@@ -651,8 +651,9 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     const holderTrigger = screen.getByRole("button", {
       name: "Linked sessions held by investigator",
     });
-    // Points down the connector, at the subjects hanging off it.
-    expect(holderTrigger.textContent).toBe("⇲");
+    // The same chain glyph as every card, counting the one link it holds.
+    expect(holderTrigger.querySelector("svg")).toBeTruthy();
+    expect(holderTrigger.textContent).toBe("1");
     fireEvent.click(holderTrigger);
     fireEvent.click(screen.getByRole("menuitem", { name: /Unlink payments refactor…/ }));
 
@@ -784,8 +785,9 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     const manualLink = makeLink({ ...link, cadence: "manual_only" });
     render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[manualLink]} />);
     const trigger = screen.getByRole("button", { name: "Link options for payments refactor" });
-    // Points back up the connector. Not the role spelled out, not the cadence.
-    expect(trigger.textContent).toBe("⇱");
+    // The chain glyph and its count. Not the role spelled out, not the cadence.
+    expect(trigger.querySelector("svg")).toBeTruthy();
+    expect(trigger.textContent).toBe("1");
     fireEvent.click(trigger);
     expect(
       screen.getByRole("menuitemradio", { name: /Catch up on request/ }).getAttribute("aria-checked"),
@@ -2069,5 +2071,220 @@ describe("SessionRail omni search", () => {
 
     fireEvent.keyDown(box, { key: "Escape" });
     expect(document.activeElement).not.toBe(box);
+  });
+});
+
+describe("SessionRail — recursive link tree", () => {
+  const LEAD: Link["grants"] = ["read", "inject", "orchestrate"];
+  const WATCH: Link["grants"] = ["read"];
+  // Newest start first is the active order, so these created_at values lay
+  // the roots out top to bottom.
+  const at = (n: number) => `2026-07-0${n}T00:00:00Z`;
+  const captain = makeSession({ id: "captain", name: "Captain", created_at: at(9) });
+  const deploy = makeSession({ id: "deploy", name: "Deploy", created_at: at(8) });
+  const railS = makeSession({ id: "rail", name: "Rail", created_at: at(7) });
+  const merge = makeSession({ id: "merge", name: "Merge", created_at: at(6) });
+  const chain = [
+    makeLink({ id: "l1", granting_session_id: "captain", subject_session_id: "deploy", grants: LEAD }),
+    makeLink({ id: "l2", granting_session_id: "deploy", subject_session_id: "rail", grants: LEAD }),
+    makeLink({ id: "l3", granting_session_id: "deploy", subject_session_id: "merge", grants: LEAD }),
+  ];
+  const watcher = makeSession({ id: "watcher", name: "Watcher", created_at: at(5) });
+  const watchRail = makeLink({
+    id: "m1",
+    granting_session_id: "watcher",
+    subject_session_id: "rail",
+    grants: WATCH,
+  });
+
+  const shortcut = (name: string) =>
+    screen.getByRole("button", { name: new RegExp(`^Jump to ${name}`) });
+
+  beforeEach(() => {
+    FLAGS.linkedSessions = true;
+  });
+  afterEach(() => {
+    FLAGS.linkedSessions = false;
+    vi.useRealTimers();
+  });
+
+  it("renders every session of a 3-level chain, each nested one level under its leader", () => {
+    render(<SessionRail sessions={[captain, deploy, railS, merge]} openTaskCounts={{}} links={chain} />);
+    expect(cardNames()).toEqual(["Captain", "Deploy", "Rail", "Merge"]);
+    const card = (name: string) => screen.getByText(name).closest('[role="button"]')!;
+    // Rail hangs off Deploy's own trunk, which hangs off Captain's.
+    const deployBox = card("Deploy").parentElement!;
+    expect(deployBox.contains(card("Rail"))).toBe(true);
+    expect(deployBox.contains(card("Merge"))).toBe(true);
+    expect(card("Captain").parentElement!.contains(deployBox)).toBe(true);
+    // Deploy's trunk counts its own two subjects.
+    expect(deployBox.querySelector('[class*="linkFan"]')?.textContent).toBe("2");
+  });
+
+  it("draws a subject with a leader and a monitor once, under the leader, and a shortcut under the monitor", () => {
+    render(
+      <SessionRail
+        sessions={[captain, deploy, railS, merge, watcher]}
+        openTaskCounts={{}}
+        links={[...chain, watchRail]}
+      />,
+    );
+    expect(cardNames()).toEqual(["Captain", "Deploy", "Rail", "Merge", "Watcher"]);
+    expect(screen.getAllByText("Rail")).toHaveLength(2);
+    const sc = shortcut("Rail");
+    expect(sc.title).toBe("Shown under Deploy. Click to jump.");
+    expect(sc.textContent).toBe("◉Rail↗");
+    // Under the watcher, not a card of its own and not in the card walk.
+    const watcherCard = screen.getByText("Watcher").closest('[role="button"]')!;
+    expect(watcherCard.nextElementSibling?.contains(sc)).toBe(true);
+    expect(sc.hasAttribute("data-rail-card")).toBe(false);
+  });
+
+  it("homes a subject with two monitors under the earliest link", () => {
+    const m2 = makeSession({ id: "m2", name: "Second", created_at: at(4) });
+    const s = makeSession({ id: "s", name: "Subject", created_at: at(3) });
+    render(
+      <SessionRail
+        sessions={[watcher, m2, s]}
+        openTaskCounts={{}}
+        links={[
+          makeLink({ id: "a", granting_session_id: "watcher", subject_session_id: "s", grants: WATCH, created_at: at(5) }),
+          makeLink({ id: "b", granting_session_id: "m2", subject_session_id: "s", grants: WATCH, created_at: at(2) }),
+        ]}
+      />,
+    );
+    expect(cardNames()).toEqual(["Watcher", "Second", "Subject"]);
+    const secondCard = screen.getByText("Second").closest('[role="button"]')!;
+    expect(secondCard.parentElement!.querySelector('[class*="subjects"]')).toBeTruthy();
+    expect(shortcut("Subject").title).toBe("Shown under Second. Click to jump.");
+  });
+
+  it("drops no session from a monitor cycle", () => {
+    const a = makeSession({ id: "a", name: "Alpha", created_at: at(3) });
+    const b = makeSession({ id: "b", name: "Bravo", created_at: at(2) });
+    const c = makeSession({ id: "c", name: "Charlie", created_at: at(1) });
+    render(
+      <SessionRail
+        sessions={[a, b, c]}
+        openTaskCounts={{}}
+        links={[
+          makeLink({ id: "ab", granting_session_id: "a", subject_session_id: "b", grants: WATCH }),
+          makeLink({ id: "bc", granting_session_id: "b", subject_session_id: "c", grants: WATCH }),
+          makeLink({ id: "ca", granting_session_id: "c", subject_session_id: "a", grants: WATCH }),
+        ]}
+      />,
+    );
+    expect(cardNames()).toEqual(["Alpha", "Bravo", "Charlie"]);
+    // Alpha is first in rail order, so the loop is cut there and closes with a shortcut.
+    expect(shortcut("Alpha").title).toBe("Shown at the top level. Click to jump.");
+  });
+
+  it("makes a subject a root when its holder isn't in the rail's list", () => {
+    // Captain is outside this rail's sessions (another workspace, say).
+    render(<SessionRail sessions={[deploy, railS, merge]} openTaskCounts={{}} links={chain} />);
+    expect(cardNames()).toEqual(["Deploy", "Rail", "Merge"]);
+    const deployCard = screen.getByText("Deploy").closest('[role="button"]')!;
+    expect(deployCard.querySelector('[class*="linkConnector"]')).toBeNull();
+  });
+
+  it("jumps to the real card from a shortcut: scrolls it into view and flashes it", () => {
+    const scroll = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      render(
+        <SessionRail
+          sessions={[captain, deploy, railS, merge, watcher]}
+          openTaskCounts={{}}
+          links={[...chain, watchRail]}
+          onSelect={vi.fn()}
+        />,
+      );
+      fireEvent.click(shortcut("Rail"));
+      const card = document.querySelector<HTMLElement>('[data-rail-card][data-rail-id="rail"]')!;
+      expect(scroll).toHaveBeenCalledTimes(1);
+      expect(scroll.mock.contexts[0]).toBe(card);
+      expect(scroll).toHaveBeenCalledWith({ block: "nearest" });
+      expect(card.className).toMatch(/flash/);
+      fireEvent.animationEnd(card);
+      expect(card.className).not.toMatch(/flash/);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  it("rolls a grandchild's urgency up to its root, and never a shortcut's", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(
+      <SessionRail
+        sessions={[captain, deploy, railS, merge, watcher]}
+        openTaskCounts={{}}
+        links={[...chain, watchRail]}
+        // Rail (a grandchild of Captain, a shortcut under Watcher) is parked.
+        agentStates={{ rail: { subagents: 0, awaitingSince: isoAgo(MINUTE), awaitingTool: "Bash" } }}
+      />,
+    );
+    // One group needs the user: Captain's. Watcher only points at Rail.
+    expect(chip("Attn.").textContent).toBe("Attn.1");
+    expect(chip("Idle").textContent).toBe("Idle1");
+    fireEvent.click(chip("Attn."));
+    expect(cardNames()).toEqual(["Captain", "Deploy", "Rail", "Merge"]);
+    fireEvent.click(chip("Idle"));
+    expect(cardNames()).toEqual(["Watcher"]);
+  });
+
+  it("checks a root off with every session under it, and pulls it back for a parked grandchild only", () => {
+    vi.useFakeTimers({ now: NOW });
+    const doneCaptain = { ...captain, tags: ["aside"] };
+    const doneWatcher = { ...watcher, tags: ["aside"] };
+    const { rerender } = render(
+      <SessionRail
+        sessions={[doneCaptain, deploy, railS, merge, doneWatcher]}
+        openTaskCounts={{}}
+        links={[...chain, watchRail]}
+      />,
+    );
+    expect(activeNames()).toEqual([]);
+    expect(doneNames()).toEqual(expect.arrayContaining(["Captain", "Deploy", "Rail", "Merge", "Watcher"]));
+
+    rerender(
+      <SessionRail
+        sessions={[doneCaptain, deploy, railS, merge, doneWatcher]}
+        openTaskCounts={{}}
+        links={[...chain, watchRail]}
+        agentStates={{ rail: { subagents: 0, awaitingSince: isoAgo(MINUTE), awaitingTool: "Bash" } }}
+      />,
+    );
+    // The parked grandchild brings its whole group back; the watcher, which
+    // only holds a shortcut to it, stays checked off.
+    expect(activeNames()).toEqual(["Captain", "Deploy", "Rail", "Merge"]);
+    expect(doneNames()).toEqual(["Watcher"]);
+  });
+
+  it("puts the same chain glyph on every card, tinted and counted once it has links", () => {
+    render(
+      <SessionRail
+        sessions={[captain, deploy, railS, merge, watcher, makeSession({ id: "solo", name: "Solo" })]}
+        openTaskCounts={{}}
+        links={[...chain, watchRail]}
+      />,
+    );
+    const countOf = (label: string) => {
+      const button = screen.getByRole("button", { name: label });
+      expect(button.querySelector("svg path")?.getAttribute("d")).toBe(
+        "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71",
+      );
+      return {
+        count: button.querySelector("[data-link-count]")?.textContent,
+        tinted: /linkTriggerLinked/.test(button.className),
+      };
+    };
+    expect(countOf("Linked sessions held by Captain")).toEqual({ count: "1", tinted: true });
+    // Deploy: led by Captain, leads Rail and Merge.
+    expect(countOf("Link options for Deploy")).toEqual({ count: "3", tinted: true });
+    // Rail: led by Deploy, watched by Watcher.
+    expect(countOf("Link options for Rail")).toEqual({ count: "2", tinted: true });
+    expect(countOf("Linked sessions held by Watcher")).toEqual({ count: "1", tinted: true });
+    expect(countOf("Add Solo to link selection")).toEqual({ count: undefined, tinted: false });
   });
 });

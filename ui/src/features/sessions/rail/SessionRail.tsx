@@ -31,8 +31,8 @@ import type {
   RailFilterBucket,
   SessionAgentState,
 } from "./railGroups";
-import { buildRailRows, computeRailLinks } from "./railLinks";
-import type { RailRow } from "./railLinks";
+import { buildRailRows, computeRailLinks, railDescendants } from "./railLinks";
+import type { RailRow, RailShortcut } from "./railLinks";
 import {
   isEditableElement,
   matchReason,
@@ -261,9 +261,10 @@ export function SessionRail({
   const ranked: { row: RailRow; rank: number; resting: number }[] = [];
   allRows.forEach((row, resting) => {
     let rank: number | undefined;
-    // A holder answers for its nested subjects here too — a subject can only
-    // be shown underneath the holder that owns it.
-    for (const session of [row.session, ...row.subjects.map((sub) => sub.session)]) {
+    // A holder answers for everything nested under it here too, at any depth
+    // — a subject can only be shown underneath the holder that owns it.
+    // Shortcut rows are pointers, not sessions, so they never match.
+    for (const session of [row.session, ...railDescendants(row)]) {
       const match = matchSession(session, terms, wsIndex);
       if (!match) continue;
       matchById.set(session.id, match);
@@ -291,13 +292,15 @@ export function SessionRail({
     );
   }
 
-  // A holder answers for the subjects nested under it: they ride along when it
-  // survives a filter, so counting it as merely "idle" while a nested card is
-  // parked would make "Attn. 1" click through to a list without it.
+  // A holder answers for every session nested under it, grandchildren
+  // included: they ride along when it survives a filter, so counting it as
+  // merely "idle" while a nested card is parked would make "Attn. 1" click
+  // through to a list without it. Shortcut rows point at cards that live (and
+  // are counted) elsewhere, so they never pull a group's bucket.
   const bucketByRowId = new Map<string, RailFilterBucket>(
     rows.map((row) => [
       row.session.id,
-      mostUrgentBucket([row.session, ...row.subjects.map((s) => s.session)].map(bucketOf)),
+      mostUrgentBucket([row.session, ...railDescendants(row)].map(bucketOf)),
     ]),
   );
   const counts: Record<RailFilter, number> = { all: rows.length, working: 0, needs: 0, idle: 0 };
@@ -317,10 +320,11 @@ export function SessionRail({
   // checked off goes to Done unless it currently needs them — then it sits in
   // the active list, at its own rank, until it doesn't.
   //
-  // Done is checked on the HOLDER only. A linked group is one card with its
-  // subjects drawn under it (railLinks.ts), so checking off a leader takes
-  // the connector and its subjects with it — splitting a group across two
-  // lists would leave arrows pointing at nothing.
+  // Done is checked on the ROOT only. A linked group is one card with its
+  // subjects drawn under it, recursively (railLinks.ts), so checking off a
+  // leader takes the connector and every session under it with it —
+  // splitting a group across two lists would leave arrows pointing at
+  // nothing.
   const active: RailRow[] = [];
   const done: RailRow[] = [];
   for (const row of visible) {
@@ -383,6 +387,23 @@ export function SessionRail({
 
   function cancelLinkMode() {
     setLinkMode(undefined);
+  }
+
+  // A shortcut row's jump: bring the session's one real card into view and
+  // flash it, so the eye lands on it. A card outside the drawn list (a
+  // collapsed Done, a filter) has nothing to scroll to, so this does nothing.
+  function jumpTo(id: string) {
+    const card = [
+      ...(railRef.current?.querySelectorAll<HTMLElement>("[data-rail-card]") ?? []),
+    ].find((el) => el.dataset.railId === id);
+    if (!card) return;
+    card.scrollIntoView({ block: "nearest" });
+    // Restart the animation if it is already running: drop the class, force a
+    // style flush, add it back.
+    card.classList.remove(styles.flash);
+    void card.offsetWidth;
+    card.classList.add(styles.flash);
+    card.addEventListener("animationend", () => card.classList.remove(styles.flash), { once: true });
   }
 
   // ⌘K / Ctrl-K focuses the field. Capture phase on the document so the rail
@@ -468,7 +489,7 @@ export function SessionRail({
   const deleteTarget = sessions.find((s) => s.id === confirmDeleteId);
 
   // Shared by the active list and Done — the two render identical cards.
-  const rowProps = {
+  const rowProps: RailRowContext = {
     openTaskCounts,
     agentStates,
     shellBySession,
@@ -487,6 +508,7 @@ export function SessionRail({
     linkMode,
     onStartLinkMode: startLinkMode,
     onToggleLinkSelection: toggleLinkSelection,
+    onJump: jumpTo,
     labelContext,
     routerClient,
     showDelegates,
@@ -699,35 +721,8 @@ export function SessionRail({
   );
 }
 
-function RailRowGroup({
-  row,
-  openTaskCounts,
-  agentStates,
-  shellBySession,
-  matchById,
-  wsIndex,
-  selectedId,
-  isUnseen,
-  onSeen,
-  onSelect,
-  onSleep,
-  onSetDone,
-  bucketOf,
-  onDeleteRequest,
-  onUnlinkRequest,
-  linkedSessionsEnabled,
-  linkMode,
-  onStartLinkMode,
-  onToggleLinkSelection,
-  labelContext,
-  routerClient,
-  showDelegates,
-  delegateFadeMs,
-  selectedDelegate,
-  onOpenDelegate,
-  grip,
-}: {
-  row: ReturnType<typeof buildRailRows>[number];
+/** Everything a card needs from the rail, shared by every card at every depth. */
+interface RailRowContext {
   openTaskCounts: Record<string, OpenTaskBreakdown>;
   agentStates: Record<string, SessionAgentState>;
   /** Each live dock shell by session id, hidden or visible. */
@@ -751,119 +746,209 @@ function RailRowGroup({
   linkMode?: LinkModeState;
   onStartLinkMode: (id: string) => void;
   onToggleLinkSelection: (id: string) => void;
+  /** A shortcut row's click: bring the session's real card into view. */
+  onJump: (id: string) => void;
   labelContext: RailLabelContext;
   routerClient: RouterClient;
   showDelegates: boolean;
   delegateFadeMs?: number;
   selectedDelegate?: { sessionId: string; harnessId: string };
   onOpenDelegate?: (d: Delegate) => void;
-  /** Present only in a reorderable active list. */
-  grip?: GripProps;
-}) {
-  const isAnchor = linkMode?.anchorId === row.session.id;
-  // A session's delegates nest right under its own card — before any linked
-  // subjects, which are other sessions.
-  const delegatesOf = (sessionId: string, linkTrunk = false) => {
-    const list = showDelegates ? agentStates[sessionId]?.delegates : undefined;
-    if (!list || list.length === 0) return null;
-    return (
-      <DelegateRows
-        delegates={list}
-        selectedHarnessId={selectedDelegate?.sessionId === sessionId ? selectedDelegate.harnessId : undefined}
-        onOpen={onOpenDelegate}
-        fadeMs={delegateFadeMs}
-        linkTrunk={linkTrunk}
-      />
-    );
-  };
-  const subjects = linkedSessionsEnabled ? row.subjects : [];
+}
+
+/**
+ * The subjects a holder answers for in its link menu: the ones drawn under
+ * it and the ones it only points at, since it holds a link to each.
+ */
+function heldSubjectsOf(row: RailRow): LinkHolderSubject[] {
+  return [
+    ...row.subjects.map((sub) => ({
+      name: sub.session.name || "Untitled session",
+      badge: sub.link!.badge,
+      linkId: sub.link!.linkId,
+    })),
+    ...row.shortcuts.map((sc) => ({
+      name: sc.session.name || "Untitled session",
+      badge: sc.role === "leader" ? ("LINKED" as const) : ("WATCHED" as const),
+      linkId: sc.linkId,
+    })),
+  ];
+}
+
+/** A session's delegates nest right under its own card — before any linked subjects, which are other sessions. */
+function delegatesOf(ctx: RailRowContext, sessionId: string, linkTrunk = false) {
+  const list = ctx.showDelegates ? ctx.agentStates[sessionId]?.delegates : undefined;
+  if (!list || list.length === 0) return null;
+  return (
+    <DelegateRows
+      delegates={list}
+      selectedHarnessId={
+        ctx.selectedDelegate?.sessionId === sessionId ? ctx.selectedDelegate.harnessId : undefined
+      }
+      onOpen={ctx.onOpenDelegate}
+      fadeMs={ctx.delegateFadeMs}
+      linkTrunk={linkTrunk}
+    />
+  );
+}
+
+/** Whether anything hangs off this row's link trunk. */
+function hasLinkChildren(row: RailRow, ctx: RailRowContext): boolean {
+  return ctx.linkedSessionsEnabled && (row.subjects.length > 0 || row.shortcuts.length > 0);
+}
+
+function RailRowGroup({ row, grip, ...ctx }: RailRowContext & { row: RailRow; grip?: GripProps }) {
+  const isAnchor = ctx.linkMode?.anchorId === row.session.id;
+  const children = hasLinkChildren(row, ctx);
   return (
     <>
       <SessionRow
         session={row.session}
-        openTaskBreakdown={openTaskCounts[row.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
-        agentState={agentStates[row.session.id] ?? EMPTY_AGENT_STATE}
-        shell={shellBySession.get(row.session.id)}
-        matchReason={reasonFor(row.session, matchById, wsIndex)}
-        selected={row.session.id === selectedId}
-        unseen={isUnseen(row.session.id)}
-        onSeen={onSeen}
-        onSelect={onSelect}
-        onSleep={onSleep}
-        onSetDone={onSetDone}
-        working={bucketOf(row.session) === "working"}
+        openTaskBreakdown={ctx.openTaskCounts[row.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
+        agentState={ctx.agentStates[row.session.id] ?? EMPTY_AGENT_STATE}
+        shell={ctx.shellBySession.get(row.session.id)}
+        matchReason={reasonFor(row.session, ctx.matchById, ctx.wsIndex)}
+        selected={row.session.id === ctx.selectedId}
+        unseen={ctx.isUnseen(row.session.id)}
+        onSeen={ctx.onSeen}
+        onSelect={ctx.onSelect}
+        onSleep={ctx.onSleep}
+        onSetDone={ctx.onSetDone}
+        working={ctx.bucketOf(row.session) === "working"}
         grip={grip}
-        onDeleteRequest={onDeleteRequest}
+        onDeleteRequest={ctx.onDeleteRequest}
         linkBadge={row.badge}
-        heldSubjects={subjects.map((sub) => ({
-          name: sub.session.name || "Untitled session",
-          badge: sub.badge,
-          linkId: sub.linkId,
-        }))}
-        onUnlinkSubjectRequest={onUnlinkRequest}
-        linkedSessionsEnabled={linkedSessionsEnabled}
-        linkModeActive={Boolean(linkMode)}
+        linkCount={ctx.linkedSessionsEnabled ? row.linkCount : 0}
+        heldSubjects={ctx.linkedSessionsEnabled ? heldSubjectsOf(row) : []}
+        onUnlinkSubjectRequest={ctx.onUnlinkRequest}
+        linkedSessionsEnabled={ctx.linkedSessionsEnabled}
+        linkModeActive={Boolean(ctx.linkMode)}
         isLinkAnchor={isAnchor}
-        isLinkSelected={linkMode?.selectedIds.has(row.session.id) ?? false}
-        labelContext={labelContext}
-        onStartLinkMode={() => onStartLinkMode(row.session.id)}
-        onToggleLinkSelection={() => onToggleLinkSelection(row.session.id)}
+        isLinkSelected={ctx.linkMode?.selectedIds.has(row.session.id) ?? false}
+        labelContext={ctx.labelContext}
+        onStartLinkMode={() => ctx.onStartLinkMode(row.session.id)}
+        onToggleLinkSelection={() => ctx.onToggleLinkSelection(row.session.id)}
       />
-      {delegatesOf(row.session.id, subjects.length > 0)}
-      {/* The subjects share one container so the trunk can be drawn by rules
-          that only ever measure their own box — see .subjects in the CSS. A
-          holder of several subjects gets one numeral on the trunk rather than
-          a "LEADER · 3" pill on its meta row. */}
-      {subjects.length > 0 && (
-        <div className={styles.subjects}>
-          {subjects.length > 1 && (
-            <span className={styles.linkFan} aria-hidden="true">
-              {subjects.length}
-            </span>
-          )}
-          {/* Each subject and its own delegates share a box, so the trunk's
-              continuation (.subject:not(:last-child)) runs past those
-              delegates to the next subject, and stops at the last one. */}
-          {subjects.map((sub) => (
-            <div key={sub.session.id} className={styles.subject}>
-              <SessionRow
-                session={sub.session}
-                openTaskBreakdown={openTaskCounts[sub.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
-                agentState={agentStates[sub.session.id] ?? EMPTY_AGENT_STATE}
-                shell={shellBySession.get(sub.session.id)}
-                matchReason={reasonFor(sub.session, matchById, wsIndex)}
-                selected={sub.session.id === selectedId}
-                unseen={isUnseen(sub.session.id)}
-                onSeen={onSeen}
-                onSelect={onSelect}
-                onSleep={onSleep}
-                onDeleteRequest={onDeleteRequest}
-                linkBadge={sub.badge}
-                orchestrateStatus={sub.orchestrateStatus}
-                orchestrateError={sub.orchestrateError}
-                nested
-                onUnlinkRequest={() =>
-                  onUnlinkRequest({ linkId: sub.linkId, name: sub.session.name || "Untitled session" })
-                }
-                linkedSessionsEnabled={linkedSessionsEnabled}
-                linkModeActive={false}
-                isLinkAnchor={false}
-                isLinkSelected={false}
-                onStartLinkMode={() => {}}
-                onToggleLinkSelection={() => {}}
-                labelContext={labelContext}
-                cadence={sub.cadence}
-                grants={sub.grants}
-                grantingSessionId={sub.grantingSessionId}
-                linkId={sub.linkId}
-                routerClient={routerClient}
-              />
-              {delegatesOf(sub.session.id)}
-            </div>
-          ))}
-        </div>
-      )}
+      {delegatesOf(ctx, row.session.id, children)}
+      {children && <RailSubjects row={row} ctx={ctx} />}
     </>
+  );
+}
+
+/**
+ * What hangs off a holder's trunk: the sessions whose home it is, each with
+ * its own subtree, then a one-line shortcut for each session it holds that is
+ * drawn somewhere else. Recursive — a subject that holds others draws its own
+ * trunk inside its .subject box, the same way a root does.
+ */
+function RailSubjects({ row, ctx }: { row: RailRow; ctx: RailRowContext }) {
+  return (
+    // The subjects share one container so the trunk can be drawn by rules
+    // that only ever measure their own box — see .subjects in the CSS. A
+    // holder of several subjects gets one numeral on the trunk rather than a
+    // "LEADER · 3" pill on its meta row. Shortcuts are not sessions, so the
+    // numeral doesn't count them.
+    <div className={styles.subjects}>
+      {row.subjects.length > 1 && (
+        <span className={styles.linkFan} aria-hidden="true">
+          {row.subjects.length}
+        </span>
+      )}
+      {/* Each subject and everything under it (its delegates, its own
+          subjects) share a box, so the trunk's continuation
+          (.subject:not(:last-child)) runs past all of that to the next one,
+          and stops at the last. */}
+      {row.subjects.map((sub) => (
+        <div key={sub.session.id} className={styles.subject}>
+          <NestedSessionRow row={sub} ctx={ctx} />
+          {delegatesOf(ctx, sub.session.id, hasLinkChildren(sub, ctx))}
+          {hasLinkChildren(sub, ctx) && <RailSubjects row={sub} ctx={ctx} />}
+        </div>
+      ))}
+      {row.shortcuts.map((sc) => (
+        <div key={`sc-${sc.linkId}`} className={styles.subject}>
+          <ShortcutRow shortcut={sc} onJump={ctx.onJump} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function NestedSessionRow({ row, ctx }: { row: RailRow; ctx: RailRowContext }) {
+  const sub = row.session;
+  const link = row.link!;
+  return (
+    <SessionRow
+      session={sub}
+      openTaskBreakdown={ctx.openTaskCounts[sub.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
+      agentState={ctx.agentStates[sub.id] ?? EMPTY_AGENT_STATE}
+      shell={ctx.shellBySession.get(sub.id)}
+      matchReason={reasonFor(sub, ctx.matchById, ctx.wsIndex)}
+      selected={sub.id === ctx.selectedId}
+      unseen={ctx.isUnseen(sub.id)}
+      onSeen={ctx.onSeen}
+      onSelect={ctx.onSelect}
+      onSleep={ctx.onSleep}
+      onDeleteRequest={ctx.onDeleteRequest}
+      linkBadge={link.badge}
+      linkCount={row.linkCount}
+      orchestrateStatus={link.orchestrateStatus}
+      orchestrateError={link.orchestrateError}
+      nested
+      onUnlinkRequest={() =>
+        ctx.onUnlinkRequest({ linkId: link.linkId, name: sub.name || "Untitled session" })
+      }
+      linkedSessionsEnabled={ctx.linkedSessionsEnabled}
+      linkModeActive={false}
+      isLinkAnchor={false}
+      isLinkSelected={false}
+      onStartLinkMode={() => {}}
+      onToggleLinkSelection={() => {}}
+      labelContext={ctx.labelContext}
+      cadence={link.cadence}
+      grants={link.grants}
+      grantingSessionId={link.grantingSessionId}
+      linkId={link.linkId}
+      routerClient={ctx.routerClient}
+    />
+  );
+}
+
+/**
+ * A one-line pointer at a session this holder also leads or watches, whose
+ * card is drawn under its home holder instead (railLinks.ts). Not a session
+ * row — no status, no actions — so it is a plain button, outside the
+ * [data-rail-card] set the keyboard walks.
+ */
+function ShortcutRow({ shortcut, onJump }: { shortcut: RailShortcut; onJump: (id: string) => void }) {
+  const name = shortcut.session.name || "Untitled session";
+  const where = shortcut.homeHolder
+    ? `Shown under ${shortcut.homeHolder.name || "Untitled session"}`
+    : "Shown at the top level";
+  const leader = shortcut.role === "leader";
+  return (
+    <button
+      type="button"
+      className={styles.shortcut}
+      title={`${where}. Click to jump.`}
+      aria-label={`Jump to ${name} (${leader ? "led" : "watched"} from here). ${where}.`}
+      data-rail-shortcut={shortcut.session.id}
+      onClick={(e) => {
+        e.stopPropagation();
+        onJump(shortcut.session.id);
+      }}
+    >
+      <span
+        className={[styles.shortcutGlyph, leader ? styles.shortcutLead : styles.shortcutWatch].join(" ")}
+        aria-hidden="true"
+      >
+        {leader ? "♛" : "◉"}
+      </span>
+      <span className={styles.shortcutName}>{name}</span>
+      <span className={styles.shortcutJump} aria-hidden="true">
+        ↗
+      </span>
+    </button>
   );
 }
 
@@ -904,6 +989,7 @@ function SessionRow({
   grip,
   onDeleteRequest,
   linkBadge,
+  linkCount = 0,
   heldSubjects,
   onUnlinkSubjectRequest,
   orchestrateStatus,
@@ -943,6 +1029,8 @@ function SessionRow({
   grip?: GripProps;
   onDeleteRequest: (id: string) => void;
   linkBadge?: string;
+  /** Counted links touching this session — tints the chain glyph and badges it with the number. */
+  linkCount?: number;
   /**
    * Only set on a holder row — the subjects it holds, which is what turns its
    * badge from a bare pill into the menu that can unlink them.
@@ -1057,39 +1145,6 @@ function SessionRow({
     .join("\n");
   const hasMeta = openTaskCount > 0;
   const showContext = hasRailLabels(labels);
-  // Link controls — the update policy and Unlink — used to hang off the
-  // LINKED / WATCHED pill, which was both the label and the trigger. The pill
-  // is gone (the connector states the relationship), so they move to the
-  // action cluster, where every other per-session verb already lives. The
-  // glyph carries the direction the connector draws: a holder opens "who I
-  // lead", a subject opens "who leads me", and the plain link glyph on an
-  // unlinked card still starts link mode — so one button never means two
-  // things on the same card.
-  const linkOptions =
-    nested && linkBadge && cadence && linkId && grantingSessionId && routerClient && onUnlinkRequest ? (
-      <LinkOptionsMenu
-        badge={linkBadge}
-        subjectName={name}
-        linkId={linkId}
-        grantingSessionId={grantingSessionId}
-        subjectSessionId={session.id}
-        grants={grants ?? []}
-        cadence={cadence}
-        orchestrateStatus={orchestrateStatus}
-        orchestrateError={orchestrateError}
-        routerClient={routerClient}
-        onUnlinkRequest={onUnlinkRequest}
-      />
-    ) : undefined;
-  const holderMenu =
-    linkBadge && heldSubjects?.length && onUnlinkSubjectRequest ? (
-      <LinkHolderMenu
-        holderName={name}
-        subjects={heldSubjects}
-        onUnlinkRequest={onUnlinkSubjectRequest}
-      />
-    ) : undefined;
-
   // The action cluster hangs outside the card, so it is painted position:fixed
   // off the row's rect and only revealed once those coordinates exist.
   const rowRef = useRef<HTMLDivElement>(null);
@@ -1351,20 +1406,25 @@ function SessionRow({
               ⏸
             </button>
           )}
-          {linkedSessionsEnabled && (linkOptions ?? holderMenu)}
-          {linkedSessionsEnabled && !nested && !holderMenu && (
-            <button
-              type="button"
-              className={styles.actionButton}
-              title="Link"
-              aria-label={`Add ${name} to link selection`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onStartLinkMode();
-              }}
-            >
-              🔗
-            </button>
+          {linkedSessionsEnabled && (
+            <LinkTrigger
+              name={name}
+              sessionId={session.id}
+              linkCount={linkCount}
+              nested={nested}
+              linkBadge={linkBadge}
+              heldSubjects={heldSubjects}
+              onUnlinkSubjectRequest={onUnlinkSubjectRequest}
+              cadence={cadence}
+              linkId={linkId}
+              grantingSessionId={grantingSessionId}
+              grants={grants}
+              orchestrateStatus={orchestrateStatus}
+              orchestrateError={orchestrateError}
+              routerClient={routerClient}
+              onUnlinkRequest={onUnlinkRequest}
+              onStartLinkMode={onStartLinkMode}
+            />
           )}
           {onSetDone && !nested && (
             // ✓ is the task-list gesture, and in this rail it means exactly
@@ -1406,6 +1466,126 @@ function SessionRow({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The chain-link glyph every card's link button wears — nested or not,
+ * linked or not — tinted and counted once the session has a counted link.
+ */
+function ChainGlyph({ count }: { count: number }) {
+  return (
+    <>
+      <svg
+        className={styles.chainGlyph}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+      </svg>
+      {count > 0 && (
+        <span className={styles.linkCount} aria-hidden="true" data-link-count={count}>
+          {count}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * A card's one link button. Its click still means what the glyph used to
+ * spell out — a subject opens "who leads me" (LinkOptionsMenu), a holder
+ * opens "who I lead" (LinkHolderMenu), an unlinked card starts link mode —
+ * but every card wears the same chain glyph now. Kept as one component so it
+ * can be rewired to a single "open links" action in one place.
+ */
+function LinkTrigger({
+  name,
+  sessionId,
+  linkCount,
+  nested,
+  linkBadge,
+  heldSubjects,
+  onUnlinkSubjectRequest,
+  cadence,
+  linkId,
+  grantingSessionId,
+  grants,
+  orchestrateStatus,
+  orchestrateError,
+  routerClient,
+  onUnlinkRequest,
+  onStartLinkMode,
+}: {
+  name: string;
+  sessionId: string;
+  linkCount: number;
+  nested?: boolean;
+  linkBadge?: string;
+  heldSubjects?: LinkHolderSubject[];
+  onUnlinkSubjectRequest?: (target: { linkId: string; name: string }) => void;
+  cadence?: LinkCadence;
+  linkId?: string;
+  grantingSessionId?: string;
+  grants?: Grant[];
+  orchestrateStatus?: OrchestrateStatus;
+  orchestrateError?: string;
+  routerClient?: RouterClient;
+  onUnlinkRequest?: () => void;
+  onStartLinkMode: () => void;
+}) {
+  const glyph = <ChainGlyph count={linkCount} />;
+  const tint = linkCount > 0 ? styles.linkTriggerLinked : undefined;
+  if (nested && linkBadge && cadence && linkId && grantingSessionId && routerClient && onUnlinkRequest) {
+    return (
+      <LinkOptionsMenu
+        badge={linkBadge}
+        subjectName={name}
+        linkId={linkId}
+        grantingSessionId={grantingSessionId}
+        subjectSessionId={sessionId}
+        grants={grants ?? []}
+        cadence={cadence}
+        orchestrateStatus={orchestrateStatus}
+        orchestrateError={orchestrateError}
+        routerClient={routerClient}
+        onUnlinkRequest={onUnlinkRequest}
+        glyph={glyph}
+        triggerClassName={tint}
+      />
+    );
+  }
+  if (linkBadge && heldSubjects?.length && onUnlinkSubjectRequest) {
+    return (
+      <LinkHolderMenu
+        holderName={name}
+        subjects={heldSubjects}
+        onUnlinkRequest={onUnlinkSubjectRequest}
+        glyph={glyph}
+        triggerClassName={tint}
+      />
+    );
+  }
+  if (nested) return null;
+  return (
+    <button
+      type="button"
+      className={[styles.actionButton, styles.linkOptionsTrigger, tint].filter(Boolean).join(" ")}
+      title={linkCount > 0 ? `Link · ${linkCount} linked` : "Link"}
+      aria-label={`Add ${name} to link selection`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onStartLinkMode();
+      }}
+    >
+      {glyph}
+    </button>
   );
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Popover } from "../../../components/Popover/Popover";
 import pillStyles from "../pills/pills.module.css";
 import { flyoutPlacement } from "./LinkOptionsMenu";
@@ -17,6 +17,10 @@ export interface LinkHolderMenuProps {
   holderName: string;
   subjects: LinkHolderSubject[];
   onUnlinkRequest: (target: { linkId: string; name: string }) => void;
+  /** The trigger's content; the rail passes its chain glyph. Defaults to the old arrow. */
+  glyph?: ReactNode;
+  /** Extra class on the trigger — the rail's "this card is linked" tint. */
+  triggerClassName?: string;
 }
 
 const ROLE_NOTE: Record<SubjectBadge, string> = {
@@ -39,6 +43,8 @@ export function LinkHolderMenu({
   holderName,
   subjects,
   onUnlinkRequest,
+  glyph,
+  triggerClassName,
 }: LinkHolderMenuProps) {
   const [placement, setPlacement] = useState<CSSProperties>();
   const open = placement !== undefined;
@@ -66,7 +72,7 @@ export function LinkHolderMenu({
       anchor={
         <button
           type="button"
-          className={[styles.actionButton, styles.linkOptionsTrigger].join(" ")}
+          className={[styles.actionButton, styles.linkOptionsTrigger, triggerClassName].filter(Boolean).join(" ")}
           title="Linked sessions"
           aria-label={`Linked sessions held by ${holderName}`}
           aria-haspopup="menu"
@@ -78,7 +84,7 @@ export function LinkHolderMenu({
           }}
         >
           {/* Points down the connector, at the subjects hanging off it. */}
-          <span aria-hidden="true">⇲</span>
+          {glyph ?? <span aria-hidden="true">⇲</span>}
         </button>
       }
     >

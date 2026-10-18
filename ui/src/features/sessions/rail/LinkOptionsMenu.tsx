@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Popover } from "../../../components/Popover/Popover";
 import type { RouterClient } from "../../../router/client";
 import type { Grant, LinkCadence, OrchestrateStatus } from "../../../router/types";
@@ -85,6 +85,10 @@ export interface LinkOptionsMenuProps {
   orchestrateError?: string;
   routerClient: RouterClient;
   onUnlinkRequest: () => void;
+  /** The trigger's content; the rail passes its chain glyph. Defaults to the old arrow. */
+  glyph?: ReactNode;
+  /** Extra class on the trigger — the rail's "this card is linked" tint. */
+  triggerClassName?: string;
 }
 
 /**
@@ -106,6 +110,8 @@ export function LinkOptionsMenu({
   orchestrateError,
   routerClient,
   onUnlinkRequest,
+  glyph,
+  triggerClassName,
 }: LinkOptionsMenuProps) {
   const [placement, setPlacement] = useState<CSSProperties>();
   const [pending, setPending] = useState(false);
@@ -156,7 +162,7 @@ export function LinkOptionsMenu({
       anchor={
         <button
           type="button"
-          className={[styles.actionButton, styles.linkOptionsTrigger].join(" ")}
+          className={[styles.actionButton, styles.linkOptionsTrigger, triggerClassName].filter(Boolean).join(" ")}
           aria-label={`Link options for ${subjectName}`}
           // The mark on the trigger says "something is wrong here"; this says
           // what, on hover and to a screen reader, without the label itself
@@ -172,7 +178,7 @@ export function LinkOptionsMenu({
           }}
         >
           {/* Points back up the connector, at the holder this subject hangs from. */}
-          <span aria-hidden="true">⇱</span>
+          {glyph ?? <span aria-hidden="true">⇱</span>}
           {isDegraded(orchestrateStatus) && (
             <span className={styles.linkBadgeAlert} aria-hidden="true" />
           )}
