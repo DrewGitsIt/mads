@@ -312,6 +312,16 @@ func TestChildReleasesLeaseOnCancel(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
+	// The child claims under its run's holder (docs/PIPELINE-LEASES-DESIGN.md
+	// A1), which is what the Router's exit cleanup releases.
+	pipelineActor := dataclient.New(base, "pipeline")
+	held, err := pipelineActor.LeasesOfKind(context.Background(), "pipeline")
+	if err != nil || len(held) != 1 || held[0].TaskID != task.ID || held[0].Holder != "pipeline:run_1" {
+		_ = cmd.Process.Kill()
+		exitErr := <-exited
+		t.Fatalf("leases mid-run = %+v (err %v), want task %s held by pipeline:run_1 (child exit: %v)", held, err, task.ID, exitErr)
+	}
+
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("signal SIGTERM: %v", err)
 	}
@@ -324,15 +334,13 @@ func TestChildReleasesLeaseOnCancel(t *testing.T) {
 		t.Fatal("pipeline child did not exit within shutdownGrace of SIGTERM")
 	}
 
-	// run()'s own dataclient authenticates as actor "pipeline" — checking
-	// via that same actor's Leases() view proves the child released the
+	// Listing every pipeline-kind lease proves the child released the
 	// lease itself before exiting, not that some other backstop (e.g. the
 	// Router's onPipelineExit ReleaseAll, which this test bypasses
 	// entirely by spawning the binary directly) papered over a leak.
-	pipelineActor := dataclient.New(base, "pipeline")
-	leases, err := pipelineActor.Leases(context.Background())
+	leases, err := pipelineActor.LeasesOfKind(context.Background(), "pipeline")
 	if err != nil {
-		t.Fatalf("Leases: %v", err)
+		t.Fatalf("LeasesOfKind: %v", err)
 	}
 	for _, l := range leases {
 		if l.TaskID == task.ID {

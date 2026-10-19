@@ -14,7 +14,8 @@ import (
 )
 
 // TestReapOnLaunchReclaimsAndResumes is the end-to-end reap-on-launch path
-// (spec: reap-on-launch): a dead engine's lease — provable via a
+// (spec: reap-on-launch): a dead engine's lease — another run's
+// ("pipeline:run_dead", found by kind, not by this run's holder), provable via a
 // definitely-gone pid, same machine/boot — is reclaimed at the next engine
 // launch, before the first scan. The task stays in_progress (Interrupted)
 // and is not run: picking it up is B-R3 (docs/PIPELINE-LEASES-DESIGN.md).
@@ -41,7 +42,7 @@ func TestReapOnLaunchReclaimsAndResumes(t *testing.T) {
 		MachineID: own.MachineID, BootID: own.BootID,
 		PID: deadPID, PIDStartTicks: 999999,
 	}
-	if err := h.data.ClaimWithIdentity(ctx, task.ID, "", time.Minute, identity); err != nil {
+	if err := h.data.ClaimWithIdentity(ctx, task.ID, "pipeline:run_dead", time.Minute, identity); err != nil {
 		t.Fatal(err)
 	}
 	task.Status = contracts.StatusInProgress
@@ -64,7 +65,7 @@ func TestReapOnLaunchReclaimsAndResumes(t *testing.T) {
 		t.Fatal(verr)
 	}
 	sum, err := Run(ctx, Config{
-		Data: h.data, Provider: fake.New(), SessionID: h.sess.ID,
+		Data: h.data, Provider: fake.New(), SessionID: h.sess.ID, RunID: "run_next",
 		Template: tpl, Cwd: h.cwd, Concurrency: 2,
 		StageTimeout: 30 * time.Second,
 		Isolated:     true, WorktreeRoot: root, DataURL: h.base,
@@ -79,7 +80,7 @@ func TestReapOnLaunchReclaimsAndResumes(t *testing.T) {
 	if len(sum.Done) != 0 {
 		t.Fatalf("done: %v, want none (an Interrupted task is not picked up before B-R3)", sum.Done)
 	}
-	leases, err := h.data.Leases(ctx)
+	leases, err := h.data.LeasesOfKind(ctx, "pipeline")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +109,7 @@ func TestReapOnLaunchLiveSiblingNoReclaim(t *testing.T) {
 	if !ok {
 		t.Fatal("procid.Current: could not establish this process's own identity")
 	}
-	if err := h.data.ClaimWithIdentity(ctx, task.ID, "", time.Minute, own); err != nil {
+	if err := h.data.ClaimWithIdentity(ctx, task.ID, "pipeline:run_live", time.Minute, own); err != nil {
 		t.Fatal(err)
 	}
 	task.Status = contracts.StatusInProgress
@@ -126,7 +127,7 @@ func TestReapOnLaunchLiveSiblingNoReclaim(t *testing.T) {
 		t.Fatal(verr)
 	}
 	if _, err := Run(ctx, Config{
-		Data: h.data, Provider: fake.New(), SessionID: other.ID,
+		Data: h.data, Provider: fake.New(), SessionID: other.ID, RunID: "run_next",
 		Template: tpl, Cwd: h.cwd, StageTimeout: 30 * time.Second,
 	}); err != nil {
 		t.Fatal(err)
@@ -135,7 +136,7 @@ func TestReapOnLaunchLiveSiblingNoReclaim(t *testing.T) {
 	if got := h.task(t, task.ID); got.Status != contracts.StatusInProgress {
 		t.Errorf("task status after sibling launch = %s, want in_progress (untouched)", got.Status)
 	}
-	leases, err := h.data.Leases(ctx)
+	leases, err := h.data.LeasesOfKind(ctx, "pipeline")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +160,7 @@ func TestReapOnLaunchForeignMachineIDNoReclaim(t *testing.T) {
 	}
 	identity := own
 	identity.MachineID = "not-this-machine"
-	if err := h.data.ClaimWithIdentity(ctx, task.ID, "", time.Minute, identity); err != nil {
+	if err := h.data.ClaimWithIdentity(ctx, task.ID, "pipeline:run_elsewhere", time.Minute, identity); err != nil {
 		t.Fatal(err)
 	}
 	task.Status = contracts.StatusInProgress
@@ -177,7 +178,7 @@ func TestReapOnLaunchForeignMachineIDNoReclaim(t *testing.T) {
 		t.Fatal(verr)
 	}
 	if _, err := Run(ctx, Config{
-		Data: h.data, Provider: fake.New(), SessionID: other.ID,
+		Data: h.data, Provider: fake.New(), SessionID: other.ID, RunID: "run_next",
 		Template: tpl, Cwd: h.cwd, StageTimeout: 30 * time.Second,
 	}); err != nil {
 		t.Fatal(err)
@@ -186,7 +187,7 @@ func TestReapOnLaunchForeignMachineIDNoReclaim(t *testing.T) {
 	if got := h.task(t, task.ID); got.Status != contracts.StatusInProgress {
 		t.Errorf("task status after foreign-machine_id launch = %s, want in_progress (untouched)", got.Status)
 	}
-	leases, err := h.data.Leases(ctx)
+	leases, err := h.data.LeasesOfKind(ctx, "pipeline")
 	if err != nil {
 		t.Fatal(err)
 	}

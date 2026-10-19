@@ -22,7 +22,12 @@ next agent attempt before blocking at max_loops. A provider rate limit is
 not a stage failure: the engine pauses and retries the same attempt (no
 loop_back consumed, no rate-limit text reaching the prompt) until the
 provider recovers or a retry cap is hit, per spec §11.9. Every running task
-is leased; foreign-leased tasks are left untouched.
+is leased under the run's own holder, `pipeline:<runID>` (actor `pipeline`
+for attribution; bare `pipeline` only when no run id is set), with a token
+only this process knows; foreign-leased tasks are left untouched. On launch
+the engine reclaims leases of kind `pipeline` whose holder process it can
+prove dead; losing a lease never changes a task's status
+(docs/PIPELINE-LEASES-DESIGN.md).
 
 With `Isolated` on (W3.2), each task gets its own worktree and `mads/<task>`
 branch: pre-merge stages run there, a stage whose command starts `git merge`
@@ -212,9 +217,12 @@ checking `backup/tsk_<id>` before re-deriving a design from scratch now holds
 automatically for every block, not just the ones a shepherd happened to back
 up by hand. Losing the lease mid-stage gets the same guarantee: before the
 engine gives up on a task it no longer owns, it commits any dirty worktree
-state and force-updates `backup/<task>` exactly like a block, so a
-reaper-blocked task never loses uncommitted work even though the engine
-writes no status for it — see "Suspend/wake aborts the orphaned stage" below.
+state and force-updates `backup/<task>` exactly like a block, so the task
+never loses uncommitted work even though the engine writes no status for
+it. It does so only if the lease is still free, under a short claim of its
+own: if another run already holds the task, that run owns the worktree and
+the engine leaves it alone — see "Suspend/wake aborts the orphaned stage"
+below.
 
 Conventions the engine defines (until the spec §6 grammar grows richer):
 - An **agent stage fails** when the provider errors or the reply's last line
@@ -294,26 +302,29 @@ never a mock of either contract.
 - **Leases survive silent stages** — writes renew the lease meter, but an
   agent one-shot can be silent for longer than any TTL (the first Wave-4
   dogfood run lost a task to the reaper this way); a heartbeat renews at a
-  third of the TTL for the life of the task, and a renewal refused as a
-  conflict abandons the task without another write:
-  TestLeaseHeartbeatOutlivesSilentStage, TestLostLeaseAbandonsTask.
+  third of the TTL for the life of the task, and a renewal refused as
+  `lease_lost` abandons the task without another write. A renewal only
+  extends a live lease for its token, so it can never re-take a lost one:
+  TestLeaseHeartbeatOutlivesSilentStage, TestLostLeaseAbandonsTask,
+  TestHeartbeatAfterReleaseAbortsAndNeverRetakes, TestLeaseHolderIsPipelineRun.
 - **Suspend/wake aborts the orphaned stage** — a machine suspend stalls every
   heartbeat past the TTL at once (CLOCK_MONOTONIC, what the heartbeat ticker
   and the stage-timeout context both run on, pauses for the whole downtime,
-  so neither fires on its own); on wake the reaper has already reclaimed the
-  lease. The engine no longer silently re-takes it and resumes driving the
-  task (that let it burn API usage against work it didn't own, and a
-  suspend-during-block once combined with this to lose uncommitted work —
-  the second and third Wave-4 runs surfaced this in turn). Instead, lease
-  loss of any kind — a proactive wall-clock gap past the TTL since the last
-  successful renewal, a renewal rejected outright, or a renewal that
-  succeeded by re-taking a lease while the task's own status had already
-  moved out from under the engine — kills the stage's agent process tree,
-  commits and backs up the worktree the same way a block does, releases the
-  lease, and writes no status: the reaper or the user owns the task now. The
-  claim loop continues immediately, free to pick up other ready work:
-  TestSuspendWakeAbortsTask, TestWallClockGapTriggersAbortWithoutRejectedRenewal,
-  TestLeaseLossKillsAgentBacksUpAndContinuesClaiming. The stage-timeout
+  so neither fires on its own); on wake the reaper has already expired the
+  lease. The engine must not resume driving the task (that let it burn API
+  usage against work it didn't own, and a suspend-during-block once
+  combined with this to lose uncommitted work — the second and third
+  Wave-4 runs surfaced this in turn). Lease loss of either kind — a
+  proactive wall-clock gap past the TTL since the last successful renewal,
+  or a renewal rejected as `lease_lost` (the reaper, or the Router's
+  `ReleaseAll` on the run's holder) — kills the stage's agent process tree,
+  snapshots the worktree the same way a block does if the lease is still
+  free, and writes no status: the task stays in_progress with no lease
+  (Interrupted). The claim loop continues immediately, free to pick up
+  other ready work: TestSuspendWakeAbortsTask,
+  TestWallClockGapTriggersAbortWithoutRejectedRenewal,
+  TestLeaseLossKillsAgentBacksUpAndContinuesClaiming,
+  TestLeaseLossSkipsSnapshotWhenAnotherRunHoldsTask. The stage-timeout
   watchdog uses the same wall clock, so a suspended machine can't extend an
   agent's budget by the sleep duration: TestStageTimeoutUsesWallClock.
 - **Sleep is inhibited while a run is active** — the engine holds a

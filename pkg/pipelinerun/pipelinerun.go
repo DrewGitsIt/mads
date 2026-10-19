@@ -29,7 +29,8 @@ type Options struct {
 	Data      *dataclient.Client
 	Provider  provider.Provider
 	SessionID string
-	// RunID names the run on its pipeline.* events (engine.Config.RunID).
+	// RunID names the run on its pipeline.* events and holds its task
+	// leases as "pipeline:<RunID>" (engine.Config.RunID).
 	RunID    string
 	Template *template.Template
 	// TemplateVersion is the contracts.Template.Version this Template was

@@ -20,8 +20,24 @@ stages:
     agent: executor
 `
 
-// runSolo starts a non-isolated run with a short lease TTL in the background
-// and returns the summary channel.
+// soloRunID is runSolo's run id, so its leases are held by
+// "pipeline:"+soloRunID (docs/PIPELINE-LEASES-DESIGN.md A1).
+const soloRunID = "run_solo"
+
+// releaseRun frees every lease the run holds the way the Router does when
+// the run's process exits (supervisor.onPipelineExit): a tokenless
+// ReleaseAll on the run's holder, from a client of its own, so the
+// engine's client keeps its token and learns of the loss only by renewing.
+func (h *harness) releaseRun(t *testing.T, runID string) {
+	t.Helper()
+	router := dataclient.New(h.base, "router")
+	if err := router.ReleaseAll(context.Background(), "pipeline:"+runID, "test: run lost its leases"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// runSolo starts a non-isolated run (run id soloRunID) with a short lease
+// TTL in the background and returns the summary channel.
 func (h *harness) runSolo(t *testing.T, p *fake.Fake, ttl time.Duration) <-chan *Summary {
 	t.Helper()
 	parsed, verr := template.Check([]byte(soloTemplate), func(string) bool { return true })
@@ -31,7 +47,7 @@ func (h *harness) runSolo(t *testing.T, p *fake.Fake, ttl time.Duration) <-chan 
 	out := make(chan *Summary, 1)
 	go func() {
 		sum, err := Run(context.Background(), Config{
-			Data: h.data, Provider: p, SessionID: h.sess.ID,
+			Data: h.data, Provider: p, SessionID: h.sess.ID, RunID: soloRunID,
 			Template: parsed, Cwd: h.cwd, Concurrency: 1,
 			StageTimeout: 30 * time.Second, LeaseTTL: ttl,
 		})
@@ -68,25 +84,24 @@ func TestLeaseHeartbeatOutlivesSilentStage(t *testing.T) {
 }
 
 // A machine suspend stalls every heartbeat past the TTL at once; on wake the
-// reaper has released the lease and blocked the task. The engine, still
-// alive and mid-stage, no longer owns the task — it must abort the stage and
-// leave the status alone (the reaper's write stands), not silently resume
-// driving it. Simulated here by doing exactly what the reaper does (release
-// + block) out from under a running stage.
+// lease is gone and someone else may have moved the task on (here, a user
+// blocking it). The engine, still alive and mid-stage, no longer owns the
+// task — it must abort the stage and leave the status alone (the other
+// write stands), not silently resume driving it. Simulated by freeing the
+// lease and blocking the task out from under a running stage.
 func TestSuspendWakeAbortsTask(t *testing.T) {
 	h := newHarness(t)
 	f := mustScenario(t, fake.Rule{Match: "Task: napper", Reply: "done", DelayMs: 1500})
 	seeded := h.seed(contracts.Task{Title: "napper"})
 	done := h.runSolo(t, f, 400*time.Millisecond)
 
-	// Mid-stage, play reaper: free the lease and block the task.
+	// Mid-stage: free the lease, then block the task as the user.
 	time.Sleep(600 * time.Millisecond)
-	if err := h.data.Release(context.Background(), seeded[0].ID); err != nil {
-		t.Fatal(err)
-	}
+	h.releaseRun(t, soloRunID)
+	user := dataclient.New(h.base, "user")
 	swept := h.task(t, seeded[0].ID)
 	swept.Status = contracts.StatusBlocked
-	if err := h.data.UpdateTask(context.Background(), &swept); err != nil {
+	if err := user.UpdateTask(context.Background(), &swept); err != nil {
 		t.Fatal(err)
 	}
 
@@ -95,7 +110,7 @@ func TestSuspendWakeAbortsTask(t *testing.T) {
 		t.Fatalf("engine completed a task it no longer owned after simulated suspend: %+v", sum)
 	}
 	if got := h.task(t, seeded[0].ID); got.Status != contracts.StatusBlocked {
-		t.Errorf("task status = %s, want blocked (the reaper's write must stand, not be overwritten)", got.Status)
+		t.Errorf("task status = %s, want blocked (the user's write must stand, not be overwritten)", got.Status)
 	}
 }
 
@@ -139,7 +154,7 @@ func TestWallClockGapTriggersAbortWithoutRejectedRenewal(t *testing.T) {
 	if len(sum.Done) != 0 {
 		t.Fatalf("engine completed a task after a wall-clock gap past the TTL: %+v", sum)
 	}
-	leases, err := h.data.Leases(context.Background())
+	leases, err := h.data.LeasesOfKind(context.Background(), "pipeline")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,14 +217,12 @@ func TestLostLeaseAbandonsTask(t *testing.T) {
 	seeded := h.seed(contracts.Task{Title: "stolen"})
 	done := h.runSolo(t, f, 400*time.Millisecond)
 
-	// Mid-stage, yank the lease out from under the engine: release as the
-	// engine's own actor, then claim as someone else. The next heartbeat
-	// renewal conflicts.
+	// Mid-stage, yank the lease out from under the engine the way the
+	// Router does (a tokenless ReleaseAll on the run's holder), then claim
+	// it as someone else. The next heartbeat renewal is rejected.
 	time.Sleep(600 * time.Millisecond)
+	h.releaseRun(t, soloRunID)
 	thief := dataclient.New(h.base, "thief")
-	if err := h.data.Release(context.Background(), seeded[0].ID); err != nil {
-		t.Fatal(err)
-	}
 	if err := thief.Claim(context.Background(), seeded[0].ID, "", time.Minute); err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +279,7 @@ func TestCancelDuringRateLimitPauseReleasesLease(t *testing.T) {
 		t.Fatal("Run did not return promptly after ctx cancellation during the rate-limit pause")
 	}
 
-	leases, err := h.data.Leases(context.Background())
+	leases, err := h.data.LeasesOfKind(context.Background(), "pipeline")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,5 +288,70 @@ func TestCancelDuringRateLimitPauseReleasesLease(t *testing.T) {
 	}
 	if got := h.task(t, seeded[0].ID); got.Status != contracts.StatusInProgress {
 		t.Errorf("cancelled task status = %s, want in_progress (cancel releases the lease, not the status)", got.Status)
+	}
+}
+
+// A run's leases are held by "pipeline:<runID>" (docs/PIPELINE-LEASES-DESIGN.md
+// A1), not the bare actor every engine shares: that is what lets the
+// Router's exit cleanup release exactly one run's leases.
+func TestLeaseHolderIsPipelineRun(t *testing.T) {
+	h := newHarness(t)
+	f := mustScenario(t, fake.Rule{Match: "Task: held", Reply: "done", DelayMs: 800})
+	seeded := h.seed(contracts.Task{Title: "held"})
+	done := h.runSolo(t, f, time.Minute)
+
+	var leases []contracts.Lease
+	deadline := time.Now().Add(5 * time.Second)
+	for len(leases) == 0 && time.Now().Before(deadline) {
+		var err error
+		if leases, err = h.data.LeasesOfKind(context.Background(), "pipeline"); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(leases) != 1 || leases[0].TaskID != seeded[0].ID || leases[0].Holder != "pipeline:"+soloRunID {
+		t.Fatalf("leases while the task runs = %+v, want %s held by pipeline:%s", leases, seeded[0].ID, soloRunID)
+	}
+
+	if sum := <-done; len(sum.Done) != 1 {
+		t.Fatalf("summary: %+v", sum)
+	}
+}
+
+// Once a run's lease is released behind its back, the next heartbeat's
+// renewal is rejected: the engine aborts the task and never takes the
+// lease back (a renewal can't create a lease, and a non-isolated abort has
+// no snapshot to claim for). The task stays in_progress: Interrupted.
+func TestHeartbeatAfterReleaseAbortsAndNeverRetakes(t *testing.T) {
+	h := newHarness(t)
+	f := mustScenario(t, fake.Rule{Match: "Task: dropped", Reply: "done", DelayMs: 3000})
+	seeded := h.seed(contracts.Task{Title: "dropped"})
+	const ttl = 300 * time.Millisecond
+	done := h.runSolo(t, f, ttl)
+
+	time.Sleep(ttl) // a couple of renewals in: the heartbeat is running
+	h.releaseRun(t, soloRunID)
+
+	// Watch the lease table until the run ends: any lease on the task now
+	// would be the engine re-taking it.
+	var sum *Summary
+	for sum == nil {
+		select {
+		case sum = <-done:
+		case <-time.After(10 * time.Millisecond):
+			leases, err := h.data.LeasesOfKind(context.Background(), "pipeline")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(leases) != 0 {
+				t.Fatalf("lease re-taken after release: %+v", leases)
+			}
+		}
+	}
+	if len(sum.Done) != 0 {
+		t.Fatalf("engine completed a task after losing its lease: %+v", sum)
+	}
+	if got := h.task(t, seeded[0].ID); got.Status != contracts.StatusInProgress {
+		t.Errorf("task status = %s, want in_progress (lease loss changes no status)", got.Status)
 	}
 }
