@@ -162,7 +162,7 @@ describe("TasksTab", { timeout: 15_000 }, () => {
         const started = recordedEnvelopes.find((e) => e.type === "pipeline.started")!;
         source.emit(started.type, JSON.stringify(started));
       });
-      expect(await screen.findByRole("button", { name: "Cancel run" })).toBeTruthy();
+      expect(await screen.findByRole("button", { name: "Stop" })).toBeTruthy();
     });
 
     it("names the tasks a left-out dependency keeps out", async () => {
@@ -240,19 +240,19 @@ describe("TasksTab", { timeout: 15_000 }, () => {
   });
 
   describe("a live run", () => {
-    it("is the default while one runs; Cancel explains itself when the run has no id", async () => {
+    it("is the default while one runs; Stop explains itself when the run has no id", async () => {
       const { routerClient, pipelineClient } = recordedClients({
         runs: [{ ...FINISHED, outcome: "running", ended_at: undefined }],
         events: UNFINISHED,
       });
       render(<TasksTab sessionId={recordedSessionId} routerClient={routerClient} pipelineClient={pipelineClient} />);
 
-      const cancel = await screen.findByRole("button", { name: "Cancel run" });
+      const cancel = await screen.findByRole("button", { name: "Stop" });
       expect(cancel.hasAttribute("disabled")).toBe(true);
-      expect(cancel.getAttribute("title")).toMatch(/can't be cancelled from here/);
+      expect(cancel.getAttribute("title")).toMatch(/can't be stopped from here/);
     });
 
-    it("cancels by the run id from the fold, so it works after a reload", async () => {
+    it("stops by the run id from the fold, so it works after a reload", async () => {
       const { routerClient, pipelineClient } = recordedClients({
         runs: [{ ...FINISHED, outcome: "running", ended_at: undefined }],
         events: withRunId(UNFINISHED, "run_42"),
@@ -260,7 +260,7 @@ describe("TasksTab", { timeout: 15_000 }, () => {
       const cancel = vi.spyOn(pipelineClient, "cancelPipeline");
       render(<TasksTab sessionId={recordedSessionId} routerClient={routerClient} pipelineClient={pipelineClient} />);
 
-      const button = await screen.findByRole("button", { name: "Cancel run" });
+      const button = await screen.findByRole("button", { name: "Stop" });
       await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
       fireEvent.click(button);
       await waitFor(() => expect(cancel).toHaveBeenCalledWith("run_42"));
@@ -272,7 +272,7 @@ describe("TasksTab", { timeout: 15_000 }, () => {
         events: UNFINISHED,
       });
       render(<TasksTab sessionId={recordedSessionId} routerClient={routerClient} pipelineClient={pipelineClient} />);
-      await screen.findByRole("button", { name: "Cancel run" });
+      await screen.findByRole("button", { name: "Stop" });
 
       const source = FakeEventSource.instances.find((s) => s.url.includes("pipeline.completed"))!;
       act(() => {

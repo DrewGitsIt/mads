@@ -50,6 +50,10 @@
   background: var(--accent);
 }
 
+.dot[data-status="interrupted"] {
+  background: var(--warn);
+}
+
 .dot[data-status="skipped"] {
   background: transparent;
   border: 1px dashed var(--text3);
@@ -88,6 +92,24 @@
   font: var(--fs-sm) var(--mono);
   color: var(--bad-fg);
   white-space: pre-wrap;
+}
+
+/* Pickup and resume markers: where this run took over from an earlier one. */
+.marker {
+  padding: var(--space-1) var(--space-2);
+  border-left: 2px solid var(--warn);
+  font: var(--fs-sm) var(--sans);
+  color: var(--warn-fg);
+}
+
+.note {
+  margin: var(--space-1) 0 0;
+  font: var(--fs-sm) var(--sans);
+  color: var(--text3);
+}
+
+.selectable .note {
+  padding-left: calc(8px + var(--space-2));
 }
 
 .srOnly {

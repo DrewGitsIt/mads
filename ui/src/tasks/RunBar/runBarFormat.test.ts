@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PipelineRun } from "../../router/types";
-import { formatDuration, formatElapsed, formatRunWhen, outcomeTone, runOrdinal } from "./runBarFormat";
+import { formatDuration, formatElapsed, formatRunWhen, outcomeLabel, outcomeTone, runOrdinal } from "./runBarFormat";
 
 function run(seq: number, outcome: PipelineRun["outcome"], started_at: string, ended_at?: string): PipelineRun {
   return { session_id: "s", run_seq: seq, started_at, ended_at, outcome, tasks_done: 0, tasks_blocked: 0, tasks_skipped: 0, cost_usd: 0 };
@@ -43,7 +43,14 @@ describe("runBarFormat", () => {
     expect(outcomeTone("completed")).toBe("ok");
     expect(outcomeTone("incomplete")).toBe("warn");
     expect(outcomeTone("interrupted")).toBe("warn");
-    expect(outcomeTone("failed")).toBe("bad");
+    expect(outcomeTone("failed")).toBe("warn");
     expect(outcomeTone("cancelled")).toBe("neutral");
+  });
+
+  it("names a cancelled run stopped, and a failed or lost one interrupted", () => {
+    expect(outcomeLabel("cancelled")).toBe("stopped");
+    expect(outcomeLabel("failed")).toBe("interrupted");
+    expect(outcomeLabel("interrupted")).toBe("interrupted");
+    expect(outcomeLabel("incomplete")).toBe("incomplete");
   });
 });

@@ -20,6 +20,8 @@ export interface MetroMapProps {
   /** The task being zoomed into: its token gets a ring and its path through the stations lights up. */
   focusTaskId?: string;
   onSelectTask: (id: string) => void;
+  /** Plan and live: the session's Interrupted tasks. */
+  interrupted?: ReadonlySet<string>;
 }
 
 const FOCUS_CLASS: Record<StationFocus, string | undefined> = {
@@ -31,10 +33,20 @@ const FOCUS_CLASS: Record<StationFocus, string | undefined> = {
 const plural = (n: number) => `${n} task${n === 1 ? "" : "s"}`;
 
 /** The run's template as a metro line, with tasks riding it as tokens. */
-export function MetroMap({ tasks, tasksById, mode, excluded, taskRunState, stages, focusTaskId, onSelectTask }: MetroMapProps) {
+export function MetroMap({
+  tasks,
+  tasksById,
+  mode,
+  excluded,
+  taskRunState,
+  stages,
+  focusTaskId,
+  onSelectTask,
+  interrupted,
+}: MetroMapProps) {
   const layout = useMemo(
-    () => metroLayout({ tasks, tasksById, mode, excluded, taskRunState, stages, focusTaskId }),
-    [tasks, tasksById, mode, excluded, taskRunState, stages, focusTaskId],
+    () => metroLayout({ tasks, tasksById, mode, excluded, taskRunState, stages, focusTaskId, interrupted }),
+    [tasks, tasksById, mode, excluded, taskRunState, stages, focusTaskId, interrupted],
   );
   const [openStack, setOpenStack] = useState<string | null>(null);
   const { geometry: g } = layout;
@@ -242,8 +254,9 @@ function Token({ token, focused, onSelect }: { token: MetroToken; focused: boole
     <button
       type="button"
       className={[styles.token, styles[token.status], focused && styles.focus].filter(Boolean).join(" ")}
-      title={token.task.title}
+      title={token.status === "interrupted" ? `${token.task.title} · Interrupted` : token.task.title}
       data-task={token.id}
+      data-status={token.status}
       aria-pressed={focused}
       onClick={() => onSelect(token.id)}
     >

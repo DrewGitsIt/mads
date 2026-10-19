@@ -7,12 +7,23 @@ import type { Task } from "../../router/types";
 
 type TasksById = Record<string, Task>;
 
+const NONE: ReadonlySet<string> = new Set();
+
+/**
+ * Work a run launches: a ready task, or an Interrupted one (in `interrupted`:
+ * the pickup endpoint's answer), which any new run picks up where it stopped
+ * (docs/PIPELINE-LEASES-DESIGN.md B2).
+ */
+export function launchable(task: Task, interrupted: ReadonlySet<string> = NONE): boolean {
+  return task.status === "ready" || (task.status === "in_progress" && interrupted.has(task.id));
+}
+
 // A dependency that can't become done in this run, on its own account: left
-// out by the user, a draft, or neither ready nor already done (blocked, needs
-// review, won't do — the engine only launches ready tasks).
-function cutsOnItsOwn(dep: Task, excluded: ReadonlySet<string>): boolean {
+// out by the user, a draft, or not launchable and not already done (blocked,
+// needs review, won't do, someone else's in-progress work).
+function cutsOnItsOwn(dep: Task, excluded: ReadonlySet<string>, interrupted: ReadonlySet<string>): boolean {
   if (dep.status === "done") return false;
-  return excluded.has(dep.id) || !!dep.draft || dep.status !== "ready";
+  return excluded.has(dep.id) || !!dep.draft || !launchable(dep, interrupted);
 }
 
 /**
@@ -21,12 +32,14 @@ function cutsOnItsOwn(dep: Task, excluded: ReadonlySet<string>): boolean {
  * (see above). Undefined when nothing upstream is in the way. Done
  * dependencies are satisfied and not looked past; ids that aren't in
  * `tasksById` are ignored. Doesn't consider `task` itself — check
- * `excluded.has(task.id)` / `task.draft` separately.
+ * `excluded.has(task.id)` / `task.draft` separately. `interrupted` (Plan:
+ * the pickup endpoint's tasks) are launchable, like ready ones.
  */
 export function leftOutBy(
   task: Task,
   tasksById: TasksById,
   excluded: ReadonlySet<string>,
+  interrupted: ReadonlySet<string> = NONE,
   seen: Set<string> = new Set(),
 ): Task | undefined {
   for (const id of task.dependencies ?? []) {
@@ -34,8 +47,8 @@ export function leftOutBy(
     seen.add(id);
     const dep = tasksById[id];
     if (!dep || dep.status === "done") continue;
-    if (cutsOnItsOwn(dep, excluded)) return dep;
-    const upstream = leftOutBy(dep, tasksById, excluded, seen);
+    if (cutsOnItsOwn(dep, excluded, interrupted)) return dep;
+    const upstream = leftOutBy(dep, tasksById, excluded, interrupted, seen);
     if (upstream) return upstream;
   }
   return undefined;
@@ -65,18 +78,19 @@ export function excludedUpstream(
   return undefined;
 }
 
-/** The tasks this plan will launch: ready, confirmed, included, and nothing upstream in the way. */
+/** The tasks this plan will launch: ready or Interrupted, confirmed, included, and nothing upstream in the way. */
 export function runnableInPlan(
   tasks: Task[],
   tasksById: TasksById,
   excluded: ReadonlySet<string>,
+  interrupted: ReadonlySet<string> = NONE,
 ): Task[] {
   return tasks.filter(
     (t) =>
-      t.status === "ready" &&
+      launchable(t, interrupted) &&
       !t.draft &&
       !excluded.has(t.id) &&
-      leftOutBy(t, tasksById, excluded) === undefined,
+      leftOutBy(t, tasksById, excluded, interrupted) === undefined,
   );
 }
 
@@ -89,12 +103,13 @@ export function planWarning(
   tasks: Task[],
   tasksById: TasksById,
   excluded: ReadonlySet<string>,
+  interrupted: ReadonlySet<string> = NONE,
 ): string | undefined {
   const cut: Task[] = [];
   const by = new Map<string, Task>();
   for (const t of tasks) {
-    if (t.status !== "ready" || t.draft || excluded.has(t.id)) continue;
-    const dep = leftOutBy(t, tasksById, excluded);
+    if (!launchable(t, interrupted) || t.draft || excluded.has(t.id)) continue;
+    const dep = leftOutBy(t, tasksById, excluded, interrupted);
     if (!dep || !(dep.draft || excluded.has(dep.id))) continue;
     cut.push(t);
     by.set(dep.id, dep);
@@ -149,8 +164,9 @@ export function criticalPath(
   tasks: Task[],
   tasksById: TasksById,
   excluded: ReadonlySet<string>,
+  interrupted: ReadonlySet<string> = NONE,
 ): string[] {
-  const runnable = new Set(runnableInPlan(tasks, tasksById, excluded).map((t) => t.id));
+  const runnable = new Set(runnableInPlan(tasks, tasksById, excluded, interrupted).map((t) => t.id));
   const include = (id: string) => runnable.has(id);
   const memo = new Map<string, number>();
   let end: string | undefined;

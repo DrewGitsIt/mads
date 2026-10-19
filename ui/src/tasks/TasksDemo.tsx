@@ -1,7 +1,16 @@
 import { TasksTab } from "./TasksTab";
 import type { RunBarView } from "./RunBar/RunBar";
-import { FakePipelineClient } from "../pipeline/client/fixtures";
-import { recordedEnvelopes, recordedSessionId, recordedTaskIds, recordedTasks } from "../pipeline/client/recordedRun";
+import {
+  FakePipelineClient,
+  pickedUpRunEnvelopes,
+  PICKUP_RUN_SEQ,
+  STOPPED_AT_SEQ,
+  STOPPED_RUN_SEQ,
+  stoppedRunEnvelopes,
+  stoppedRunPickup,
+  stoppedRunTasks,
+} from "../pipeline/client/fixtures";
+import { recordedSessionId, recordedTaskIds, recordedTasks } from "../pipeline/client/recordedRun";
 import { FakeRouterClient, fixtureSessions } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import type { Envelope, PipelineRun, Task, Template } from "../router/types";
@@ -52,40 +61,34 @@ class DemoRouterClient extends FakeRouterClient {
 }
 
 // The recording ran in milliseconds against a fake provider; spread it out
-// so durations read like a real run, ending (live: cut off) a moment ago.
+// so durations read like a real run, ending (live: still going) a moment ago.
+//
+// Every mode tells one story (docs/PIPELINE-LEASES-DESIGN.md): Run 1 was
+// stopped with flaky api's code_review in flight, so flaky api is
+// Interrupted. Past shows Run 1 · stopped; Plan shows flaky api will resume
+// at code_review; live is Run 2, which picked it up.
 const STEP_MS = 23_000;
-// Live stops with flaky api's third code_review attempt still open.
-const LIVE_CUT_SEQ = 46;
-const startSeq = recordedEnvelopes.find((e) => e.type === "pipeline.started")!.seq;
 
 function envelopes(): Envelope[] {
-  const all = mode === "live" ? recordedEnvelopes.filter((e) => e.seq <= LIVE_CUT_SEQ) : recordedEnvelopes;
+  const all = mode === "live" ? pickedUpRunEnvelopes() : stoppedRunEnvelopes();
+  const first = STOPPED_RUN_SEQ;
   const last = all[all.length - 1].seq;
-  const base = Date.now() - (last - startSeq) * STEP_MS - (mode === "live" ? 40_000 : 3_600_000);
-  return all.map((e) => ({
-    ...e,
-    timestamp: new Date(base + Math.max(0, e.seq - startSeq) * STEP_MS).toISOString(),
-    payload: e.type === "pipeline.started" ? { ...(e.payload as object), run_id: "run_demo" } : e.payload,
-  }));
+  const base = Date.now() - (last - first) * STEP_MS - (mode === "live" ? 40_000 : 3_600_000);
+  return all.map((e) => ({ ...e, timestamp: new Date(base + Math.max(0, e.seq - first) * STEP_MS).toISOString() }));
 }
 
 function tasks(): Task[] {
-  const copy = recordedTasks.map((t) => structuredClone(t));
+  const copy = stoppedRunTasks();
   if (mode === "plan") {
-    for (const t of copy) {
-      t.status = "ready";
-      t.notes = [];
-    }
     copy.push({
       ...structuredClone(recordedTasks[0]),
       id: "tsk_demo_draft",
       title: "docs for the cli",
+      status: "ready",
       draft: true,
       dependencies: [recordedTaskIds.cli],
       notes: [],
     });
-  } else if (mode === "live") {
-    copy.find((t) => t.id === recordedTaskIds.flakyApi)!.status = "in_progress";
   }
   // No dependencies: the graph's tray holds it.
   copy.push({
@@ -101,18 +104,34 @@ function tasks(): Task[] {
 }
 
 const envs = envelopes();
-const run: PipelineRun = {
-  session_id: recordedSessionId,
-  run_seq: startSeq,
-  run_id: "run_demo",
-  started_at: envs.find((e) => e.type === "pipeline.started")!.timestamp,
-  ended_at: mode === "past" ? envs[envs.length - 1].timestamp : undefined,
-  outcome: mode === "past" ? "incomplete" : "running",
-  tasks_done: 1,
-  tasks_blocked: 1,
-  tasks_skipped: 1,
-  cost_usd: 0,
-};
+const at = (seq: number) => envs.find((e) => e.seq === seq)!.timestamp;
+const runs: PipelineRun[] = [
+  {
+    session_id: recordedSessionId,
+    run_seq: STOPPED_RUN_SEQ,
+    run_id: "run_stopped",
+    started_at: at(STOPPED_RUN_SEQ),
+    ended_at: at(STOPPED_AT_SEQ + 1),
+    outcome: "cancelled",
+    tasks_done: 1,
+    tasks_blocked: 0,
+    tasks_skipped: 0,
+    cost_usd: 0,
+  },
+];
+if (mode === "live") {
+  runs.push({
+    session_id: recordedSessionId,
+    run_seq: PICKUP_RUN_SEQ,
+    run_id: "run_pickup",
+    started_at: at(PICKUP_RUN_SEQ),
+    outcome: "running",
+    tasks_done: 0,
+    tasks_blocked: 0,
+    tasks_skipped: 0,
+    cost_usd: 0,
+  });
+}
 
 const demoTasks = tasks();
 const routerClient = new DemoRouterClient(
@@ -125,10 +144,11 @@ const routerClient = new DemoRouterClient(
 const pipelineClient = new FakePipelineClient(demoTasks.map((t) => ({ ...t })));
 // `mads merge` prints nothing: its log is the lens's empty-output state.
 pipelineClient.outputChunksFor = (_taskId, target) => (target?.stage === "merge" ? [] : undefined);
-if (mode !== "plan") {
-  pipelineClient.runs = [run];
-  pipelineClient.runEvents = envs;
-}
+pipelineClient.runs = runs;
+pipelineClient.runEvents = envs;
+// Live: Run 2 holds flaky api's lease, so nothing is Interrupted.
+pipelineClient.pickup = mode === "live" ? { shared_directory: false, tasks: [] } : stoppedRunPickup;
+const focusRun = mode === "plan" ? { run: "new" as const } : undefined;
 
 function href(next: { mode?: DemoMode; view?: RunBarView }) {
   const q = new URLSearchParams({ mode: next.mode ?? mode, view: next.view ?? view });
@@ -138,7 +158,7 @@ function href(next: { mode?: DemoMode; view?: RunBarView }) {
 /**
  * Dev-only: the Tasks tab against the recorded run, no backend. `?mode=`
  * plan | live | past and `?view=` list | graph pick the starting state
- * (Start and Cancel are recorded by the fake client and change nothing).
+ * (Start and Stop are recorded by the fake client and change nothing).
  */
 export function TasksDemo() {
   return (
@@ -163,6 +183,7 @@ export function TasksDemo() {
           routerClient={routerClient}
           pipelineClient={pipelineClient}
           initialView={view}
+          focusRun={focusRun}
           onOpenFile={(path) => console.log("open file", path)}
         />
       </div>

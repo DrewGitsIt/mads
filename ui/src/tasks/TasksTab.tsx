@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PipelineClient } from "../pipeline/client/pipelineClient";
 import { planWarning, runnableInPlan } from "../pipeline/plan/planScope";
 import { runStages } from "../pipeline/plan/runStages";
-import { runStatusOf, type RunMode } from "../pipeline/plan/runStatus";
+import { interruptedIds, pickupLine, runStatusOf, type RunMode } from "../pipeline/plan/runStatus";
+import { usePickup } from "../pipeline/plan/usePickup";
 import { useRunTemplates } from "../pipeline/plan/useRunTemplates";
 import { usePipelineRun, type TaskRunState, type UsePipelineRunResult } from "../pipeline/state/usePipelineRun";
 import { usePipelineRunHistory } from "../pipeline/state/usePipelineRunHistory";
@@ -59,8 +60,7 @@ interface RunFold {
 }
 
 const EMPTY_FOLD: RunFold = { columns: [], taskRunState: {}, excludedTaskIds: [] };
-const NO_RUN_ID =
-  "This run started before runs recorded their id, so it can't be cancelled from here. Cancel it from the CLI.";
+const NO_RUN_ID = "This run started before runs recorded their id, so it can't be stopped from here. Stop it from the CLI.";
 
 function selectionFrom(focusRun: TasksTabProps["focusRun"]): Selection {
   if (!focusRun) return { kind: "auto" };
@@ -217,6 +217,20 @@ export function TasksTab({
   const scopeExcluded = mode === "plan" ? excluded : runExcluded;
   const taskRunState = mode === "plan" ? EMPTY_FOLD.taskRunState : fold.taskRunState;
 
+  // Interrupted tasks (docs/PIPELINE-LEASES-DESIGN.md): Plan asks where a run
+  // of the chosen template picks each up; a live run, where it will. A past
+  // run reads them from its own record instead.
+  const pickupTemplateId = mode === "plan" ? templateId : mode === "live" ? runTemplate?.id : undefined;
+  const pickup = usePickup(
+    pipelineClient,
+    sessionId,
+    pickupTemplateId || undefined,
+    tasks,
+    `${live.phase}:${live.runStartSeq ?? ""}`,
+  );
+  const interrupted = useMemo(() => interruptedIds(pickup), [pickup]);
+  const runLabelOf = useCallback((runSeq: number) => `Run ${runOrdinal(runs, runSeq)}`, [runs]);
+
   const blockReasons = useMemo(() => {
     const out: Record<string, string> = {};
     for (const t of tasks) {
@@ -301,8 +315,8 @@ export function TasksTab({
       templateId,
       defaultTemplateId,
       onTemplateChange: setPickedTemplateId,
-      runnableCount: runnableInPlan(tasks, tasksById, excluded).length,
-      warning: planWarning(tasks, tasksById, excluded),
+      runnableCount: runnableInPlan(tasks, tasksById, excluded, interrupted).length,
+      warning: planWarning(tasks, tasksById, excluded, interrupted),
       onStart: async () => {
         const excludeTaskIds = [...excluded].filter((id) => tasksById[id]);
         await pipelineClient.startPipeline(sessionId, templateId, { excludeTaskIds });
@@ -317,10 +331,10 @@ export function TasksTab({
       mode: "live",
       templateLabel: templateLabel(runTemplate, fold.template),
       startedAt: live.runStartedAt,
-      onCancel: async () => {
+      onStop: async () => {
         if (runId) await pipelineClient.cancelPipeline(runId);
       },
-      cancelDisabledReason: runId ? undefined : NO_RUN_ID,
+      stopDisabledReason: runId ? undefined : NO_RUN_ID,
     };
   } else if (shown.mode === "past") {
     const run = runs.find((r) => r.run_seq === shown.runSeq);
@@ -344,7 +358,7 @@ export function TasksTab({
         key={taskId}
         task={task}
         tasksById={tasksById}
-        runStatus={runStatusOf(task, { mode, tasksById, excluded: scopeExcluded })}
+        runStatus={runStatusOf(task, { mode, tasksById, excluded: scopeExcluded, taskRunState, interrupted })}
         stages={stages}
         runState={taskRunState[taskId]}
         sessionId={sessionId}
@@ -357,6 +371,8 @@ export function TasksTab({
         onRetry={retry}
         onWontDo={wontDo}
         blockReason={blockReasons[taskId]}
+        runLabelOf={runLabelOf}
+        pickupText={mode === "past" ? undefined : pickupLine(taskId, pickup)}
         showCloseHint={showCloseHint}
       />
     );
@@ -365,7 +381,10 @@ export function TasksTab({
   const sheetTask =
     sheet?.kind === "detail" ? (tasksById[sheet.taskId] ?? (created?.id === sheet.taskId ? created : undefined)) : undefined;
   const sheetRunState = sheetTask ? live.taskRunState[sheetTask.id] : undefined;
-  const sheetLocked = sheetTask?.status === "in_progress";
+  // Read-only only while the live run is working on the task (it holds the
+  // lease, so a write would be refused). An Interrupted task, or one a
+  // person set in progress, has no live lease and stays editable.
+  const sheetLocked = sheetTask?.status === "in_progress" && live.phase === "running" && !!sheetRunState;
   const sheetRetry = sheet?.kind === "detail" && sheet.as === "retry";
 
   return (
@@ -385,6 +404,7 @@ export function TasksTab({
                 stages={stages}
                 focusTaskId={focusTaskObj?.id}
                 onSelectTask={selectRow}
+                interrupted={interrupted}
               />
               {focusTaskObj ? (
                 renderLens(focusTaskObj.id)
@@ -395,6 +415,7 @@ export function TasksTab({
                   mode={mode}
                   excluded={scopeExcluded}
                   taskRunState={taskRunState}
+                  pickup={pickup}
                   onSelectTask={selectRow}
                   blockReasons={blockReasons}
                   onToggleInclude={toggleInclude}
@@ -419,6 +440,7 @@ export function TasksTab({
               excluded={scopeExcluded}
               stages={stages}
               taskRunState={taskRunState}
+              pickup={pickup}
               runLabel={shownSeq !== undefined ? `Run ${runOrdinal(runs, shownSeq)}` : "Run"}
               onToggleInclude={toggleInclude}
               onEditRetry={(id) => openDetails(id, "retry")}

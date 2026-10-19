@@ -50,15 +50,32 @@ export function runOrdinal(runs: PipelineRun[], runSeq: number): number {
   return runs.filter((r) => r.run_seq < runSeq).length + 1;
 }
 
+/**
+ * A run outcome in the Tasks tab's words (docs/PIPELINE-LEASES-DESIGN.md
+ * B1): a cancelled run was stopped by the user; a failed one (the engine
+ * crashed) or one lost to a reboot ("interrupted" in the history) was
+ * interrupted. Every task keeps its state either way.
+ */
+export function outcomeLabel(outcome: string): string {
+  switch (outcome) {
+    case "cancelled":
+      return "stopped";
+    case "failed":
+    case "interrupted":
+      return "interrupted";
+    default:
+      return outcome;
+  }
+}
+
 export function outcomeTone(outcome: string | undefined): ChipTone {
   switch (outcome) {
     case "running":
       return "info";
     case "completed":
       return "ok";
-    case "failed":
-      return "bad";
     case "incomplete":
+    case "failed":
     case "interrupted":
       return "warn";
     default:

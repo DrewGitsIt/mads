@@ -3,7 +3,8 @@ import styles from "./RunStatusGlyph.module.css";
 
 /**
  * A run status as a shape: filled for done/blocked, a spinning arc for
- * running, dashed for queued, dotted for anything not in the run. Always
+ * running, the same arc stopped for interrupted, dashed for queued, dotted
+ * for anything not in the run. Always
  * aria-hidden; the caller names the status in text.
  */
 export function RunStatusGlyph({ status }: { status: RunStatus }) {

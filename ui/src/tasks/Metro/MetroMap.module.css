@@ -250,6 +250,12 @@
   color: var(--bg0);
 }
 
+.interrupted {
+  background: var(--warn-soft);
+  border-color: var(--warn);
+  color: var(--warn-fg);
+}
+
 .queued,
 .ready {
   border-style: dashed;

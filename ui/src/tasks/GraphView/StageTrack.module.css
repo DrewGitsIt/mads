@@ -16,6 +16,9 @@
 .seg_now {
   background: var(--accent);
 }
+.seg_stopped {
+  background: var(--warn);
+}
 .seg_failed {
   background: var(--bad);
 }

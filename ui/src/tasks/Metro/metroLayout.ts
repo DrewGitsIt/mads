@@ -119,6 +119,8 @@ export interface MetroInput {
   taskRunState: Record<string, TaskRunState>;
   stages: RunStage[];
   focusTaskId?: string;
+  /** Plan and live: the session's Interrupted tasks (the pickup endpoint's). */
+  interrupted?: ReadonlySet<string>;
 }
 
 /** A title cut to fit a token: whole words where it can, an ellipsis when it cuts. */
@@ -248,10 +250,10 @@ function buildArcs(stages: RunStage[], xs: number[]): MetroArc[] {
 }
 
 export function metroLayout(input: MetroInput): MetroLayout {
-  const { tasks, tasksById, mode, excluded, taskRunState, stages, focusTaskId } = input;
+  const { tasks, tasksById, mode, excluded, taskRunState, stages, focusTaskId, interrupted } = input;
   const xs = stationXs(stages.length);
   const xOf = new Map(stages.map((s, i) => [s.name, xs[i]]));
-  const ctx = { mode, tasksById, excluded };
+  const ctx = { mode, tasksById, excluded, taskRunState, interrupted };
 
   const start: MetroToken[] = [];
   const done: MetroToken[] = [];
@@ -267,10 +269,17 @@ export function metroLayout(input: MetroInput): MetroLayout {
       task,
       status,
       label: shortTitle(task.title),
-      attempt: status === "running" ? currentAttempt(rs) : 0,
+      attempt: status === "running" || status === "interrupted" ? currentAttempt(rs) : 0,
     };
     if (status === "draft" || status === "skipped" || status === "excluded") out.push(token);
     else if (status === "ready" || status === "queued") start.push(token);
+    else if (status === "interrupted") {
+      // Where it stopped, when this run's record says (past); else waiting
+      // at the start for a run to pick it up (Plan, live).
+      const stage = rs?.currentStage && xOf.has(rs.currentStage) ? rs.currentStage : undefined;
+      if (stage === undefined) start.push(token);
+      else at.set(stage, [...(at.get(stage) ?? []), token]);
+    }
     else if (status === "done") done.push(token);
     else if (status === "blocked") {
       // Plan has no run to be blocked in: it's simply not in this run.
@@ -303,7 +312,7 @@ export function metroLayout(input: MetroInput): MetroLayout {
   const stations: MetroStation[] = stages.map((stage, i) => ({
     stage,
     x: xs[i],
-    hot: (at.get(stage.name)?.length ?? 0) > 0,
+    hot: (at.get(stage.name) ?? []).some((t) => t.status === "running"),
     focus: tracing ? (stage.name === nowStage ? "now" : visited.has(stage.name) ? "visited" : "dim") : undefined,
   }));
 

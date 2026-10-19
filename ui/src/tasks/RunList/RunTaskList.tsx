@@ -1,6 +1,15 @@
 import type { KeyboardEvent, MouseEvent } from "react";
 import type { Task } from "../../router/types";
-import { PLAN_GROUPS, RUN_GROUPS, runStatusOf, type RunMode, type RunStatus } from "../../pipeline/plan/runStatus";
+import {
+  interruptedIds,
+  pickupLine,
+  PLAN_GROUPS,
+  RUN_GROUPS,
+  runStatusOf,
+  type PickupInfo,
+  type RunMode,
+  type RunStatus,
+} from "../../pipeline/plan/runStatus";
 import { leftOutBy } from "../../pipeline/plan/planScope";
 import type { TaskRunState } from "../../pipeline/state/usePipelineRun";
 import { Button } from "../../components/Button/Button";
@@ -16,6 +25,8 @@ export interface RunTaskListProps {
   /** Plan: the include boxes left unticked. Live/past: the run's excluded_task_ids. */
   excluded: ReadonlySet<string>;
   taskRunState: Record<string, TaskRunState>;
+  /** Plan and live: the session's Interrupted tasks and where a run picks each up. */
+  pickup?: PickupInfo;
   focusTaskId?: string;
   onSelectTask: (id: string) => void;
   /** Why each blocked task is blocked, by task id (the blocker note or stage.failed reason). */
@@ -35,6 +46,7 @@ const CHIP: Record<RunStatus, { label: string; tone: ChipTone }> = {
   ready: { label: "Ready", tone: "neutral" },
   queued: { label: "Queued", tone: "neutral" },
   running: { label: "Running", tone: "info" },
+  interrupted: { label: "Interrupted", tone: "warn" },
   blocked: { label: "Blocked", tone: "bad" },
   done: { label: "Done", tone: "ok" },
   skipped: { label: "Not in this run", tone: "neutral" },
@@ -47,14 +59,22 @@ type SubTone = "bad" | "warn" | undefined;
 function subLine(
   task: Task,
   status: RunStatus,
-  props: Pick<RunTaskListProps, "mode" | "tasksById" | "excluded" | "taskRunState" | "blockReasons">,
+  props: Pick<RunTaskListProps, "mode" | "tasksById" | "excluded" | "taskRunState" | "blockReasons" | "pickup">,
 ): { text: string; tone?: SubTone } {
-  const { mode, tasksById, excluded, taskRunState, blockReasons } = props;
+  const { mode, tasksById, excluded, taskRunState, blockReasons, pickup } = props;
   const rs = taskRunState[task.id];
+  const interrupted = interruptedIds(pickup);
   switch (status) {
     case "running": {
-      if (!rs?.currentStage) return { text: "starting" };
+      if (!rs?.currentStage) return { text: rs?.pickup ? "picked up" : "starting" };
       return { text: `${rs.currentStage} · attempt ${Math.max(1, currentAttempt(rs))}` };
+    }
+    case "interrupted": {
+      // Past: where it was when the run ended. Plan and live: where a run picks it up.
+      if (mode === "past") {
+        return { text: rs?.currentStage ? `${rs.currentStage} · attempt ${Math.max(1, currentAttempt(rs))}` : "" };
+      }
+      return { text: pickupLine(task.id, pickup) ?? "" };
     }
     case "blocked": {
       const lastFailed = [...(rs?.attempts ?? [])].reverse().find((a) => a.status === "failed");
@@ -69,13 +89,13 @@ function subLine(
     case "excluded":
       return { text: "left out of this run" };
     case "skipped": {
-      const cut = leftOutBy(task, tasksById, excluded);
+      const cut = leftOutBy(task, tasksById, excluded, interrupted);
       if (cut) {
         const why = cut.draft || excluded.has(cut.id) ? "which is left out" : "which can't run";
         return { text: `${mode === "past" ? "didn't run" : "won't run"}: depends on ${cut.title}, ${why}`, tone: "warn" };
       }
       if (mode === "past") return { text: "didn't run" };
-      if (task.status === "in_progress") return { text: "won't run: left in progress by an earlier run", tone: "warn" };
+      if (task.status === "in_progress") return { text: "won't run: already in progress" };
       if (task.status === "needs_review") return { text: "won't run: needs review" };
       if (task.status === "wont_do") return { text: "won't do" };
       return { text: "won't run" };
@@ -91,9 +111,9 @@ const stop = (e: MouseEvent | KeyboardEvent) => e.stopPropagation();
 
 /** The run's tasks, grouped by where they stand, under the metro. */
 export function RunTaskList(props: RunTaskListProps) {
-  const { tasks, tasksById, mode, excluded, onAddTask, onBulkImport } = props;
+  const { tasks, tasksById, mode, excluded, taskRunState, pickup, onAddTask, onBulkImport } = props;
   const groups = mode === "plan" ? PLAN_GROUPS : RUN_GROUPS;
-  const ctx = { mode, tasksById, excluded };
+  const ctx = { mode, tasksById, excluded, taskRunState, interrupted: interruptedIds(pickup) };
   const statusById = new Map(tasks.map((t) => [t.id, runStatusOf(t, ctx)]));
 
   return (

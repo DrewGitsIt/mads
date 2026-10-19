@@ -82,7 +82,7 @@ function liveProps(over: Partial<RunBarLiveProps> = {}): RunBarLiveProps {
     selectedRunSeq: 90,
     templateLabel: "default-implementation v3",
     startedAt: "2026-10-19T12:00:00Z",
-    onCancel: async () => {},
+    onStop: async () => {},
     ...over,
   };
 }
@@ -193,7 +193,7 @@ describe("RunBar: run menu", () => {
       "+ New runchoose a template, then Run",
       "Run 3runningstarted 14 min ago",
       "Run 2completedOct 17 · 22m",
-      "Run 1failedOct 15 · 1mdefault-implementation v2",
+      "Run 1interruptedOct 15 · 1mdefault-implementation v2",
     ]);
     expect(items[0].getAttribute("aria-checked")).toBe("true");
     expect(document.activeElement).toBe(items[0]);
@@ -225,7 +225,7 @@ describe("RunBar: run menu", () => {
 });
 
 describe("RunBar: live", () => {
-  it("shows Run N with a running chip, template, ticking elapsed, and Cancel run", () => {
+  it("shows Run N with a running chip, template, ticking elapsed, and Stop", () => {
     vi.useFakeTimers({ now: new Date("2026-10-19T12:14:27Z") });
     render(<RunBar {...liveProps()} />);
     const trigger = screen.getByRole("button", { name: /Run 3/ });
@@ -236,7 +236,7 @@ describe("RunBar: live", () => {
       vi.advanceTimersByTime(2000);
     });
     expect(screen.getByLabelText("Elapsed 14:29")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Cancel run" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Stop" }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByRole("button", { name: /Template/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Run \d+ task/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Pause/ })).toBeNull();
@@ -247,16 +247,19 @@ describe("RunBar: live", () => {
     expect(screen.getByRole("button", { name: /Run 3/ })).toBeTruthy();
   });
 
-  it("disables Cancel with a reason, and shows a cancel error inline", async () => {
-    const { rerender } = render(<RunBar {...liveProps({ cancelDisabledReason: "This run has no run id" })} />);
-    const cancel = screen.getByRole("button", { name: "Cancel run" });
-    expect((cancel as HTMLButtonElement).disabled).toBe(true);
-    expect(cancel.getAttribute("title")).toBe("This run has no run id");
+  it("disables Stop with a reason, and shows a stop error inline", async () => {
+    const { rerender } = render(<RunBar {...liveProps({ stopDisabledReason: "This run has no run id" })} />);
+    const stop = screen.getByRole("button", { name: "Stop" });
+    expect((stop as HTMLButtonElement).disabled).toBe(true);
+    expect(stop.getAttribute("title")).toBe("This run has no run id");
 
-    const onCancel = vi.fn().mockRejectedValue(new Error("cancel failed"));
-    rerender(<RunBar {...liveProps({ onCancel })} />);
-    fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("cancel failed"));
+    const onStop = vi.fn().mockRejectedValue(new Error("stop failed"));
+    rerender(<RunBar {...liveProps({ onStop })} />);
+    const enabled = screen.getByRole("button", { name: "Stop" });
+    // Enabled, its tooltip says what Stop keeps.
+    expect(enabled.getAttribute("title")).toMatch(/keep their work/);
+    fireEvent.click(enabled);
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("stop failed"));
   });
 });
 
@@ -266,9 +269,18 @@ describe("RunBar: past", () => {
     render(<RunBar {...pastProps({ onNewRun })} />);
     expect(screen.getByRole("button", { name: /Run 2/ }).textContent).toContain("completed");
     expect(screen.getByLabelText("Took 22:05")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "New run" }));
     expect(onNewRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads a cancelled run as stopped, and a crashed or lost one as interrupted", () => {
+    const { rerender } = render(<RunBar {...pastProps({ outcome: "cancelled" })} />);
+    expect(screen.getByRole("button", { name: /Run 2/ }).textContent).toContain("stopped");
+    rerender(<RunBar {...pastProps({ outcome: "failed" })} />);
+    expect(screen.getByRole("button", { name: /Run 2/ }).textContent).toContain("interrupted");
+    rerender(<RunBar {...pastProps({ outcome: "interrupted" })} />);
+    expect(screen.getByRole("button", { name: /Run 2/ }).textContent).toContain("interrupted");
   });
 
   it("shows no clock for a run with no recorded end", () => {

@@ -19,6 +19,9 @@
 .seg_now {
   stroke: var(--accent);
 }
+.seg_stopped {
+  stroke: var(--warn);
+}
 .seg_failed {
   stroke: var(--bad);
 }
@@ -41,6 +44,9 @@
 }
 .core_done {
   fill: var(--ok);
+}
+.core_interrupted {
+  fill: var(--warn-soft);
 }
 
 .focused {

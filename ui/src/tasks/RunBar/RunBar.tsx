@@ -6,7 +6,7 @@ import { Popover } from "../../components/Popover/Popover";
 import { SegmentedControl } from "../../components/SegmentedControl/SegmentedControl";
 import { runStages } from "../../pipeline/plan/runStages";
 import type { PipelineRun, Template } from "../../router/types";
-import { formatElapsed, formatRunWhen, outcomeTone, runOrdinal, spanMs } from "./runBarFormat";
+import { formatElapsed, formatRunWhen, outcomeLabel, outcomeTone, runOrdinal, spanMs } from "./runBarFormat";
 import { useNow } from "./useNow";
 import styles from "./RunBar.module.css";
 
@@ -45,10 +45,13 @@ export interface RunBarLiveProps extends RunBarCommon {
   mode: "live";
   templateLabel?: string;
   startedAt?: string;
-  /** Rejecting shows the error inline. */
-  onCancel: () => Promise<void>;
-  /** When set, Cancel is disabled and this explains why (its tooltip). */
-  cancelDisabledReason?: string;
+  /**
+   * Stop: ends the run and keeps all state (docs/PIPELINE-LEASES-DESIGN.md
+   * B1). Rejecting shows the error inline.
+   */
+  onStop: () => Promise<void>;
+  /** When set, Stop is disabled and this explains why (its tooltip). */
+  stopDisabledReason?: string;
 }
 
 export interface RunBarPastProps extends RunBarCommon {
@@ -73,7 +76,7 @@ type Pop = "run" | "template" | null;
  * The Tasks tab's run bar (docs/TASKS-PIPELINE-DESIGN.md): view toggle, the
  * run menu (this session's run history, plus New run), then per mode —
  * Plan: template menu, one warning line, Run N tasks; Live: template,
- * ticking elapsed time, Cancel run; Past: template, duration, New run.
+ * ticking elapsed time, Stop; Past: template, duration, New run.
  * Controlled: the caller owns every value and does the work behind each
  * callback.
  */
@@ -273,16 +276,16 @@ export function RunBar(props: RunBarProps) {
       </span>
     );
     if (mode === "live") {
-      const { onCancel, cancelDisabledReason } = props;
+      const { onStop, stopDisabledReason } = props;
       action = (
         <Button
           variant="secondary"
           size="sm"
-          disabled={Boolean(cancelDisabledReason) || pending}
-          title={cancelDisabledReason}
-          onClick={() => void act(onCancel)}
+          disabled={Boolean(stopDisabledReason) || pending}
+          title={stopDisabledReason ?? STOP_HINT}
+          onClick={() => void act(onStop)}
         >
-          Cancel run
+          Stop
         </Button>
       );
     } else {
@@ -312,12 +315,14 @@ export function RunBar(props: RunBarProps) {
   );
 }
 
+const STOP_HINT = "Stop the run. Tasks keep their work; the ones in flight are Interrupted, and the next run picks them up.";
+
 function OutcomeChip({ outcome }: { outcome?: string }) {
   if (!outcome) return null;
   return (
     <Chip tone={outcomeTone(outcome)}>
       {outcome === "running" && <span className={styles.spin} aria-hidden="true" />}
-      {outcome}
+      {outcomeLabel(outcome)}
     </Chip>
   );
 }

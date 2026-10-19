@@ -45,6 +45,10 @@ export interface TaskLensProps {
   onDiscuss?: (taskId: string) => void;
   /** Overrides the last failed attempt's reason in the blocked box. */
   blockReason?: string;
+  /** A run's name from its run_seq, e.g. "Run 3": marks what an earlier run did. */
+  runLabelOf?: (runSeq: number) => string;
+  /** An Interrupted task no run has picked up yet: where a run picks it up (pickupLine). */
+  pickupText?: string;
   /**
    * Shows the "Esc close" button in the header (default). Off where the host
    * already offers the same way out, e.g. the graph's focus breadcrumb.
@@ -57,6 +61,7 @@ const STATUS_CHIP: Record<RunStatus, { label: string; tone: ChipTone }> = {
   ready: { label: "ready", tone: "neutral" },
   queued: { label: "queued", tone: "neutral" },
   running: { label: "running", tone: "info" },
+  interrupted: { label: "interrupted", tone: "warn" },
   blocked: { label: "blocked", tone: "bad" },
   done: { label: "done", tone: "ok" },
   skipped: { label: "not in this run", tone: "neutral" },
@@ -64,7 +69,7 @@ const STATUS_CHIP: Record<RunStatus, { label: string; tone: ChipTone }> = {
   draft: { label: "draft", tone: "draft" },
 };
 
-type StationState = "wait" | "now" | "done" | "fail" | "skip";
+type StationState = "wait" | "now" | "stop" | "done" | "fail" | "skip";
 
 const STATION_STATE: Record<StageAttempt["status"], StationState> = {
   started: "now",
@@ -76,6 +81,7 @@ const STATION_STATE: Record<StageAttempt["status"], StationState> = {
 const STATION_LABEL: Record<StationState, string> = {
   wait: "not reached",
   now: "running",
+  stop: "interrupted",
   done: "done",
   fail: "failed",
   skip: "skipped",
@@ -108,6 +114,8 @@ export function TaskLens({
   onWontDo,
   onDiscuss,
   blockReason,
+  runLabelOf,
+  pickupText,
   showCloseHint = true,
   className,
 }: TaskLensProps) {
@@ -145,6 +153,13 @@ export function TaskLens({
   }, [stages, attempts]);
 
   const chip = STATUS_CHIP[runStatus];
+  // A picked-up task: the stages an earlier run completed, and where it came from.
+  const pickup = runState?.pickup;
+  const earlierDone = new Set(pickup?.completedStages ?? []);
+  const fromRun = pickup?.resumedFromRunSeq !== undefined ? (runLabelOf?.(pickup.resumedFromRunSeq) ?? "an earlier run") : undefined;
+  const pickupNote = pickup ? pickupNoteOf(pickup.mode, pickup.fromStage, fromRun) : undefined;
+  // An open attempt the run left behind (it ended, or the task is waiting for a pickup).
+  const stoppedOpen = runStatus === "interrupted";
 
   return (
     <section
@@ -174,10 +189,13 @@ export function TaskLens({
         {stripStages.map((stage, i) => {
           const own = attempts.filter((a) => a.stage === stage.name);
           const latest = own[own.length - 1];
-          const state: StationState = latest ? STATION_STATE[latest.status] : "wait";
+          const doneEarlier = !latest && earlierDone.has(stage.name);
+          let state: StationState = latest ? STATION_STATE[latest.status] : doneEarlier ? "done" : "wait";
+          if (state === "now" && stoppedOpen) state = "stop";
           const lastIndex = latest ? attempts.lastIndexOf(latest) : -1;
-          const sub =
-            own.length > 1
+          const sub = doneEarlier
+            ? (fromRun ?? "earlier run")
+            : own.length > 1
               ? plural(own.length, "attempt")
               : state === "skip"
                 ? stage.when
@@ -205,7 +223,7 @@ export function TaskLens({
                 data-still={reducedMotion || undefined}
                 disabled={!latest}
                 aria-pressed={selected?.stage === stage.name}
-                aria-label={`${stage.name}: ${STATION_LABEL[state]}${own.length > 1 ? `, ${own.length} attempts` : ""}`}
+                aria-label={`${stage.name}: ${STATION_LABEL[state]}${doneEarlier ? ` in ${fromRun ?? "an earlier run"}` : ""}${own.length > 1 ? `, ${own.length} attempts` : ""}`}
                 onClick={() => select(lastIndex)}
               >
                 <span className={styles.dot} aria-hidden="true">
@@ -239,10 +257,18 @@ export function TaskLens({
         <div className={styles.side}>
           <div>
             <h4 className={styles.h}>Timeline</h4>
-            {attempts.length === 0 ? (
-              <p className={styles.muted}>Not started.</p>
+            {attempts.length === 0 && !pickupNote ? (
+              <p className={styles.muted}>{runStatus === "interrupted" && pickupText ? pickupText : "Not started."}</p>
             ) : (
-              <StageTimeline attempts={attempts} selectedIndex={selectedIndex} onSelect={select} now={clock} />
+              <StageTimeline
+                attempts={attempts}
+                selectedIndex={selectedIndex}
+                onSelect={select}
+                now={clock}
+                pickupNote={pickupNote}
+                resumedFrom={fromRun}
+                interrupted={stoppedOpen}
+              />
             )}
           </div>
           <div>
@@ -276,9 +302,11 @@ export function TaskLens({
               live={live}
               now={clock}
               onSelect={select}
+              resumedFrom={fromRun}
+              stopped={stoppedOpen}
             />
           ) : (
-            <p className={styles.emptyOut}>{emptyOutputText(task, runStatus, tasksById)}</p>
+            <p className={styles.emptyOut}>{emptyOutputText(task, runStatus, tasksById, pickupText)}</p>
           )}
         </div>
       </div>
@@ -286,8 +314,18 @@ export function TaskLens({
   );
 }
 
-function emptyOutputText(task: Task, status: RunStatus, tasksById: Record<string, Task>): string {
+// The pickup marker: "Picked up from Run 3 · resumes at code_review", or
+// "Picked up from Run 3 · restarts at architect, keeps its work".
+function pickupNoteOf(mode: "resume" | "restart", fromStage: string | undefined, fromRun: string | undefined): string {
+  const head = fromRun ? `Picked up from ${fromRun}` : "Picked up";
+  if (mode === "resume") return fromStage ? `${head} · resumes at ${fromStage}` : head;
+  return `${head} · restarts${fromStage ? ` at ${fromStage}` : ""}, keeps its work`;
+}
+
+function emptyOutputText(task: Task, status: RunStatus, tasksById: Record<string, Task>, pickupText?: string): string {
   switch (status) {
+    case "interrupted":
+      return pickupText ? `${pickupText}.` : "Interrupted. Nothing to show for this run.";
     case "queued": {
       const waits = (task.dependencies ?? [])
         .map((id) => tasksById[id])
@@ -392,6 +430,10 @@ interface AttemptOutputProps {
   /** Set while the run is live: an open attempt's time so far ticks from it. */
   now?: number;
   onSelect: (index: number) => void;
+  /** The run a resumed attempt came from, e.g. "Run 3". */
+  resumedFrom?: string;
+  /** The task is Interrupted: an open attempt stopped, it isn't live. */
+  stopped?: boolean;
 }
 
 function AttemptOutput({
@@ -405,16 +447,20 @@ function AttemptOutput({
   live,
   now,
   onSelect,
+  resumedFrom,
+  stopped,
 }: AttemptOutputProps) {
   const attempt = attempts[index];
   const duration = attemptDuration(attempt, now);
   const [view, setView] = useState<OutputView>("turns");
   const isCommand = stage?.kind === "command";
   const raw = isCommand || view === "raw";
-  const isLive = live && attempt.status === "started";
+  const isLive = live && attempt.status === "started" && !stopped;
   const streams = attempt.status !== "skipped";
 
   const same = attempts.map((a, i) => ({ a, i })).filter(({ a }) => a.stage === attempt.stage);
+  // Attempt numbers continue across runs (a pickup), so "of M" is the highest, not a count.
+  const ofCount = Math.max(...same.map(({ a }) => a.attempt));
 
   // Opening an EventSource is a side effect: once per selected attempt (and
   // view: the raw view tears its source down when it unmounts), never once
@@ -436,7 +482,8 @@ function AttemptOutput({
 
   // An attempt a loop-back started carries the failure that sent it here.
   const prev = attempts[index - 1];
-  const handoffFrom = attempt.attempt > 1 && prev?.status === "failed" && prev.reason ? prev : undefined;
+  const handoffFrom =
+    attempt.attempt > 1 && !attempt.rerun && prev?.status === "failed" && prev.reason ? prev : undefined;
   const next = attempts[index + 1];
   const handoffTo = attempt.status === "failed" && next && next.attempt > 1 ? next : undefined;
 
@@ -454,8 +501,8 @@ function AttemptOutput({
             onChange={(v) => onSelect(Number(v))}
             options={same.map(({ a, i }) => ({
               value: String(i),
-              label: `attempt ${a.attempt} of ${same.length}${
-                a.status === "started" && live ? " · live" : a.status === "failed" ? " · failed" : ""
+              label: `attempt ${a.attempt} of ${ofCount}${
+                a.status === "started" && live && !stopped ? " · live" : a.status === "failed" ? " · failed" : ""
               }`,
             }))}
           />
@@ -466,13 +513,25 @@ function AttemptOutput({
           <Chip tone="info">live{duration ? ` ${duration}` : ""}</Chip>
         ) : (
           <>
-            <Chip tone={attempt.status === "failed" ? "bad" : attempt.status === "completed" ? "ok" : "neutral"}>
-              {attempt.status}
+            <Chip
+              tone={
+                attempt.status === "failed"
+                  ? "bad"
+                  : attempt.status === "completed"
+                    ? "ok"
+                    : stopped && attempt.status === "started"
+                      ? "warn"
+                      : "neutral"
+              }
+            >
+              {stopped && attempt.status === "started" ? "interrupted" : attempt.status}
             </Chip>
             {duration && <span className={styles.duration}>{duration}</span>}
           </>
         )}
         {!!attempt.retries && <Chip tone="warn">retried ×{attempt.retries}</Chip>}
+        {attempt.resumed && <span className={styles.resumeNote}>resumed from {resumedFrom ?? "an earlier run"}</span>}
+        {attempt.rerun && <span className={styles.resumeNote}>rerun after interruption</span>}
         {isCommand && <span>command</span>}
         <span className={styles.spacer} />
         {!isCommand && streams && (

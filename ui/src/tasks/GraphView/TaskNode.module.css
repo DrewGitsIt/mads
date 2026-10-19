@@ -162,6 +162,10 @@
 .run_ready {
   border-color: var(--accent);
 }
+.run_interrupted {
+  border-color: var(--warn);
+  border-style: dashed;
+}
 .run_blocked {
   border-color: var(--bad);
   background: color-mix(in srgb, var(--bad-soft) 60%, var(--bg1));

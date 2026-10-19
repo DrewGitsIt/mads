@@ -1,7 +1,7 @@
 import type { ChipTone } from "../../components/Chip/Chip";
 import { leftOutBy, waveOf } from "../../pipeline/plan/planScope";
 import type { RunStage } from "../../pipeline/plan/runStages";
-import { runStatusOf, type RunMode, type RunStatus } from "../../pipeline/plan/runStatus";
+import { pickupLine, runStatusOf, type PickupInfo, type RunMode, type RunStatus } from "../../pipeline/plan/runStatus";
 import type { StageAttempt, TaskRunState } from "../../pipeline/state/usePipelineRun";
 import type { Task } from "../../router/types";
 import { blockedReason } from "./graphStatus";
@@ -12,14 +12,18 @@ import type { GraphEdgeLayout } from "./layout";
 // shared status line, plan badges, and edge treatments. Pure, so the node
 // and canvas components only render what these return.
 
-/** One stage's state for one task — a ring arc or a track segment. `off`: the task isn't in this run. */
-export type StageState = "done" | "now" | "failed" | "skipped" | "waiting" | "off";
+/**
+ * One stage's state for one task — a ring arc or a track segment. `off`: the
+ * task isn't in this run. `stopped`: the stage an interruption cut short.
+ */
+export type StageState = "done" | "now" | "stopped" | "failed" | "skipped" | "waiting" | "off";
 
 /** The shared vocabulary's words for each run status (Blocked is never "Needs you"). */
 export const RUN_STATUS_LABEL: Record<RunStatus, string> = {
   ready: "Ready",
   queued: "Queued",
   running: "Running",
+  interrupted: "Interrupted",
   blocked: "Blocked",
   done: "Done",
   skipped: "Not in this run",
@@ -32,6 +36,7 @@ export const RUN_STATUS_TONE: Record<RunStatus, ChipTone> = {
   ready: "neutral",
   queued: "neutral",
   running: "info",
+  interrupted: "warn",
   blocked: "bad",
   done: "ok",
   skipped: "draft",
@@ -73,6 +78,10 @@ export interface RunViewContext {
   excluded: ReadonlySet<string>;
   stages: RunStage[];
   taskRunState: Record<string, TaskRunState>;
+  /** Plan and live: the session's Interrupted tasks and where a run picks each up. */
+  pickup?: PickupInfo;
+  /** pickup's ids (interruptedIds), for runStatusOf. */
+  interrupted?: ReadonlySet<string>;
 }
 
 // `when: '!contains(labels, "trivial")'` skips the stage for a task
@@ -101,6 +110,10 @@ function latestAttempt(attempts: StageAttempt[], stage: string): StageAttempt | 
  * or past run each stage shows its newest attempt; while a task is running,
  * a completed stage after the current one shows `waiting` again (a loop
  * back will run it once more), and a failure stays visible as the reason.
+ * An Interrupted task waiting for a run (Plan, or live before the run gets
+ * to it) shows the stages a resume skips as done; one a run picked up shows
+ * the stages an earlier run completed as done; one a past run left in
+ * flight shows where it stopped.
  */
 export function stageStatesOf(
   task: Task,
@@ -108,18 +121,28 @@ export function stageStatesOf(
   mode: RunMode,
   stages: RunStage[],
   runState: TaskRunState | undefined,
+  pickup?: PickupInfo,
 ): StageCell[] {
-  const off = status === "draft" || status === "excluded" || (mode === "plan" ? status !== "ready" : status === "skipped");
+  const willRun = status === "ready" || status === "interrupted";
+  const off = status === "draft" || status === "excluded" || (mode === "plan" ? !willRun : status === "skipped");
   if (off) return stages.map((s) => ({ name: s.name, state: "off" }));
-  if (mode === "plan") {
-    return stages.map((s) => ({ name: s.name, state: skipsByLabel(task, s) ? "skipped" : "waiting" }));
+  const waiting = status === "interrupted" && !runState ? pickup?.tasks[task.id] : undefined;
+  if (mode === "plan" || waiting) {
+    const from = waiting?.mode === "resume" && waiting.from_stage ? stages.findIndex((s) => s.name === waiting.from_stage) : -1;
+    return stages.map((s, i) => ({
+      name: s.name,
+      state: i < from ? "done" : skipsByLabel(task, s) ? "skipped" : "waiting",
+    }));
   }
   const attempts = runState?.attempts ?? [];
+  const earlier = new Set(runState?.pickup?.completedStages ?? []);
   const currentIndex = runState?.currentStage ? stages.findIndex((s) => s.name === runState.currentStage) : -1;
   return stages.map((s, i): StageCell => {
     const a = latestAttempt(attempts, s.name);
     let state: StageState;
-    if (!a && status === "running" && i === currentIndex) {
+    if (!a && earlier.has(s.name)) {
+      state = "done";
+    } else if (!a && status === "running" && i === currentIndex) {
       state = "now";
     } else if (!a) {
       // Done with no attempts at all finished before this run's record; done
@@ -127,7 +150,7 @@ export function stageStatesOf(
       if (status === "done") state = attempts.length === 0 ? "done" : "skipped";
       else state = "waiting";
     } else if (a.status === "started") {
-      state = status === "running" ? "now" : "waiting";
+      state = status === "running" ? "now" : status === "interrupted" ? "stopped" : "waiting";
     } else if (a.status === "completed") {
       state = status === "running" && currentIndex !== -1 && i > currentIndex ? "waiting" : "done";
     } else if (a.status === "failed") {
@@ -146,11 +169,17 @@ export function currentStageOf(runState: TaskRunState | undefined): string | und
 
 function statusLineOf(task: Task, status: RunStatus, ctx: RunViewContext): StatusLine | undefined {
   const runState = ctx.taskRunState[task.id];
+  if (status === "interrupted") {
+    const waiting = pickupLine(task.id, ctx.pickup);
+    if (ctx.mode !== "past" && waiting) return { text: waiting, tone: "warn" };
+    const stage = currentStageOf(runState);
+    return { text: stage ? `Interrupted at ${stage}` : "Interrupted", tone: "warn" };
+  }
   if (ctx.mode === "plan") {
     if (status === "ready") return undefined;
     if (status === "draft") return { text: "draft: confirm it before it can run", tone: "neutral" };
     if (status === "excluded") return { text: "left out of this run", tone: "neutral" };
-    const cut = leftOutBy(task, ctx.tasksById, ctx.excluded);
+    const cut = leftOutBy(task, ctx.tasksById, ctx.excluded, ctx.interrupted);
     if (cut) return { text: `won't run: depends on ${cut.title}`, tone: "warn" };
     return { text: "not in this run", tone: "neutral" };
   }
@@ -189,7 +218,7 @@ export function nodeRunViews(tasks: Task[], ctx: RunViewContext): Record<string,
     out[task.id] = {
       mode: ctx.mode,
       status,
-      stages: stageStatesOf(task, status, ctx.mode, ctx.stages, ctx.taskRunState[task.id]),
+      stages: stageStatesOf(task, status, ctx.mode, ctx.stages, ctx.taskRunState[task.id], ctx.pickup),
       line: statusLineOf(task, status, ctx),
       retryable: !plan && status === "blocked",
       wave: plan && status === "ready" ? waveOf(task, ctx.tasksById, waves) : undefined,

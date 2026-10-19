@@ -22,6 +22,13 @@
   animation: runGlyphSpin 1s linear infinite;
 }
 
+/* Interrupted: the running arc, stopped. Calm (warn), never Blocked's alarm. */
+.interrupted {
+  border-color: var(--warn);
+  border-right-color: transparent;
+  background: var(--warn-soft);
+}
+
 .blocked {
   background: var(--bad);
   border-color: var(--bad);

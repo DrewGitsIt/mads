@@ -86,6 +86,18 @@ describe("runnableInPlan", () => {
     const child = task("c", ["d"]);
     expect(runnableInPlan([done, child], index([done, child]), none).map((t) => t.id)).toEqual(["c"]);
   });
+
+  it("launches Interrupted tasks, and what depends on them, but not someone else's in-progress work", () => {
+    const stopped = task("i", [], { status: "in_progress" });
+    const mine = task("m", [], { status: "in_progress" });
+    const after = task("a", ["i"]);
+    const list = [stopped, mine, after];
+    const ids = (interrupted?: ReadonlySet<string>) => runnableInPlan(list, index(list), none, interrupted).map((t) => t.id);
+    expect(ids(new Set(["i"]))).toEqual(["i", "a"]);
+    expect(ids()).toEqual([]);
+    expect(runnableInPlan(list, index(list), new Set(["i"]), new Set(["i"])).map((t) => t.id)).toEqual([]);
+    expect(planWarning(list, index(list), new Set(["i"]), new Set(["i"]))).toBe("a won't run (depends on i)");
+  });
 });
 
 describe("waveOf", () => {

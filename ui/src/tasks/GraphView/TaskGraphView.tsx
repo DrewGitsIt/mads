@@ -4,7 +4,7 @@ import { Toast } from "../../components/Toast/Toast";
 import type { PipelineClient } from "../../pipeline/client/pipelineClient";
 import { criticalPath } from "../../pipeline/plan/planScope";
 import { runStages, type RunStage } from "../../pipeline/plan/runStages";
-import type { RunMode } from "../../pipeline/plan/runStatus";
+import { interruptedIds, type PickupInfo, type RunMode } from "../../pipeline/plan/runStatus";
 import type { TaskRunState } from "../../pipeline/state/usePipelineRun";
 import { useEscapeLayer } from "../../platform/escapeLayers";
 import type { RouterClient } from "../../router/client";
@@ -63,6 +63,8 @@ export interface TaskGraphViewProps {
   stages?: RunStage[];
   /** The run fold's per-task state. */
   taskRunState?: Record<string, TaskRunState>;
+  /** Plan and live: the session's Interrupted tasks and where a run picks each up. */
+  pickup?: PickupInfo;
   /** The focus breadcrumb's first crumb, e.g. "Run 4". Defaults to "Run". */
   runLabel?: string;
   onToggleInclude?: (taskId: string) => void;
@@ -123,6 +125,7 @@ export function TaskGraphView({
   excluded,
   stages,
   taskRunState,
+  pickup,
   runLabel = "Run",
   onToggleInclude,
   onEditRetry,
@@ -148,6 +151,7 @@ export function TaskGraphView({
   const runColumns = useMemo(() => runStageList.map((s) => s.name), [runStageList]);
   const foldExcluded = runState?.excludedTaskIds;
   const runExcluded = useMemo(() => excluded ?? new Set(foldExcluded ?? []), [excluded, foldExcluded]);
+  const interrupted = useMemo(() => interruptedIds(pickup), [pickup]);
   const runViews = useMemo(
     () =>
       runMode
@@ -157,13 +161,15 @@ export function TaskGraphView({
             excluded: runExcluded,
             stages: runStageList,
             taskRunState: runTaskState,
+            pickup,
+            interrupted,
           })
         : undefined,
-    [runMode, tasks, tasksById, runExcluded, runStageList, runTaskState],
+    [runMode, tasks, tasksById, runExcluded, runStageList, runTaskState, pickup, interrupted],
   );
   const critical = useMemo(
-    () => (runMode === "plan" ? criticalPath(tasks, tasksById, runExcluded) : []),
-    [runMode, tasks, tasksById, runExcluded],
+    () => (runMode === "plan" ? criticalPath(tasks, tasksById, runExcluded, interrupted) : []),
+    [runMode, tasks, tasksById, runExcluded, interrupted],
   );
   const actions = useMemo<GraphRunActions>(
     () => ({ onToggleInclude, onEditRetry, onRetry }),

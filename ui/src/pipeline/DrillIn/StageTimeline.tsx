@@ -10,6 +10,15 @@ export interface StageTimelineProps {
   selectedIndex?: number;
   /** The clock for an open attempt's time so far (a live run). Without it, open attempts show no time. */
   now?: number;
+  /**
+   * The run picked this task up after an interruption: a marker above its
+   * first attempt, e.g. "Picked up from Run 3 · resumes at code_review".
+   */
+  pickupNote?: string;
+  /** The run a picked-up task continues from, e.g. "Run 3": names where a resumed attempt came from. */
+  resumedFrom?: string;
+  /** The run ended with this task in flight: an open attempt reads interrupted, not running. */
+  interrupted?: boolean;
 }
 
 /**
@@ -30,20 +39,40 @@ export function attemptDuration(attempt: StageAttempt, now?: number): string | u
  * screen readers), the stage name with `#N` for a repeat attempt, and the
  * attempt's length. A failed attempt's reason sits underneath.
  */
-export function StageTimeline({ attempts, onSelect, selectedIndex, now }: StageTimelineProps) {
-  if (attempts.length === 0) {
+export function StageTimeline({
+  attempts,
+  onSelect,
+  selectedIndex,
+  now,
+  pickupNote,
+  resumedFrom,
+  interrupted,
+}: StageTimelineProps) {
+  if (attempts.length === 0 && !pickupNote) {
     return <p className={styles.empty}>No stages started yet.</p>;
   }
 
   return (
     <ol className={styles.timeline} data-testid="stage-timeline">
+      {pickupNote && (
+        <li className={styles.marker} data-testid="pickup-marker">
+          {pickupNote}
+        </li>
+      )}
       {attempts.map((attempt, i) => {
         const duration = attemptDuration(attempt, now);
         const retries = attempt.retries ?? 0;
+        const stopped = interrupted && attempt.status === "started";
+        const shownStatus = stopped ? "interrupted" : attempt.status;
+        const note = attempt.resumed
+          ? `resumed from ${resumedFrom ?? "an earlier run"}`
+          : attempt.rerun
+            ? "rerun after interruption"
+            : undefined;
         const name = (
           <>
-            <span className={styles.dot} data-status={attempt.status} aria-hidden="true" />
-            <span className={styles.srOnly}>{attempt.status}: </span>
+            <span className={styles.dot} data-status={shownStatus} aria-hidden="true" />
+            <span className={styles.srOnly}>{shownStatus}: </span>
             <span className={styles.name} title={attempt.stage}>
               {attempt.stage}
             </span>
@@ -65,7 +94,7 @@ export function StageTimeline({ attempts, onSelect, selectedIndex, now }: StageT
                   type="button"
                   className={styles.stageButton}
                   aria-pressed={i === selectedIndex}
-                  aria-label={`${attempt.stage}${attempt.attempt > 1 ? ` #${attempt.attempt}` : ""}, ${attempt.status}`}
+                  aria-label={`${attempt.stage}${attempt.attempt > 1 ? ` #${attempt.attempt}` : ""}, ${shownStatus}`}
                   onClick={() => onSelect(i)}
                 >
                   {name}
@@ -84,11 +113,16 @@ export function StageTimeline({ attempts, onSelect, selectedIndex, now }: StageT
                 ))}
               {duration && (
                 <span className={styles.duration}>
-                  {attempt.status === "started" ? "live " : ""}
+                  {attempt.status === "started" && !stopped ? "live " : ""}
                   {duration}
                 </span>
               )}
             </div>
+            {note && (
+              <p className={styles.note} data-testid="attempt-note">
+                ↳ {note}
+              </p>
+            )}
             {attempt.reason && (
               <p className={styles.reason}>
                 {onSelect && attempt.status === "failed" ? "↺ " : ""}

@@ -175,6 +175,11 @@
   color: var(--accent-ink);
 }
 
+.stop .dot {
+  background: var(--warn-soft);
+  border-color: var(--warn);
+}
+
 .skip .dot {
   background: var(--bg2);
   border-style: dashed;
@@ -368,4 +373,10 @@
     border-right: none;
     overflow-y: visible;
   }
+}
+
+/* "resumed from Run 3" / "rerun after interruption" beside an attempt's header. */
+.resumeNote {
+  color: var(--warn-fg);
+  font: var(--fs-sm) var(--sans);
 }
