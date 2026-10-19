@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -39,10 +40,12 @@ type Options struct {
 	// skips LoadTemplate) is a valid "unknown" and is simply omitted from
 	// the pipeline.started payload rather than reported as a real version.
 	TemplateVersion int
-	Cwd             string
-	Concurrency     int
-	Model           string
-	StageTimeout    time.Duration
+	// ExcludeTaskIDs maps onto engine.Config.ExcludeTaskIDs.
+	ExcludeTaskIDs []string
+	Cwd            string
+	Concurrency    int
+	Model          string
+	StageTimeout   time.Duration
 	// DisableSleepInhibit maps onto engine.Config.DisableSleepInhibit;
 	// callers set it from SleepInhibitDisabled(cfg), never directly.
 	DisableSleepInhibit bool
@@ -87,6 +90,18 @@ type Options struct {
 // run already in progress.
 func SleepInhibitDisabled(cfg contracts.Config) bool {
 	return cfg.AllowSleepDuringPipelines
+}
+
+// SplitTaskIDs parses a comma-separated -exclude-task-ids flag value (the
+// Router's SpawnPipeline joins the list that way) into ids, dropping blanks.
+func SplitTaskIDs(s string) []string {
+	var ids []string
+	for _, id := range strings.Split(s, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // LoadTemplate fetches a template by registry name/ID and runs the same
@@ -148,6 +163,7 @@ func Run(ctx context.Context, opts Options) (*engine.Summary, error) {
 		RunID:               opts.RunID,
 		Template:            opts.Template,
 		TemplateVersion:     opts.TemplateVersion,
+		ExcludeTaskIDs:      opts.ExcludeTaskIDs,
 		Cwd:                 opts.Cwd,
 		Concurrency:         opts.Concurrency,
 		Model:               opts.Model,

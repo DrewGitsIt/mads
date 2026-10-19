@@ -66,6 +66,11 @@ type Config struct {
 	// (pre-versioning row, or a caller that bypassed LoadTemplate) and is
 	// omitted from the event payload rather than reported as a real version.
 	TemplateVersion int
+	// ExcludeTaskIDs are tasks this run leaves out: never launched, their
+	// statuses untouched. A ready task that (transitively) depends on one
+	// can never start, so it reports skipped at quiescence like any other
+	// unsatisfiable dependency. Echoed on pipeline.started.
+	ExcludeTaskIDs []string
 	// Cwd is where command stages run and agent one-shots execute. W3.2
 	// replaces this with per-task worktrees.
 	Cwd string
@@ -365,6 +370,9 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 	if e.cfg.TemplateVersion > 0 {
 		payload["template_version"] = e.cfg.TemplateVersion
 	}
+	if len(e.cfg.ExcludeTaskIDs) > 0 {
+		payload["excluded_task_ids"] = e.cfg.ExcludeTaskIDs
+	}
 	e.runSeq = e.event(ctx, contracts.PipelineStarted, "", payload)
 
 	// The live work queue (spec §6): task.* events for this session poke the
@@ -386,6 +394,10 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 	results := make(chan result)
 	running := map[string]bool{}
 	excluded := map[string]bool{} // attempted but unclaimable (leased elsewhere): not ours this run
+	leftOut := map[string]bool{}  // cfg.ExcludeTaskIDs: never launched, never counted
+	for _, id := range e.cfg.ExcludeTaskIDs {
+		leftOut[id] = true
+	}
 
 	// Continuous scheduler: fill free slots from the ready set, then wait
 	// for one completion and re-scan — a finishing task can unblock its
@@ -430,7 +442,7 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 		}
 		if ctx.Err() == nil { // when cancelled, stop launching but keep draining
 			for _, t := range e.runnable(tasks, byID) {
-				if running[t.ID] || excluded[t.ID] || len(running) >= e.cfg.Concurrency {
+				if running[t.ID] || excluded[t.ID] || leftOut[t.ID] || len(running) >= e.cfg.Concurrency {
 					continue
 				}
 				running[t.ID] = true
@@ -439,9 +451,10 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 		}
 		if len(running) == 0 {
 			// Quiescent: nothing running, nothing can start. Anything
-			// still ready has unsatisfiable dependencies this run.
+			// still ready has unsatisfiable dependencies this run —
+			// including a dependency on a left-out task.
 			for _, t := range tasks {
-				if t.Status == contracts.StatusReady && !t.Draft && !excluded[t.ID] {
+				if t.Status == contracts.StatusReady && !t.Draft && !excluded[t.ID] && !leftOut[t.ID] {
 					summary.Skipped = append(summary.Skipped, t.ID)
 				}
 			}

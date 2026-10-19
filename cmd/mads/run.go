@@ -32,6 +32,7 @@ func cmdRun(args []string, out io.Writer) error {
 	session := fs.String("session", "", "session ID (required)")
 	workspace := fs.String("workspace", ".", "workspace repo the run works in")
 	tplName := fs.String("template", "default-implementation", "pipeline template (registry name)")
+	exclude := fs.String("exclude", "", "comma-separated task IDs to leave out of the run (dependents report skipped)")
 	providerName := fs.String("provider", "claude-code", "agent provider: claude-code, kiro-cli, goose, or fake")
 	model := fs.String("model", "", "model override for agent stages")
 	concurrency := fs.Int("concurrency", 5, "simultaneous tasks — agent stages run in parallel up to "+
@@ -130,7 +131,8 @@ func cmdRun(args []string, out io.Writer) error {
 	runID := newRunID()
 	sum, err := pipelinerun.Run(ctx, pipelinerun.Options{
 		Data: client, Provider: prov, SessionID: *session, RunID: runID,
-		Template: tpl, TemplateVersion: tplVersion, Cwd: ws, Concurrency: *concurrency,
+		Template: tpl, TemplateVersion: tplVersion, ExcludeTaskIDs: pipelinerun.SplitTaskIDs(*exclude),
+		Cwd: ws, Concurrency: *concurrency,
 		Model: *model, StageTimeout: *stageTimeout,
 		DisableSleepInhibit: pipelinerun.SleepInhibitDisabled(cfg),
 		Isolated:            *isolated, WorktreeRoot: root, DataURL: *data,

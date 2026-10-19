@@ -45,6 +45,7 @@ func main() {
 	_ = flag.String("data-url", "", "ignored — matches the real session/pipeline service's argv shape")
 	_ = flag.String("run-id", "", "ignored — matches the real pipeline service's argv shape")
 	_ = flag.String("template", "", "ignored — matches the real pipeline service's argv shape")
+	_ = flag.String("exclude-task-ids", "", "ignored — matches the real pipeline service's argv shape")
 	flag.Parse()
 
 	ln, err := net.Listen("tcp", *addr)

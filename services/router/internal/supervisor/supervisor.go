@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -150,10 +151,14 @@ func (s *Supervisor) SpawnSession(ctx context.Context, sessionID string) (string
 // about a session and a pipeline run sharing one holder string. templateID
 // is passed through so the child can load and validate its own frozen copy
 // (same launch-check the CLI runs), rather than trusting a value already
-// re-resolved once by the caller.
-func (s *Supervisor) SpawnPipeline(ctx context.Context, runID, sessionID, templateID string) (string, error) {
+// re-resolved once by the caller. excludeTaskIDs, when non-empty, rides
+// -exclude-task-ids (comma-joined): tasks the run must never launch.
+func (s *Supervisor) SpawnPipeline(ctx context.Context, runID, sessionID, templateID string, excludeTaskIDs []string) (string, error) {
 	argv := append(append([]string{}, s.pipelineArgv...),
 		"-run-id", runID, "-session-id", sessionID, "-template", templateID)
+	if len(excludeTaskIDs) > 0 {
+		argv = append(argv, "-exclude-task-ids", strings.Join(excludeTaskIDs, ","))
+	}
 	env := s.credentialEnv(ctx)
 	p, err := child.Spawn(ctx, runID, argv, env, func(_ *child.Process, expected bool, exitErr error) {
 		s.onPipelineExit(runID, sessionID, expected, exitErr)

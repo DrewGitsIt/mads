@@ -252,7 +252,7 @@ func implicitDir(dir string) bool { return dir == "" || dir == "." || dir == "./
 // provider, and concurrency,
 // then hands off to pipelinerun.Run — the child-mode equivalent of
 // cmd/mads/run.go's own resolution chain.
-func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome string) error {
+func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome string, excludeTaskIDs []string) error {
 	client := dataclient.New(dataURL, "pipeline")
 
 	sess, err := client.Session(ctx, sessionID)
@@ -304,8 +304,8 @@ func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome strin
 
 	_, err = pipelinerun.Run(ctx, pipelinerun.Options{
 		Data: client, Provider: prov, SessionID: sessionID, RunID: runID,
-		Template: tpl, TemplateVersion: tplVersion, Cwd: where.cwd, Concurrency: cfg.ConcurrencyLimit,
-		Model: sess.Model, StageTimeout: stageTimeout,
+		Template: tpl, TemplateVersion: tplVersion, ExcludeTaskIDs: excludeTaskIDs,
+		Cwd: where.cwd, Concurrency: cfg.ConcurrencyLimit, Model: sess.Model, StageTimeout: stageTimeout,
 		DisableSleepInhibit: pipelinerun.SleepInhibitDisabled(cfg),
 		Isolated:            isolated, WorktreeRoot: worktreeRoot, Session: where.session,
 		DataURL: dataURL, MadsHome: madsHome,
@@ -323,6 +323,7 @@ func main() {
 	runID := flag.String("run-id", "", "pipeline run ID (required)")
 	sessionID := flag.String("session-id", "", "session ID (required)")
 	tplName := flag.String("template", "", "pipeline template (registry name, required)")
+	exclude := flag.String("exclude-task-ids", "", "comma-separated task IDs the run leaves out")
 	dataURL := flag.String("data-url", "http://localhost:17374", "Data Service base URL")
 	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root (env MADS_HOME)")
 	flag.Parse()
@@ -350,7 +351,9 @@ func main() {
 	}
 
 	runErr := make(chan error, 1)
-	go func() { runErr <- run(ctx, *runID, *sessionID, *tplName, *dataURL, *madsHome) }()
+	go func() {
+		runErr <- run(ctx, *runID, *sessionID, *tplName, *dataURL, *madsHome, pipelinerun.SplitTaskIDs(*exclude))
+	}()
 
 	select {
 	case err := <-runErr:

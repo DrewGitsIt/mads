@@ -216,7 +216,7 @@ func TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent(t *testing.T) {
 
 	sessionID := "ses_pipeline"
 	runID := "run_test"
-	addr, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test")
+	addr, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test", nil)
 	if err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestPipelineCancelDoesNotEmitFailedEvent(t *testing.T) {
 
 	sessionID := "ses_cancel"
 	runID := "run_cancel"
-	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test"); err != nil {
+	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test", nil); err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
 
@@ -312,7 +312,7 @@ func TestPipelineExitLeavesSessionActiveWhenChildLive(t *testing.T) {
 	}
 
 	runID := "run_live_child"
-	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test"); err != nil {
+	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test", nil); err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
 	if err := sup.TerminatePipeline(ctx, runID); err != nil {
@@ -363,7 +363,7 @@ func TestPipelineExitHealsStaleInactiveSessionWithLiveChild(t *testing.T) {
 	}
 
 	runID := "run_heal_active"
-	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test"); err != nil {
+	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test", nil); err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
 	if err := sup.TerminatePipeline(ctx, runID); err != nil {
@@ -473,7 +473,7 @@ func TestSpawnPipelineGrantsImplicitHandRaiserWhenSessionLive(t *testing.T) {
 	if _, err := sup.SpawnSession(ctx, sessionID); err != nil {
 		t.Fatalf("SpawnSession: %v", err)
 	}
-	if _, err := sup.SpawnPipeline(ctx, "run_edge_a", sessionID, "tpl_test"); err != nil {
+	if _, err := sup.SpawnPipeline(ctx, "run_edge_a", sessionID, "tpl_test", nil); err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
 
@@ -499,7 +499,7 @@ func TestSpawnSessionGrantsImplicitHandRaiserWhenPipelineLive(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	sessionID := sess.ID
-	if _, err := sup.SpawnPipeline(ctx, "run_edge_b", sessionID, "tpl_test"); err != nil {
+	if _, err := sup.SpawnPipeline(ctx, "run_edge_b", sessionID, "tpl_test", nil); err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
 	if _, err := sup.SpawnSession(ctx, sessionID); err != nil {
@@ -532,7 +532,7 @@ func TestSpawnPipelineGrantsImplicitHandRaiserWithoutLiveChild(t *testing.T) {
 	}
 	sessionID := sess.ID
 	runID := "run_no_child"
-	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test"); err != nil {
+	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test", nil); err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
 	if _, ok := sup.SessionAddr(sessionID); ok {
@@ -575,7 +575,7 @@ func TestPipelineExitRevokesImplicitHandRaiser(t *testing.T) {
 	if _, err := sup.SpawnSession(ctx, sessionID); err != nil {
 		t.Fatalf("SpawnSession: %v", err)
 	}
-	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test"); err != nil {
+	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test", nil); err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
 
@@ -618,7 +618,7 @@ func TestSessionAndPipelineAddr(t *testing.T) {
 	}
 
 	runID := "run_addr"
-	pipelineAddr, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test")
+	pipelineAddr, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test", nil)
 	if err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}

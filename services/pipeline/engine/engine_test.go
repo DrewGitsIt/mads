@@ -929,3 +929,74 @@ func TestPipelineEventsCarryRunID(t *testing.T) {
 		}
 	}
 }
+
+// TestExcludedTasksLeftOut: an excluded task is never launched and keeps its
+// status; whatever depends on it, directly or transitively, reports skipped
+// like any unsatisfiable dependency, and pipeline.started names the excluded
+// ids alongside the run id.
+func TestExcludedTasksLeftOut(t *testing.T) {
+	h := newHarness(t)
+	seeded := h.seed(
+		contracts.Task{Title: "left out"},
+		contracts.Task{Title: "needs left out"},
+		contracts.Task{Title: "needs needs left out"},
+		contracts.Task{Title: "independent"},
+	)
+	for i, dep := range map[int]string{1: seeded[0].ID, 2: seeded[1].ID} {
+		task := seeded[i]
+		task.Dependencies = []string{dep}
+		if err := h.data.UpdateTask(context.Background(), &task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sum, err := Run(context.Background(), Config{
+		Data: h.data, Provider: fake.New(), SessionID: h.sess.ID, RunID: "run_ex",
+		Template: solitaryTemplate(t, ""), Cwd: h.cwd, Concurrency: 2,
+		StageTimeout: 30 * time.Second, ExcludeTaskIDs: []string{seeded[0].ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[3].ID {
+		t.Errorf("done: %v, want just %s (independent)", sum.Done, seeded[3].ID)
+	}
+	skipped := map[string]bool{}
+	for _, id := range sum.Skipped {
+		skipped[id] = true
+	}
+	if len(sum.Skipped) != 2 || !skipped[seeded[1].ID] || !skipped[seeded[2].ID] {
+		t.Errorf("skipped: %v, want the two dependents %s, %s", sum.Skipped, seeded[1].ID, seeded[2].ID)
+	}
+	if got := h.task(t, seeded[0].ID).Status; got != contracts.StatusReady {
+		t.Errorf("excluded task status = %s, want ready (untouched)", got)
+	}
+	for _, ev := range h.events(t, "stage.started") {
+		if ev.TaskID == seeded[0].ID {
+			t.Errorf("excluded task launched: %+v", ev)
+		}
+	}
+	started := h.events(t, "pipeline.started")
+	want := `"excluded_task_ids":["` + seeded[0].ID + `"]`
+	if len(started) != 1 || !strings.Contains(string(started[0].Payload), want) ||
+		!strings.Contains(string(started[0].Payload), `"run_id":"run_ex"`) {
+		t.Fatalf("pipeline.started: %+v, want %s and run_id", started, want)
+	}
+}
+
+// TestPipelineStartedOmitsExcludedWhenNone: a run with nothing left out
+// carries no excluded_task_ids key at all.
+func TestPipelineStartedOmitsExcludedWhenNone(t *testing.T) {
+	h := newHarness(t)
+	h.seed(contracts.Task{Title: "plain run"})
+	if _, err := Run(context.Background(), Config{
+		Data: h.data, Provider: fake.New(), SessionID: h.sess.ID,
+		Template: solitaryTemplate(t, ""), Cwd: h.cwd, Concurrency: 1,
+		StageTimeout: 30 * time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	started := h.events(t, "pipeline.started")
+	if len(started) != 1 || strings.Contains(string(started[0].Payload), "excluded_task_ids") {
+		t.Fatalf("pipeline.started should omit excluded_task_ids when none: %+v", started)
+	}
+}

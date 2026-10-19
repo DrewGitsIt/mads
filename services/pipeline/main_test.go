@@ -173,7 +173,7 @@ func TestRunDrainsSeededBatchLikeCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := run(context.Background(), "run_1", sess.ID, tpl.ID, base, t.TempDir()); err != nil {
+	if err := run(context.Background(), "run_1", sess.ID, tpl.ID, base, t.TempDir(), nil); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -402,7 +402,7 @@ func TestRunUsesSessionDirNotWorkspaceRepo(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			marker := "ran-" + strings.ReplaceAll(tc.name, " ", "-")
 			tpl := seedRun(t, client, &tc.sess, "name: where-"+tc.sess.Name+"\nstages:\n  - name: verify\n    command: touch "+marker+"\n")
-			if err := run(ctx, "run_1", tc.sess.ID, tpl.ID, base, t.TempDir()); err != nil {
+			if err := run(ctx, "run_1", tc.sess.ID, tpl.ID, base, t.TempDir(), nil); err != nil {
 				t.Fatalf("run: %v", err)
 			}
 			if _, err := os.Stat(filepath.Join(dirRepo, marker)); err != nil {
@@ -443,7 +443,7 @@ stages:
 		t.Fatal(err)
 	}
 
-	if err := run(ctx, "run_1", sess.ID, tpl.ID, base, t.TempDir()); err != nil {
+	if err := run(ctx, "run_1", sess.ID, tpl.ID, base, t.TempDir(), nil); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(folder, "piped.txt")); err != nil {
