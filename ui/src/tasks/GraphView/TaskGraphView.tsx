@@ -177,7 +177,9 @@ export function TaskGraphView({
   const reducedMotion = usePrefersReducedMotion();
   const [statusFilter, setStatusFilter] = useState<GraphStatus | null>(null);
   const [statusSpotlight, setStatusSpotlight] = useState<GraphStatus | null>(null);
-  const activeStatus = statusSpotlight ?? statusFilter;
+  // A live or past run speaks in run statuses; the task-status strip is for planning only.
+  const showStatusStrip = runMode !== "live" && runMode !== "past";
+  const activeStatus = showStatusStrip ? (statusSpotlight ?? statusFilter) : null;
   const statusDimmedIds = activeStatus
     ? new Set(tasks.filter((t) => graphStatusOf(t) !== activeStatus).map((t) => t.id))
     : null;
@@ -389,12 +391,14 @@ export function TaskGraphView({
             containerRef={trayRef}
             reducedMotion={reducedMotion}
           />
-          <StatusFilterStrip
-            tasks={tasks}
-            activeFilter={statusFilter}
-            onHoverStatus={setStatusSpotlight}
-            onToggleFilter={handleToggleStatusFilter}
-          />
+          {showStatusStrip && (
+            <StatusFilterStrip
+              tasks={tasks}
+              activeFilter={statusFilter}
+              onHoverStatus={setStatusSpotlight}
+              onToggleFilter={handleToggleStatusFilter}
+            />
+          )}
         </>
       )}
       <div className={styles.body}>

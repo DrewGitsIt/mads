@@ -53,6 +53,21 @@ function renderView(tasks: Task[], props: Partial<TaskGraphViewProps> = {}) {
   );
 }
 
+describe("TaskGraphView — status filter strip", () => {
+  const tasks = [task({ id: "a", title: "A" }), task({ id: "b", title: "B", status: "done", dependencies: ["a"] })];
+  const strip = () => screen.queryByRole("button", { name: /ready$/ });
+
+  it("shows in Plan", () => {
+    renderView(tasks, { mode: "plan" });
+    expect(strip()).not.toBeNull();
+  });
+
+  it.each(["live", "past"] as const)("is hidden for a %s run", (mode) => {
+    renderView(tasks, { mode });
+    expect(strip()).toBeNull();
+  });
+});
+
 describe("TaskGraphView — Plan", () => {
   // a -> b -> c is the longest chain; x is left out, so y (behind it) won't run.
   const a = task({ id: "a", title: "A" });
