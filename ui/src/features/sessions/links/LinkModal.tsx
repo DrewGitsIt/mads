@@ -13,6 +13,7 @@ import {
   type EffectiveEdge,
 } from "./linkDraft";
 import type { LinkEditor } from "./useLinkEditor";
+import { FOCUS_HALF, GAP_F, curve, layoutSky, type Placed } from "./skyLayout";
 import styles from "./LinkModal.module.css";
 
 /** A node's one-line status, as the rail's status line reads it. */
@@ -27,43 +28,9 @@ export interface LinkModalProps {
   statusOf?: (sessionId: string) => NodeStatus | undefined;
 }
 
-// The sky's geometry. Nodes sit on three rows (holders, focus, subjects); a
-// side with more nodes than fit widens the canvas, and the sky scrolls
-// sideways rather than stacking rows whose lines would cross other nodes.
-const NODE_W = 140;
-const GAP = 12;
-const EDGE_X = NODE_W / 2 + GAP;
-const MIN_W = 620;
-const H = 400;
-const Y_UP = 70;
-const Y_FOCUS = 200;
-const Y_DOWN = 330;
 const POP_W = 256;
 /** How far below the sky the edge editor may hang: into the gap, never over the footer. */
 const POP_OVERHANG = 10;
-
-interface Point {
-  x: number;
-  y: number;
-}
-
-function canvasWidth(n: number): number {
-  return Math.max(MIN_W, (n - 1) * (NODE_W + GAP) + 2 * EDGE_X);
-}
-
-/** One side's nodes, spread over the width that side needs and centred in the canvas. */
-function spread(n: number, y: number, w: number): Point[] {
-  if (n === 1) return [{ x: w / 2, y }];
-  const own = canvasWidth(n);
-  const offset = (w - own) / 2;
-  const step = (own - 2 * EDGE_X) / (n - 1);
-  return Array.from({ length: n }, (_, i) => ({ x: offset + EDGE_X + i * step, y }));
-}
-
-function bezier(p0: number, p1: number, p2: number, p3: number, t: number): number {
-  const u = 1 - t;
-  return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
-}
 
 const ORCHESTRATE_NOTE: Partial<Record<OrchestrateStatus, string>> = {
   pending_restart: "Orchestration tools activate when the leading agent is next idle.",
@@ -147,7 +114,6 @@ export function LinkModal({ editor, statusOf }: LinkModalProps) {
   const titleId = useId();
   const confirmTitleId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
-  const skyRef = useRef<HTMLDivElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const confirmRef = useRef<HTMLDivElement>(null);
   const focus = editor.focus!;
@@ -191,29 +157,19 @@ export function LinkModal({ editor, statusOf }: LinkModalProps) {
     if (confirm) confirmRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
   }, [confirm]);
 
-  // A freshly opened edge editor takes focus, so the keyboard lands on it.
+  // A freshly opened edge editor takes focus, so the keyboard lands on it,
+  // and is scrolled fully into view when wrapped rows make the body scroll.
   useEffect(() => {
     if (!pick) return;
-    popRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    const pop = popRef.current;
+    pop?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
+    pop?.scrollIntoView?.({ block: "nearest" });
   }, [pick]);
 
   const ups = edges.filter((e) => e.subject === focus);
   const downs = edges.filter((e) => e.granting === focus);
-  const W = canvasWidth(Math.max(ups.length, downs.length, 1));
-
-  // Re-centre the scroll on the focus whenever it moves. The edge editor
-  // lives outside the scroll box (so it is never clipped by it) and follows
-  // the scroll through `view`.
-  const [view, setView] = useState({ left: 0, width: MIN_W });
-  const syncView = () => {
-    const sky = skyRef.current;
-    if (sky) setView({ left: sky.scrollLeft, width: sky.clientWidth || MIN_W });
-  };
-  useLayoutEffect(() => {
-    const sky = skyRef.current;
-    if (sky) sky.scrollLeft = (sky.scrollWidth - sky.clientWidth) / 2;
-    syncView();
-  }, [focus, W]);
+  const sky = layoutSky(ups, downs);
+  const { width: W, height: H } = sky;
 
   // Keep the edge editor's bottom within reach: measured, since its height
   // depends on which notes it carries.
@@ -224,27 +180,16 @@ export function LinkModal({ editor, statusOf }: LinkModalProps) {
     pop.style.top = `${Math.max(6, Math.min(top, H + POP_OVERHANG - pop.offsetHeight))}px`;
   });
 
-  const pos = new Map<string, Point>();
-  pos.set(focus, { x: W / 2, y: Y_FOCUS });
-  spread(ups.length, Y_UP, W).forEach((p, i) => pos.set(ups[i].granting, p));
-  spread(downs.length, Y_DOWN, W).forEach((p, i) => pos.set(downs[i].subject, p));
+  const pos = new Map<string, { x: number; y: number }>();
+  pos.set(focus, sky.focus);
+  const byKey = new Map<string, Placed<EffectiveEdge>>();
+  for (const p of sky.placed) {
+    pos.set(p.side === "up" ? p.item.granting : p.item.subject, p);
+    byKey.set(p.item.key, p);
+  }
 
   const refusedKey = saveErr?.refused ? saveErr.key : undefined;
   const isBad = (e: EffectiveEdge) => Boolean(loopThrough(edges, e)) || (e.key === refusedKey && e.dirty);
-
-  const geometry = (e: EffectiveEdge) => {
-    const a = pos.get(e.granting)!;
-    const b = pos.get(e.subject)!;
-    const y0 = a.y + (e.granting === focus ? 28 : 22);
-    const y1 = b.y - (e.subject === focus ? 28 : 22);
-    const ym = (y0 + y1) / 2;
-    // The badge sits near the outer node, so badges space out like the nodes do.
-    const t = e.granting === focus ? 0.72 : 0.28;
-    return {
-      d: `M ${a.x} ${y0} C ${a.x} ${ym}, ${b.x} ${ym}, ${b.x} ${y1}`,
-      badge: { x: bezier(a.x, a.x, b.x, b.x, t), y: bezier(y0, ym, ym, y1, t) },
-    };
-  };
 
   const cadenceClass = { per_turn: styles.perTurn, on_signal: styles.onSignal, manual_only: styles.manual };
 
@@ -299,8 +244,8 @@ export function LinkModal({ editor, statusOf }: LinkModalProps) {
   const picked = edges.find((e) => e.key === pick);
 
   function edgeEditor(pe: EffectiveEdge) {
-    const g = geometry(pe).badge;
-    const left = Math.min(Math.max(g.x - view.left + 20, 8), view.width - POP_W - 8);
+    const g = byKey.get(pe.key)!.badge;
+    const left = Math.min(Math.max(g.x + 20, 8), W - POP_W - 8);
     const top = Math.max(g.y - 150, 6);
     const otherLeader = leaderOf(edges, pe.subject, pe.key);
     const swapWhy = swapBlockedReason(edges, pe, nameOf);
@@ -507,11 +452,11 @@ export function LinkModal({ editor, statusOf }: LinkModalProps) {
         </button>
       </div>
 
-      <div className={styles.skyWrap}>
+      {/* The body scrolls vertically when wrapped rows make the sky taller than
+          the viewport; the header and footer stay put. Never sideways. */}
+      <div className={styles.mb} data-link-body="">
         <div
-          ref={skyRef}
-          className={styles.skyScroll}
-          onScroll={syncView}
+          className={styles.skyWrap}
           onClick={(e) => {
             // A click on empty sky closes the edge editor.
             if (pick && !(e.target as HTMLElement).closest("button")) editor.pickEdge(undefined);
@@ -519,35 +464,37 @@ export function LinkModal({ editor, statusOf }: LinkModalProps) {
         >
           <div className={styles.sky} style={{ width: W, height: H }} data-sky="">
             <svg className={styles.wires} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
-              {[...ups, ...downs].map((e) => (
+              {sky.placed.map(({ item: e, wire }) => (
                 <path
                   key={e.key}
                   className={[styles.wire, roleClass(e), cadenceClass[e.cadence]].join(" ")}
-                  d={geometry(e).d}
+                  d={curve(wire)}
                   data-wire={e.key}
                   data-role={e.role}
                   data-cadence={e.cadence}
                 />
               ))}
               {downs.length === 0 && (
-                <path className={[styles.wire, styles.ghostWire].join(" ")} d={`M ${W / 2} ${Y_FOCUS + 28} L ${W / 2} ${Y_DOWN - 14}`} />
+                <path
+                  className={[styles.wire, styles.ghostWire].join(" ")}
+                  d={`M ${sky.focus.x} ${sky.focus.y + FOCUS_HALF} L ${sky.focus.x} ${sky.focus.y + GAP_F - 14}`}
+                />
               )}
             </svg>
             {node(focus)}
-            {ups.map((e) => node(e.granting, e))}
-            {downs.map((e) => node(e.subject, e))}
+            {sky.placed.map((p) => node(p.side === "up" ? p.item.granting : p.item.subject, p.item))}
             {ups.length === 0 && (
-              <div className={[styles.node, styles.ghostNode].join(" ")} style={{ left: W / 2, top: Y_UP }}>
+              <div className={[styles.node, styles.ghostNode].join(" ")} style={{ left: sky.ghostUp.x, top: sky.ghostUp.y }}>
                 Nothing leads or monitors this
               </div>
             )}
             {downs.length === 0 && (
-              <div className={[styles.node, styles.ghostNode].join(" ")} style={{ left: W / 2, top: Y_DOWN }}>
+              <div className={[styles.node, styles.ghostNode].join(" ")} style={{ left: sky.ghostDown.x, top: sky.ghostDown.y }}>
                 ← Click sessions in the list to link them here
               </div>
             )}
-            {[...ups, ...downs].map((e) => {
-              const g = geometry(e).badge;
+            {sky.placed.map(({ item: e }) => {
+              const g = byKey.get(e.key)!.badge;
               const bad = isBad(e);
               const role = ROLE_COPY[e.role];
               const cad = CADENCE_COPY[e.cadence].title;
@@ -580,9 +527,9 @@ export function LinkModal({ editor, statusOf }: LinkModalProps) {
                 </button>
               );
             })}
+            {picked && edgeEditor(picked)}
           </div>
         </div>
-        {picked && edgeEditor(picked)}
       </div>
 
       <div className={styles.mf}>
