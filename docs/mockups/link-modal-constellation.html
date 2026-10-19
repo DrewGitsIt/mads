@@ -92,7 +92,7 @@
   .pane.blurred .scrim { display: flex; }
 
   /* ── modal ─────────────────────────────────────────────── */
-  .modal { position: relative; width: 660px; max-height: 100%; overflow: visible; border-radius: 16px; background: color-mix(in srgb, var(--bg1) 80%, transparent); border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2); box-shadow: 0 24px 60px rgba(0,0,0,.45); }
+  .modal { position: relative; width: 680px; max-height: 100%; overflow: visible; border-radius: 16px; background: color-mix(in srgb, var(--bg1) 80%, transparent); border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2); box-shadow: 0 24px 60px rgba(0,0,0,.45); }
   .modal.enter { animation: pop var(--dur-slow) var(--ease-out); }
   @keyframes pop { from { transform: translateY(8px) scale(.985); opacity: 0; } }
   .mh { padding: 14px 18px 8px; display: flex; gap: 10px; align-items: flex-start; }
@@ -132,7 +132,7 @@
   @keyframes up14 { to { stroke-dashoffset: 28; } }
   .wire.ghost { stroke: var(--text3); stroke-dasharray: 4 6; opacity: .45; }
 
-  .node { position: absolute; transform: translate(-50%, -50%); width: 150px; padding: 6px 9px; border-radius: 12px; background: var(--bg2); border: 1px solid var(--line); font-size: 12px; text-align: center; cursor: pointer; box-shadow: 0 6px 16px rgba(0,0,0,.22); transition: border-color var(--dur-fast), transform var(--dur) var(--ease-out); }
+  .node { position: absolute; transform: translate(-50%, -50%); width: 140px; padding: 6px 9px; border-radius: 12px; background: var(--bg2); border: 1px solid var(--line); font-size: 12px; text-align: center; cursor: pointer; box-shadow: 0 6px 16px rgba(0,0,0,.22); transition: border-color var(--dur-fast), transform var(--dur) var(--ease-out); }
   .node:hover { border-color: var(--text3); }
   .node .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .node .st { color: var(--text3); font-size: 10.5px; display: flex; gap: 6px; justify-content: center; align-items: center; }
@@ -178,6 +178,21 @@
   .invalid { color: var(--bad-fg); font-size: 12px; max-width: 380px; line-height: 1.35; }
   .invalid b { color: var(--accent); font-weight: 600; }
 
+  .skywrap.scroll { margin: 0 18px; overflow-x: auto; overflow-y: hidden; border-radius: 12px; border: 1px solid var(--line-soft); }
+  .skywrap.scroll .sky { margin: 0; border: 0; border-radius: 0; }
+  .node.more { border-style: dashed; color: var(--text2); background: var(--bg1); width: 110px; }
+  .morelist { position: absolute; z-index: 6; width: 250px; max-height: 260px; overflow-y: auto; padding: 6px; border-radius: 12px; background: var(--bg2); border: 1px solid var(--line); box-shadow: 0 16px 34px rgba(0,0,0,.45); font-size: 12.5px; }
+  .morelist .mi { display: flex; gap: 8px; align-items: center; padding: 5px 8px; border-radius: 7px; cursor: pointer; }
+  .morelist .mi:hover { background: var(--bg3); }
+  .morelist .mi .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .morelist .mi .c { color: var(--text3); font-size: 11px; display: inline-flex; gap: 3px; align-items: center; }
+  .morelist .g.lead { color: var(--accent); } .morelist .g.mon { color: var(--info); }
+  .ibtn { width: 20px; height: 20px; margin: 2px 0 0 8px; flex: none; border-radius: 50%; border: 1px solid var(--line); background: var(--bg2); color: var(--text2); font: italic 600 11px/18px Georgia, serif; cursor: pointer; }
+  .ibtn:hover, .ibtn.on { color: var(--text); border-color: var(--text3); }
+  .infopop { position: absolute; z-index: 8; top: 46px; left: 18px; width: 340px; padding: 12px 14px; border-radius: 12px; background: var(--bg2); border: 1px solid var(--line); box-shadow: 0 16px 34px rgba(0,0,0,.45); font-size: 12.5px; line-height: 1.45; color: var(--text2); animation: pop var(--dur-fast) var(--ease-out); }
+  .infopop p { margin: 0 0 8px; } .infopop ul { margin: 2px 0 8px; padding-left: 16px; } .infopop li { margin: 2px 0; }
+  .infopop b { color: var(--text); } .infopop code { font-size: 11px; padding: 0 3px; }
+  .infopop .lead { color: var(--accent); } .infopop .mon { color: var(--info); }
   .legend { display: flex; gap: 16px; justify-content: center; margin: 8px 18px 0; color: var(--text3); font-size: 11px; flex-wrap: wrap; }
   .legend svg { width: 34px; height: 8px; vertical-align: middle; margin-right: 5px; overflow: visible; }
   .mf { margin-top: 10px; padding: 12px 18px 14px; display: flex; gap: 8px; align-items: center; border-top: 1px solid var(--line-soft); }
@@ -273,6 +288,13 @@
     <div class="grp"><span class="lbl">Scenario</span>
       <button data-scen="seed" class="on">Seed (1 shared session)</button>
       <button data-scen="heavy">Heavy (two monitors watching 6 led sessions)</button>
+      <button data-scen="hub">Busy hub (3 above, 9 below)</button>
+    </div>
+    <div class="sep"></div>
+    <div class="grp"><span class="lbl">Many nodes</span>
+      <button data-many="scroll" class="on">As built: one row, scrolls</button>
+      <button data-many="wrap">Wrap: rows of 4</button>
+      <button data-many="more">Show 3, then +N more</button>
     </div>
     <div class="sep"></div>
     <div class="grp" id="railStats" style="font: 12px var(--mono); color: var(--text)"></div>
@@ -341,7 +363,7 @@ const CAD = {
 };
 const ROLE = { leader: { g: '♛', t: 'Leads', cls: 'lead' }, monitor: { g: '◉', t: 'Monitors', cls: 'mon' } };
 
-const SESSIONS = [
+const BASE_SESSIONS = [
   { id: 'p', name: 'Release captain', st: 'idle', ws: 'mads', t: '18:02' },
   { id: 'm', name: 'Cost watchdog', st: 'idle', ws: 'mads', t: '17:59' },
   { id: 'a', name: 'Fix deploy on Ubuntu runners', st: 'working', ws: 'mads', t: '17:48' },
@@ -354,7 +376,22 @@ const SESSIONS = [
   { id: 'q', name: 'QA sentinel', st: 'idle', ws: 'mads', t: 'Thu' },
   { id: 'g', name: 'twinctl: fix flaky CI', st: 'idle', ws: 'twinctl', t: 'Thu' },
 ];
-let place = '2', scen = 'seed', failSim = 'off';
+const HUB_SESSIONS = [
+  { id: 'H', name: 'Release train 4.2', st: 'working', ws: 'mads', t: '18:30' },
+  { id: 'L1', name: 'Program lead', st: 'idle', ws: 'mads', t: '18:31' },
+  ...['Bump dependencies', 'Changelog draft', 'Migrate CI cache', 'Flaky test triage', 'Docs screenshots',
+    'Perf baseline', 'Sign macOS build', 'Release notes copy', 'Smoke on arm64'].map((name, i) =>
+    ({ id: 'S' + (i + 1), name, st: i % 3 === 0 ? 'working' : 'idle', ws: 'mads', t: '18:' + (10 + i) })),
+];
+let SESSIONS = BASE_SESSIONS;
+const HUB = () => [
+  { h: 'L1', s: 'H', role: 'leader', cad: 'on_signal' },
+  { h: 'm', s: 'H', role: 'monitor', cad: 'per_turn' },
+  { h: 'q', s: 'H', role: 'monitor', cad: 'on_signal' },
+  ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => ({ h: 'H', s: 'S' + i, role: i % 4 === 0 ? 'monitor' : 'leader',
+    cad: i % 3 === 0 ? 'manual_only' : i % 3 === 1 ? 'on_signal' : 'per_turn' })),
+];
+let place = '2', scen = 'seed', failSim = 'off', many = 'scroll';
 const HEAVY = () => [...SEED(),
   { h: 'm', s: 'b', role: 'monitor', cad: 'on_signal' },
   { h: 'm', s: 'c', role: 'monitor', cad: 'on_signal' },
@@ -566,9 +603,19 @@ function save() {
 }
 
 /* ── constellation ─────────────────────────────────────── */
-const W = 622, H = 400, YU = 70, YF = 200, YD = 330;
-function spread(n, y) {
-  return Array.from({ length: n }, (_, i) => ({ x: n === 1 ? W / 2 : 92 + i * ((W - 184) / (n - 1)), y }));
+// Layout. SP = horizontal spacing between node centres; PER = nodes per row
+// before wrapping (or before "+N more"). Rows sit GAP_F from the focus and
+// ROWG apart; a row is centred on the sky.
+const W = 640, SP = 152, PER = 4, GAP_F = 125, ROWG = 84, NODE_H = 40;
+let H = 400;
+const rowXs = (k, width) => Array.from({ length: k }, (_, i) => width / 2 + (i - (k - 1) / 2) * SP);
+const chunk = (arr, n) => arr.reduce((rows, x, i) => (i % n ? rows[rows.length - 1].push(x) : rows.push([x]), rows), []);
+// One side's rows of edges, per the many-nodes mode. In "more" mode a side
+// with more than PER links shows PER-1 of them plus a "+N more" pill.
+function sideRows(edges) {
+  if (many === 'wrap') return chunk(edges, PER);
+  if (many === 'more' && edges.length > PER) return [[...edges.slice(0, PER - 1), { more: edges.slice(PER - 1) }]];
+  return edges.length ? [edges] : [];
 }
 function nodeHtml(id, x, y, extraCls = '') {
   const s = byId(id);
@@ -583,33 +630,87 @@ function nodeHtml(id, x, y, extraCls = '') {
 function sky() {
   const ups = M.draft.filter((e) => e.s === M.focus);
   const downs = M.draft.filter((e) => e.h === M.focus);
-  const pos = new Map();
-  pos.set(M.focus, { x: W / 2, y: YF });
-  spread(ups.length, YU).forEach((p, i) => pos.set(ups[i].h, p));
-  spread(downs.length, YD).forEach((p, i) => pos.set(downs[i].s, p));
-  const edges = [...ups, ...downs];
-  let wires = '', badges = '', nodes = '';
-  for (const e of edges) {
-    const a = pos.get(e.h), b = pos.get(e.s);
-    const y0 = a.y + (e.h === M.focus ? 24 : 20), y1 = b.y - (e.s === M.focus ? 24 : 20), ym = (y0 + y1) / 2;
-    wires += `<path class="wire ${ROLE[e.role].cls} ${e.cad}" d="M ${a.x} ${y0} C ${a.x} ${ym}, ${b.x} ${ym}, ${b.x} ${y1}"/>`;
-    const loop = inCycle(e) || (M.saveErr && M.saveErr.kind === 'refused' && M.saveErr.key === key(e) && isDirty(e));
-    badges += `<button class="eb ${ROLE[e.role].cls} ${M.pick === key(e) ? 'picked' : ''} ${isDirty(e) ? 'dirty' : ''} ${loop ? 'bad' : ''}" style="left:${(a.x + b.x) / 2}px;top:${ym}px" data-edge="${key(e)}" title="${loop ? 'This link closes a loop of leaders' : 'Edit this link'}">
-      <span class="g">${ROLE[e.role].g}</span>${e.cad === 'manual_only' ? ICON_MUTE : CAD[e.cad].t}</button>`;
-  }
-  nodes += nodeHtml(M.focus, W / 2, YF, 'focus');
-  ups.forEach((e) => { const p = pos.get(e.h); nodes += nodeHtml(e.h, p.x, p.y, isDirty(e) ? 'add' : ''); });
-  downs.forEach((e) => { const p = pos.get(e.s); nodes += nodeHtml(e.s, p.x, p.y, isDirty(e) ? 'add' : ''); });
-  if (!ups.length) nodes += `<div class="node ghost" style="left:${W / 2}px;top:${YU}px">nothing leads or monitors this</div>`;
-  if (!downs.length) { nodes += `<div class="node ghost" style="left:${W / 2}px;top:${YD}px">← click sessions in the rail to link them here</div>`; wires += `<path class="wire ghost" d="M ${W / 2} ${YF + 24} L ${W / 2} ${YD - 14}"/>`; }
+  const upRows = sideRows(ups), downRows = sideRows(downs);
+  const widest = Math.max(1, ...upRows.map((r) => r.length), ...downRows.map((r) => r.length));
+  const width = many === 'scroll' ? Math.max(W, widest * SP + 40) : W;
+  const U = Math.max(1, upRows.length), D = Math.max(1, downRows.length);
+  const yF = 50 + (U - 1) * ROWG + GAP_F;
+  H = yF + GAP_F + (D - 1) * ROWG + 50;
+  const fx = width / 2;
+  const pos = new Map([[M.focus, { x: fx, y: yF }]]);
+  // place: edge → node centre, row index, and (for rows past the first) the
+  // gutter of row 0 its line runs down, so it never crosses a nearer node.
+  const placed = [];
+  const lay = (rows, dir) => rows.forEach((row, r) => {
+    const xs = rowXs(row.length, width);
+    const y = yF + dir * (GAP_F + r * ROWG);
+    row.forEach((item, i) => placed.push({ item, x: xs[i], y, r, dir }));
+  });
+  lay(upRows, -1); lay(downRows, 1);
+  for (const p of placed) if (!p.item.more) pos.set(p.dir < 0 ? p.item.h : p.item.s, { x: p.x, y: p.y });
+  const row0 = (dir) => rowXs((dir < 0 ? upRows : downRows)[0]?.length ?? 0, width);
+  const gutterUse = new Map();
 
+  // A path through points with vertical tangents at each bend, so lines
+  // leave and enter nodes vertically. Always drawn holder → subject.
+  const curve = (pts) => pts.reduce((d, p, i) => {
+    if (i === 0) return `M ${p.x} ${p.y}`;
+    const q = pts[i - 1], ym = (q.y + p.y) / 2;
+    return q.x === p.x ? `${d} L ${p.x} ${p.y}` : `${d} C ${q.x} ${ym}, ${p.x} ${ym}, ${p.x} ${p.y}`;
+  }, '');
+  const route = (p) => {
+    const edge = { x: fx, y: yF + p.dir * 24 }, end = { x: p.x, y: p.y - p.dir * (NODE_H / 2) };
+    if (p.r === 0) return [edge, end];
+    // Down the nearest gutter between row-0 nodes, offset per line sharing it.
+    const xs = row0(p.dir), gutters = xs.slice(1).map((x, i) => (x + xs[i]) / 2);
+    const g = gutters.reduce((a, b) => (Math.abs(b - p.x) < Math.abs(a - p.x) ? b : a));
+    const k = gutterUse.get(g) ?? 0; gutterUse.set(g, k + 1);
+    const gx = g + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * 5;
+    const y0 = yF + p.dir * (GAP_F - NODE_H / 2 - 14), y1 = p.y - p.dir * (NODE_H / 2 + 16);
+    return [edge, { x: gx, y: y0 }, { x: gx, y: y1 }, end];
+  };
+
+  let wires = '', badges = '', nodes = nodeHtml(M.focus, fx, yF, 'focus');
+  for (const p of placed) {
+    const pts = route(p);
+    const ordered = p.dir < 0 ? [...pts].reverse() : pts; // holder first
+    if (p.item.more) {
+      const n = p.item.more.length;
+      wires += `<path class="wire ghost" d="${curve(ordered)}"/>`;
+      nodes += `<div class="node more" style="left:${p.x}px;top:${p.y}px" data-more="${p.dir}">+${n} more<div class="st">${p.dir < 0 ? 'above' : 'below'}</div></div>`;
+      for (const e of p.item.more) pos.set(p.dir < 0 ? e.h : e.s, { x: p.x, y: p.y });
+      continue;
+    }
+    const e = p.item;
+    wires += `<path class="wire ${ROLE[e.role].cls} ${e.cad}" d="${curve(ordered)}"/>`;
+    const loop = inCycle(e) || (M.saveErr && M.saveErr.kind === 'refused' && M.saveErr.key === key(e) && isDirty(e));
+    const bx = p.x, by = p.y - p.dir * (NODE_H / 2 + 16);
+    badges += `<button class="eb ${ROLE[e.role].cls} ${M.pick === key(e) ? 'picked' : ''} ${isDirty(e) ? 'dirty' : ''} ${loop ? 'bad' : ''}" style="left:${bx}px;top:${by}px" data-edge="${key(e)}" title="${loop ? 'This link closes a loop of leaders' : 'Edit this link'}">
+      <span class="g">${ROLE[e.role].g}</span>${e.cad === 'manual_only' ? ICON_MUTE : CAD[e.cad].t}</button>`;
+    nodes += nodeHtml(p.dir < 0 ? e.h : e.s, p.x, p.y, isDirty(e) ? 'add' : '');
+  }
+  if (!ups.length) nodes += `<div class="node ghost" style="left:${fx}px;top:${yF - GAP_F}px">nothing leads or monitors this</div>`;
+  if (!downs.length) { nodes += `<div class="node ghost" style="left:${fx}px;top:${yF + GAP_F}px">← click sessions in the rail to link them here</div>`; wires += `<path class="wire ghost" d="M ${fx} ${yF + 24} L ${fx} ${yF + GAP_F - 14}"/>`; }
+
+  let moreList = '';
+  if (M.moreOpen) {
+    const dir = +M.moreOpen, side = dir < 0 ? upRows : downRows;
+    const mp = placed.find((p) => p.item.more && p.dir === dir);
+    if (mp) {
+      moreList = `<div class="morelist" style="left:${Math.min(mp.x - 125, width - 258)}px;top:${dir < 0 ? mp.y + 26 : Math.max(6, mp.y - 290)}px">${mp.item.more.map((e) => {
+        const other = dir < 0 ? e.h : e.s;
+        return `<div class="mi" data-edge="${key(e)}"><span class="g ${ROLE[e.role].cls}">${ROLE[e.role].g}</span><span class="n">${esc(byId(other).name)}</span><span class="c">${e.cad === 'manual_only' ? ICON_MUTE : CAD[e.cad].t}</span></div>`;
+      }).join('')}</div>`;
+    }
+    void side;
+  }
   let pop = '';
   const pe = M.draft.find((x) => key(x) === M.pick);
   if (pe) {
     const a = pos.get(pe.h), b = pos.get(pe.s);
     const mx = (a.x + b.x) / 2, my = ((a.y + b.y) / 2);
-    const left = Math.min(Math.max(mx + 20, 8), W - 258);
-    const top = Math.min(Math.max(my - 150, 6), H - 345);
+    const left = Math.min(Math.max(mx + 20, 8), width - 258);
+    const top = Math.min(Math.max(my - 150, 6), Math.max(6, H - 345));
     const otherLeader = leaderOf(pe.s, pe);
     const swapBlock = pe.role === 'leader' && leaderOf(pe.h);
     pop = `<div class="pop" style="left:${left}px;top:${top}px">
@@ -629,8 +730,8 @@ function sky() {
       <div class="act bad" data-remove="1">× Unlink</div>
     </div>`;
   }
-  const lanes = `<span class="lane" style="top:10px">Leads / monitors this</span><span class="lane" style="bottom:8px">Led / monitored by this</span>`;
-  return `<div class="sky" data-sky style="width:${W}px;height:${H}px">${lanes}<svg class="wires" viewBox="0 0 ${W} ${H}">${wires}</svg>${nodes}${badges}${pop}</div>`;
+  const skyHtml = `<div class="sky" data-sky style="width:${width}px;height:${H}px"><svg class="wires" viewBox="0 0 ${width} ${H}">${wires}</svg>${nodes}${badges}${moreList}${pop}</div>`;
+  return many === 'scroll' && width > W ? `<div class="skywrap scroll" style="width:${W + 2}px">${skyHtml}</div>` : skyHtml;
 }
 function modal() {
   const f = byId(M.focus);
@@ -640,13 +741,21 @@ function modal() {
   const err = M.saveErr && changes.length ? `<span class="invalid">Saved ${M.saveErr.done} of ${M.saveErr.total}. Couldn't save ${esc(M.saveErr.label)}: ${esc(M.saveErr.msg)}${M.saveErr.kind === 'refused' ? ' Change that link, then save again.' : ''}</span>` : '';
   const blocked = loop ? `<span class="invalid">Can't save: ${loop.map((id) => esc(byId(id).name)).join(' <b>♛→</b> ')} is a loop of leaders. Change one link to Monitors or unlink it.</span>` : '';
   const ln = (cls) => `<svg viewBox="0 0 34 8"><path class="wire ${cls}" d="M1 4 L33 4"/></svg>`;
-  const legend = `<div class="legend"><span>${ln('lead per_turn')}♛ Leads: flows down</span><span>${ln('mon per_turn')}◉ Monitors: flows up</span><span>fast = Follow · slow = Signals · still = Muted</span></div>`;
+  void ln;
+  const info = M.info ? `<div class="infopop">
+    <p><b class="lead">♛ Leader</b>: reads and directs. Tools: <code>list_links</code>, <code>get_summary</code>, <code>get_turns</code>, <code>check_mailbox</code>, <code>set_attention</code>, and <code>send_message</code>, which delivers into the other session's conversation, attributed, after its current turn. A session has at most one leader, and a leader's reach is capped by that session's own trust level.</p>
+    <p><b class="mon">◉ Monitor</b>: reads only. The same tools except <code>send_message</code>; it never speaks into the session.</p>
+    <p style="margin-bottom:2px"><b>Cadence</b> is set per line and decides when updates arrive:</p>
+    <ul><li><b>Follow</b>: a digest after each burst of activity.</li>
+      <li><b>Signals</b> (default): woken only when the session needs attention (a permission request, a crash, a task done or blocked). Other digests wait in a mailbox until the next wake or <code>check_mailbox</code>.</li>
+      <li><b>Muted</b>: nothing is pushed. The agent can still catch up with <code>get_summary</code>.</li></ul>
+    <p style="margin:0">You set cadence here. The leading or monitoring agent can also change its own with <code>set_attention</code>.</p></div>` : '';
   const confirm = M.confirm ? `<div class="confirm"><div class="box"><div class="t">${M.savedSome ? 'Some changes are already saved. ' : ''}Discard the ${changes.length} unsaved change${changes.length === 1 ? '' : 's'}?</div>
     <ul>${changes.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>
     <div class="row"><button class="btn" data-act="keep">Keep editing</button><button class="btn danger" data-act="discard">Discard</button></div></div></div>` : '';
   return `<div class="modal ${M.enter ? 'enter' : ''}">
-    <div class="mh"><div><div class="ttl">Links · ${esc(f.name)}</div>${crumbs || '<div class="sub">Click a node to center on it. Click a line\'s badge to edit that link.</div>'}</div><button class="x" data-act="close" aria-label="Close">×</button></div>
-    ${sky()}${legend}
+    <div class="mh"><div><div class="ttl" style="display:flex;align-items:center">Links · ${esc(f.name)}<button class="ibtn ${M.info ? 'on' : ''}" data-act="info" aria-label="How links work" title="How links work">i</button></div>${crumbs || '<div class="sub">Click a node to center on it. Click a line\'s badge to edit that link.</div>'}</div><button class="x" data-act="close" aria-label="Close">×</button></div>
+    ${info}${sky()}
     <div class="mf">${blocked || err || (changes.length ? `<span class="pending" title="${esc(changes.join('\n'))}">${changes.length} unsaved</span>` : '')}<span class="sp"></span>
       <button class="btn" data-act="close">Cancel</button>
       <button class="btn pri" data-act="save" ${changes.length && !loop ? '' : 'disabled'}>${changes.length ? (M.saveErr && M.saveErr.kind === 'transient' ? 'Retry' : `Save ${changes.length} change${changes.length === 1 ? '' : 's'}`) : 'No changes'}</button></div>
@@ -658,6 +767,9 @@ function render() {
   renderRail();
   document.getElementById('pane').classList.toggle('blurred', !!M);
   document.getElementById('scrim').innerHTML = M ? modal() : '';
+  // As built: the overflowing row opens scrolled to its middle, under the focus.
+  const sw = document.querySelector('.skywrap.scroll');
+  if (sw) sw.scrollLeft = (sw.scrollWidth - sw.clientWidth) / 2;
   document.getElementById('paneTitle').textContent = byId(openId).name;
   if (M) M.enter = false;
 }
@@ -688,6 +800,7 @@ document.getElementById('scrim').addEventListener('click', (e) => {
   const g = (a) => t.closest(`[${a}]`)?.getAttribute(a);
   let v;
   if ((v = g('data-act'))) {
+    if (v === 'info') { M.info = !M.info; M.pick = null; M.moreOpen = null; return render(); }
     if (v === 'close') return tryClose();
     if (v === 'save') return save();
     if (v === 'keep') { M.confirm = false; return render(); }
@@ -698,13 +811,16 @@ document.getElementById('scrim').addEventListener('click', (e) => {
   if ((v = g('data-setcad'))) return edit(M.pick, (x) => { x.cad = v; });
   if (g('data-swap')) return swapDir(M.pick);
   if (g('data-remove')) return removeEdge(M.pick);
-  if ((v = g('data-edge'))) { M.pick = M.pick === v ? null : v; return render(); }
+  if ((v = g('data-more'))) { M.moreOpen = M.moreOpen === v ? null : v; M.pick = null; M.info = false; return render(); }
+  if ((v = g('data-edge'))) { M.pick = M.pick === v ? null : v; M.moreOpen = null; M.info = false; return render(); }
   if ((v = g('data-focus'))) return focusOn(v);
   if (t.closest('[data-sky]') && M.pick && !t.closest('.pop')) { M.pick = null; render(); }
 });
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || !M) return;
   if (M.confirm) { M.confirm = false; render(); }
+  else if (M.info) { M.info = false; render(); }
+  else if (M.moreOpen) { M.moreOpen = null; render(); }
   else if (M.pick) { M.pick = null; render(); }
   else tryClose();
 });
@@ -716,7 +832,12 @@ document.getElementById('theme').onclick = () => { const r = document.documentEl
 const pal = document.getElementById('palette');
 ['clay', 'aubergine', 'citrus', 'dune', 'ember', 'glacier', 'graphite', 'harbor', 'ink', 'lagoon', 'moss', 'rosewood', 'sakura', 'space', 'synthwave'].forEach((p) => pal.insertAdjacentHTML('beforeend', `<option>${p}</option>`));
 pal.onchange = () => { document.documentElement.dataset.palette = pal.value; };
-document.getElementById('reset').onclick = () => { links = scen === 'heavy' ? HEAVY() : SEED(); M = null; render(); };
+document.getElementById('reset').onclick = () => { links = scen === 'heavy' ? HEAVY() : scen === 'hub' ? HUB() : SEED(); M = null; render(); };
+document.querySelectorAll('[data-many]').forEach((b) => b.addEventListener('click', () => {
+  many = b.dataset.many;
+  document.querySelectorAll('[data-many]').forEach((x) => x.classList.toggle('on', x === b));
+  if (M) { M.moreOpen = null; render(); }
+}));
 document.querySelectorAll('[data-fail]').forEach((b) => b.addEventListener('click', () => {
   failSim = b.dataset.fail;
   document.querySelectorAll('[data-fail]').forEach((x) => x.classList.toggle('on', x === b));
@@ -729,7 +850,9 @@ document.querySelectorAll('[data-place]').forEach((b) => b.addEventListener('cli
 document.querySelectorAll('[data-scen]').forEach((b) => b.addEventListener('click', () => {
   scen = b.dataset.scen;
   document.querySelectorAll('[data-scen]').forEach((x) => x.classList.toggle('on', x === b));
-  links = scen === 'heavy' ? HEAVY() : SEED(); M = null; render();
+  SESSIONS = scen === 'hub' ? [...BASE_SESSIONS, ...HUB_SESSIONS] : BASE_SESSIONS;
+  links = scen === 'heavy' ? HEAVY() : scen === 'hub' ? HUB() : SEED(); M = null; render();
+  if (scen === 'hub') open('H');
 }));
 
 /* ── rail placement comparison (static) ─────────────────── */
