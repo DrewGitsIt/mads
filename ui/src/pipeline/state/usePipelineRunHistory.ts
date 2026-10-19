@@ -11,6 +11,8 @@ export interface UsePipelineRunHistoryResult {
   /** Folded board state for the selected run. */
   columns: string[];
   taskRunState: Record<string, TaskRunState>;
+  /** The selected run's pipeline.started `excluded_task_ids` (empty for older runs). */
+  excludedTaskIds: string[];
   loading: boolean;
   error: string | null;
 }
@@ -35,6 +37,7 @@ export function usePipelineRunHistory(
   const [selectedRunSeq, setSelectedRunSeq] = useState<number | undefined>(undefined);
   const [columns, setColumns] = useState<string[]>([]);
   const [taskRunState, setTaskRunState] = useState<Record<string, TaskRunState>>({});
+  const [excludedTaskIds, setExcludedTaskIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -92,6 +95,7 @@ export function usePipelineRunHistory(
         const folded = bounded.reduce(foldReducer, initialRunFoldState);
         setColumns(folded.columns);
         setTaskRunState(folded.taskRunState);
+        setExcludedTaskIds(folded.excludedTaskIds);
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
@@ -108,5 +112,5 @@ export function usePipelineRunHistory(
     setSelectedRunSeq(runSeq);
   }, []);
 
-  return { runs, selectedRunSeq, selectRun, columns, taskRunState, loading, error };
+  return { runs, selectedRunSeq, selectRun, columns, taskRunState, excludedTaskIds, loading, error };
 }

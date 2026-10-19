@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { usePipelineRun } from "./usePipelineRun";
+import { foldReducer, initialRunFoldState, usePipelineRun } from "./usePipelineRun";
+import type { Envelope } from "../../router/types";
 import { FakeEventSource } from "../../router/testFakeEventSource";
 import { FakePipelineClient } from "../client/fixtures";
 import {
@@ -383,5 +384,107 @@ describe("usePipelineRun", () => {
     await Promise.resolve();
     expect(result.current.taskRunState[recordedTaskIds.coreLib]).toEqual(before);
     expect(result.current.taskRunState[recordedTaskIds.coreLib]?.attempts[0]?.retries).toBeUndefined();
+  });
+
+  it("reads run_id, template and excluded_task_ids from a resumed run's pipeline.started, so a remount can cancel", async () => {
+    const client = newClient();
+    client.runs = [
+      {
+        session_id: recordedSessionId,
+        run_seq: 100,
+        run_id: "run_abc",
+        started_at: "2026-07-16T05:00:00Z",
+        outcome: "running",
+        tasks_done: 0,
+        tasks_blocked: 0,
+        tasks_skipped: 0,
+        cost_usd: 0,
+      },
+    ];
+    client.runEvents = [
+      {
+        seq: 100,
+        timestamp: "2026-07-16T05:00:00Z",
+        type: "pipeline.started",
+        session_id: recordedSessionId,
+        actor: "pipeline",
+        payload: {
+          template: "default-implementation",
+          run_id: "run_abc",
+          excluded_task_ids: [recordedTaskIds.coreLib],
+        },
+      },
+    ];
+    const { result } = renderHook(() => usePipelineRun(recordedSessionId, client));
+
+    await waitFor(() => expect(result.current.resuming).toBe(false));
+    expect(result.current.runId).toBe("run_abc");
+    expect(result.current.template).toBe("default-implementation");
+    expect(result.current.excludedTaskIds).toEqual([recordedTaskIds.coreLib]);
+  });
+
+  it("falls back to the run history's run_id when an older pipeline.started carried none", async () => {
+    const client = newClient();
+    client.runs = [
+      {
+        session_id: recordedSessionId,
+        run_seq: 100,
+        run_id: "run_from_history",
+        started_at: "2026-07-16T05:00:00Z",
+        outcome: "running",
+        tasks_done: 0,
+        tasks_blocked: 0,
+        tasks_skipped: 0,
+        cost_usd: 0,
+      },
+    ];
+    client.runEvents = [
+      {
+        seq: 100,
+        timestamp: "2026-07-16T05:00:00Z",
+        type: "pipeline.started",
+        session_id: recordedSessionId,
+        actor: "pipeline",
+        payload: { template: "default-implementation" },
+      },
+    ];
+    const { result } = renderHook(() => usePipelineRun(recordedSessionId, client));
+
+    await waitFor(() => expect(result.current.resuming).toBe(false));
+    expect(result.current.runId).toBe("run_from_history");
+    expect(result.current.excludedTaskIds).toEqual([]);
+  });
+});
+
+describe("foldReducer pipeline.started", () => {
+  function started(seq: number, payload: Record<string, unknown>): Envelope {
+    return {
+      seq,
+      timestamp: "2026-10-19T10:00:00Z",
+      type: "pipeline.started",
+      session_id: "ses_1",
+      actor: "pipeline",
+      payload,
+    };
+  }
+
+  it("leaves runId undefined and excludedTaskIds empty for events from before they existed", () => {
+    const state = foldReducer(initialRunFoldState, started(1, { template: "default-implementation" }));
+    expect(state.phase).toBe("running");
+    expect(state.runId).toBeUndefined();
+    expect(state.excludedTaskIds).toEqual([]);
+  });
+
+  it("treats a null excluded_task_ids as empty", () => {
+    const state = foldReducer(initialRunFoldState, started(1, { run_id: "r1", excluded_task_ids: null }));
+    expect(state.runId).toBe("r1");
+    expect(state.excludedTaskIds).toEqual([]);
+  });
+
+  it("a newer run replaces the previous run's id and exclusions", () => {
+    let state = foldReducer(initialRunFoldState, started(1, { run_id: "r1", excluded_task_ids: ["t1"] }));
+    state = foldReducer(state, started(9, { run_id: "r2" }));
+    expect(state.runId).toBe("r2");
+    expect(state.excludedTaskIds).toEqual([]);
   });
 });

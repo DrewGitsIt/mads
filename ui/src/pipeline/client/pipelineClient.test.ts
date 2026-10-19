@@ -42,6 +42,26 @@ describe("FetchPipelineClient", () => {
     expect(result).toEqual({ run_id: "run_1" });
   });
 
+  it("startPipeline sends exclude_task_ids when some are given", async () => {
+    const fetchMock = mockFetchOnce({ run_id: "run_1" });
+    const client = new FetchPipelineClient();
+    await client.startPipeline("ses_1", "tpl_1", { excludeTaskIds: ["t2", "t3"] });
+    const [, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      session_id: "ses_1",
+      template_id: "tpl_1",
+      exclude_task_ids: ["t2", "t3"],
+    });
+  });
+
+  it("startPipeline omits exclude_task_ids when the list is empty", async () => {
+    const fetchMock = mockFetchOnce({ run_id: "run_1" });
+    const client = new FetchPipelineClient();
+    await client.startPipeline("ses_1", "tpl_1", { excludeTaskIds: [] });
+    const [, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(JSON.parse(init.body as string)).not.toHaveProperty("exclude_task_ids");
+  });
+
   it("cancelPipeline POSTs /pipelines/:id/cancel", async () => {
     const fetchMock = mockFetchOnce(undefined);
     const client = new FetchPipelineClient();
@@ -132,6 +152,22 @@ describe("FetchPipelineClient", () => {
       );
     });
 
+    it("adds run, stage and attempt query params when given", () => {
+      const client = new FetchPipelineClient();
+      client.streamTaskOutput("ses_1", "t1", { run: 42, stage: "code_review", attempt: 2 });
+      expect(FakeEventSource.instances[0].url).toBe(
+        "http://localhost:17373/sessions/ses_1/pipeline/tasks/t1/output?run=42&stage=code_review&attempt=2",
+      );
+    });
+
+    it("sends only the params that are set", () => {
+      const client = new FetchPipelineClient();
+      client.streamTaskOutput("ses_1", "t1", { run: 7 });
+      expect(FakeEventSource.instances[0].url).toBe(
+        "http://localhost:17373/sessions/ses_1/pipeline/tasks/t1/output?run=7",
+      );
+    });
+
     it("delivers JSON-decoded message frames to onChunk listeners", () => {
       const client = new FetchPipelineClient();
       const source = client.streamTaskOutput("ses_1", "t1");
@@ -185,6 +221,14 @@ describe("FetchPipelineClient", () => {
       client.streamTaskTurns("ses_1", "t1");
       expect(FakeEventSource.instances[0].url).toBe(
         "http://localhost:17373/sessions/ses_1/pipeline/tasks/t1/turns",
+      );
+    });
+
+    it("adds run, stage and attempt query params when given", () => {
+      const client = new FetchPipelineClient();
+      client.streamTaskTurns("ses_1", "t1", { run: 42, stage: "executor", attempt: 1 });
+      expect(FakeEventSource.instances[0].url).toBe(
+        "http://localhost:17373/sessions/ses_1/pipeline/tasks/t1/turns?run=42&stage=executor&attempt=1",
       );
     });
 

@@ -357,7 +357,12 @@ export interface RouterClient {
   cancelJob(jobId: string): Promise<void>;
 
   // --- Pipeline ---
-  createPipelineRun(sessionId: string, templateId: string): Promise<{ run_id: string }>;
+  /** `excludeTaskIds` is sent as `exclude_task_ids` only when non-empty: the engine never launches those tasks, and reports their dependents as skipped. */
+  createPipelineRun(
+    sessionId: string,
+    templateId: string,
+    excludeTaskIds?: string[],
+  ): Promise<{ run_id: string }>;
   cancelPipelineRun(runId: string): Promise<void>;
   retryTask(taskId: string): Promise<Task>;
 
@@ -1297,10 +1302,12 @@ export class FetchRouterClient implements RouterClient {
   async createPipelineRun(
     sessionId: string,
     templateId: string,
+    excludeTaskIds?: string[],
   ): Promise<{ run_id: string }> {
     return routerPost(this.baseUrl, "/pipelines", {
       session_id: sessionId,
       template_id: templateId,
+      ...(excludeTaskIds && excludeTaskIds.length > 0 ? { exclude_task_ids: excludeTaskIds } : {}),
     });
   }
 

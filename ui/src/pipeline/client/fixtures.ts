@@ -1,4 +1,10 @@
-import type { PipelineClient, PipelineOutputSource, PipelineTurnsSource } from "./pipelineClient";
+import type {
+  PipelineClient,
+  PipelineOutputSource,
+  PipelineTurnsSource,
+  StartPipelineOptions,
+  TaskStreamTarget,
+} from "./pipelineClient";
 import type { Envelope, PipelineRun, Task } from "../../router/types";
 import { recordedSessionId, recordedTasks } from "./recordedRun";
 
@@ -80,6 +86,10 @@ export class FakePipelineClient implements PipelineClient {
   // history) keeps seeing no runs, same as today.
   runs: PipelineRun[] = [];
   runEvents: Envelope[] = [];
+  // Recorded so tests can assert what a run was started with and which log a
+  // stream asked for, without spying.
+  startCalls: { sessionId: string; templateId: string; opts?: StartPipelineOptions }[] = [];
+  streamCalls: { kind: "output" | "turns"; taskId: string; target?: TaskStreamTarget }[] = [];
 
   constructor(private tasks: Task[] = recordedTasks.map((t) => ({ ...t }))) {}
 
@@ -87,7 +97,12 @@ export class FakePipelineClient implements PipelineClient {
     return this.tasks.filter((t) => t.session_id === sessionId);
   }
 
-  async startPipeline(_sessionId: string, _templateId: string): Promise<{ run_id: string }> {
+  async startPipeline(
+    sessionId: string,
+    templateId: string,
+    opts?: StartPipelineOptions,
+  ): Promise<{ run_id: string }> {
+    this.startCalls.push({ sessionId, templateId, opts });
     return { run_id: "run_fixture" };
   }
 
@@ -113,11 +128,13 @@ export class FakePipelineClient implements PipelineClient {
     throw new Error("not supported by the current pipeline engine");
   }
 
-  streamTaskOutput(_sessionId: string, _taskId: string): PipelineOutputSource {
+  streamTaskOutput(_sessionId: string, taskId: string, target?: TaskStreamTarget): PipelineOutputSource {
+    this.streamCalls.push({ kind: "output", taskId, target });
     return new FakePipelineOutputSource();
   }
 
-  streamTaskTurns(_sessionId: string, _taskId: string): PipelineTurnsSource {
+  streamTaskTurns(_sessionId: string, taskId: string, target?: TaskStreamTarget): PipelineTurnsSource {
+    this.streamCalls.push({ kind: "turns", taskId, target });
     return new FakePipelineTurnsSource();
   }
 

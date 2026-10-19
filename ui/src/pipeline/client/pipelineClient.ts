@@ -27,6 +27,41 @@ export interface PipelineTurnsSource {
   close(): void;
 }
 
+/**
+ * Which log a task stream reads (GET .../output and .../turns). Omitted →
+ * the latest run, following the newest log. `run` alone → that run's newest
+ * log for the task. `stage` + `attempt` → exactly that stage attempt's log
+ * (turns: that attempt's recorded transcript). A log that isn't the one being
+ * written streams its contents, then `end`; a missing one is zero chunks,
+ * then `end`.
+ */
+export interface TaskStreamTarget {
+  /** The run's run_seq (PipelineRun.run_seq), not its run_id. */
+  run?: number;
+  stage?: string;
+  /** 1-based, StageAttempt.attempt. */
+  attempt?: number;
+}
+
+export interface StartPipelineOptions {
+  /** Ready tasks to leave out of the run. Sent only when non-empty. */
+  excludeTaskIds?: string[];
+}
+
+function taskStreamUrl(
+  sessionId: string,
+  taskId: string,
+  kind: "output" | "turns",
+  target: TaskStreamTarget | undefined,
+): string {
+  const params = new URLSearchParams();
+  if (target?.run !== undefined) params.set("run", String(target.run));
+  if (target?.stage) params.set("stage", target.stage);
+  if (target?.attempt !== undefined) params.set("attempt", String(target.attempt));
+  const query = params.toString();
+  return `${ROUTER_BASE}/sessions/${sessionId}/pipeline/tasks/${taskId}/${kind}${query ? `?${query}` : ""}`;
+}
+
 const NOT_SUPPORTED = "not supported by the current pipeline engine";
 
 /**
@@ -36,7 +71,11 @@ const NOT_SUPPORTED = "not supported by the current pipeline engine";
  */
 export interface PipelineClient {
   listTasks(sessionId: string): Promise<Task[]>;
-  startPipeline(sessionId: string, templateId: string): Promise<{ run_id: string }>;
+  startPipeline(
+    sessionId: string,
+    templateId: string,
+    opts?: StartPipelineOptions,
+  ): Promise<{ run_id: string }>;
   cancelPipeline(runId: string): Promise<void>;
   retryTask(taskId: string): Promise<Task>;
   // Both reject — no backend capability exists (HANDOFF.md §1: the engine
@@ -47,8 +86,8 @@ export interface PipelineClient {
   pausePipeline(runId: string): Promise<void>;
   resumePipeline(runId: string): Promise<void>;
   reassignTask(taskId: string, agent: string): Promise<void>;
-  streamTaskOutput(sessionId: string, taskId: string): PipelineOutputSource;
-  streamTaskTurns(sessionId: string, taskId: string): PipelineTurnsSource;
+  streamTaskOutput(sessionId: string, taskId: string, target?: TaskStreamTarget): PipelineOutputSource;
+  streamTaskTurns(sessionId: string, taskId: string, target?: TaskStreamTarget): PipelineTurnsSource;
   // Historical run replay (HANDOFF.md §4) — the Pipeline tab's run picker.
   listRuns(sessionId: string): Promise<PipelineRun[]>;
   getRunEvents(sessionId: string, since: number): Promise<Envelope[]>;
@@ -65,8 +104,9 @@ export class FetchPipelineClient implements PipelineClient {
   async startPipeline(
     sessionId: string,
     templateId: string,
+    opts?: StartPipelineOptions,
   ): Promise<{ run_id: string }> {
-    return this.client.createPipelineRun(sessionId, templateId);
+    return this.client.createPipelineRun(sessionId, templateId, opts?.excludeTaskIds);
   }
 
   async cancelPipeline(runId: string): Promise<void> {
@@ -89,10 +129,8 @@ export class FetchPipelineClient implements PipelineClient {
     throw new Error(NOT_SUPPORTED);
   }
 
-  streamTaskOutput(sessionId: string, taskId: string): PipelineOutputSource {
-    const es = new EventSource(
-      `${ROUTER_BASE}/sessions/${sessionId}/pipeline/tasks/${taskId}/output`,
-    );
+  streamTaskOutput(sessionId: string, taskId: string, target?: TaskStreamTarget): PipelineOutputSource {
+    const es = new EventSource(taskStreamUrl(sessionId, taskId, "output", target));
     es.addEventListener("end", () => es.close());
     return {
       onChunk(listener: (chunk: string) => void): () => void {
@@ -106,10 +144,8 @@ export class FetchPipelineClient implements PipelineClient {
     };
   }
 
-  streamTaskTurns(sessionId: string, taskId: string): PipelineTurnsSource {
-    const es = new EventSource(
-      `${ROUTER_BASE}/sessions/${sessionId}/pipeline/tasks/${taskId}/turns`,
-    );
+  streamTaskTurns(sessionId: string, taskId: string, target?: TaskStreamTarget): PipelineTurnsSource {
+    const es = new EventSource(taskStreamUrl(sessionId, taskId, "turns", target));
     es.addEventListener("end", () => es.close());
     return {
       onTurns(listener: (turns: TranscriptMessage[]) => void): () => void {

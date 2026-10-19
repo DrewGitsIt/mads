@@ -98,7 +98,7 @@ describe("App", () => {
 
   it("shows the failure screen when the config fetch rejects, and Retry refetches", async () => {
     let allowConfig = false;
-    const fetchMock = vi.fn().mockImplementation((input: URL | string, init?: RequestInit) => {
+    const fetchMock = vi.fn().mockImplementation((input: URL | string) => {
       const path = new URL(input.toString()).pathname;
       if (path === "/config") {
         if (!allowConfig) return Promise.reject(new TypeError("Failed to fetch"));

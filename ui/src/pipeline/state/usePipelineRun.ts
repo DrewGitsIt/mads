@@ -67,6 +67,15 @@ export interface RunFoldState {
   runStartSeq?: number;
   runStartedAt?: string;
   runEndedAt?: string;
+  /**
+   * pipeline.started's `run_id` — the Router's id, the one cancelPipeline
+   * takes. Undefined for runs recorded before the event carried it.
+   */
+  runId?: string;
+  /** pipeline.started's `template` — the template's name as the engine parsed it. */
+  template?: string;
+  /** pipeline.started's `excluded_task_ids`: tasks left out of this run. Empty for older runs. */
+  excludedTaskIds: string[];
   /** Stage names in first-seen order across the current run — the board's column order. */
   columns: string[];
   taskRunState: Record<string, TaskRunState>;
@@ -74,6 +83,7 @@ export interface RunFoldState {
 
 export const initialRunFoldState: RunFoldState = {
   phase: "idle",
+  excludedTaskIds: [],
   columns: [],
   taskRunState: {},
 };
@@ -182,16 +192,23 @@ function foldFileChanged(state: RunFoldState, env: Envelope): RunFoldState {
 
 export function foldReducer(state: RunFoldState, env: Envelope): RunFoldState {
   switch (env.type) {
-    case "pipeline.started":
+    case "pipeline.started": {
       // A new run always resets board state — old runs' stage.*/task.* events
       // for the same task ids are otherwise indistinguishable (HANDOFF.md §2).
+      const payload = env.payload as
+        | { run_id?: string; template?: string; excluded_task_ids?: string[] | null }
+        | undefined;
       return {
         phase: "running",
         runStartSeq: env.seq,
         runStartedAt: env.timestamp,
+        runId: payload?.run_id || undefined,
+        template: payload?.template || undefined,
+        excludedTaskIds: payload?.excluded_task_ids ?? [],
         columns: [],
         taskRunState: {},
       };
+    }
     case "pipeline.completed":
     case "pipeline.cancelled":
     case "pipeline.failed": {
@@ -236,6 +253,10 @@ export interface UsePipelineRunResult {
   runStartSeq?: number;
   runStartedAt?: string;
   runEndedAt?: string;
+  /** The run's Router id, from the fold — so Cancel works after a remount or reload. */
+  runId?: string;
+  template?: string;
+  excludedTaskIds: string[];
   columns: string[];
   taskRunState: Record<string, TaskRunState>;
   refetchTasks: () => Promise<void>;
@@ -299,7 +320,12 @@ export function useResumingRunFold(
         if (target) {
           const events = await client!.getRunEvents(sessionId, target.run_seq - 1);
           if (!mounted.current) return;
-          const seeded = events.reduce(foldReducer, initialRunFoldState);
+          let seeded = events.reduce(foldReducer, initialRunFoldState);
+          // The run history pairs runs by id, so it can know the id even when
+          // the fetched prefix didn't start at pipeline.started.
+          if (seeded.runId === undefined && target.run_id && seeded.runStartSeq === target.run_seq) {
+            seeded = { ...seeded, runId: target.run_id };
+          }
           dispatch({ kind: "seed", state: seeded });
           caughtUpSeq = events.length > 0 ? Math.max(...events.map((e) => e.seq)) : target.run_seq - 1;
         }
@@ -383,6 +409,9 @@ export function usePipelineRun(sessionId: string, client: PipelineClient): UsePi
     runStartSeq: runState.runStartSeq,
     runStartedAt: runState.runStartedAt,
     runEndedAt: runState.runEndedAt,
+    runId: runState.runId,
+    template: runState.template,
+    excludedTaskIds: runState.excludedTaskIds,
     columns: runState.columns,
     taskRunState: runState.taskRunState,
     refetchTasks,
