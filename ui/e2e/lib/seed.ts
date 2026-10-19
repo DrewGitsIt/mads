@@ -401,3 +401,31 @@ export async function pollStageStarted(
   }
   throw new Error(`pollStageStarted: ${sessionId} stage ${stage} never started`);
 }
+
+/** POST /tasks — one task, e.g. a draft (importTasks can't seed one). */
+export async function createTask(
+  routerURL: string,
+  body: { session_id: string; title: string; draft?: boolean; dependencies?: string[] },
+): Promise<{ id: string; title: string }> {
+  const res = await fetch(`${routerURL}/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source: "user", ...body }),
+  });
+  if (!res.ok) throw new Error(`createTask: status ${res.status}: ${await res.text()}`);
+  return (await res.json()) as { id: string; title: string };
+}
+
+/** POST /templates — a Library pipeline template from YAML source. */
+export async function createTemplate(
+  routerURL: string,
+  body: { name: string; description?: string; source: string },
+): Promise<{ id: string; name: string }> {
+  const res = await fetch(`${routerURL}/templates`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`createTemplate: status ${res.status}: ${await res.text()}`);
+  return (await res.json()) as { id: string; name: string };
+}

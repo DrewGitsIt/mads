@@ -15,7 +15,7 @@ import {
 const changedFilePath = "src/example.ts";
 const commitMessage = "e2e: seed a real pipeline commit";
 
-test.describe("session workspace: tasks/files/pipeline tabs", () => {
+test.describe("session workspace: tasks and changes tabs", () => {
   test.describe.configure({ mode: "serial" });
 
   let sessionId: string;
@@ -103,7 +103,9 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     await rail.getByText(sessionName, { exact: true }).click();
     await page.getByRole("tab", { name: "Tasks" }).click();
 
-    await page.locator("#workspace-panel-tasks").getByText(workTask.title, { exact: true }).click();
+    // The tab shows the session's last run, where a row click zooms into the
+    // task; the row's ✎ opens its detail sheet.
+    await page.locator("#workspace-panel-tasks").getByRole("button", { name: `Edit ${workTask.title}` }).click();
     await page.getByLabel("Title").fill(`${workTask.title} (edited)`);
     await page.getByRole("button", { name: "Save" }).click();
 
@@ -141,70 +143,62 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     await expect(page.getByText(`Diff from commit ${commitHash.slice(0, 7)}`)).toBeVisible();
   });
 
-  test("pipeline tab shows the completed run", async ({ page, routerURL }) => {
+  test("tasks tab shows the completed run", async ({ page, routerURL }) => {
     await page.goto(routerURL);
     const rail = page.locator('[aria-label="Session list"]');
     await rail.getByText(sessionName, { exact: true }).click();
+    await page.getByRole("tab", { name: "Tasks", exact: true }).click();
 
-    await page.getByRole("tab", { name: "Pipeline" }).click();
-    // Scoped to the Pipeline panel: the hidden Tasks panel and the
-    // conversation panel's context rail carry "Done" status chips too.
-    const doneColumn = page
-      .locator("#workspace-panel-pipeline")
-      .getByText("Done", { exact: true })
-      .locator("../..");
-    await expect(doneColumn.getByText("e2e session-work task")).toBeVisible();
-
-    // The run finished before this page load. The Data Service's SSE stream
-    // replays a session's full history on connect (since=0 by default), so
-    // usePipelineRun's live fold catches this run on its own — the header
-    // must show its finished outcome, never "idle" (the bug this task fixes).
-    // (A session with more history than a fresh SSE connection replays before
-    // this assertion's timeout would instead fall back to the historical fetch
-    // path and its RunPicker — both are covered at the unit level.)
-    await expect(page.getByText("idle", { exact: true })).not.toBeVisible();
-    await expect(page.getByText("completed", { exact: true })).toBeVisible();
+    // Both runs finished before this page load: the run bar shows the newest
+    // one with its outcome, and the metro has the run's tasks at Done.
+    const panel = page.locator("#workspace-panel-tasks");
+    const runTrigger = panel.locator('button[aria-haspopup="menu"]').first();
+    await expect(runTrigger).toContainText("Run 2");
+    await expect(runTrigger).toContainText("completed");
+    await expect(panel.getByRole("button", { name: "New run", exact: true })).toBeVisible();
+    // The list's Done group (the metro's Done stack collapses past 3 tokens).
+    await expect(
+      panel.getByRole("region", { name: /^Done/ }).locator(`li[data-task="${secondRunTask.id}"]`),
+    ).toBeVisible();
   });
 
-  test("pipeline tab run picker replays historical runs", async ({ page, routerURL }) => {
-    // The test above documents that a fresh SSE connection usually replays
-    // its full backlog before the historical fetch resolves, so the live
-    // fold wins the race and the RunPicker never mounts. Stall the SSE
-    // request indefinitely (never continue/fulfill/abort it) to force the
-    // opposite, deterministically, without depending on backlog size:
-    // usePipelineRun's phase stays "idle" for the whole test, so
-    // usePipelineTab always renders the historical (event-log replay) path.
-    await page.route("**/events*", async (route) => {
-      const accept = route.request().headers()["accept"] ?? "";
-      if (accept.includes("text/event-stream")) return; // hang forever
-      await route.continue();
-    });
-
+  test("the run menu replays an earlier run", async ({ page, routerURL }) => {
     await page.goto(routerURL);
     const rail = page.locator('[aria-label="Session list"]');
     await rail.getByText(sessionName, { exact: true }).click();
-    await page.getByRole("tab", { name: "Pipeline" }).click();
+    await page.getByRole("tab", { name: "Tasks", exact: true }).click();
 
-    const trigger = page.getByRole("button", { name: "Run history" });
-    await expect(trigger).toBeVisible();
-    const initialLabel = await trigger.textContent();
+    const panel = page.locator("#workspace-panel-tasks");
+    const runTrigger = panel.locator('button[aria-haspopup="menu"]').first();
+    await expect(runTrigger).toContainText("Run 2");
 
-    await trigger.click();
-    const options = page.getByRole("button", { name: /Run · started/ });
-    await expect(options).toHaveCount(2);
+    // In Run 2, workTask (done in Run 1) has nothing of its own to show.
+    await panel.locator(`li[data-task="${workTask.id}"]`).getByRole("button").first().click();
+    const lens = panel.getByTestId("task-lens");
+    await expect(lens.getByText("Not started.")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(lens).toBeHidden();
 
-    // Selecting the older run must fetch and fold *that* run's own event
+    await runTrigger.click();
+    const menu = page.getByRole("menu", { name: "Runs" });
+    await expect(menu.getByRole("menuitemradio", { name: /^Run \d/ })).toHaveCount(2);
+
+    // Picking the older run must fetch and fold *that* run's own event
     // window from the real backend — not just flip a client-side label.
     const [response] = await Promise.all([
       page.waitForResponse(
         (res) => res.url().includes("/events") && res.url().includes(`since=${firstRunSeq - 1}`),
       ),
-      // Newest run is listed/selected first — click the second (older) option.
-      options.nth(1).click(),
+      menu.getByRole("menuitemradio", { name: /^Run 1/ }).click(),
     ]);
     expect(response.ok()).toBeTruthy();
+    await expect(runTrigger).toContainText("Run 1");
 
-    await expect(trigger).not.toHaveText(initialLabel ?? "");
+    // Run 1's fold has workTask's stages.
+    await panel.locator(`li[data-task="${workTask.id}"]`).getByRole("button").first().click();
+    await expect(lens.getByTestId("stage-timeline-entry").first()).toBeVisible();
+    await expect(lens.getByRole("list", { name: "Stages" }).getByRole("button", { name: "verify: done" })).toBeVisible();
+    expect(secondRunSeq).toBeGreaterThan(firstRunSeq);
   });
 
   test("graph mode shows the unsequenced tray and a canvas node", async ({ page, routerURL }) => {
@@ -212,7 +206,10 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     const rail = page.locator('[aria-label="Session list"]');
     await rail.getByText(sessionName, { exact: true }).click();
     await page.getByRole("tab", { name: "Tasks" }).click();
-    await page.getByRole("button", { name: "Graph", exact: true }).click();
+    // Plan: the task-status filter strip is a planning tool (a live or past
+    // run's graph speaks in run statuses and hides it).
+    await page.locator("#workspace-panel-tasks").getByRole("button", { name: "New run", exact: true }).click();
+    await page.getByRole("radio", { name: "Graph" }).click();
 
     await expect(page.getByText("Runs when a slot opens", { exact: false })).toBeVisible();
     await expect(
@@ -247,7 +244,7 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
 
     await page
       .locator("#workspace-panel-tasks")
-      .getByText(dependentTask.title, { exact: true })
+      .getByRole("button", { name: `Edit ${dependentTask.title}` })
       .click();
     // Scoped to the open detail sheet — depTask/secondRunTask's own list-view
     // rows sit behind it in the DOM with the same title text.
@@ -271,7 +268,7 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     await expect(sheet.getByText(depTask.title, { exact: true })).toBeVisible();
     await expect(sheet.getByText(secondRunTask.title, { exact: true })).toBeVisible();
 
-    await page.getByRole("button", { name: "Graph", exact: true }).click();
+    await page.getByRole("radio", { name: "Graph" }).click();
     await expect(
       page.locator(`.react-flow__edge[data-id="${secondRunTask.id}->${dependentTask.id}"]`),
     ).toBeVisible();
@@ -338,8 +335,12 @@ test.describe("session workspace: blocked task review from Tasks tab", () => {
     await page.getByRole("tab", { name: "Tasks" }).click();
 
     // Same Tasks-panel scoping as above: the context rail's hidden TaskRow
-    // copy of this title would otherwise be the first strict-mode match.
-    await page.locator("#workspace-panel-tasks").getByText(taskTitle, { exact: true }).click();
+    // copy of this title would otherwise be the first strict-mode match. The
+    // tab shows the run that blocked it: the row zooms into the task's lens,
+    // and Task details opens the sheet.
+    const panel = page.locator("#workspace-panel-tasks");
+    await panel.locator("li[data-task]").getByRole("button", { name: taskTitle, exact: true }).click();
+    await panel.getByTestId("task-lens").getByRole("button", { name: "Task details" }).click();
     const sheet = page.getByRole("complementary");
     await expect(sheet.getByRole("combobox")).toHaveValue("blocked");
     // The blocker note is intentionally duplicated: once in the Pipeline run
