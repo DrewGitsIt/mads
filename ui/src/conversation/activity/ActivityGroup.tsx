@@ -21,8 +21,8 @@ import {
   primaryLocation,
   resultLabel,
   statusOf,
-  toolTitle,
 } from "./toolDisplay";
+import { useToolTitle } from "./linkNames";
 import styles from "./ActivityGroup.module.css";
 
 export interface ActivityGroupProps {
@@ -356,6 +356,7 @@ export function ActivityRow({
   /** Holds find's current match (shown in context under the row). */
   findCurrent?: boolean;
 }) {
+  const toolTitle = useToolTitle();
   const [hovered, setHovered] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
   const isTool = entry.type === "tool";

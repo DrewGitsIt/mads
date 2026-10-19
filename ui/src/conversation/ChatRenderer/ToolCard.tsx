@@ -3,7 +3,8 @@ import { Card } from "../../components/Card/Card";
 import { Chip } from "../../components/Chip/Chip";
 import type { ToolUse } from "../../router/types";
 import { DiffView } from "../activity/DiffView";
-import { diffHunks, diffStat, formatDuration, toolTitle } from "../activity/toolDisplay";
+import { useToolTitle } from "../activity/linkNames";
+import { diffHunks, diffStat, formatDuration } from "../activity/toolDisplay";
 import styles from "./ToolCard.module.css";
 
 export interface ToolCardProps {
@@ -34,6 +35,7 @@ const RESULT_CAP = 2000;
  * `title` wins, summarize() is only the legacy fallback.
  */
 export function ToolCard({ tool, timestamp, defaultExpanded = false, live = false }: ToolCardProps) {
+  const toolTitle = useToolTitle();
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [resultExpanded, setResultExpanded] = useState(false);
   const result = tool.result;
