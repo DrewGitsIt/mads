@@ -101,6 +101,10 @@ type Rule struct {
 	// rule catches resumed one-shots only, so it may sit before fresh
 	// rules (it still shadows any Resumed rule after it).
 	Resumed bool `yaml:"resumed,omitempty"`
+	// AnnounceRef is Scenario.AnnounceOneShotRef for one-shots matching
+	// this rule only, so one suite-wide scenario can give a single task's
+	// stage a resumable session without changing every other one-shot.
+	AnnounceRef bool `yaml:"announce_ref,omitempty"`
 }
 
 // UsageOverride pins one or more of a scripted one-shot's usage fields; unset

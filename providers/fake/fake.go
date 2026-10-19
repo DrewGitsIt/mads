@@ -300,7 +300,7 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 	return s, nil
 }
 
-func (f *Fake) OneShot(_ context.Context, req provider.OneShotRequest) (*provider.OneShotResult, error) {
+func (f *Fake) OneShot(ctx context.Context, req provider.OneShotRequest) (*provider.OneShotResult, error) {
 	var history []provider.Message
 	if req.Resume != "" {
 		h, err := f.resumeOneShot(req.Resume)
@@ -328,7 +328,7 @@ func (f *Fake) OneShot(_ context.Context, req provider.OneShotRequest) (*provide
 	switch {
 	case req.Resume != "":
 		ref = req.Resume
-	case f.scenario.AnnounceOneShotRef:
+	case f.scenario.AnnounceOneShotRef || plan.announceRef:
 		ref = f.newOneShotRef()
 	}
 	if ref != "" {
@@ -360,9 +360,16 @@ func (f *Fake) OneShot(_ context.Context, req provider.OneShotRequest) (*provide
 	// caller watching for incremental output sees genuine pacing rather
 	// than one wait followed by the whole result at once.
 	var b strings.Builder
+	//
+	// Cancelling ctx stops the one-shot between chunks, as killing a real
+	// agent process would: an error, and no agent turn recorded.
 	for _, chunk := range plan.chunks {
 		if plan.delay > 0 {
-			time.Sleep(plan.delay)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(plan.delay):
+			}
 		}
 		b.WriteString(chunk)
 		if req.OnEvent != nil {
@@ -514,6 +521,8 @@ type turnPlan struct {
 	crash     bool
 	rateLimit bool
 	usage     *UsageOverride
+	// announceRef: the rule's AnnounceRef (one-shots only).
+	announceRef bool
 }
 
 func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) turnPlan {
@@ -529,6 +538,7 @@ func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) tur
 		p := turnPlan{
 			chunks: r.Chunks, delay: time.Duration(r.DelayMs) * time.Millisecond,
 			tools: r.Tools, crash: r.Crash, rateLimit: rateLimit, usage: r.Usage,
+			announceRef: r.AnnounceRef,
 		}
 		if len(p.chunks) == 0 && r.Reply != "" {
 			p.chunks = []string{r.Reply}

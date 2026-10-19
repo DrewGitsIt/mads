@@ -286,6 +286,60 @@ func TestOneShotNoRefWithoutAnnounceOptIn(t *testing.T) {
 	}
 }
 
+// A rule's announce_ref gives its one-shots a ref without opting every
+// other one-shot in.
+func TestOneShotRuleAnnouncesRef(t *testing.T) {
+	f, err := fake.NewWithScenario(fake.Scenario{Rules: []fake.Rule{
+		{Match: "slow task", Reply: "ok", AnnounceRef: true},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.OneShot(context.Background(), provider.OneShotRequest{Prompt: "the slow task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Ref == "" {
+		t.Error("announce_ref rule: OneShotResult.Ref is empty")
+	}
+	other, err := f.OneShot(context.Background(), provider.OneShotRequest{Prompt: "echo hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.Ref != "" {
+		t.Errorf("unmatched one-shot: Ref = %q, want empty", other.Ref)
+	}
+}
+
+// Cancelling a one-shot's ctx stops it between chunks, as killing a real
+// agent would, rather than streaming the rest of the scripted reply.
+func TestOneShotStopsOnCancel(t *testing.T) {
+	f, err := fake.NewWithScenario(fake.Scenario{Rules: []fake.Rule{
+		{Match: "slow", Chunks: []string{"a", "b", "c", "d"}, DelayMs: 200},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var got []string
+	start := time.Now()
+	_, err = f.OneShot(ctx, provider.OneShotRequest{
+		Prompt: "slow",
+		OnEvent: func(ev provider.Event) {
+			if ev.Kind == provider.EventText {
+				got = append(got, ev.Text)
+				cancel()
+			}
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if len(got) != 1 || time.Since(start) > 2*time.Second {
+		t.Errorf("streamed %v in %v after cancel; want one chunk, promptly", got, time.Since(start))
+	}
+}
+
 // TestFakeComplete proves Fake implements provider.Completer using the same
 // scripted dialect as OneShot, but leaves no ref or transcript behind —
 // Complete's hermetic "no session left behind" contract.
