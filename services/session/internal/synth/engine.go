@@ -222,7 +222,7 @@ func (e *Engine) write(ctx context.Context, draft Draft) error {
 		noteTarget = inProgress[0].ID
 	}
 
-	if err := e.data.Claim(ctx, noteTarget, noteLeaseTTL); err != nil {
+	if err := e.data.Claim(ctx, noteTarget, "", noteLeaseTTL); err != nil {
 		if errors.Is(err, dataclient.ErrConflict) {
 			return nil // someone else holds the lease; skip notes this pass
 		}

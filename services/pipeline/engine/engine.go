@@ -584,7 +584,7 @@ func (e *engine) runnable(tasks []contracts.Task, byID map[string]contracts.Task
 // meter.
 func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.TaskStatus {
 	ttl := e.cfg.LeaseTTL
-	if err := e.cfg.Data.ClaimWithIdentity(ctx, task.ID, ttl, e.identity); err != nil {
+	if err := e.cfg.Data.ClaimWithIdentity(ctx, task.ID, "", ttl, e.identity); err != nil {
 		return task.Status // someone else holds it; not ours this run
 	}
 	// Writes renew the lease meter, but an agent stage can be silent for
@@ -642,8 +642,8 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 					abort()
 					return
 				}
-				err := e.cfg.Data.ClaimWithIdentity(ctx, taskID, ttl, e.identity)
-				if errors.Is(err, dataclient.ErrConflict) || errors.Is(err, dataclient.ErrNotFound) {
+				err := e.cfg.Data.Renew(ctx, taskID)
+				if errors.Is(err, dataclient.ErrLeaseLost) || errors.Is(err, dataclient.ErrConflict) || errors.Is(err, dataclient.ErrNotFound) {
 					abort()
 					return
 				}

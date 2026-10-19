@@ -30,6 +30,9 @@ func NewLog(db *sql.DB) *Log {
 type Tx struct {
 	tx       *sql.Tx
 	appended bool
+	// leaseToken is the request's lease proof (WithLeaseToken), read by
+	// checkAndRenew to authorise a write to a leased task.
+	leaseToken string
 }
 
 // Exec runs a state mutation inside the transaction.
@@ -90,7 +93,7 @@ func (l *Log) WithTx(ctx context.Context, fn func(*Tx) error) error {
 	if err != nil {
 		return fmt.Errorf("log: begin: %w", err)
 	}
-	t := &Tx{tx: tx}
+	t := &Tx{tx: tx, leaseToken: leaseTokenFrom(ctx)}
 	if err := fn(t); err != nil {
 		_ = tx.Rollback()
 		return err

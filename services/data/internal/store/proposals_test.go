@@ -27,7 +27,8 @@ func TestApproveAddNoteRejectedWhileTaskActivelyLeased(t *testing.T) {
 	ctx := context.Background()
 	task := mkTask(t, tasks, contracts.Task{Title: "Build login", Status: contracts.StatusInProgress})
 
-	if _, err := leases.Claim(ctx, task.ID, "executor", time.Minute); err != nil {
+	lease, err := leases.Claim(ctx, task.ID, "executor", time.Minute)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -61,7 +62,7 @@ func TestApproveAddNoteRejectedWhileTaskActivelyLeased(t *testing.T) {
 	}
 
 	// Once the lease frees up, the same proposal can be approved.
-	if err := leases.Release(ctx, task.ID, "executor"); err != nil {
+	if err := leases.Release(ctx, task.ID, lease.Token); err != nil {
 		t.Fatal(err)
 	}
 	approved, err := proposals.Approve(ctx, p.ID)
@@ -87,7 +88,8 @@ func TestApproveUpdateTaskRejectedWhileTaskActivelyLeased(t *testing.T) {
 		Title: "Build login", Description: "original description", Status: contracts.StatusInProgress,
 	})
 
-	if _, err := leases.Claim(ctx, task.ID, "executor", time.Minute); err != nil {
+	lease, err := leases.Claim(ctx, task.ID, "executor", time.Minute)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -119,7 +121,7 @@ func TestApproveUpdateTaskRejectedWhileTaskActivelyLeased(t *testing.T) {
 		t.Fatalf("description = %q, want unchanged (rejected approval must not partially apply)", reloaded.Description)
 	}
 
-	if err := leases.Release(ctx, task.ID, "executor"); err != nil {
+	if err := leases.Release(ctx, task.ID, lease.Token); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := proposals.Approve(ctx, p.ID); err != nil {

@@ -623,7 +623,7 @@ func TestShutdownReleasesLeases(t *testing.T) {
 		t.Fatalf("register fake: %v", err)
 	}
 
-	if err := data.Claim(ctx, task.ID, time.Minute); err != nil {
+	if err := data.Claim(ctx, task.ID, "", time.Minute); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 
@@ -643,7 +643,7 @@ func TestShutdownReleasesLeases(t *testing.T) {
 		t.Fatalf("activity = %q, want inactive", got.Activity)
 	}
 
-	if err := other.Claim(ctx, task.ID, time.Minute); err != nil {
+	if err := other.Claim(ctx, task.ID, "", time.Minute); err != nil {
 		t.Fatalf("claim after release should succeed, got: %v", err)
 	}
 }

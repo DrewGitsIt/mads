@@ -2,10 +2,8 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -18,8 +16,8 @@ import (
 // TestReapOnLaunchReclaimsAndResumes is the end-to-end reap-on-launch path
 // (spec: reap-on-launch): a dead engine's lease — provable via a
 // definitely-gone pid, same machine/boot — is reclaimed at the next engine
-// launch, before the first scan, and the task resumes fresh, discarding
-// the dead run's leftover worktree/branch.
+// launch, before the first scan. The task stays in_progress (Interrupted)
+// and is not run: picking it up is B-R3 (docs/PIPELINE-LEASES-DESIGN.md).
 func TestReapOnLaunchReclaimsAndResumes(t *testing.T) {
 	h := newHarness(t)
 	seeded := h.seed(contracts.Task{Title: "orphaned"})
@@ -43,7 +41,7 @@ func TestReapOnLaunchReclaimsAndResumes(t *testing.T) {
 		MachineID: own.MachineID, BootID: own.BootID,
 		PID: deadPID, PIDStartTicks: 999999,
 	}
-	if err := h.data.ClaimWithIdentity(ctx, task.ID, time.Minute, identity); err != nil {
+	if err := h.data.ClaimWithIdentity(ctx, task.ID, "", time.Minute, identity); err != nil {
 		t.Fatal(err)
 	}
 	task.Status = contracts.StatusInProgress
@@ -74,23 +72,25 @@ func TestReapOnLaunchReclaimsAndResumes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sum.Done) != 1 || sum.Done[0] != task.ID {
-		t.Fatalf("done: %v, want just %s", sum.Done, task.ID)
+	// Reclaim deletes the dead holder's lease and changes no status
+	// (docs/PIPELINE-LEASES-DESIGN.md A3): the task stays in_progress
+	// (Interrupted). Picking an Interrupted task up is B-R3; until then
+	// this run leaves it alone.
+	if len(sum.Done) != 0 {
+		t.Fatalf("done: %v, want none (an Interrupted task is not picked up before B-R3)", sum.Done)
 	}
-
-	var foundEvidence bool
-	for _, e := range h.events(t, "task.status_changed") {
-		var payload struct{ From, To, Reason string }
-		if err := json.Unmarshal(e.Payload, &payload); err != nil {
-			t.Fatal(err)
-		}
-		if payload.To == "ready" && strings.Contains(payload.Reason, "provably dead") &&
-			strings.Contains(payload.Reason, "not found") {
-			foundEvidence = true
-		}
+	leases, err := h.data.Leases(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !foundEvidence {
-		t.Error("no reclaim evidence event (payload.reason mentioning \"provably dead\" and \"not found\") found")
+	if len(leases) != 0 {
+		t.Fatalf("leases after launch: %+v, want the dead holder's lease reclaimed", leases)
+	}
+	if got := h.task(t, task.ID); got.Status != contracts.StatusInProgress {
+		t.Errorf("status after reclaim = %s, want in_progress", got.Status)
+	}
+	if evs := h.events(t, "task.status_changed"); len(evs) != 1 {
+		t.Errorf("status_changed events = %d, want just the test's own ready -> in_progress", len(evs))
 	}
 }
 
@@ -108,7 +108,7 @@ func TestReapOnLaunchLiveSiblingNoReclaim(t *testing.T) {
 	if !ok {
 		t.Fatal("procid.Current: could not establish this process's own identity")
 	}
-	if err := h.data.ClaimWithIdentity(ctx, task.ID, time.Minute, own); err != nil {
+	if err := h.data.ClaimWithIdentity(ctx, task.ID, "", time.Minute, own); err != nil {
 		t.Fatal(err)
 	}
 	task.Status = contracts.StatusInProgress
@@ -159,7 +159,7 @@ func TestReapOnLaunchForeignMachineIDNoReclaim(t *testing.T) {
 	}
 	identity := own
 	identity.MachineID = "not-this-machine"
-	if err := h.data.ClaimWithIdentity(ctx, task.ID, time.Minute, identity); err != nil {
+	if err := h.data.ClaimWithIdentity(ctx, task.ID, "", time.Minute, identity); err != nil {
 		t.Fatal(err)
 	}
 	task.Status = contracts.StatusInProgress

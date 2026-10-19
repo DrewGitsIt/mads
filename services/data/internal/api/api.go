@@ -64,6 +64,7 @@ func NewWithIdentity(db *sql.DB, ident Identity) http.Handler {
 	mux.HandleFunc("POST /tasks/{id}/notes/{noteId}/confirm", s.handleConfirmNote)
 	mux.HandleFunc("POST /tasks/{id}/notes/{noteId}/discard", s.handleDiscardNote)
 	mux.HandleFunc("POST /tasks/{id}/claim", s.handleClaimLease)
+	mux.HandleFunc("POST /tasks/{id}/lease/renew", s.handleRenewLease)
 	mux.HandleFunc("POST /tasks/{id}/release", s.handleReleaseLease)
 	mux.HandleFunc("POST /tasks/{id}/reclaim", s.handleReclaimLease)
 	mux.HandleFunc("POST /leases/release-all", s.handleReleaseAllLeases)

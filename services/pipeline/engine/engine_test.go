@@ -467,7 +467,7 @@ func TestForeignLeaseSkipsTask(t *testing.T) {
 	h := newHarness(t)
 	seeded := h.seed(contracts.Task{Title: "mine"}, contracts.Task{Title: "theirs"})
 	other := dataclient.New(h.base, "session-ses_1")
-	if err := other.Claim(context.Background(), seeded[1].ID, time.Minute); err != nil {
+	if err := other.Claim(context.Background(), seeded[1].ID, "", time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	src := "name: solo\nstages:\n  - name: executor\n    agent: executor\n"

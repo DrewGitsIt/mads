@@ -131,7 +131,7 @@ func TestLeaseLossKillsAgentBacksUpAndContinuesClaiming(t *testing.T) {
 	if err := h.data.Release(context.Background(), seeded[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := thief.Claim(context.Background(), seeded[0].ID, time.Minute); err != nil {
+	if err := thief.Claim(context.Background(), seeded[0].ID, "", time.Minute); err != nil {
 		t.Fatal(err)
 	}
 
@@ -167,7 +167,7 @@ func TestLeaseLossKillsAgentBacksUpAndContinuesClaiming(t *testing.T) {
 	if orphan.Status != contracts.StatusInProgress {
 		t.Errorf("orphaned task status = %s, want in_progress (untouched — the thief owns it now)", orphan.Status)
 	}
-	if err := thief.Claim(context.Background(), seeded[0].ID, time.Minute); err != nil {
+	if err := thief.Renew(context.Background(), seeded[0].ID); err != nil {
 		t.Errorf("thief's lease was disturbed by the engine's abort: %v", err)
 	}
 

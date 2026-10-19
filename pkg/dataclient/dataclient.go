@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -27,10 +28,30 @@ var ErrNotFound = errors.New("not found")
 // ErrConflict maps 409s — for tasks, that's "live-leased by someone else".
 var ErrConflict = errors.New("conflict")
 
+// ErrLeaseLost maps a 409 with code "lease_lost" (Renew): the lease is
+// gone, expired or held under another token, so this client no longer
+// holds the task and must stop writing to it. Errors carrying it also
+// match ErrConflict.
+var ErrLeaseLost = errors.New("lease lost")
+
+// leaseHeader carries a task's lease token (docs/PIPELINE-LEASES-DESIGN.md
+// A2) on every request about that task.
+const leaseHeader = "X-Mads-Lease"
+
 type Client struct {
 	base  string
 	actor string
 	http  *http.Client
+
+	// mu guards held: the leases this client claimed, by task id. The
+	// tokens live only here, in memory: never logged, never in an error.
+	mu   sync.Mutex
+	held map[string]heldLease
+}
+
+type heldLease struct {
+	token  string
+	holder string
 }
 
 // New builds a client. actor names the mutation identity this client rides
@@ -41,7 +62,36 @@ func New(baseURL, actor string) *Client {
 		base:  strings.TrimSuffix(baseURL, "/"),
 		actor: actor,
 		http:  &http.Client{Timeout: 30 * time.Second},
+		held:  map[string]heldLease{},
 	}
+}
+
+func (c *Client) leaseToken(taskID string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.held[taskID].token
+}
+
+func (c *Client) forgetLease(taskID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.held, taskID)
+}
+
+// pathTaskID is the task a request path is about: the id in "/tasks/{id}"
+// and its sub-paths, or "" for any other path.
+func pathTaskID(path string) string {
+	rest, ok := strings.CutPrefix(path, "/tasks/")
+	if !ok {
+		return ""
+	}
+	seg, _, _ := strings.Cut(rest, "/")
+	seg, _, _ = strings.Cut(seg, "?")
+	id, err := url.PathUnescape(seg)
+	if err != nil {
+		return ""
+	}
+	return id
 }
 
 // BaseURL returns the Data Service URL this client was built with.
@@ -77,6 +127,11 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	if c.actor != "" {
 		req.Header.Set("X-Mads-Actor", c.actor)
 	}
+	if id := pathTaskID(path); id != "" {
+		if tok := c.leaseToken(id); tok != "" {
+			req.Header.Set(leaseHeader, tok)
+		}
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
@@ -95,6 +150,12 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	case resp.StatusCode == http.StatusNotFound:
 		return fmt.Errorf("%s %s: %w", method, path, ErrNotFound)
 	case resp.StatusCode == http.StatusConflict:
+		var body struct {
+			Code string `json:"code"`
+		}
+		if json.Unmarshal(raw, &body) == nil && body.Code == "lease_lost" {
+			return fmt.Errorf("%s %s: %w (%w)", method, path, ErrLeaseLost, ErrConflict)
+		}
 		return fmt.Errorf("%s %s: %w: %s", method, path, ErrConflict, strings.TrimSpace(string(raw)))
 	case resp.StatusCode == http.StatusUnprocessableEntity:
 		var verr contracts.ValidationError
@@ -186,24 +247,15 @@ func (c *Client) Cycles(ctx context.Context, sessionID string) ([][]string, erro
 
 // --- Leases (spec §15, the parking meter) ---
 
-// Claim takes or renews the task's lease for this client's actor.
-// ErrConflict when someone else holds it.
-func (c *Client) Claim(ctx context.Context, taskID string, ttl time.Duration) error {
-	body := map[string]any{}
-	if ttl > 0 {
-		body["ttl_seconds"] = int(ttl.Seconds())
-	}
-	return c.do(ctx, http.MethodPost, "/tasks/"+url.PathEscape(taskID)+"/claim", body, nil)
-}
-
-func (c *Client) Release(ctx context.Context, taskID string) error {
-	return c.do(ctx, http.MethodPost, "/tasks/"+url.PathEscape(taskID)+"/release", map[string]any{}, nil)
-}
-
-// ReleaseAll is the supervision call: free everything a dead holder had.
-func (c *Client) ReleaseAll(ctx context.Context, holder, reason string) error {
-	return c.do(ctx, http.MethodPost, "/leases/release-all",
-		map[string]any{"holder": holder, "reason": reason}, nil)
+// Claim takes a free task's lease. holder is the lease holder: empty
+// means this client's actor, otherwise it must be the actor or start
+// with "<actor>:" (e.g. "pipeline:<runID>"). ErrConflict when the task
+// has a live lease, whoever holds it (this client included: renewing is
+// Renew's job). On success the client keeps the lease token and sends it
+// on every later request about the task (updates, notes, Renew,
+// Release), so callers never handle it.
+func (c *Client) Claim(ctx context.Context, taskID, holder string, ttl time.Duration) error {
+	return c.ClaimWithIdentity(ctx, taskID, holder, ttl, contracts.LeaseIdentity{})
 }
 
 // ClaimWithIdentity is Claim plus this process's lease identity (spec:
@@ -211,30 +263,91 @@ func (c *Client) ReleaseAll(ctx context.Context, holder, reason string) error {
 // can prove this holder died. identity's zero value means "couldn't
 // establish identity" (pkg/procid); the lease then carries none and is
 // never provable, same as a pre-migration row.
-func (c *Client) ClaimWithIdentity(ctx context.Context, taskID string, ttl time.Duration, identity contracts.LeaseIdentity) error {
+func (c *Client) ClaimWithIdentity(ctx context.Context, taskID, holder string, ttl time.Duration, identity contracts.LeaseIdentity) error {
 	body := map[string]any{}
+	if holder != "" {
+		body["holder"] = holder
+	}
 	if ttl > 0 {
 		body["ttl_seconds"] = int(ttl.Seconds())
 	}
 	if identity != (contracts.LeaseIdentity{}) {
 		body["identity"] = identity
 	}
-	return c.do(ctx, http.MethodPost, "/tasks/"+url.PathEscape(taskID)+"/claim", body, nil)
+	var lease contracts.Lease
+	if err := c.do(ctx, http.MethodPost, "/tasks/"+url.PathEscape(taskID)+"/claim", body, &lease); err != nil {
+		return err
+	}
+	if lease.Token == "" {
+		return fmt.Errorf("POST /tasks/%s/claim: response carried no lease token", url.PathEscape(taskID))
+	}
+	c.mu.Lock()
+	c.held[taskID] = heldLease{token: lease.Token, holder: lease.Holder}
+	c.mu.Unlock()
+	return nil
 }
 
-// Leases lists every live lease held by this client's own actor — the
-// reap-on-launch candidate set.
+// Renew extends this client's lease on the task by its TTL. ErrLeaseLost
+// when the lease is gone, expired or not this client's (the client then
+// forgets it); it never re-takes a lost lease.
+func (c *Client) Renew(ctx context.Context, taskID string) error {
+	err := c.do(ctx, http.MethodPost, "/tasks/"+url.PathEscape(taskID)+"/lease/renew", map[string]any{}, nil)
+	if errors.Is(err, ErrLeaseLost) {
+		c.forgetLease(taskID)
+	}
+	return err
+}
+
+// Release drops this client's lease on the task. Releasing a free task is
+// a no-op; ErrConflict when someone else holds it. Either way the client
+// forgets its token; a transport error keeps it so a retry can succeed.
+func (c *Client) Release(ctx context.Context, taskID string) error {
+	err := c.do(ctx, http.MethodPost, "/tasks/"+url.PathEscape(taskID)+"/release", map[string]any{}, nil)
+	if err == nil || errors.Is(err, ErrConflict) {
+		c.forgetLease(taskID)
+	}
+	return err
+}
+
+// ReleaseAll is the supervision call: free everything a dead holder had.
+// Tokenless; any of this client's own leases under holder are forgotten.
+func (c *Client) ReleaseAll(ctx context.Context, holder, reason string) error {
+	err := c.do(ctx, http.MethodPost, "/leases/release-all",
+		map[string]any{"holder": holder, "reason": reason}, nil)
+	if err == nil {
+		c.mu.Lock()
+		for id, l := range c.held {
+			if l.holder == holder {
+				delete(c.held, id)
+			}
+		}
+		c.mu.Unlock()
+	}
+	return err
+}
+
+// Leases lists every live lease held by exactly this client's own actor.
 func (c *Client) Leases(ctx context.Context) ([]contracts.Lease, error) {
 	var leases []contracts.Lease
 	err := c.do(ctx, http.MethodGet, "/leases", nil, &leases)
 	return leases, err
 }
 
+// LeasesOfKind lists every live lease whose holder is kind or starts with
+// "<kind>:" — the reap-on-launch candidate set across runs. kind must be
+// this client's actor.
+func (c *Client) LeasesOfKind(ctx context.Context, kind string) ([]contracts.Lease, error) {
+	var leases []contracts.Lease
+	err := c.do(ctx, http.MethodGet, "/leases?kind="+url.QueryEscape(kind), nil, &leases)
+	return leases, err
+}
+
 // ReclaimLease is the proof-or-nothing transition (reap-on-launch): if
-// the lease still matches identity exactly, it's released and the task
-// requeued in_progress -> ready with evidence on the event. reclaimed is
-// false when the lease moved on since the caller established proof (a
-// safe no-op, not an error).
+// the lease's holder is of this client's actor's kind and still matches
+// identity exactly, it's deleted. The task's status is untouched (an
+// in_progress task becomes Interrupted). reclaimed is false when the
+// lease moved on since the caller established proof (a safe no-op, not
+// an error).
 func (c *Client) ReclaimLease(ctx context.Context, taskID string, identity contracts.LeaseIdentity, evidence string) (bool, error) {
 	var out struct {
 		Reclaimed bool `json:"reclaimed"`

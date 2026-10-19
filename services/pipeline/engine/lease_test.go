@@ -56,7 +56,7 @@ func TestLeaseHeartbeatOutlivesSilentStage(t *testing.T) {
 	// Well past the TTL, mid-stage: the lease must still be held.
 	time.Sleep(900 * time.Millisecond)
 	thief := dataclient.New(h.base, "thief")
-	err := thief.Claim(context.Background(), seeded[0].ID, time.Minute)
+	err := thief.Claim(context.Background(), seeded[0].ID, "", time.Minute)
 	if !errors.Is(err, dataclient.ErrConflict) {
 		t.Fatalf("foreign claim during a silent stage: err=%v (want conflict — the heartbeat must be renewing)", err)
 	}
@@ -182,7 +182,7 @@ func TestRateLimitPauseHoldsLease(t *testing.T) {
 	// Mid-pause, well past the TTL: the lease must still be held.
 	time.Sleep(backoff / 2)
 	thief := dataclient.New(h.base, "thief")
-	err := thief.Claim(context.Background(), seeded[0].ID, time.Minute)
+	err := thief.Claim(context.Background(), seeded[0].ID, "", time.Minute)
 	if !errors.Is(err, dataclient.ErrConflict) {
 		t.Fatalf("foreign claim during a rate-limit pause: err=%v (want conflict — the heartbeat must be renewing)", err)
 	}
@@ -210,7 +210,7 @@ func TestLostLeaseAbandonsTask(t *testing.T) {
 	if err := h.data.Release(context.Background(), seeded[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := thief.Claim(context.Background(), seeded[0].ID, time.Minute); err != nil {
+	if err := thief.Claim(context.Background(), seeded[0].ID, "", time.Minute); err != nil {
 		t.Fatal(err)
 	}
 
@@ -224,7 +224,7 @@ func TestLostLeaseAbandonsTask(t *testing.T) {
 	}
 	// The thief's lease survives the engine's exit (no release of a lease
 	// the engine no longer holds).
-	if err := thief.Claim(context.Background(), seeded[0].ID, time.Minute); err != nil {
+	if err := thief.Renew(context.Background(), seeded[0].ID); err != nil {
 		t.Errorf("thief's lease was disturbed: %v", err)
 	}
 }

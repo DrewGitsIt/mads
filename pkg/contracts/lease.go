@@ -14,6 +14,11 @@ type Lease struct {
 	// pre-migration rows and writers on platforms other than Linux and
 	// darwin — never provable.
 	Identity *LeaseIdentity `json:"identity,omitempty"`
+	// Token is the lease's proof of possession, returned once by a
+	// successful claim and never again (the store keeps only its hash).
+	// Renew, release and writes to the leased task present it in the
+	// X-Mads-Lease header. Never log it or write it anywhere.
+	Token string `json:"token,omitempty"`
 }
 
 // LeaseIdentity pins a lease's holder to one exact OS process (reap-on-

@@ -151,7 +151,7 @@ func TestExternalKillReleasesLeasesAndEmitsCrashEvent(t *testing.T) {
 	// expiry rather than supervision, they'd still be failing a few hundred
 	// ms in — this proves supervision, not the backstop.
 	sessionClient := dataclient.New(base, sessionID)
-	if err := sessionClient.Claim(ctx, task.ID, 30*time.Second); err != nil {
+	if err := sessionClient.Claim(ctx, task.ID, "", 30*time.Second); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 
@@ -167,10 +167,15 @@ func TestExternalKillReleasesLeasesAndEmitsCrashEvent(t *testing.T) {
 		t.Fatalf("kill child pid %d: %v", pid, err)
 	}
 
+	// Supervision frees the lease; losing a lease changes no task status
+	// (docs/PIPELINE-LEASES-DESIGN.md A3).
 	eventually(t, 5*time.Second, func() bool {
-		got, err := admin.Task(ctx, task.ID)
-		return err == nil && got.Status == contracts.StatusBlocked
+		leases, err := sessionClient.Leases(ctx)
+		return err == nil && len(leases) == 0
 	})
+	if got, err := admin.Task(ctx, task.ID); err != nil || got.Status != contracts.StatusInProgress {
+		t.Fatalf("task after supervision release: %+v, %v; want in_progress", got, err)
+	}
 
 	eventually(t, 5*time.Second, func() bool {
 		events, err := admin.Events(ctx, 0, sessionID, []string{"session.crashed"})
@@ -235,7 +240,7 @@ func TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent(t *testing.T) {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	runClient := dataclient.New(base, runID)
-	if err := runClient.Claim(ctx, task.ID, 30*time.Second); err != nil {
+	if err := runClient.Claim(ctx, task.ID, "", 30*time.Second); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 
@@ -251,10 +256,15 @@ func TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent(t *testing.T) {
 		t.Fatalf("kill child pid %d: %v", pid, err)
 	}
 
+	// Supervision frees the lease; losing a lease changes no task status
+	// (docs/PIPELINE-LEASES-DESIGN.md A3).
 	eventually(t, 5*time.Second, func() bool {
-		got, err := admin.Task(ctx, task.ID)
-		return err == nil && got.Status == contracts.StatusBlocked
+		leases, err := runClient.Leases(ctx)
+		return err == nil && len(leases) == 0
 	})
+	if got, err := admin.Task(ctx, task.ID); err != nil || got.Status != contracts.StatusInProgress {
+		t.Fatalf("task after supervision release: %+v, %v; want in_progress", got, err)
+	}
 
 	eventually(t, 5*time.Second, func() bool {
 		events, err := admin.Events(ctx, 0, sessionID, []string{"pipeline.failed"})
@@ -876,7 +886,7 @@ func TestBootSweepReconcilesOrphanedActiveSession(t *testing.T) {
 		t.Fatalf("CreateTask (engine-active): %v", err)
 	}
 	engineClient := dataclient.New(base, "external-mads-run")
-	if err := engineClient.Claim(ctx, engineTask.ID, 30*time.Second); err != nil {
+	if err := engineClient.Claim(ctx, engineTask.ID, "", 30*time.Second); err != nil {
 		t.Fatalf("Claim (engine-active): %v", err)
 	}
 
