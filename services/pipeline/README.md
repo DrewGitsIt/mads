@@ -29,6 +29,27 @@ the engine reclaims leases of kind `pipeline` whose holder process it can
 prove dead; losing a lease never changes a task's status
 (docs/PIPELINE-LEASES-DESIGN.md).
 
+**Interrupted tasks are picked up** (docs/PIPELINE-LEASES-DESIGN.md B2). A
+task that is `in_progress` with no live lease is Interrupted (derived, never
+stored); the scheduler runs it like a ready task, under the same dependency,
+draft, exclusion and concurrency rules. An in_progress task another run
+holds is that run's: pre-filtered by the pipeline leases each scan, and a
+claim conflict parks it for 30s, so it is neither claimed every scan nor
+counted. On pickup the engine rebuilds the task's progress record from
+events (`progress.go`: every `stage.*` event carries `run_seq`), keeps the
+task's worktree and branch (committing stray work as "auto-commit:
+interrupted work"), and emits `stage.picked_up`. Same template and version:
+completed stages are skipped and loop/attempt counters restored; an
+interrupted agent stage resumes its provider session as the same attempt
+(`OneShotRequest.Resume`) or, failing that, runs a new attempt told it is
+resuming, with the interrupted attempt's output; a command stage reruns; an
+interrupted merge stage aborts a half merge of the branch, or completes
+without merging if the branch is already in trunk. Anything else restarts
+at the first stage with the worktree kept. **Stop** (ctx cancelled) never
+blocks: in-flight tasks are left Interrupted, their stray work committed,
+branch backed up and lease released (`Summary.Interrupted`):
+TestPickupResumesInterruptedAgentStage and the rest of pickup_test.go.
+
 With `Isolated` on (W3.2), each task gets its own worktree and `mads/<task>`
 branch: pre-merge stages run there, a stage whose command starts `git merge`
 is the merge-back — serialized (one at a time), branch and trailer-carrying
@@ -210,8 +231,8 @@ TestPreLandStageCatchesLintBeforeLandQueue.
 blocks and its `mads/<task>` branch exists, the engine force-updates
 `backup/<task>` to the branch head before recording the block, and names the
 backup branch in the note — salvage-safe by construction, since claiming a
-task (worktree creation) deliberately wipes any live worktree/branch left
-over from a previous attempt. When a task reaches done, its `backup/<task>`
+ready task (worktree creation) deliberately wipes any live worktree/branch
+left over from a previous attempt (an Interrupted task's are kept). When a task reaches done, its `backup/<task>`
 (if any) is deleted — stale-backup hygiene. The existing convention of
 checking `backup/tsk_<id>` before re-deriving a design from scratch now holds
 automatically for every block, not just the ones a shepherd happened to back

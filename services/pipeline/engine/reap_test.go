@@ -2,8 +2,10 @@ package engine
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,8 +19,10 @@ import (
 // (spec: reap-on-launch): a dead engine's lease — another run's
 // ("pipeline:run_dead", found by kind, not by this run's holder), provable via a
 // definitely-gone pid, same machine/boot — is reclaimed at the next engine
-// launch, before the first scan. The task stays in_progress (Interrupted)
-// and is not run: picking it up is B-R3 (docs/PIPELINE-LEASES-DESIGN.md).
+// launch, before the first scan. Reclaiming changes no status, so the task
+// is Interrupted, and the same run picks it up (docs/PIPELINE-LEASES-DESIGN.md
+// B2): with no progress record it restarts at the first stage in the dead
+// run's kept worktree, whose uncommitted work survives into trunk.
 func TestReapOnLaunchReclaimsAndResumes(t *testing.T) {
 	h := newHarness(t)
 	seeded := h.seed(contracts.Task{Title: "orphaned"})
@@ -59,6 +63,9 @@ func TestReapOnLaunchReclaimsAndResumes(t *testing.T) {
 	if out, err := leftover.CombinedOutput(); err != nil {
 		t.Fatalf("git worktree add (leftover): %v\n%s", err, out)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "leftover.txt"), []byte("dead run's work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	tpl, verr := template.Check([]byte(isolatedTemplate), func(string) bool { return true })
 	if verr != nil {
@@ -74,24 +81,32 @@ func TestReapOnLaunchReclaimsAndResumes(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Reclaim deletes the dead holder's lease and changes no status
-	// (docs/PIPELINE-LEASES-DESIGN.md A3): the task stays in_progress
-	// (Interrupted). Picking an Interrupted task up is B-R3; until then
-	// this run leaves it alone.
-	if len(sum.Done) != 0 {
-		t.Fatalf("done: %v, want none (an Interrupted task is not picked up before B-R3)", sum.Done)
+	// (docs/PIPELINE-LEASES-DESIGN.md A3); the Interrupted task is then
+	// picked up and runs to done.
+	if len(sum.Done) != 1 || sum.Done[0] != task.ID {
+		t.Fatalf("summary: %+v, want the reclaimed task picked up and done", sum)
 	}
 	leases, err := h.data.LeasesOfKind(ctx, "pipeline")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(leases) != 0 {
-		t.Fatalf("leases after launch: %+v, want the dead holder's lease reclaimed", leases)
+		t.Fatalf("leases after the run: %+v, want none", leases)
 	}
-	if got := h.task(t, task.ID); got.Status != contracts.StatusInProgress {
-		t.Errorf("status after reclaim = %s, want in_progress", got.Status)
+	if got := h.task(t, task.ID); got.Status != contracts.StatusDone {
+		t.Errorf("status = %s, want done", got.Status)
 	}
-	if evs := h.events(t, "task.status_changed"); len(evs) != 1 {
-		t.Errorf("status_changed events = %d, want just the test's own ready -> in_progress", len(evs))
+	// No status write on pickup: the test's own ready -> in_progress, then
+	// the run's in_progress -> done.
+	if evs := h.events(t, "task.status_changed"); len(evs) != 2 {
+		t.Errorf("status_changed events = %d, want 2", len(evs))
+	}
+	picks := h.events(t, string(contracts.StagePickedUp))
+	if len(picks) != 1 || !strings.Contains(string(picks[0].Payload), `"mode":"restart"`) {
+		t.Errorf("stage.picked_up events = %+v, want one restart (no progress record)", picks)
+	}
+	if _, err := os.Stat(filepath.Join(h.cwd, "leftover.txt")); err != nil {
+		t.Errorf("the dead run's uncommitted work didn't reach trunk: %v", err)
 	}
 }
 

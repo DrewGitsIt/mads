@@ -172,11 +172,12 @@ func (w *worktrees) create(ctx context.Context, task contracts.Task) (dir, branc
 	}
 	branch = "mads/" + task.ID
 	dir = filepath.Join(w.root, task.ID)
-	// A reclaimed task (reap-on-launch) may still have its dead run's
-	// worktree/branch on disk; discard both so `worktree add` starts
-	// clean instead of failing on an existing path/ref. Harmless no-op
-	// (remove already discards its own errors) when there's nothing to
-	// remove — the common case.
+	// A Ready task has no progress, so any worktree/branch left on disk
+	// (a requeued task's earlier attempt) is stale; discard both so
+	// `worktree add` starts clean instead of failing on an existing
+	// path/ref. Harmless no-op (remove already discards its own errors)
+	// when there's nothing to remove — the common case. An Interrupted
+	// task's worktree is its progress: reopen keeps it.
 	w.remove(ctx, dir, branch)
 	head, err := w.git(ctx, w.primary, "rev-parse", "HEAD")
 	if err != nil {
@@ -196,9 +197,94 @@ func (w *worktrees) create(ctx context.Context, task contracts.Task) (dir, branc
 	return dir, branch, nil
 }
 
+// reopen is create for an Interrupted task (docs/PIPELINE-LEASES-DESIGN.md
+// B2): the task's worktree and branch are its progress, so they are kept,
+// never wiped. An existing worktree on the task branch is reused as is; if
+// the directory is gone (or no longer a worktree) but the branch survives,
+// the worktree is re-added from the branch. Stray uncommitted work is
+// committed first ("auto-commit: interrupted work"). With no task branch
+// there is nothing to keep, and it falls back to create.
+func (w *worktrees) reopen(ctx context.Context, task contracts.Task) (dir, branch string, err error) {
+	if err := w.ensureSetup(ctx); err != nil {
+		return "", "", err
+	}
+	branch = "mads/" + task.ID
+	dir = filepath.Join(w.root, task.ID)
+	if _, err := w.git(ctx, w.primary, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err != nil {
+		return w.create(ctx, task)
+	}
+	if head, err := w.git(ctx, dir, "symbolic-ref", "--quiet", "--short", "HEAD"); err != nil || strings.TrimSpace(head) != branch || !w.isWorktreeRoot(ctx, dir) {
+		// Gone, or not this task's worktree any more: drop whatever is
+		// registered or left at the path, then check the branch out
+		// there again.
+		_, _ = w.git(ctx, w.primary, "worktree", "remove", "--force", dir)
+		if err := os.RemoveAll(dir); err != nil {
+			return "", "", err
+		}
+		_, _ = w.git(ctx, w.primary, "worktree", "prune")
+		if _, err := w.git(ctx, w.primary, "worktree", "add", dir, branch); err != nil {
+			return "", "", err
+		}
+	}
+	if err := w.commitStrayMsg(ctx, dir, "auto-commit: interrupted work\n\nTask: "+task.ID); err != nil {
+		return "", "", err
+	}
+	// The fork point the land attempt's attribution names: where the branch
+	// left trunk.
+	if base, err := w.git(ctx, w.primary, "merge-base", "HEAD", branch); err == nil {
+		w.setFork(task.ID, strings.TrimSpace(base))
+	}
+	if err := githook.SetWorktreeConfig(ctx, dir, githook.Config{
+		TaskID:    task.ID,
+		SessionID: w.sessionID,
+		DataURL:   w.dataURL,
+	}); err != nil {
+		return "", "", err
+	}
+	return dir, branch, nil
+}
+
+// isWorktreeRoot reports whether dir is the top of a git worktree (rather
+// than, say, a plain directory inside the primary repo, where git commands
+// would resolve to the primary's own checkout).
+func (w *worktrees) isWorktreeRoot(ctx context.Context, dir string) bool {
+	top, err := w.git(ctx, dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return false
+	}
+	want, err1 := filepath.EvalSymlinks(dir)
+	got, err2 := filepath.EvalSymlinks(strings.TrimSpace(top))
+	return err1 == nil && err2 == nil && want == got
+}
+
+// mergeRecovery prepares the primary for re-running an interrupted merge
+// stage. A merge of this task's branch left in progress (the run died
+// mid-merge) is aborted; a merge of anything else is not ours and is left
+// for merge to refuse. landed reports that the task branch is already in
+// trunk, so the stage is complete without merging again.
+func (w *worktrees) mergeRecovery(ctx context.Context, branch string) (landed bool, err error) {
+	if mh, err := w.git(ctx, w.primary, "rev-parse", "-q", "--verify", "MERGE_HEAD"); err == nil {
+		tip, terr := w.git(ctx, w.primary, "rev-parse", "--verify", "refs/heads/"+branch)
+		if terr == nil && strings.TrimSpace(mh) == strings.TrimSpace(tip) {
+			if _, err := w.git(ctx, w.primary, "merge", "--abort"); err != nil {
+				return false, fmt.Errorf("abort the interrupted merge of %s: %w", branch, err)
+			}
+		}
+	}
+	if _, err := w.git(ctx, w.primary, "merge-base", "--is-ancestor", branch, "HEAD"); err == nil {
+		return true, nil
+	}
+	return false, nil
+}
+
 // commitStray commits any uncommitted agent work so nothing is ever lost at
 // merge time; the trailer keeps the commit linked to its task (spec §3, §5).
 func (w *worktrees) commitStray(ctx context.Context, dir string, task contracts.Task) error {
+	return w.commitStrayMsg(ctx, dir, fmt.Sprintf("%s (pipeline auto-commit)\n\nTask: %s", task.Title, task.ID))
+}
+
+// commitStrayMsg is commitStray with its commit message given.
+func (w *worktrees) commitStrayMsg(ctx context.Context, dir, msg string) error {
 	status, err := w.git(ctx, dir, "status", "--porcelain")
 	if err != nil {
 		return err
@@ -209,7 +295,6 @@ func (w *worktrees) commitStray(ctx context.Context, dir string, task contracts.
 	if _, err := w.git(ctx, dir, "add", "-A"); err != nil {
 		return err
 	}
-	msg := fmt.Sprintf("%s (pipeline auto-commit)\n\nTask: %s", task.Title, task.ID)
 	_, err = w.git(ctx, dir, "commit", "-m", msg)
 	return err
 }
