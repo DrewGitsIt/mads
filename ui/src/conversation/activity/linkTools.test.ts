@@ -25,9 +25,18 @@ describe("linkToolTitle", () => {
     );
     expect(
       linkToolTitle(
-        call("mcp__mads-links__get_session_turns", { session: "Docs", from_turn: 12, to_turn: 18 }),
+        call("mcp__mads-links__get_session_turns", { session: "Docs", from_turn: 260, count: 5 }),
       ),
-    ).toBe("Read turns 12–18 → Docs");
+    ).toBe("Read turns 260–264 → Docs");
+    expect(
+      linkToolTitle(call("mcp__mads-links__get_session_turns", { session: "Docs", from_turn: 7 })),
+    ).toBe("Read turn 7 → Docs");
+    expect(
+      linkToolTitle(call("mcp__mads-links__get_session_turns", { session: "Docs", count: 3 })),
+    ).toBe("Read last 3 turns → Docs");
+    expect(linkToolTitle(call("mcp__mads-links__get_session_turns", { session: "Docs" }))).toBe(
+      "Read last turn → Docs",
+    );
     expect(linkToolTitle(call("mcp__mads-links__check_mailbox", { session: "Docs" }))).toBe(
       "Check mailbox → Docs",
     );

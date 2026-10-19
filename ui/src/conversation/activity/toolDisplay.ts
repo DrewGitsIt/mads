@@ -137,12 +137,24 @@ export function linkToolTitle(tool: ToolUse, resolve?: LinkNameResolver): string
   const raw = str(input.session) ?? str(input.link_id) ?? str(input.subject_session_id);
   const target = raw && (resolve?.(raw) ?? (/^[a-z]+_[0-9a-f]{8,}$/.test(raw) ? shortId(raw) : raw));
   let title = verb;
-  if (op.endsWith("turns") && input.from_turn != null && input.to_turn != null) {
+  if (op === "get_session_turns") {
+    title = turnsSliceTitle(input.from_turn, input.count);
+  } else if (op === "get_turns" && input.from_turn != null && input.to_turn != null) {
     title += ` ${String(input.from_turn)}–${String(input.to_turn)}`;
   }
   if (target) title += ` → ${target}`;
   if (op === "set_attention" && str(input.cadence)) title += `: ${str(input.cadence)}`;
   return title;
+}
+
+// get_session_turns slices by count from the end, or count from from_turn
+// (2026-10-19); the server defaults count to 1.
+function turnsSliceTitle(fromTurn: unknown, count: unknown): string {
+  const n = typeof count === "number" && count >= 1 ? count : 1;
+  if (typeof fromTurn === "number" && fromTurn >= 1) {
+    return n === 1 ? `Read turn ${fromTurn}` : `Read turns ${fromTurn}–${fromTurn + n - 1}`;
+  }
+  return n === 1 ? "Read last turn" : `Read last ${n} turns`;
 }
 
 function shortId(id: string): string {
