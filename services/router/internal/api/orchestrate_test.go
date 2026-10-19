@@ -218,7 +218,7 @@ func TestOrchestrateSummaryUsesSessionSummary(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("summary: status %d", resp.StatusCode)
 	}
-	got := decodeJSON[map[string]string](t, resp)
+	got := decodeJSON[map[string]any](t, resp)
 	if got["source"] != "summary" || got["text"] != "did the thing" {
 		t.Fatalf("summary = %+v, want {source: summary, text: %q}", got, "did the thing")
 	}
@@ -310,8 +310,18 @@ func TestOrchestrateSummaryCompressesLiveTurns(t *testing.T) {
 	if got["prologue"] != "did the thing (stale)" {
 		t.Fatalf("summary = %+v, want prologue %q", got, "did the thing (stale)")
 	}
-	if int(got["from_turn"].(float64)) != int(first.Seq) || int(got["to_turn"].(float64)) != int(last.Seq) {
-		t.Fatalf("summary = %+v, want from_turn %d to_turn %d", got, first.Seq, last.Seq)
+	// The event-log seqs the digest used to cite are gone (2026-10-19): they
+	// meant nothing to get_session_turns, which numbers transcript turns.
+	if _, ok := got["from_turn"]; ok {
+		t.Fatalf("summary = %+v, want no from_turn", got)
+	}
+	if _, ok := got["turns"].(float64); !ok {
+		t.Fatalf("summary = %+v, want a numeric turns count", got)
+	}
+	for _, seq := range []int64{first.Seq, last.Seq} {
+		if strings.Contains(got["text"].(string), fmt.Sprintf("turn %d", seq)) {
+			t.Fatalf("summary text %q cites event-log seq %d", got["text"], seq)
+		}
 	}
 }
 
@@ -392,69 +402,9 @@ func TestOrchestrateSummaryNoEnvelopesUnchanged(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("summary: status %d", resp.StatusCode)
 	}
-	got := decodeJSON[map[string]string](t, resp)
+	got := decodeJSON[map[string]any](t, resp)
 	if got["source"] != "summary" || got["text"] != "did the thing" {
 		t.Fatalf("summary = %+v, want {source: summary, text: %q}", got, "did the thing")
-	}
-}
-
-// TestOrchestrateGetTurnsReturnsCitedRange proves get_session_turns recovers
-// the normalized entries for the exact turn range a get_session_summary digest
-// would cite.
-func TestOrchestrateGetTurnsReturnsCitedRange(t *testing.T) {
-	srv, base := newTestServerWithData(t)
-	setLinkedSessionsFlag(t, srv.URL, true)
-
-	leader := mkSessionRouter(t, srv.URL, "leader")
-	subject := mkSessionRouter(t, srv.URL, "subject")
-
-	direct := dataclient.New(base, "test-bootstrap")
-	before := appendTurnEnded(t, direct, subject.ID, "user: earlier turn\n")
-	first := appendTurnEnded(t, direct, subject.ID, "user: fix the bug\nassistant: on it\n")
-	last := appendTurnEnded(t, direct, subject.ID, "tool: Bash\nassistant: fixed\n")
-
-	createResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
-		GrantingSessionID: leader.ID,
-		SubjectSessionID:  subject.ID,
-		Preset:            contracts.PresetLeader,
-	})
-	if createResp.StatusCode != http.StatusCreated {
-		t.Fatalf("create: status %d", createResp.StatusCode)
-	}
-
-	url := fmt.Sprintf("%s/sessions/%s/orchestrate/turns?for=%s&from_turn=%d&to_turn=%d",
-		srv.URL, leader.ID, subject.ID, first.Seq, last.Seq)
-	resp, err := http.Get(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("get_session_turns: status %d", resp.StatusCode)
-	}
-	type turnsResp struct {
-		FromTurn int `json:"from_turn"`
-		ToTurn   int `json:"to_turn"`
-		Entries  []struct {
-			Turn int    `json:"turn"`
-			Kind string `json:"kind"`
-			Text string `json:"text"`
-			Tool string `json:"tool"`
-		} `json:"entries"`
-	}
-	got := decodeJSON[turnsResp](t, resp)
-	if got.FromTurn != int(first.Seq) || got.ToTurn != int(last.Seq) {
-		t.Fatalf("range = %d..%d, want %d..%d", got.FromTurn, got.ToTurn, first.Seq, last.Seq)
-	}
-	for _, e := range got.Entries {
-		if e.Turn == int(before.Seq) {
-			t.Fatalf("entries = %+v, want no entry from the turn before the cited range", got.Entries)
-		}
-	}
-	if len(got.Entries) != 4 {
-		t.Fatalf("entries = %+v, want 4 (2 from each cited turn)", got.Entries)
-	}
-	if got.Entries[0].Kind != "user" || got.Entries[0].Text != "fix the bug" {
-		t.Fatalf("entries[0] = %+v, want {kind: user, text: fix the bug}", got.Entries[0])
 	}
 }
 
@@ -467,7 +417,7 @@ func TestOrchestrateGetTurnsNoOrchestrateLinkForbidden(t *testing.T) {
 	leader := mkSessionRouter(t, srv.URL, "leader")
 	subject := mkSessionRouter(t, srv.URL, "subject")
 
-	resp, err := http.Get(srv.URL + "/sessions/" + leader.ID + "/orchestrate/turns?for=" + subject.ID + "&from_turn=1&to_turn=2")
+	resp, err := http.Get(srv.URL + "/sessions/" + leader.ID + "/orchestrate/turns?for=" + subject.ID + "&count=2")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -254,12 +254,13 @@ Links are directed edges; nothing is 1:1 by design:
 
    **Link tools (2026-10-19).** A leader ignored the tools and reached its
    subject another way, so its messages bypassed MADS. The tools now say
-   plainly what they're for, and nothing else changed about the routes.
+   plainly what they're for; the routes are unchanged apart from
+   `get_session_turns`'s rework below.
    The provider sees one server, `mads-links` (tools appear as
    `mcp__mads-links__message_session`), with fixed verbs:
    `list_linked_sessions`, `message_session(session, text, wait_ms?)`,
    `get_session_summary(session)`,
-   `get_session_turns(session, from_turn, to_turn)`,
+   `get_session_turns(session, count?, from_turn?)`,
    `check_mailbox(session)`, `set_attention(session, cadence)`. A read-grant-
    only server omits `message_session`. `session` is the linked session's
    name (its ID also works). The server resolves it on every call against
@@ -276,6 +277,34 @@ Links are directed edges; nothing is 1:1 by design:
    sit in the prompt instead of behind tool search. The local capability
    registry still keys the process `orchestrate-<session id>`: its pid
    files live in the shared `$MADS_HOME/mcp`.
+
+   `get_session_turns` reads the subject's transcript (2026-10-19), the
+   same read `GET /sessions/{id}/transcript` serves: the live child's when
+   it's running, the provider's `TranscriptReader` otherwise. It used to
+   rebuild turns from `session.turn_ended` digest deltas, which gave
+   assistant text in streaming fragments, tool calls as a bare name, no
+   tool output, no opening message, and event-log seqs as turn numbers. A
+   turn now starts at each `user` message (the human's or a link-injected
+   one); anything before the first folds into turn 1, and turns number
+   1..N. `count` alone is the last `count` turns (default 1); `from_turn`
+   plus `count` reads forward from there. A slice past either end is
+   clamped and the header says so; `from_turn` past N is a tool error
+   naming N. The result is plain text: a `<name> — turns 41–42 of 42`
+   header, then per turn `## Turn N · user` (or `· from Leader · <name>`,
+   `· digest · <name>`, worded like the conversation's chips), the
+   message, `agent:` lines, `tool <Name> <compact JSON input>` with its
+   output on `  → ` lines, `notification:` lines, and a one-line
+   `[context compacted]`. No thinking, statuses, ids, or locations. Tool
+   input is cut at 1,000 characters and output at 2,000, each with
+   `…(truncated, N chars)`; past 40,000 for the whole response the oldest
+   turns in the slice drop first and the header says which. Raw tool
+   content does leave the subject this way, deliberately: the user granted
+   the link. Digests are unchanged and still carry tool calls as name and
+   path only. `list_linked_sessions` reports each session's `turns` (the
+   subjects route counts them only when asked with `?turns=1`, since every
+   other tool resolves its `session` through that route), and
+   `get_session_summary` reports `turns` in place of the seq anchors it
+   used to return.
 6. **L3 Implicit hand-raiser**: pipeline start/session-activation hooks
    auto-granting `{read, inject}` over own-session runs.
 7. **L4 Link UI**: rail multi-select + Link flow + grouping/badges +

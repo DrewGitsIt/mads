@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -28,7 +27,7 @@ const orchestrateLiveTurnLimit = 20
 
 // orchestrateSummaryBudgetTokens is get_session_summary's live-compression
 // budget: terse enough for a leader's tool-call turn, generous enough that a
-// long-transcript fixture still yields readable prose citing a turn range.
+// long-transcript fixture still yields readable prose.
 const orchestrateSummaryBudgetTokens = 1000
 
 // maxOrchestrateWaitMS caps message_session's optional bounded wait so a
@@ -44,8 +43,13 @@ const orchestratePollInterval = 50 * time.Millisecond
 // holds an orchestrate or read grant over — the link tools'
 // list_linked_sessions, and the table they resolve a tool's `session`
 // argument against (docs/LINKED-SESSIONS-DESIGN.md decomposition item 5).
+// With ?turns=1 each row also carries the subject's transcript turn count
+// (splitTurns), so an agent knows what get_session_turns can slice
+// (2026-10-19). Opt-in because it reads every subject's transcript, and
+// every other tool call resolves its `session` against this route.
 func (s *server) handleOrchestrateSubjects(w http.ResponseWriter, r *http.Request) {
 	leaderID := r.PathValue("id")
+	withTurns := r.URL.Query().Get("turns") == "1"
 	links, err := s.data.LinksForSession(r.Context(), leaderID)
 	if err != nil {
 		writeError(w, err)
@@ -58,6 +62,7 @@ func (s *server) handleOrchestrateSubjects(w http.ResponseWriter, r *http.Reques
 		Grants           []string `json:"grants"`
 		Activity         string   `json:"activity"`
 		Cadence          string   `json:"cadence"`
+		Turns            *int     `json:"turns,omitempty"`
 	}
 	out := []orchestrateSubject{}
 	for _, l := range links {
@@ -66,9 +71,14 @@ func (s *server) handleOrchestrateSubjects(w http.ResponseWriter, r *http.Reques
 		}
 		name := l.SubjectSessionID
 		activity := ""
+		var turns *int
 		if sess, err := s.data.Session(r.Context(), l.SubjectSessionID); err == nil {
 			name = sess.Name
 			activity = string(sess.Activity)
+			if withTurns {
+				n := len(splitTurns(s.subjectTranscript(r.Context(), sess)))
+				turns = &n
+			}
 		}
 		grants := make([]string, len(l.Grants))
 		for i, g := range l.Grants {
@@ -81,6 +91,7 @@ func (s *server) handleOrchestrateSubjects(w http.ResponseWriter, r *http.Reques
 			Grants:           grants,
 			Activity:         activity,
 			Cadence:          string(l.Cadence),
+			Turns:            turns,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -118,6 +129,11 @@ func (s *server) findOrchestrateLink(ctx context.Context, leaderID, subjectID st
 // no turn_ended envelopes falls back to the durable summary, or a short raw
 // transcript tail if it has none either — unchanged from before this digest
 // path existed.
+//
+// Every response carries "turns", the subject's transcript turn count — the
+// numbering get_session_turns slices. It replaced the from_turn/to_turn
+// event-log seqs the digest used to cite (2026-10-19): those meant nothing
+// to the transcript-based get_session_turns, and nothing else read them.
 func (s *server) handleOrchestrateSummary(w http.ResponseWriter, r *http.Request) {
 	leaderID := r.PathValue("id")
 	subjectID := r.URL.Query().Get("for")
@@ -135,10 +151,12 @@ func (s *server) handleOrchestrateSummary(w http.ResponseWriter, r *http.Request
 		writeError(w, err)
 		return
 	}
+	transcript := s.subjectTranscript(r.Context(), subject)
+	turnCount := len(splitTurns(transcript))
 
 	envs := s.orchestrateTurnEnvelopes(r.Context(), subjectID)
 	if len(envs) == 0 {
-		writeJSON(w, http.StatusOK, s.orchestrateSummaryFallback(r.Context(), subject))
+		writeJSON(w, http.StatusOK, orchestrateSummaryFallback(subject, transcript, turnCount))
 		return
 	}
 	if len(envs) > orchestrateLiveTurnLimit {
@@ -158,15 +176,14 @@ func (s *server) handleOrchestrateSummary(w http.ResponseWriter, r *http.Request
 	if err != nil || res.Text == "" {
 		// Best-effort: a hard digest failure, or every envelope decoding to
 		// nothing, degrades to the same fallback as the no-envelopes case.
-		writeJSON(w, http.StatusOK, s.orchestrateSummaryFallback(r.Context(), subject))
+		writeJSON(w, http.StatusOK, orchestrateSummaryFallback(subject, transcript, turnCount))
 		return
 	}
 
 	resp := map[string]any{
-		"source":    "compressed_recent",
-		"text":      res.Text,
-		"from_turn": res.FromTurn,
-		"to_turn":   res.ToTurn,
+		"source": "compressed_recent",
+		"text":   res.Text,
+		"turns":  turnCount,
 	}
 	if subject.Summary != "" {
 		resp["prologue"] = subject.Summary
@@ -174,16 +191,17 @@ func (s *server) handleOrchestrateSummary(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// orchestrateSummaryFallback is get_session_summary's pre-digest behavior,
-// unchanged: the subject's durable Session.Summary when set, else a short
-// raw transcript tail.
-func (s *server) orchestrateSummaryFallback(ctx context.Context, subject contracts.Session) map[string]string {
+// orchestrateSummaryFallback is get_session_summary's pre-digest behavior:
+// the subject's durable Session.Summary when set, else a short raw
+// transcript tail — plus the turn count every summary carries.
+func orchestrateSummaryFallback(subject contracts.Session, transcript []contracts.TranscriptMessage, turnCount int) map[string]any {
 	if subject.Summary != "" {
-		return map[string]string{"source": "summary", "text": subject.Summary}
+		return map[string]any{"source": "summary", "text": subject.Summary, "turns": turnCount}
 	}
-	return map[string]string{
+	return map[string]any{
 		"source": "transcript_tail",
-		"text":   s.orchestrateTranscriptTail(ctx, subject),
+		"text":   orchestrateTranscriptTail(transcript),
+		"turns":  turnCount,
 	}
 }
 
@@ -199,76 +217,25 @@ func (s *server) orchestrateTurnEnvelopes(ctx context.Context, subjectID string)
 }
 
 // orchestrateTurnFromEnvelope decodes a session.turn_ended envelope's
-// {"delta": "..."} payload into a turndigest.Turn, using the envelope's Seq
-// (the Data Service's global, gapless, monotonically increasing log
-// position, pkg/contracts/event.go) as the turn's anchor number — the one
-// stable identifier a turn_ended envelope carries, and exactly what
-// get_session_turns's from_turn/to_turn need to recover the same range a
-// digest cites. turndigest.Parse recovers the structured Entry list (kind + text,
+// {"delta": "..."} payload into a turndigest.Turn for get_session_summary's
+// digest. turndigest.Parse recovers the structured Entry list (kind + text,
 // tool calls reduced to name+path) from the delta's rendered line format,
 // the same normalized shape GenerateDigest already builds from the same
 // payload for its own compression (services/router/internal/job/digest.go)
 // — a digest-of-already-normalized-data, not a re-summarization from
-// scratch. A payload that fails to decode yields an empty turn (skipped by
-// Digest, since it contributes no entries).
+// scratch. The turn carries no Number (2026-10-19): it used to be the
+// envelope's event-log Seq, which the rendering then cited as
+// "— turn 87843 —" to a reader whose get_session_turns numbers transcript
+// turns 1..N. A payload that fails to decode yields an empty turn (skipped
+// by Digest, since it contributes no entries).
 func orchestrateTurnFromEnvelope(env contracts.Envelope) turndigest.Turn {
 	var payload struct {
 		Delta string `json:"delta"`
 	}
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
-		return turndigest.Turn{Number: int(env.Seq)}
+		return turndigest.Turn{}
 	}
-	return turndigest.Turn{Number: int(env.Seq), Entries: turndigest.Parse(payload.Delta)}
-}
-
-// orchestrateTurnEntry is one turndigest.Entry tagged with the turn number
-// (envelope Seq) it came from — get_session_turns's response shape, so a
-// leader can see turn boundaries within the range it's drilling into.
-type orchestrateTurnEntry struct {
-	Turn int    `json:"turn"`
-	Kind string `json:"kind"`
-	Text string `json:"text,omitempty"`
-	Tool string `json:"tool,omitempty"`
-	Path string `json:"path,omitempty"`
-}
-
-// handleOrchestrateGetTurns answers {id}'s (the leader) get_session_turns
-// tool call: the normalized (turndigest.Parse'd, not model-compressed)
-// entries for the subject's session.turn_ended envelopes whose turn number
-// (Seq) falls in [from_turn, to_turn] — recoverable loss instead of minimal
-// loss, letting a leader drill down into the anchor range a
-// get_session_summary digest cited. Gated by the same orchestrate-link check
-// as get_session_summary.
-func (s *server) handleOrchestrateGetTurns(w http.ResponseWriter, r *http.Request) {
-	leaderID := r.PathValue("id")
-	subjectID := r.URL.Query().Get("for")
-	link, err := s.findOrchestrateLink(r.Context(), leaderID, subjectID)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	if link == nil {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "no orchestrate link to that subject"})
-		return
-	}
-	fromTurn, _ := strconv.Atoi(r.URL.Query().Get("from_turn"))
-	toTurn, _ := strconv.Atoi(r.URL.Query().Get("to_turn"))
-
-	entries := []orchestrateTurnEntry{}
-	for _, env := range s.orchestrateTurnEnvelopes(r.Context(), subjectID) {
-		turn := orchestrateTurnFromEnvelope(env)
-		if turn.Number < fromTurn || turn.Number > toTurn {
-			continue
-		}
-		for _, e := range turn.Entries {
-			entries = append(entries, orchestrateTurnEntry{Turn: turn.Number, Kind: e.Kind, Text: e.Text, Tool: e.Tool, Path: e.Path})
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"from_turn": fromTurn,
-		"to_turn":   toTurn,
-		"entries":   entries,
-	})
+	return turndigest.Turn{Entries: turndigest.Parse(payload.Delta)}
 }
 
 // handleOrchestrateSetAttention answers {id}'s (the caller's own session,
@@ -367,20 +334,10 @@ func (s *server) fetchChildJSON(ctx context.Context, addr, path string, v any) e
 	return json.NewDecoder(resp.Body).Decode(v)
 }
 
-// orchestrateTranscriptTail reads subject's transcript the same way
-// handleSessionTranscript does (live child first, durable fallback), then
-// takes the last orchestrateTranscriptTailLen messages and joins them into
-// plain text for a leader agent to read directly.
-func (s *server) orchestrateTranscriptTail(ctx context.Context, subject contracts.Session) string {
-	var msgs []contracts.TranscriptMessage
-	if addr, ok := s.sup.SessionAddr(subject.ID); ok {
-		if err := s.fetchChildJSON(ctx, addr, "/transcript", &msgs); err != nil {
-			msgs = nil
-		}
-	}
-	if msgs == nil {
-		msgs = s.transcriptFor(ctx, subject)
-	}
+// orchestrateTranscriptTail takes the last orchestrateTranscriptTailLen
+// messages of a subject's transcript (subjectTranscript) and joins them
+// into plain text for a leader agent to read directly.
+func orchestrateTranscriptTail(msgs []contracts.TranscriptMessage) string {
 	if len(msgs) > orchestrateTranscriptTailLen {
 		msgs = msgs[len(msgs)-orchestrateTranscriptTailLen:]
 	}

@@ -25,8 +25,10 @@ import (
 
 // Entry is the shared shape promoted from the session child's digestEntry
 // (services/session/internal/runner) / synth's deltaEntry: text chunks
-// verbatim, tool uses reduced to {name, path} — raw tool input/output never
-// leaves the session process.
+// verbatim, tool uses reduced to {name, path} — no raw tool input/output
+// reaches a digest or synthesis. (get_session_turns, which does carry it to
+// a linked leader, reads the transcript instead and doesn't use Entry,
+// 2026-10-19.)
 type Entry struct {
 	Kind string // KindUser | KindAssistant | KindTool
 	Text string

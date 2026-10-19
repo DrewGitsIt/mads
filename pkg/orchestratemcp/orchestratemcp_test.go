@@ -135,7 +135,7 @@ func TestInitializeAndToolsList(t *testing.T) {
 		"list_linked_sessions": nil,
 		"message_session":      {"session", "text"},
 		"get_session_summary":  {"session"},
-		"get_session_turns":    {"session", "from_turn", "to_turn"},
+		"get_session_turns":    {"session"},
 		"check_mailbox":        {"session"},
 		"set_attention":        {"session", "cadence"},
 	}
@@ -168,6 +168,24 @@ func TestInitializeAndToolsList(t *testing.T) {
 		session, ok := props["session"].(map[string]any)
 		if !ok || session["description"] == "" || session["description"] == nil {
 			t.Errorf("%s session param = %+v, want a described string", name, props["session"])
+		}
+	}
+
+	// get_session_turns slices transcript turns by count and an optional
+	// from_turn; the old seq-range to_turn is gone (2026-10-19).
+	turnsProps := tools["get_session_turns"]["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	for _, p := range []string{"count", "from_turn"} {
+		prop, ok := turnsProps[p].(map[string]any)
+		if !ok || prop["type"] != "integer" || prop["minimum"] != float64(1) {
+			t.Errorf("get_session_turns %s = %+v, want an integer with minimum 1", p, turnsProps[p])
+		}
+	}
+	if _, ok := turnsProps["to_turn"]; ok {
+		t.Errorf("get_session_turns still takes to_turn")
+	}
+	for _, want := range []string{"input and output", "count", "from_turn"} {
+		if d := tools["get_session_turns"]["description"].(string); !strings.Contains(d, want) {
+			t.Errorf("get_session_turns description missing %q: %s", want, d)
 		}
 	}
 }
@@ -249,15 +267,16 @@ func TestToolsCallCheckMailbox(t *testing.T) {
 
 // TestToolsCallListLinkedSessions proves list_linked_sessions reshapes the
 // subjects route into the agent-facing rows: the name it passes back as
-// `session`, the session ID, grants, activity, cadence — and no link ID.
+// `session`, the session ID, grants, activity, cadence, turns (asked for
+// with ?turns=1) — and no link ID.
 func TestToolsCallListLinkedSessions(t *testing.T) {
 	var gotActor string
 	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/sessions/leader-1/orchestrate/subjects" {
-			t.Fatalf("router saw %s %s", r.Method, r.URL.Path)
+		if r.Method != http.MethodGet || r.URL.Path != "/sessions/leader-1/orchestrate/subjects" || r.URL.RawQuery != "turns=1" {
+			t.Fatalf("router saw %s %s", r.Method, r.URL)
 		}
 		gotActor = r.Header.Get("X-Mads-Actor")
-		_, _ = w.Write([]byte(defaultSubjects))
+		_, _ = w.Write([]byte(strings.Replace(defaultSubjects, `"cadence":"on_signal"`, `"cadence":"on_signal","turns":42`, 1)))
 	}))
 	defer router.Close()
 
@@ -271,7 +290,7 @@ func TestToolsCallListLinkedSessions(t *testing.T) {
 	if isErr {
 		t.Fatalf("isError = true: %s", text)
 	}
-	want := `[{"name":"payments","session_id":"ses_pay","grants":["read","inject","orchestrate"],"activity":"idle","cadence":"on_signal"}]`
+	want := `[{"name":"payments","session_id":"ses_pay","grants":["read","inject","orchestrate"],"activity":"idle","cadence":"on_signal","turns":42}]`
 	if text != want {
 		t.Fatalf("content text = %s, want %s", text, want)
 	}
@@ -290,16 +309,34 @@ func TestToolsCallGetSessionSummary(t *testing.T) {
 	}
 }
 
+// TestToolsCallGetSessionTurns proves get_session_turns forwards count and
+// from_turn (each only when set) and hands the Router's plain-text
+// rendering to the model as is — a from_turn past the end (400) as a tool
+// error the agent can read (2026-10-19).
 func TestToolsCallGetSessionTurns(t *testing.T) {
-	router, calls := fakeRouter(t, "leader-1", defaultSubjects, http.StatusOK, `{"from_turn":1,"to_turn":2,"entries":[]}`)
-	resps := runLines(t, router, "leader-1",
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_session_turns","arguments":{"session":"payments","from_turn":1,"to_turn":2}}}`,
-	)
-	if len(*calls) != 1 || (*calls)[0].Path != "/sessions/leader-1/orchestrate/turns?for=ses_pay&from_turn=1&to_turn=2" {
-		t.Fatalf("router saw %+v", *calls)
+	cases := []struct {
+		args     string
+		status   int
+		reply    string
+		wantPath string
+		wantErr  bool
+	}{
+		{`{"session":"payments"}`, http.StatusOK, "payments — turn 4 of 4\n", "/sessions/leader-1/orchestrate/turns?for=ses_pay", false},
+		{`{"session":"payments","count":3}`, http.StatusOK, "payments — turns 2–4 of 4\n", "/sessions/leader-1/orchestrate/turns?for=ses_pay&count=3", false},
+		{`{"session":"payments","from_turn":2,"count":2}`, http.StatusOK, "payments — turns 2–3 of 4\n", "/sessions/leader-1/orchestrate/turns?for=ses_pay&count=2&from_turn=2", false},
+		{`{"session":"payments","from_turn":9}`, http.StatusBadRequest, "payments has 4 turns; from_turn 9 is past the end.", "/sessions/leader-1/orchestrate/turns?for=ses_pay&from_turn=9", true},
 	}
-	if text, _ := resultText(t, resps[0]); text != `{"from_turn":1,"to_turn":2,"entries":[]}` {
-		t.Fatalf("content text = %q", text)
+	for _, tc := range cases {
+		router, calls := fakeRouter(t, "leader-1", defaultSubjects, tc.status, tc.reply)
+		resps := runLines(t, router, "leader-1",
+			`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_session_turns","arguments":`+tc.args+`}}`,
+		)
+		if len(*calls) != 1 || (*calls)[0].Path != tc.wantPath {
+			t.Fatalf("%s: router saw %+v, want %s", tc.args, *calls, tc.wantPath)
+		}
+		if text, isErr := resultText(t, resps[0]); text != tc.reply || isErr != tc.wantErr {
+			t.Fatalf("%s: content text = %q isError %v", tc.args, text, isErr)
+		}
 	}
 }
 

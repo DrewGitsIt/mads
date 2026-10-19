@@ -9,10 +9,12 @@ import (
 
 // digestAccumulator collects one turn's activity for the digest push, as
 // turndigest.Entry values (the shared shape — text chunks verbatim, tool
-// uses reduced to {name, path}; raw tool input/output never leaves the
-// session process). It mirrors services/session/internal/synth's deltaEntry
-// accumulation, but resets every turn end rather than on synth's own
-// debounced multi-turn trigger, so a digest push
+// uses reduced to {name, path}). A digest carries no raw tool input/output;
+// a leader that wants it reads the transcript through get_session_turns
+// (2026-10-19), which this accumulator doesn't feed. It mirrors
+// services/session/internal/synth's deltaEntry accumulation, but resets
+// every turn end rather than on synth's own debounced multi-turn trigger,
+// so a digest push
 // (docs/LINKED-SESSIONS-DESIGN.md decision 4) carries exactly one turn's
 // activity. Its own mutex (distinct from Runner.mu) guards against
 // recordUser, called from the Send/Inject goroutine, racing with

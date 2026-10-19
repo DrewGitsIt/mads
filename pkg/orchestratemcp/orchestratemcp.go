@@ -155,8 +155,8 @@ func (s *Server) handleToolCall(ctx context.Context, req rpcRequest) *rpcRespons
 		Session  string `json:"session"`
 		Text     string `json:"text"`
 		WaitMS   int64  `json:"wait_ms,omitempty"`
+		Count    int    `json:"count"`
 		FromTurn int    `json:"from_turn"`
-		ToTurn   int    `json:"to_turn"`
 		Cadence  string `json:"cadence"`
 	}
 	if len(params.Arguments) > 0 {
@@ -183,7 +183,7 @@ func (s *Server) handleToolCall(ctx context.Context, req rpcRequest) *rpcRespons
 		case "get_session_summary":
 			status, body, err = s.client.getSummary(ctx, target.SubjectSessionID)
 		case "get_session_turns":
-			status, body, err = s.client.getTurns(ctx, target.SubjectSessionID, args.FromTurn, args.ToTurn)
+			status, body, err = s.client.getTurns(ctx, target.SubjectSessionID, args.Count, args.FromTurn)
 		case "check_mailbox":
 			status, body, err = s.client.checkMailbox(ctx, target.LinkID)
 		case "set_attention":
@@ -222,7 +222,7 @@ func (s *Server) resolve(ctx context.Context, arg string) (linkedSession, error)
 // listLinkedSessions reshapes the subjects route's rows into
 // list_linked_sessions' agent-facing rows (listedSession).
 func (s *Server) listLinkedSessions(ctx context.Context) (int, []byte, error) {
-	sessions, err := s.client.linkedSessions(ctx)
+	sessions, err := s.client.linkedSessionsWithTurns(ctx)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -234,6 +234,7 @@ func (s *Server) listLinkedSessions(ctx context.Context) (int, []byte, error) {
 			Grants:    l.Grants,
 			Activity:  l.Activity,
 			Cadence:   l.Cadence,
+			Turns:     derefInt(l.Turns),
 		}
 	}
 	raw, err := json.Marshal(out)
@@ -241,4 +242,11 @@ func (s *Server) listLinkedSessions(ctx context.Context) (int, []byte, error) {
 		return 0, nil, err
 	}
 	return 200, raw, nil
+}
+
+func derefInt(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
 }

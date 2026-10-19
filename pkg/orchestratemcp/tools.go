@@ -26,7 +26,8 @@ var toolDefs = []map[string]any{
 		"name": "list_linked_sessions",
 		"description": "List the sessions the user has linked to you, and how you can reach each: its name (pass it as `session` to the other tools), " +
 			"session ID, grants (orchestrate lets you message it; read lets you read its summary and turns), " +
-			"what it's doing right now, and its cadence (how its progress comes back to you).",
+			"what it's doing right now, its cadence (how its progress comes back to you), " +
+			"and turns (how many turns its conversation has, numbered from 1, for get_session_turns).",
 		"inputSchema": map[string]any{
 			"type":                 "object",
 			"properties":           map[string]any{},
@@ -52,7 +53,8 @@ var toolDefs = []map[string]any{
 	{
 		"name": "get_session_summary",
 		"description": "Read a compressed account of what a linked session has said and done, focused on its replies. " +
-			"Cheap in tokens, so use it first. It cites turn numbers you can pass to get_session_turns for the exact record.",
+			"Cheap in tokens, so use it first, then read the exact record with get_session_turns, e.g. count: 3 for the last three turns. " +
+			"It also says how many turns the session has.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -64,17 +66,20 @@ var toolDefs = []map[string]any{
 	},
 	{
 		"name": "get_session_turns",
-		"description": "Read a linked session's exact turns for a range: its words verbatim and every tool call it made " +
-			"(the tool and the file or path it acted on; tool output isn't included). " +
-			"Use it to audit what the session actually did, or to read exactly what it said.",
+		"description": "Read a linked session's conversation exactly, turn by turn: the message that started each turn " +
+			"(from the user, or from you or another linked session), its words verbatim, and every tool call it made " +
+			"with the call's input and output (long ones truncated). " +
+			"Use it to audit what the session actually did, or to read exactly what it said. " +
+			"A turn starts at each message the session is sent; turns are numbered from 1, and list_linked_sessions says how many there are. " +
+			"Pass count alone for the last count turns (the default is the last one), or from_turn with count to read from a given turn.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"session":   sessionParam,
-				"from_turn": map[string]any{"type": "integer", "description": "First turn number in the range, inclusive."},
-				"to_turn":   map[string]any{"type": "integer", "description": "Last turn number in the range, inclusive."},
+				"count":     map[string]any{"type": "integer", "minimum": 1, "description": "How many turns to read. Defaults to 1."},
+				"from_turn": map[string]any{"type": "integer", "minimum": 1, "description": "The turn to start at, counting from 1. Omit to read the last count turns."},
 			},
-			"required":             []string{"session", "from_turn", "to_turn"},
+			"required":             []string{"session"},
 			"additionalProperties": false,
 		},
 	},

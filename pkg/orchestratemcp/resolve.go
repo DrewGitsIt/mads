@@ -17,6 +17,8 @@ type linkedSession struct {
 	Grants           []string `json:"grants"`
 	Activity         string   `json:"activity"`
 	Cadence          string   `json:"cadence"`
+	// Turns is set only on a listLinksWithTurns read.
+	Turns *int `json:"turns,omitempty"`
 }
 
 // listedSession is list_linked_sessions' row as the agent sees it: the name
@@ -28,6 +30,9 @@ type listedSession struct {
 	Grants    []string `json:"grants"`
 	Activity  string   `json:"activity,omitempty"`
 	Cadence   string   `json:"cadence,omitempty"`
+	// Turns is how many transcript turns the session has: what
+	// get_session_turns' count and from_turn slice (2026-10-19).
+	Turns int `json:"turns"`
 }
 
 // toolError is a failure the agent can act on — an unknown or ambiguous
@@ -42,7 +47,15 @@ func (e *toolError) Error() string { return e.msg }
 // status comes back as a toolError carrying the Router's own body, the same
 // text the tool would have shown had it called the route directly.
 func (c *client) linkedSessions(ctx context.Context) ([]linkedSession, error) {
-	status, body, err := c.listLinks(ctx)
+	return decodeLinkedSessions(c.listLinks(ctx))
+}
+
+// linkedSessionsWithTurns is linkedSessions with each row's turn count.
+func (c *client) linkedSessionsWithTurns(ctx context.Context) ([]linkedSession, error) {
+	return decodeLinkedSessions(c.listLinksWithTurns(ctx))
+}
+
+func decodeLinkedSessions(status int, body []byte, err error) ([]linkedSession, error) {
 	if err != nil {
 		return nil, err
 	}

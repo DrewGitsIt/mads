@@ -66,14 +66,28 @@ func (c *client) listLinks(ctx context.Context) (int, []byte, error) {
 	return c.do(ctx, http.MethodGet, "/sessions/"+url.PathEscape(c.sessionID)+"/orchestrate/subjects", nil)
 }
 
+// listLinksWithTurns is listLinks plus each subject's transcript turn count
+// (?turns=1) — only list_linked_sessions asks, since counting reads every
+// subject's transcript and every other tool resolves through listLinks.
+func (c *client) listLinksWithTurns(ctx context.Context) (int, []byte, error) {
+	return c.do(ctx, http.MethodGet, "/sessions/"+url.PathEscape(c.sessionID)+"/orchestrate/subjects?turns=1", nil)
+}
+
 func (c *client) getSummary(ctx context.Context, subjectSessionID string) (int, []byte, error) {
 	path := "/sessions/" + url.PathEscape(c.sessionID) + "/orchestrate/summary?for=" + url.QueryEscape(subjectSessionID)
 	return c.do(ctx, http.MethodGet, path, nil)
 }
 
-func (c *client) getTurns(ctx context.Context, subjectSessionID string, fromTurn, toTurn int) (int, []byte, error) {
-	path := "/sessions/" + url.PathEscape(c.sessionID) + "/orchestrate/turns?for=" + url.QueryEscape(subjectSessionID) +
-		"&from_turn=" + strconv.Itoa(fromTurn) + "&to_turn=" + strconv.Itoa(toTurn)
+// getTurns reads a slice of a subject's transcript turns: count (the Router
+// defaults it to 1) and, when fromTurn > 0, the 1-based turn to start at.
+func (c *client) getTurns(ctx context.Context, subjectSessionID string, count, fromTurn int) (int, []byte, error) {
+	path := "/sessions/" + url.PathEscape(c.sessionID) + "/orchestrate/turns?for=" + url.QueryEscape(subjectSessionID)
+	if count > 0 {
+		path += "&count=" + strconv.Itoa(count)
+	}
+	if fromTurn > 0 {
+		path += "&from_turn=" + strconv.Itoa(fromTurn)
+	}
 	return c.do(ctx, http.MethodGet, path, nil)
 }
 
