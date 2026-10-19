@@ -105,7 +105,7 @@ function RunCard({ data, run }: { data: TaskNodeData; run: NodeRunView }) {
       </div>
       {showTrack && <StageTrack stages={run.stages} />}
       {run.wave !== undefined && (
-        <span className={styles.wave}>
+        <span className={styles.wave} title={run.skips.length > 0 ? `skips ${run.skips.join(", ")}` : undefined}>
           wave {run.wave}
           {run.skips.length > 0 && ` · skips ${run.skips.join(", ")}`}
         </span>
@@ -113,7 +113,7 @@ function RunCard({ data, run }: { data: TaskNodeData; run: NodeRunView }) {
       {run.line && (
         <div className={[styles.line, styles[`line_${run.line.tone}`]].join(" ")}>
           {run.line.tone === "running" && <StatusGlyph status="in_progress" animate={!reducedMotion} />}
-          <span>{run.line.text}</span>
+          <span title={run.line.text}>{run.line.text}</span>
         </div>
       )}
       {run.retryable && (actions.onEditRetry || actions.onRetry) && (
@@ -194,7 +194,11 @@ function LegacyCard({ data }: { data: TaskNodeData }) {
           {currentStage && <span className={styles.stageLabel}>{currentStage}</span>}
         </div>
       )}
-      {status === "blocked" && reason && <div className={styles.reason}>{reason}</div>}
+      {status === "blocked" && reason && (
+        <div className={styles.reason} title={reason}>
+          {reason}
+        </div>
+      )}
       <div className={styles.footer}>
         <StatusGlyph status={status} animate={status === "in_progress" && !reducedMotion} />
         {task.retry_count > 0 && <span className={styles.retry}>retry ×{task.retry_count}</span>}

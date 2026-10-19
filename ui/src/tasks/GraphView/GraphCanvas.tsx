@@ -92,11 +92,12 @@ export interface GraphCanvasProps {
   refitSignal?: number;
 }
 
-// Node boxes are positioned by their top-left; layout positions are centers.
-function halfSize(level: GraphLevel | undefined, hasRun: boolean) {
-  return hasRun && level === "overview"
-    ? { x: RING_SIZE / 2, y: RING_SIZE / 2 }
-    : { x: NODE_WIDTH / 2, y: NODE_HEIGHT / 2 };
+// Node boxes are positioned by their top-left; layout positions are centers
+// of a slot `height` tall. Cards and rings both draw from the slot's top, so
+// a level switch keeps every node's top in place and a card (bounded by the
+// slot height) never reaches the next rank.
+function halfSize(level: GraphLevel | undefined, hasRun: boolean, height: number) {
+  return { x: hasRun && level === "overview" ? RING_SIZE / 2 : NODE_WIDTH / 2, y: height / 2 };
 }
 
 function toXYNodes(
@@ -116,10 +117,10 @@ function toXYNodes(
   return canvasNodes.map((n) => ({
     id: n.id,
     type: "taskNode",
-    position:
-      runViews !== undefined && level === "overview"
-        ? { x: n.x - RING_SIZE / 2, y: n.y - RING_SIZE / 2 }
-        : { x: n.x - n.width / 2, y: n.y - n.height / 2 },
+    position: {
+      x: n.x - halfSize(level, runViews !== undefined, n.height).x,
+      y: n.y - halfSize(level, runViews !== undefined, n.height).y,
+    },
     // Selecting a node for highlight also selects it in xyflow's own
     // built-in sense; without this, Backspace with a node selected would
     // ALSO delete the node via onNodesDelete, not just the intended edges.
@@ -413,10 +414,11 @@ function GraphCanvasInner({
           ? { x: event.clientX, y: event.clientY }
           : { x: event.touches[0]?.clientX ?? 0, y: event.touches[0]?.clientY ?? 0 };
       // Layout positions are node centers; xyflow's are top-left corners.
-      const half = halfSize(node.data.level, node.data.run !== undefined);
+      const height = canvasNodes.find((n) => n.id === node.id)?.height ?? NODE_HEIGHT;
+      const half = halfSize(node.data.level, node.data.run !== undefined, height);
       onNodeDragStop?.(node.id, point, { x: node.position.x + half.x, y: node.position.y + half.y });
     },
-    [onNodeDragStop],
+    [onNodeDragStop, canvasNodes],
   );
 
   const handleDrop = useCallback(

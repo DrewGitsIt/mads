@@ -21,7 +21,7 @@ import { FocusPanel } from "./FocusPanel";
 import { GraphCanvas } from "./GraphCanvas";
 import { GraphRunActionsContext, type GraphRunActions } from "./graphRunActions";
 import { graphStatusOf, type GraphStatus } from "./graphStatus";
-import { computeGraphLayout, type ComponentSlots } from "./layout";
+import { computeGraphLayout, graphNodeHeight, type ComponentSlots } from "./layout";
 import { loadPositions, savePositions } from "./positions";
 import {
   criticalEdgeIds,
@@ -78,6 +78,7 @@ export interface TaskGraphViewProps {
 }
 
 const EMPTY_RUN_STATE: Record<string, TaskRunState> = {};
+const NO_SLOTS: ComponentSlots = new Map();
 
 // Zoom thresholds for switching level as the user zooms (hysteresis between them).
 const OVERVIEW_BELOW = 0.6;
@@ -132,7 +133,7 @@ export function TaskGraphView({
 }: TaskGraphViewProps) {
   const [cycles, setCycles] = useState<string[][]>([]);
   const [positions, setPositions] = useState<Record<string, Point>>(() => loadPositions(sessionId));
-  const previousSlotsRef = useRef<ComponentSlots>(new Map());
+  const previousSlotsRef = useRef<{ height: number; slots: ComponentSlots }>({ height: 0, slots: NO_SLOTS });
   const trayRef = useRef<HTMLDivElement>(null);
   const [pendingDragOut, setPendingDragOut] = useState<PendingDragOut | null>(null);
   const [toast, setToast] = useState<GraphToast | null>(null);
@@ -202,19 +203,23 @@ export function TaskGraphView({
   // re-reading the same data the lazy useState initializer already loaded).
   useEffect(() => {
     setPositions(loadPositions(sessionId));
-    previousSlotsRef.current = new Map();
+    previousSlotsRef.current = { height: 0, slots: NO_SLOTS };
   }, [sessionId]);
 
   useEffect(() => {
     savePositions(sessionId, positions);
   }, [sessionId, positions]);
 
-  const result = computeGraphLayout(tasks, cycles, positions, previousSlotsRef.current);
+  // One slot height for every level, so zooming between levels never moves a node.
+  const nodeHeight = graphNodeHeight(runViews !== undefined);
+  // Slots packed at another height would overlap at this one; re-pack instead.
+  const reusableSlots = previousSlotsRef.current.height === nodeHeight ? previousSlotsRef.current.slots : NO_SLOTS;
+  const result = computeGraphLayout(tasks, cycles, positions, reusableSlots, nodeHeight);
 
   // Updated after render commits, never mutated during render (§7).
   useEffect(() => {
-    previousSlotsRef.current = result.slots;
-  }, [result.slots]);
+    previousSlotsRef.current = { height: nodeHeight, slots: result.slots };
+  }, [nodeHeight, result.slots]);
 
   const edgeDegree = new Map<string, number>();
   for (const edge of result.edges) {
@@ -370,7 +375,7 @@ export function TaskGraphView({
 
   function handleAutoLayout() {
     setPositions({});
-    previousSlotsRef.current = new Map();
+    previousSlotsRef.current = { height: 0, slots: NO_SLOTS };
     setAutoLayoutSignal((n) => n + 1);
   }
 

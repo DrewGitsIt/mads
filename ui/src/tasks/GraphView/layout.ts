@@ -2,7 +2,21 @@ import dagre from "@dagrejs/dagre";
 import type { Task } from "../../router/types";
 
 export const NODE_WIDTH = 220;
-export const NODE_HEIGHT = 88; // tune visually once TaskNode exists; not load-bearing
+/** The plain status card's slot (no run view); its blocked reason is clamped to two lines. */
+export const NODE_HEIGHT = 88;
+/**
+ * A run card's slot: the tallest a Cards-level card can draw. That is a
+ * blocked card: two-line title, stage track, status line clamped to three
+ * lines (TaskNode.module.css), retry buttons — measured at 163px; the plan's
+ * wave chip never shares a card with the buttons. Every level of a run uses
+ * this one height, so switching Overview/Cards/Focus never moves a node.
+ */
+export const RUN_CARD_HEIGHT = 168;
+
+/** The layout slot height for the graph's nodes: run cards are taller than the plain status cards. */
+export function graphNodeHeight(hasRunView: boolean): number {
+  return hasRunView ? RUN_CARD_HEIGHT : NODE_HEIGHT;
+}
 
 const PACK_ROW_WIDTH = 1400;
 const PACK_GAP = 60;
@@ -118,7 +132,7 @@ export function connectedComponents(taskIds: string[], edges: GraphEdgeLayout[])
 
 /**
  * Today's dagre call, scoped to one component's subgraph: rankdir TB,
- * nodesep 40, ranksep 60, fixed NODE_WIDTH/NODE_HEIGHT, sorted-id
+ * nodesep 40, ranksep 60, fixed NODE_WIDTH x `nodeHeight`, sorted-id
  * iteration. Output is normalized so the component's own bounding box
  * starts at local (0,0) — packing adds an origin offset on top.
  */
@@ -126,6 +140,7 @@ export function layoutComponent(
   memberIds: string[],
   tasksById: Record<string, Task>,
   edges: GraphEdgeLayout[],
+  nodeHeight: number = NODE_HEIGHT,
 ): ComponentLayout {
   const sortedIds = [...memberIds].sort();
   const memberSet = new Set(memberIds);
@@ -135,7 +150,7 @@ export function layoutComponent(
   g.setDefaultEdgeLabel(() => ({}));
 
   for (const id of sortedIds) {
-    g.setNode(id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+    g.setNode(id, { width: NODE_WIDTH, height: nodeHeight });
   }
   for (const edge of edges) {
     if (memberSet.has(edge.from) && memberSet.has(edge.to)) g.setEdge(edge.from, edge.to);
@@ -216,13 +231,16 @@ function componentSortKey(memberIds: string[], tasksById: Record<string, Task>):
  * connected node, or a tray node dragged in with no edges yet); otherwise
  * degree >= 1 nodes place via their component's packed slot, and degree-0
  * nodes with no manual position never reach `canvasNodes` — they're tray
- * membership instead (§2).
+ * membership instead (§2). `nodeHeight` is every node's slot height
+ * (graphNodeHeight); a node draws from its slot's top, so it must not be
+ * taller than that.
  */
 export function computeGraphLayout(
   tasks: Task[],
   cycles: string[][],
   manualPositions: Record<string, { x: number; y: number }>,
   previousSlots: ComponentSlots,
+  nodeHeight: number = NODE_HEIGHT,
 ): GraphLayoutResult {
   const tasksById: Record<string, Task> = {};
   for (const task of tasks) tasksById[task.id] = task;
@@ -243,7 +261,7 @@ export function computeGraphLayout(
     return aCreated !== bCreated ? aCreated.localeCompare(bCreated) : aId.localeCompare(bId);
   });
 
-  const componentLayouts = orderedGroups.map((memberIds) => layoutComponent(memberIds, tasksById, edges));
+  const componentLayouts = orderedGroups.map((memberIds) => layoutComponent(memberIds, tasksById, edges, nodeHeight));
   const slots = packComponents(componentLayouts, previousSlots);
 
   const canvasNodes: GraphNodeLayout[] = [];
@@ -263,7 +281,7 @@ export function computeGraphLayout(
     if (degree === 0 && manual === undefined) {
       trayTaskIds.push(task.id);
     } else if (degree === 0 && manual !== undefined) {
-      canvasNodes.push({ id: task.id, x: manual.x, y: manual.y, width: NODE_WIDTH, height: NODE_HEIGHT, task });
+      canvasNodes.push({ id: task.id, x: manual.x, y: manual.y, width: NODE_WIDTH, height: nodeHeight, task });
     }
   }
 
