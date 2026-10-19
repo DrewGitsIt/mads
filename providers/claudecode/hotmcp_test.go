@@ -103,6 +103,32 @@ func TestStreamSessionHotSetRefusesDroppingLaunchServer(t *testing.T) {
 	}
 }
 
+// A launch-time server can't be reconfigured live either. A leader
+// launched with only read links gets the read-only orchestrate server; when
+// a link gains orchestrate, the same-named server differs only in env (no
+// MADS_ORCHESTRATE_READONLY), and skipping it as "already mounted" left
+// send_message missing while the link read active (2026-10-19).
+func TestStreamSessionHotSetRefusesChangingLaunchServer(t *testing.T) {
+	p := testProvider(t)
+	readOnly := orchestrateMCPRef()
+	readOnly.Env = append(readOnly.Env, "MADS_ORCHESTRATE_READONLY=1")
+	sess, err := p.Start(context.Background(), provider.StartOptions{
+		Mode: provider.ModeACP, MCPServers: []provider.MCPServerRef{readOnly},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sess.Close() }()
+	hs := sess.(provider.MCPHotSetter)
+	err = hs.SetMCPServers(context.Background(), []provider.MCPServerRef{orchestrateMCPRef()})
+	if !errors.Is(err, provider.ErrMCPHotSetUnsupported) {
+		t.Fatalf("changing a launch server's env: err = %v, want ErrMCPHotSetUnsupported", err)
+	}
+	if err := hs.SetMCPServers(context.Background(), []provider.MCPServerRef{readOnly}); err != nil {
+		t.Fatalf("unchanged launch server: %v", err)
+	}
+}
+
 // The terminal transport has no control channel.
 func TestPTYSessionIsNotMCPHotSetter(t *testing.T) {
 	p := testProvider(t)

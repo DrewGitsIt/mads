@@ -90,7 +90,7 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 		mcpConfigPath:    mcpConfigPath,
 		permSettingsPath: permSettingsPath,
 		announced:        make(chan string, 1),
-		launchMCP:        map[string]bool{},
+		launchMCP:        map[string]provider.MCPServerRef{},
 		controlWaiters:   map[string]chan controlReply{},
 		asker:            opts.Permissions,
 		asks:             map[string]context.CancelFunc{},
@@ -98,7 +98,7 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 	}
 	s.askCtx, s.askStop = context.WithCancel(context.Background())
 	for _, srv := range opts.MCPServers {
-		s.launchMCP[srv.Name] = true
+		s.launchMCP[srv.Name] = srv
 	}
 	switch {
 	case forkID != "":
@@ -201,11 +201,11 @@ type streamSession struct {
 	windows  map[string]int
 	refFired bool // guards announced against a double-send
 
-	// launchMCP names the servers this process was started with
-	// (--mcp-config). mcp_set_servers manages a separate, "dynamic" set on
-	// top of them, so SetMCPServers can add servers but can't take these
-	// away.
-	launchMCP map[string]bool
+	// launchMCP holds the servers this process was started with
+	// (--mcp-config), by name. mcp_set_servers manages a separate, "dynamic"
+	// set on top of them, so SetMCPServers can add servers but can't take
+	// these away or change them.
+	launchMCP map[string]provider.MCPServerRef
 	// controlWaiters routes a control_response to the call waiting on its
 	// request_id.
 	controlWaiters map[string]chan controlReply
@@ -571,18 +571,23 @@ func (s *streamSession) Interrupt(_ context.Context) error {
 // set, present on turn 2 with the same session id (docs/research/
 // claude-mcp-hot-mount.md). Servers the process was launched with aren't in
 // the dynamic set, so a change that drops one is ErrMCPHotSetUnsupported.
-// So is a non-stdio server, which this adapter never passes live.
+// So is one that changes a launch server's config under the same name — a
+// read-only orchestrate server gaining send_message differs only in env —
+// and a non-stdio server, which this adapter never passes live.
 func (s *streamSession) SetMCPServers(ctx context.Context, servers []provider.MCPServerRef) error {
 	s.mu.Lock()
-	launch := make(map[string]bool, len(s.launchMCP))
-	for name := range s.launchMCP {
-		launch[name] = true
+	launch := make(map[string]provider.MCPServerRef, len(s.launchMCP))
+	for name, srv := range s.launchMCP {
+		launch[name] = srv
 	}
 	s.mu.Unlock()
 
 	dynamic := map[string]mcpServerJSON{}
 	for _, srv := range servers {
-		if launch[srv.Name] {
+		if was, ok := launch[srv.Name]; ok {
+			if !sameMCPServer(was, srv) {
+				return fmt.Errorf("%w: would change launch-time server %q", provider.ErrMCPHotSetUnsupported, srv.Name)
+			}
 			delete(launch, srv.Name)
 			continue
 		}
@@ -612,6 +617,13 @@ func (s *streamSession) SetMCPServers(ctx context.Context, servers []provider.MC
 		return fmt.Errorf("claude mcp_set_servers: %v", result.Errors)
 	}
 	return nil
+}
+
+// sameMCPServer reports whether a and b launch the same server: every
+// field, env in order (callers build it deterministically).
+func sameMCPServer(a, b provider.MCPServerRef) bool {
+	return a.Name == b.Name && a.Command == b.Command && a.Type == b.Type && a.URL == b.URL &&
+		slices.Equal(a.Env, b.Env)
 }
 
 // control sends one control_request and waits for its control_response.

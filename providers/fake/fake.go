@@ -29,6 +29,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -110,7 +112,9 @@ func WithTranscriptDir(dir string) Option {
 // WithMCPHotSet makes the fake's sessions implement provider.MCPHotSetter,
 // the way claude-code's structured transport does: SetMCPServers replaces
 // the live session's recorded MCP servers (MCPServers(ref)) with no
-// restart and no Start call.
+// restart and no Start call. Like claude-code, it refuses
+// (ErrMCPHotSetUnsupported) to drop or reconfigure a server the session
+// was started with.
 func WithMCPHotSet() Option {
 	return func(f *Fake) { f.mcpHotSet = true }
 }
@@ -123,9 +127,20 @@ func (f *Fake) HotSetCalls() int {
 }
 
 // hotSetSession is a fakeSession that can also change its MCP servers live.
-type hotSetSession struct{ *fakeSession }
+// launch is the set it was started with, which a live change must keep
+// exactly.
+type hotSetSession struct {
+	*fakeSession
+	launch []provider.MCPServerRef
+}
 
-func (s hotSetSession) SetMCPServers(_ context.Context, servers []provider.MCPServerRef) error {
+func (s *hotSetSession) SetMCPServers(_ context.Context, servers []provider.MCPServerRef) error {
+	for _, l := range s.launch {
+		i := slices.IndexFunc(servers, func(srv provider.MCPServerRef) bool { return srv.Name == l.Name })
+		if i < 0 || !reflect.DeepEqual(servers[i], l) {
+			return fmt.Errorf("%w: fake: launch-time server %q dropped or changed", provider.ErrMCPHotSetUnsupported, l.Name)
+		}
+	}
 	ref := s.Ref() // before f.mu: Ref takes the session's own lock
 	s.f.mu.Lock()
 	defer s.f.mu.Unlock()
@@ -289,7 +304,7 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 		s.ptyR, s.ptyW = io.Pipe()
 	}
 	if f.mcpHotSet && opts.Mode == provider.ModeACP {
-		return hotSetSession{s}, nil
+		return &hotSetSession{fakeSession: s, launch: opts.MCPServers}, nil
 	}
 	return s, nil
 }

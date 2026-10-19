@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -77,4 +78,63 @@ func TestRefreshOrchestrateHotSetsWithoutCycling(t *testing.T) {
 	if got := len(fp.StartCalls()) - startsBefore; got != 0 {
 		t.Fatalf("provider restarts after teardown = %d, want 0", got)
 	}
+}
+
+// A leader started with only read links runs the read-only orchestrate
+// server. Upgrading a link to Leader keeps the server's name and drops
+// MADS_ORCHESTRATE_READONLY, which a live change can't apply to a
+// launch-time server, so the refresh must cycle the provider to mount
+// send_message — not report the link active with the read-only tools still
+// live (2026-10-19).
+func TestRefreshOrchestrateUpgradeFromReadOnlyCycles(t *testing.T) {
+	putMadsOnPath(t)
+	ctx := context.Background()
+	base := datatest.Start(t)
+	enableOrchestrateLinkedSessions(t, dataclient.New(base, "test-bootstrap"))
+
+	leader := newSession(t, base)
+	subject := newSession(t, base)
+	data := dataclient.New(base, leader.ID)
+	link, err := data.CreateLink(ctx, contracts.LinkRequest{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID, Preset: contracts.PresetMonitor,
+	})
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	reg := provider.NewRegistry()
+	fp := fake.New(fake.WithMCPHotSet())
+	if err := reg.Register(fp); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+	r := New(leader.ID, data, reg)
+	r.MCPRegistry = testMCPRegistry(t)
+	r.RouterURL = "http://localhost:0"
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+	runTurn(t, r, "echo hi")
+	if refs := providerMCPServers(t, data, fp, leader.ID); len(refs) != 1 || !slices.Contains(refs[0].Env, "MADS_ORCHESTRATE_READONLY=1") {
+		t.Fatalf("launch MCP servers = %+v, want the read-only orchestrate server", refs)
+	}
+
+	if _, err := data.UpdateLink(ctx, link.ID, contracts.LinkRequest{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID, Preset: contracts.PresetLeader,
+	}); err != nil {
+		t.Fatalf("upgrade link: %v", err)
+	}
+	startsBefore := len(fp.StartCalls())
+	if err := r.RefreshOrchestrate(ctx); err != nil {
+		t.Fatalf("RefreshOrchestrate: %v", err)
+	}
+	waitOrchestrateStatus(t, data, link.ID, contracts.OrchestrateActive)
+	if got := len(fp.StartCalls()) - startsBefore; got != 1 {
+		t.Fatalf("provider restarts = %d, want 1 (a launch server can't change live)", got)
+	}
+	refs := providerMCPServers(t, data, fp, leader.ID)
+	if len(refs) != 1 || slices.Contains(refs[0].Env, "MADS_ORCHESTRATE_READONLY=1") {
+		t.Fatalf("live MCP servers = %+v, want the orchestrate server without READONLY", refs)
+	}
+	runTurn(t, r, "echo still here")
 }
