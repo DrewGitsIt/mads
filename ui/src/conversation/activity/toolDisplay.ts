@@ -102,9 +102,56 @@ export function summarize(tool: ToolUse): string {
   return "no input";
 }
 
-/** The server-built one-line summary, falling back to the legacy client derivation. */
-export function toolTitle(tool: ToolUse): string {
-  return tool.title ?? summarize(tool);
+/** Maps a session ID or link ID to the linked session's name, when the UI knows it. */
+export type LinkNameResolver = (id: string) => string | undefined;
+
+// Verb per link tool: the fixed `mads-links` server, then the legacy
+// per-session `orchestrate-<id>` server's names for older transcripts.
+const LINK_TOOL_VERBS: Record<string, string> = {
+  list_linked_sessions: "List linked sessions",
+  message_session: "Message",
+  get_session_summary: "Read summary",
+  get_session_turns: "Read turns",
+  check_mailbox: "Check mailbox",
+  set_attention: "Set attention",
+  list_links: "List linked sessions",
+  send_message: "Message",
+  get_summary: "Read summary",
+  get_turns: "Read turns",
+};
+
+/**
+ * Readable title for a leader's call to a MADS link tool, or undefined for
+ * any other tool. The target is a name (new tools) or an ID (legacy link_id /
+ * subject_session_id) resolved through `resolve`, else shortened.
+ */
+export function linkToolTitle(tool: ToolUse, resolve?: LinkNameResolver): string | undefined {
+  if (!tool.name.startsWith("mcp__")) return undefined;
+  const [, server, op] = tool.name.split("__");
+  if (!op || (server !== "mads-links" && !server?.startsWith("orchestrate-"))) return undefined;
+  const verb = LINK_TOOL_VERBS[op];
+  if (!verb) return undefined;
+  const input =
+    tool.input && typeof tool.input === "object" ? (tool.input as Record<string, unknown>) : {};
+  const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
+  const raw = str(input.session) ?? str(input.link_id) ?? str(input.subject_session_id);
+  const target = raw && (resolve?.(raw) ?? (/^[a-z]+_[0-9a-f]{8,}$/.test(raw) ? shortId(raw) : raw));
+  let title = verb;
+  if (op.endsWith("turns") && input.from_turn != null && input.to_turn != null) {
+    title += ` ${String(input.from_turn)}–${String(input.to_turn)}`;
+  }
+  if (target) title += ` → ${target}`;
+  if (op === "set_attention" && str(input.cadence)) title += `: ${str(input.cadence)}`;
+  return title;
+}
+
+function shortId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 12)}…` : id;
+}
+
+/** The link tools' title if it is one, else the server-built one-line summary, falling back to the legacy client derivation. */
+export function toolTitle(tool: ToolUse, resolve?: LinkNameResolver): string {
+  return linkToolTitle(tool, resolve) ?? tool.title ?? summarize(tool);
 }
 
 /**

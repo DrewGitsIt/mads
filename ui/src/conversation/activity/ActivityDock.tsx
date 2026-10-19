@@ -16,8 +16,8 @@ import {
   resultLabel,
   serverDiffHunk,
   statusOf,
-  toolTitle,
 } from "./toolDisplay";
+import { useToolTitle } from "./linkNames";
 import styles from "./ActivityDock.module.css";
 
 /** What the dock is showing: one tool call's full detail, or a subagent's stream. */
@@ -167,6 +167,7 @@ function ToolDetail({
     };
   }, [client, sessionId, tool.id, wantsServerDiff]);
 
+  const toolTitle = useToolTitle();
   const result = tool.result;
   return (
     <>

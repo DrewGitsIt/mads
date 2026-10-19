@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ToolUse } from "../../router/types";
-import { toolTitle } from "../activity/toolDisplay";
+import { useToolTitle } from "../activity/linkNames";
 import styles from "./WorkingIndicator.module.css";
 
 const WORKING = "Working…";
@@ -32,6 +32,7 @@ export function WorkingIndicator({
    */
   since?: string;
 }) {
+  const toolTitle = useToolTitle();
   // Seconds since the turn went live — since `since` when known, else since
   // this indicator mounted (it stays mounted turn-long). Deliberately not
   // reset when the pending tool changes: the user's question is "how long

@@ -61,6 +61,7 @@ import {
   type SubStreamItem,
   type TaskModel,
 } from "./activity/conversationItems";
+import { LinkNamesProvider, useLinkNames } from "./activity/linkNames";
 import { formatTokens, toolTitle } from "./activity/toolDisplay";
 import { Chip } from "../components/Chip/Chip";
 import { FADE_OUT_MS, usePresence } from "../components/Motion";
@@ -285,6 +286,9 @@ export function ConversationTab({
   const [streamBroken, setStreamBroken] = useState(false);
   const [streamGeneration, setStreamGeneration] = useState(0);
   const links = useSessionLinks([sessionId]);
+  const linkName = useLinkNames(routerClient, sessionId, links);
+  const linkNameRef = useRef(linkName);
+  linkNameRef.current = linkName;
 
   // --- Commit and Land (docs/SESSION-WORKTREES-DESIGN.md D4–D6) ---
   // Result cards from the event log plus the actions that make them; the
@@ -1012,7 +1016,7 @@ export function ConversationTab({
       }
       if (turnPhaseRef.current !== "live") beginTurn();
       pacerEnqueueTool(parsed.tool, new Date().toISOString());
-      setCurrentActivity(toolTitle(parsed.tool));
+      setCurrentActivity(toolTitle(parsed.tool, linkNameRef.current));
     };
     const onToolResult = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
@@ -1477,7 +1481,7 @@ export function ConversationTab({
       const last = stream && stream.length > 0 ? stream[stream.length - 1] : undefined;
       const op =
         last?.type === "tool"
-          ? toolTitle(last.tool)
+          ? toolTitle(last.tool, linkName)
           : last?.type === "thinking"
             ? "Thinking…"
             : (model.currentStep ?? model.lastToolName);
@@ -1639,315 +1643,317 @@ export function ConversationTab({
     ) : undefined;
 
   return (
-    <div className={styles.tab} ref={tabRef}>
-      <CommitDialog
-        open={commitDialog !== null}
-        sessionId={sessionId}
-        routerClient={routerClient}
-        fastModel={commitSettings.fastModel}
-        initialError={commitDialog?.initialError}
-        onClose={() => setCommitDialog(null)}
-        onCommitted={worktree.noteCommit}
-        onOpenFile={onOpenFile}
-      />
+    <LinkNamesProvider resolve={linkName}>
+      <div className={styles.tab} ref={tabRef}>
+        <CommitDialog
+          open={commitDialog !== null}
+          sessionId={sessionId}
+          routerClient={routerClient}
+          fastModel={commitSettings.fastModel}
+          initialError={commitDialog?.initialError}
+          onClose={() => setCommitDialog(null)}
+          onCommitted={worktree.noteCommit}
+          onOpenFile={onOpenFile}
+        />
 
-      <div className={styles.body}>
-        {showHistory ? (
-          <>
-            <div className={styles.stream} ref={stick.ref} onScroll={stick.onScroll} data-testid="conversation-stream">
-              {provisioning && (
-                <div className={styles.provisioningWrap}>
-                  <ProvisioningStrip sessionId={sessionId} onDone={onProvisioningDone} />
-                </div>
-              )}
-              {messages.length === 0 && worktree.cards.length === 0 && !inChatTurn && liveItems.length === 0 ? (
-                <>
-                  <div className={styles.emptyTranscript}>No conversation yet</div>
-                  {/* No rows to anchor to — every card is a fallback one. */}
-                  {livePermissionRequests.map((req) => (
-                    <PermissionCard key={req.id} request={req} onResolve={resolvePermission} />
-                  ))}
-                </>
-              ) : (
-                <ChatRenderer
-                  messages={messages}
-                  links={links}
-                  viewedSessionId={sessionId}
-                  attachmentUrl={(id, variant) =>
-                    routerClient.attachmentUrl({ session: sessionId }, id, variant)
-                  }
-                  liveItems={liveItems}
-                  turnActive={inChatTurn}
-                  foldNewCode={wordsPerMinute !== null}
-                  thinkingHistory={thinkingHistory}
-                  toolStatuses={toolStatuses}
-                  background={backgroundByTool}
-                  tasks={tasksByToolUseMap}
-                  selectedToolId={dockTarget?.type === "tool" ? dockTarget.toolId : undefined}
-                  onOpenTool={openTool}
-                  onOpenTask={(toolUseId, tool) =>
-                    openSubagent(
-                      toolUseId,
-                      tasksByToolUseMap.get(toolUseId)?.description ?? toolTitle(tool),
-                      tasksByToolUseMap.get(toolUseId)?.subagentType,
-                    )
-                  }
-                  worktreeCards={worktree.cards}
-                  worktreeActions={worktreeActions}
-                  permissionRequests={livePermissionRequests}
-                  onResolvePermission={resolvePermission}
-                  permissionReveal={permissionReveal}
-                  onRetry={(text) => void retrySend(text)}
-                  find={find.request}
-                  onFindStatus={find.onStatus}
-                />
-              )}
-              {transport.status !== "idle" && (
-                <div className={styles.transportBanner}>
-                  {transport.status === "switching" ? (
-                    <span>Switching to {transport.to === "terminal" ? "terminal" : "chat"}…</span>
-                  ) : (
-                    <>
-                      <span>
-                        {transport.code === "busy"
-                          ? "Can't switch — a turn is in flight."
-                          : "Couldn't switch transport."}
-                      </span>
-                      <div className={styles.transportActions}>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => void handleToggle(transport.attemptedMode)}
-                        >
-                          Retry
-                        </Button>
-                        {transport.code === "busy" && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => void handleInterruptAndSwitch(transport.attemptedMode)}
-                          >
-                            Interrupt and switch
-                          </Button>
-                        )}
-                        {transport.code !== "busy" && transport.attemptedMode === "terminal" && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => void handleToggle("chat")}
-                          >
-                            Return to chat
-                          </Button>
-                        )}
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-              {waking && (
-                <div className={styles.transportBanner}>
-                  <span>Waking the agent…</span>
-                </div>
-              )}
-              <CompactionStatus
-                status={compactStatus}
-                onDismiss={() => {
-                  writeCompactDismissedAt(sessionId);
-                  setCompactStatus(undefined);
-                }}
-              />
-              {/* Pinned strip (T16): the approval jump, running-subagent
-                  substrip, turn-long working indicator and queued messages
-                  float over the bottom of the scrollable stream, just above
-                  the session dock — none can scroll off screen while the
-                  conversation is on screen. The dock itself sits below the
-                  stream, outside it, so the scrollbar ends at its top edge. */}
-              <div className={styles.pinned} data-testid="pinned-cluster" ref={pinnedRef}>
-                <ApprovalJump
-                  pending={pendingPermissions}
-                  subagentName={subagentName}
-                  scopeRef={tabRef}
-                  streamRef={streamRef}
-                  pinnedRef={pinnedRef}
-                  reveal={permissionReveal}
-                  onReveal={revealPermission}
-                />
-                <RunningStack
-                  key={sessionId}
-                  agents={substripEntries}
-                  processes={offscreenBackground}
-                  onOpen={(model) =>
-                    model.toolUseId &&
-                    openSubagent(model.toolUseId, model.description ?? "Subagent", model.subagentType)
-                  }
-                />
-                {working && (
-                  <WorkingIndicator
-                    tool={working.tool}
-                    activity={currentActivity}
-                    since={agentSince}
-                  />
-                )}
-                <QueuedMessages
-                  queued={queuedMessages}
-                  onCancel={handleCancelQueued}
-                  className={styles.queuedAbove}
-                />
-                {showAll.present && (
-                  // The paced reveal trails the agent by more than a couple of
-                  // seconds' reading — offer to skip to the end of it.
-                  <div className={styles.revealAll} data-leaving={showAll.leaving || undefined}>
-                    <Chip tone="info" onClick={pacer.revealAll}>
-                      Show all
-                    </Chip>
+        <div className={styles.body}>
+          {showHistory ? (
+            <>
+              <div className={styles.stream} ref={stick.ref} onScroll={stick.onScroll} data-testid="conversation-stream">
+                {provisioning && (
+                  <div className={styles.provisioningWrap}>
+                    <ProvisioningStrip sessionId={sessionId} onDone={onProvisioningDone} />
                   </div>
                 )}
-              </div>
-            </div>
-            {find.open && <FindBar {...find.bar} streamRef={streamRef} />}
-            <SessionDock {...dockProps} mode="chat">
-              <Composer
-                routerClient={routerClient}
-                sessionId={sessionId}
-                session={session}
-                links={links}
-                agentId={session.agent}
-                provider={session.provider}
-                usage={lastUsage}
-                contextWindow={dockProps.contextWindow}
-                mode={activeMode}
-                onModeChange={dockProps.onModeChange}
-                onCompact={dockProps.onCompact}
-                disabled={transport.status !== "idle" || waking}
-                busy={inChatTurn}
-                onStop={requestStop}
-                initialValue={pendingFirstMessage}
-                prefill={composerPrefill}
-                autoSendInitial={Boolean(pendingFirstMessage)}
-                onSendStart={noteSendStart}
-                onSendError={noteSendError}
-                onAutoSendStart={onPendingFirstMessageHandled}
-                onUpdateSession={handleUpdateSession}
-                onCommandExecuted={(message, action) => setCommandToast({ tone: "ok", message, action })}
-                onCommandError={(message) => setCommandToast({ tone: "bad", message })}
-                onOpenTask={onOpenTask}
-                onCompactSession={compaction.compacts ? (i) => void handleCompactNow(i) : undefined}
-                onQueued={noteQueued}
-                onSent={noteSent}
-              />
-            </SessionDock>
-          </>
-        ) : (
-          <>
-            <div className={styles.stream} ref={streamRef} data-testid="conversation-stream">
-              {terminalBridge ? (
-                <TerminalView
-                  ref={terminalViewRef}
-                  bridge={terminalBridge}
-                  className={styles.terminal}
-                  onComposeOpen={openCompose}
-                  onToggleView={() => void handleToggle("chat")}
+                {messages.length === 0 && worktree.cards.length === 0 && !inChatTurn && liveItems.length === 0 ? (
+                  <>
+                    <div className={styles.emptyTranscript}>No conversation yet</div>
+                    {/* No rows to anchor to — every card is a fallback one. */}
+                    {livePermissionRequests.map((req) => (
+                      <PermissionCard key={req.id} request={req} onResolve={resolvePermission} />
+                    ))}
+                  </>
+                ) : (
+                  <ChatRenderer
+                    messages={messages}
+                    links={links}
+                    viewedSessionId={sessionId}
+                    attachmentUrl={(id, variant) =>
+                      routerClient.attachmentUrl({ session: sessionId }, id, variant)
+                    }
+                    liveItems={liveItems}
+                    turnActive={inChatTurn}
+                    foldNewCode={wordsPerMinute !== null}
+                    thinkingHistory={thinkingHistory}
+                    toolStatuses={toolStatuses}
+                    background={backgroundByTool}
+                    tasks={tasksByToolUseMap}
+                    selectedToolId={dockTarget?.type === "tool" ? dockTarget.toolId : undefined}
+                    onOpenTool={openTool}
+                    onOpenTask={(toolUseId, tool) =>
+                      openSubagent(
+                        toolUseId,
+                        tasksByToolUseMap.get(toolUseId)?.description ?? toolTitle(tool, linkName),
+                        tasksByToolUseMap.get(toolUseId)?.subagentType,
+                      )
+                    }
+                    worktreeCards={worktree.cards}
+                    worktreeActions={worktreeActions}
+                    permissionRequests={livePermissionRequests}
+                    onResolvePermission={resolvePermission}
+                    permissionReveal={permissionReveal}
+                    onRetry={(text) => void retrySend(text)}
+                    find={find.request}
+                    onFindStatus={find.onStatus}
+                  />
+                )}
+                {transport.status !== "idle" && (
+                  <div className={styles.transportBanner}>
+                    {transport.status === "switching" ? (
+                      <span>Switching to {transport.to === "terminal" ? "terminal" : "chat"}…</span>
+                    ) : (
+                      <>
+                        <span>
+                          {transport.code === "busy"
+                            ? "Can't switch — a turn is in flight."
+                            : "Couldn't switch transport."}
+                        </span>
+                        <div className={styles.transportActions}>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => void handleToggle(transport.attemptedMode)}
+                          >
+                            Retry
+                          </Button>
+                          {transport.code === "busy" && (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => void handleInterruptAndSwitch(transport.attemptedMode)}
+                            >
+                              Interrupt and switch
+                            </Button>
+                          )}
+                          {transport.code !== "busy" && transport.attemptedMode === "terminal" && (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => void handleToggle("chat")}
+                            >
+                              Return to chat
+                            </Button>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+                {waking && (
+                  <div className={styles.transportBanner}>
+                    <span>Waking the agent…</span>
+                  </div>
+                )}
+                <CompactionStatus
+                  status={compactStatus}
+                  onDismiss={() => {
+                    writeCompactDismissedAt(sessionId);
+                    setCompactStatus(undefined);
+                  }}
                 />
-              ) : (
-                <div className={styles.ptyUnavailable}>Connecting…</div>
-              )}
-            </div>
-            {/* The xterm is the input: no composer, chips, queue or working
-                line here. The dock's height is fixed in this view, so the
-                xterm fits once; the compose sheet floats over it rather than
-                resizing the PTY. */}
-            <SessionDock
-              {...dockProps}
-              mode="terminal"
-              onComposeToggle={terminalBridge ? toggleCompose : undefined}
-              composeOpen={composeOpen}
-              sheet={composeSheet}
-            />
-          </>
+                {/* Pinned strip (T16): the approval jump, running-subagent
+                    substrip, turn-long working indicator and queued messages
+                    float over the bottom of the scrollable stream, just above
+                    the session dock — none can scroll off screen while the
+                    conversation is on screen. The dock itself sits below the
+                    stream, outside it, so the scrollbar ends at its top edge. */}
+                <div className={styles.pinned} data-testid="pinned-cluster" ref={pinnedRef}>
+                  <ApprovalJump
+                    pending={pendingPermissions}
+                    subagentName={subagentName}
+                    scopeRef={tabRef}
+                    streamRef={streamRef}
+                    pinnedRef={pinnedRef}
+                    reveal={permissionReveal}
+                    onReveal={revealPermission}
+                  />
+                  <RunningStack
+                    key={sessionId}
+                    agents={substripEntries}
+                    processes={offscreenBackground}
+                    onOpen={(model) =>
+                      model.toolUseId &&
+                      openSubagent(model.toolUseId, model.description ?? "Subagent", model.subagentType)
+                    }
+                  />
+                  {working && (
+                    <WorkingIndicator
+                      tool={working.tool}
+                      activity={currentActivity}
+                      since={agentSince}
+                    />
+                  )}
+                  <QueuedMessages
+                    queued={queuedMessages}
+                    onCancel={handleCancelQueued}
+                    className={styles.queuedAbove}
+                  />
+                  {showAll.present && (
+                    // The paced reveal trails the agent by more than a couple of
+                    // seconds' reading — offer to skip to the end of it.
+                    <div className={styles.revealAll} data-leaving={showAll.leaving || undefined}>
+                      <Chip tone="info" onClick={pacer.revealAll}>
+                        Show all
+                      </Chip>
+                    </div>
+                  )}
+                </div>
+              </div>
+              {find.open && <FindBar {...find.bar} streamRef={streamRef} />}
+              <SessionDock {...dockProps} mode="chat">
+                <Composer
+                  routerClient={routerClient}
+                  sessionId={sessionId}
+                  session={session}
+                  links={links}
+                  agentId={session.agent}
+                  provider={session.provider}
+                  usage={lastUsage}
+                  contextWindow={dockProps.contextWindow}
+                  mode={activeMode}
+                  onModeChange={dockProps.onModeChange}
+                  onCompact={dockProps.onCompact}
+                  disabled={transport.status !== "idle" || waking}
+                  busy={inChatTurn}
+                  onStop={requestStop}
+                  initialValue={pendingFirstMessage}
+                  prefill={composerPrefill}
+                  autoSendInitial={Boolean(pendingFirstMessage)}
+                  onSendStart={noteSendStart}
+                  onSendError={noteSendError}
+                  onAutoSendStart={onPendingFirstMessageHandled}
+                  onUpdateSession={handleUpdateSession}
+                  onCommandExecuted={(message, action) => setCommandToast({ tone: "ok", message, action })}
+                  onCommandError={(message) => setCommandToast({ tone: "bad", message })}
+                  onOpenTask={onOpenTask}
+                  onCompactSession={compaction.compacts ? (i) => void handleCompactNow(i) : undefined}
+                  onQueued={noteQueued}
+                  onSent={noteSent}
+                />
+              </SessionDock>
+            </>
+          ) : (
+            <>
+              <div className={styles.stream} ref={streamRef} data-testid="conversation-stream">
+                {terminalBridge ? (
+                  <TerminalView
+                    ref={terminalViewRef}
+                    bridge={terminalBridge}
+                    className={styles.terminal}
+                    onComposeOpen={openCompose}
+                    onToggleView={() => void handleToggle("chat")}
+                  />
+                ) : (
+                  <div className={styles.ptyUnavailable}>Connecting…</div>
+                )}
+              </div>
+              {/* The xterm is the input: no composer, chips, queue or working
+                  line here. The dock's height is fixed in this view, so the
+                  xterm fits once; the compose sheet floats over it rather than
+                  resizing the PTY. */}
+              <SessionDock
+                {...dockProps}
+                mode="terminal"
+                onComposeToggle={terminalBridge ? toggleCompose : undefined}
+                composeOpen={composeOpen}
+                sheet={composeSheet}
+              />
+            </>
+          )}
+
+          {shellOpen &&
+            (shellBridge ? (
+              <ShellDock
+                bridge={shellBridge}
+                cwd={session.cwd ?? session.worktree_dir}
+                height={shellHeight}
+                onHeightChange={(height) => setShellDockState(sessionId, { height })}
+                onHide={() => setShellDockState(sessionId, { open: false })}
+                onEnd={() => {
+                  // The busy-confirmation dialog (docs/SHELL-DOCK-DESIGN.md D4) is a later step.
+                  shellBridge.end();
+                  setShellDockState(sessionId, { open: false });
+                }}
+              />
+            ) : (
+              <div className={styles.ptyUnavailable}>
+                Shell requires the Electron shell.
+              </div>
+            ))}
+        </div>
+
+        <ConfirmDialog
+          // A turn that ends while the question is up leaves nothing to stop.
+          open={stopConfirm !== undefined && inChatTurn}
+          title="Stop everything?"
+          description={stopConfirm && `Stopping the reply also ends ${stopSummary(stopConfirm)}.`}
+          confirmLabel="Stop everything"
+          cancelLabel="Keep working"
+          onConfirm={() => {
+            setStopConfirm(undefined);
+            void handleInterrupt();
+          }}
+          onCancel={() => setStopConfirm(undefined)}
+        />
+
+        {dockView && (
+          <ActivityDock
+            view={dockView}
+            sessionId={sessionId}
+            client={routerClient}
+            statuses={toolStatuses}
+            permissions={permissionsByToolUse}
+            onResolvePermission={resolvePermission}
+            onClose={() => setDockTarget(null)}
+            onOpenPage={
+              onOpenDelegate && dockView.type === "subagent" && dockView.task
+                ? () => {
+                    setDockTarget(null);
+                    onOpenDelegate(dockView.task!.taskId);
+                  }
+                : undefined
+            }
+          />
         )}
 
-        {shellOpen &&
-          (shellBridge ? (
-            <ShellDock
-              bridge={shellBridge}
-              cwd={session.cwd ?? session.worktree_dir}
-              height={shellHeight}
-              onHeightChange={(height) => setShellDockState(sessionId, { height })}
-              onHide={() => setShellDockState(sessionId, { open: false })}
-              onEnd={() => {
-                // The busy-confirmation dialog (docs/SHELL-DOCK-DESIGN.md D4) is a later step.
-                shellBridge.end();
-                setShellDockState(sessionId, { open: false });
-              }}
-            />
-          ) : (
-            <div className={styles.ptyUnavailable}>
-              Shell requires the Electron shell.
-            </div>
-          ))}
-      </div>
+        {sendError && (
+          <Toast
+            tone="bad"
+            title="Couldn't send your message"
+            description={sendError}
+            onDismiss={() => setSendError(undefined)}
+          />
+        )}
 
-      <ConfirmDialog
-        // A turn that ends while the question is up leaves nothing to stop.
-        open={stopConfirm !== undefined && inChatTurn}
-        title="Stop everything?"
-        description={stopConfirm && `Stopping the reply also ends ${stopSummary(stopConfirm)}.`}
-        confirmLabel="Stop everything"
-        cancelLabel="Keep working"
-        onConfirm={() => {
-          setStopConfirm(undefined);
-          void handleInterrupt();
-        }}
-        onCancel={() => setStopConfirm(undefined)}
-      />
-
-      {dockView && (
-        <ActivityDock
-          view={dockView}
-          sessionId={sessionId}
-          client={routerClient}
-          statuses={toolStatuses}
-          permissions={permissionsByToolUse}
-          onResolvePermission={resolvePermission}
-          onClose={() => setDockTarget(null)}
-          onOpenPage={
-            onOpenDelegate && dockView.type === "subagent" && dockView.task
-              ? () => {
-                  setDockTarget(null);
-                  onOpenDelegate(dockView.task!.taskId);
-                }
-              : undefined
-          }
-        />
-      )}
-
-      {sendError && (
-        <Toast
-          tone="bad"
-          title="Couldn't send your message"
-          description={sendError}
-          onDismiss={() => setSendError(undefined)}
-        />
-      )}
-
-      {commandToast && (
-        <Toast
-          tone={commandToast.tone}
-          title={commandToast.tone === "ok" ? commandToast.message : "Command failed"}
-          description={commandToast.tone === "bad" ? commandToast.message : undefined}
-          action={
-            commandToast.action && {
-              label: commandToast.action.label,
-              onClick: () => {
-                setCommandToast(undefined);
-                commandToast.action?.onClick();
-              },
+        {commandToast && (
+          <Toast
+            tone={commandToast.tone}
+            title={commandToast.tone === "ok" ? commandToast.message : "Command failed"}
+            description={commandToast.tone === "bad" ? commandToast.message : undefined}
+            action={
+              commandToast.action && {
+                label: commandToast.action.label,
+                onClick: () => {
+                  setCommandToast(undefined);
+                  commandToast.action?.onClick();
+                },
+              }
             }
-          }
-          onDismiss={() => setCommandToast(undefined)}
-        />
-      )}
-    </div>
+            onDismiss={() => setCommandToast(undefined)}
+          />
+        )}
+      </div>
+    </LinkNamesProvider>
   );
 }
 
