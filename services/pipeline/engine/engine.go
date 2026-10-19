@@ -387,6 +387,11 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 	if len(e.cfg.ExcludeTaskIDs) > 0 {
 		payload["excluded_task_ids"] = e.cfg.ExcludeTaskIDs
 	}
+	// The Router's lost-run sweep proves a run's engine dead by this
+	// (docs/PIPELINE-LEASES-DESIGN.md B1); omitted when it couldn't be read.
+	if e.identity != (contracts.LeaseIdentity{}) {
+		payload["identity"] = e.identity
+	}
 	e.runSeq = e.event(ctx, contracts.PipelineStarted, "", payload)
 
 	// The live work queue (spec §6): task.* events for this session poke the
