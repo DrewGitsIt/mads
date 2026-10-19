@@ -778,7 +778,7 @@ func TestStartPipelineExcludeTaskIDs(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("all excluded: status = %d, want 400", resp.StatusCode)
 	}
-	if body := decodeJSON[map[string]string](t, resp); body["error"] != "session has no ready tasks" {
+	if body := decodeJSON[map[string]string](t, resp); body["error"] != "session has no ready or interrupted tasks" {
 		t.Fatalf("all excluded: body = %+v", body)
 	}
 

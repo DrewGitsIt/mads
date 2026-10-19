@@ -141,8 +141,19 @@ never called peer-to-peer.
   session-summary job is suppressed on this path, so no summary outlives the session it
   summarises — see "Critical paths" below.
 - `POST /pipelines` — body `{"session_id", "template_id"}`, mints a `run_<hex>` ID, spawns
-  a Pipeline Engine child; 201 with `{"run_id", "addr"}`.
+  a Pipeline Engine child; 201 with `{"run_id", "addr"}`. A session with no ready task
+  can still start a run if it has an Interrupted one (the run picks it up); otherwise 400
+  "session has no ready or interrupted tasks".
 - `POST /pipelines/{id}/cancel` — stop the child and append `pipeline.cancelled`; 204.
+  The Tasks tab calls this **Stop**: tasks keep their state, and in-flight ones become
+  Interrupted.
+- `GET /sessions/{id}/pipeline/pickup?template=<id>` — the session's Interrupted tasks
+  (in_progress, moved there by the pipeline, no live pipeline or session lease) and where a
+  run of that template picks each up: `{"shared_directory", "tasks": [{"task_id", "mode":
+  "resume"|"restart", "from_stage", "last_run_seq", "last_run_id", "template_name",
+  "template_version"}]}`. Computed with the engine's own functions (`pkg/pipelineprogress`),
+  so the Plan says what the run will do. 400 without `template` or for a template that
+  fails launch checks.
 - `GET /events` — the UI's single control-plane subscription point (spec §15). SSE only
   (`Accept: text/event-stream`, no batch/JSON mode — the Data Service already serves that
   directly for one-shot fetches). Query params `since`/`session_id`/`types` are passed

@@ -89,7 +89,22 @@ func (s *server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !ready {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session has no ready tasks"})
+		// A run also picks up Interrupted tasks (docs/PIPELINE-LEASES-DESIGN.md
+		// B2), so they are work too.
+		interrupted, _, err := s.interruptedTasks(ctx, body.SessionID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		for _, id := range interrupted {
+			if !excluded[id] {
+				ready = true
+				break
+			}
+		}
+	}
+	if !ready {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session has no ready or interrupted tasks"})
 		return
 	}
 

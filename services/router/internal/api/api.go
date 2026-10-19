@@ -181,6 +181,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("GET /pipelines/{id}/output", s.handlePipelineOutput)
 	mux.HandleFunc("GET /sessions/{id}/pipeline/tasks/{taskId}/output", s.handlePipelineTaskOutput)
 	mux.HandleFunc("GET /sessions/{id}/pipeline/tasks/{taskId}/turns", s.handlePipelineTaskTurns)
+	mux.HandleFunc("GET /sessions/{id}/pipeline/pickup", s.handlePipelinePickup)
 	mux.HandleFunc("POST /agents/generate", s.handleGenerateAgent)
 	mux.HandleFunc("GET /agents/{id}", s.handleGetAgent)
 	mux.HandleFunc("POST /agents", s.handleCreateAgent)

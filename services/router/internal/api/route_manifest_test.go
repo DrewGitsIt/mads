@@ -117,6 +117,7 @@ var routeManifest = []struct {
 	{"POST", "/jobs/abc/cancel", "POST /jobs/{id}/cancel"},
 	{"POST", "/pipelines", "POST /pipelines"},
 	{"POST", "/pipelines/abc/cancel", "POST /pipelines/{id}/cancel"},
+	{"GET", "/sessions/abc/pipeline/pickup", "GET /sessions/{id}/pipeline/pickup"},
 	{"POST", "/tasks/abc/retry", "POST /tasks/{id}/retry"},
 	{"GET", "/registry/index", "GET /registry/index"},
 	{"POST", "/registry/install", "POST /registry/install"},

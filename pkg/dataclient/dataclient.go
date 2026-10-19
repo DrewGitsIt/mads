@@ -342,6 +342,14 @@ func (c *Client) LeasesOfKind(ctx context.Context, kind string) ([]contracts.Lea
 	return leases, err
 }
 
+// As is a client for the same Data Service under another actor, sharing
+// this one's HTTP client. It holds no leases. The Router uses it to read the
+// leases of a kind it doesn't own (LeasesOfKind requires the caller's
+// actor); attribution, not authentication (spec §15).
+func (c *Client) As(actor string) *Client {
+	return &Client{base: c.base, actor: actor, http: c.http, held: map[string]heldLease{}}
+}
+
 // ReclaimLease is the proof-or-nothing transition (reap-on-launch): if
 // the lease's holder is of this client's actor's kind and still matches
 // identity exactly, it's deleted. The task's status is untouched (an
