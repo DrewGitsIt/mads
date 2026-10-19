@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { criticalPath, leftOutBy, runnableInPlan, waveOf } from "./planScope";
+import { criticalPath, leftOutBy, planWarning, runnableInPlan, waveOf } from "./planScope";
 import type { Task, TaskStatus } from "../../router/types";
 
 function task(id: string, dependencies: string[] = [], extra: Partial<Task> = {}): Task {
@@ -134,5 +134,22 @@ describe("criticalPath", () => {
     const a = task("a", ["b"]);
     const b = task("b", ["a"]);
     expect(criticalPath([a, b], index([a, b]), none).length).toBeGreaterThan(0);
+  });
+});
+
+describe("planWarning", () => {
+  it("names the ready tasks a left-out or draft dependency keeps out, and what they depend on", () => {
+    expect(planWarning(tasks, byId, none)).toBe("t6 won't run (depends on t7)");
+    expect(planWarning(tasks, byId, new Set(["t1"]))).toBe("t2, t3, t5, t6 won't run (depends on t1, t7)");
+  });
+
+  it("says nothing when only a non-ready dependency is in the way", () => {
+    const blocked = task("b", [], { status: "blocked" });
+    const after = task("a", ["b"]);
+    expect(planWarning([blocked, after], index([blocked, after]), none)).toBeUndefined();
+  });
+
+  it("doesn't name tasks that are themselves left out", () => {
+    expect(planWarning(tasks, byId, new Set(["t6"]))).toBeUndefined();
   });
 });

@@ -488,3 +488,36 @@ describe("foldReducer pipeline.started", () => {
     expect(state.excludedTaskIds).toEqual([]);
   });
 });
+
+describe("foldReducer stage timestamps", () => {
+  function env(seq: number, type: string, timestamp: string, payload: Record<string, unknown> = {}): Envelope {
+    return { seq, timestamp, type, session_id: "ses_1", task_id: "t1", actor: "pipeline", payload };
+  }
+
+  it("stamps an attempt with its opening and closing envelopes' timestamps", () => {
+    const state = [
+      env(1, "pipeline.started", "2026-10-19T10:00:00Z"),
+      env(2, "stage.started", "2026-10-19T10:00:05Z", { stage: "architect" }),
+      env(3, "stage.retried", "2026-10-19T10:01:00Z", { stage: "architect" }),
+      env(4, "stage.failed", "2026-10-19T10:02:10Z", { stage: "architect", reason: "no" }),
+      env(5, "stage.started", "2026-10-19T10:02:11Z", { stage: "architect" }),
+      env(6, "stage.skipped", "2026-10-19T10:03:00Z", { stage: "docs" }),
+    ].reduce(foldReducer, initialRunFoldState);
+    const attempts = state.taskRunState.t1.attempts;
+    expect(attempts.map((a) => [a.startedAt, a.endedAt])).toEqual([
+      ["2026-10-19T10:00:05Z", "2026-10-19T10:02:10Z"],
+      ["2026-10-19T10:02:11Z", undefined],
+      ["2026-10-19T10:03:00Z", "2026-10-19T10:03:00Z"],
+    ]);
+  });
+
+  it("the recorded run's attempts all carry both timestamps once it finishes", () => {
+    const state = recordedEnvelopes.reduce(foldReducer, initialRunFoldState);
+    const attempts = Object.values(state.taskRunState).flatMap((t) => t.attempts);
+    expect(attempts.length).toBeGreaterThan(0);
+    for (const a of attempts) {
+      expect(a.startedAt).toBeTruthy();
+      expect(a.endedAt).toBeTruthy();
+    }
+  });
+});

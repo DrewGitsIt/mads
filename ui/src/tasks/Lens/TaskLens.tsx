@@ -6,7 +6,7 @@ import { Select } from "../../components/Select/Select";
 import type { PipelineClient, TaskStreamTarget } from "../../pipeline/client/pipelineClient";
 import { AgentOutputView } from "../../pipeline/DrillIn/AgentOutputView";
 import { DrillInFeed } from "../../pipeline/DrillIn/DrillInFeed";
-import { StageTimeline } from "../../pipeline/DrillIn/StageTimeline";
+import { attemptDuration, StageTimeline } from "../../pipeline/DrillIn/StageTimeline";
 import { TaskFiles } from "../../pipeline/DrillIn/TaskFiles";
 import type { RunStage } from "../../pipeline/plan/runStages";
 import type { RunStatus } from "../../pipeline/plan/runStatus";
@@ -14,6 +14,8 @@ import type { StageAttempt, TaskRunState } from "../../pipeline/state/usePipelin
 import { useEscapeLayer } from "../../platform/escapeLayers";
 import type { Task } from "../../router/types";
 import { usePrefersReducedMotion } from "../GraphView/usePrefersReducedMotion";
+import { RunStatusGlyph } from "../RunList/RunStatusGlyph";
+import { useNow } from "../RunBar/useNow";
 import styles from "./TaskLens.module.css";
 
 export type TaskDetailsMode = "details" | "retry";
@@ -106,6 +108,10 @@ export function TaskLens({
   useEscapeLayer(true, onClose);
   const reducedMotion = usePrefersReducedMotion();
   const attempts = useMemo(() => runState?.attempts ?? [], [runState]);
+  // Open attempts of a live run show a ticking time so far.
+  const ticking = live && attempts.some((a) => a.status === "started");
+  const now = useNow(ticking);
+  const clock = ticking ? now : undefined;
 
   // null follows the newest attempt, so a live task's next stage takes over
   // the output pane as it starts. Picking the newest attempt goes back to
@@ -141,7 +147,7 @@ export function TaskLens({
       data-testid="task-lens"
     >
       <header className={styles.head}>
-        <RunGlyph status={runStatus} animate={!reducedMotion} />
+        <RunStatusGlyph status={runStatus} />
         <span className={styles.title}>{task.title}</span>
         <Chip tone={chip.tone}>{chip.label}</Chip>
         {(task.labels ?? []).map((label) => (
@@ -228,7 +234,7 @@ export function TaskLens({
             {attempts.length === 0 ? (
               <p className={styles.muted}>Not started.</p>
             ) : (
-              <StageTimeline attempts={attempts} selectedIndex={selectedIndex} onSelect={select} />
+              <StageTimeline attempts={attempts} selectedIndex={selectedIndex} onSelect={select} now={clock} />
             )}
           </div>
           <div>
@@ -260,6 +266,7 @@ export function TaskLens({
               pipelineClient={pipelineClient}
               runSeq={runSeq}
               live={live}
+              now={clock}
               onSelect={select}
             />
           ) : (
@@ -292,17 +299,6 @@ function emptyOutputText(task: Task, status: RunStatus, tasksById: Record<string
     default:
       return "No stage ran for this task in this run.";
   }
-}
-
-function RunGlyph({ status, animate }: { status: RunStatus; animate: boolean }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={[styles.glyph, styles[`g_${status}`], status === "running" && animate && styles.spin]
-        .filter(Boolean)
-        .join(" ")}
-    />
-  );
 }
 
 interface BlockedBoxProps {
@@ -385,6 +381,8 @@ interface AttemptOutputProps {
   pipelineClient: PipelineClient;
   runSeq?: number;
   live: boolean;
+  /** Set while the run is live: an open attempt's time so far ticks from it. */
+  now?: number;
   onSelect: (index: number) => void;
 }
 
@@ -397,9 +395,11 @@ function AttemptOutput({
   pipelineClient,
   runSeq,
   live,
+  now,
   onSelect,
 }: AttemptOutputProps) {
   const attempt = attempts[index];
+  const duration = attemptDuration(attempt, now);
   const [view, setView] = useState<OutputView>("turns");
   const isCommand = stage?.kind === "command";
   const raw = isCommand || view === "raw";
@@ -410,7 +410,7 @@ function AttemptOutput({
 
   // Opening an EventSource is a side effect: once per selected attempt (and
   // view: the raw view tears its source down when it unmounts), never once
-  // per render, and closed on change and unmount. Same idiom as PipelineTab.
+  // per render, and closed on change and unmount.
   const streamKey = streams ? `${runSeq ?? ""}|${attempt.stage}|${attempt.attempt}|${raw ? "raw" : "turns"}` : null;
   const target: TaskStreamTarget = { run: runSeq, stage: attempt.stage, attempt: attempt.attempt };
   const outputSource = useMemo(
@@ -452,11 +452,14 @@ function AttemptOutput({
           attempt.attempt > 1 && <span>attempt {attempt.attempt}</span>
         )}
         {isLive ? (
-          <Chip tone="info">live</Chip>
+          <Chip tone="info">live{duration ? ` ${duration}` : ""}</Chip>
         ) : (
-          <Chip tone={attempt.status === "failed" ? "bad" : attempt.status === "completed" ? "ok" : "neutral"}>
-            {attempt.status}
-          </Chip>
+          <>
+            <Chip tone={attempt.status === "failed" ? "bad" : attempt.status === "completed" ? "ok" : "neutral"}>
+              {attempt.status}
+            </Chip>
+            {duration && <span className={styles.duration}>{duration}</span>}
+          </>
         )}
         {!!attempt.retries && <Chip tone="warn">retried ×{attempt.retries}</Chip>}
         {isCommand && <span>command</span>}

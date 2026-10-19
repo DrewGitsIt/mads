@@ -65,7 +65,7 @@ function taskStreamUrl(
 const NOT_SUPPORTED = "not supported by the current pipeline engine";
 
 /**
- * Router API surface the Pipeline tab depends on — a dedicated interface
+ * Router API surface the Tasks tab's pipeline runs depend on — a dedicated interface
  * analogous to `RouterClient` (`ui/src/router/client.ts`) but scoped to
  * pipeline actions, per HANDOFF.md §4.
  */
@@ -88,7 +88,7 @@ export interface PipelineClient {
   reassignTask(taskId: string, agent: string): Promise<void>;
   streamTaskOutput(sessionId: string, taskId: string, target?: TaskStreamTarget): PipelineOutputSource;
   streamTaskTurns(sessionId: string, taskId: string, target?: TaskStreamTarget): PipelineTurnsSource;
-  // Historical run replay (HANDOFF.md §4) — the Pipeline tab's run picker.
+  // Historical run replay (HANDOFF.md §4) — the Tasks tab's run menu.
   listRuns(sessionId: string): Promise<PipelineRun[]>;
   getRunEvents(sessionId: string, since: number): Promise<Envelope[]>;
 }

@@ -110,6 +110,16 @@ describe("RunTaskList (live)", () => {
     expect(screen.getByRole("button", { name: /Add task/ })).toBeTruthy();
     expect(screen.queryByText("A new ready task is picked up by this run")).toBeNull();
   });
+
+  it("offers Bulk import beside Add task only when handed one", () => {
+    const { unmount } = renderList();
+    expect(screen.queryByRole("button", { name: "Bulk import" })).toBeNull();
+    unmount();
+    const onBulkImport = vi.fn();
+    renderList({ onBulkImport });
+    fireEvent.click(screen.getByRole("button", { name: "Bulk import" }));
+    expect(onBulkImport).toHaveBeenCalled();
+  });
 });
 
 describe("RunTaskList (plan)", () => {

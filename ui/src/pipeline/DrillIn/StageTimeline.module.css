@@ -23,6 +23,13 @@
   color: var(--text);
 }
 
+.duration {
+  margin-left: auto;
+  font: var(--fs-sm) var(--mono);
+  color: var(--text3);
+  white-space: nowrap;
+}
+
 .reason {
   margin: var(--space-1) 0 0;
   font: var(--fs-sm) var(--mono);
@@ -58,6 +65,7 @@
   border: none;
   background: none;
   text-align: left;
+  overflow-wrap: anywhere;
   font: var(--fs-sm) var(--mono);
   color: var(--text);
   cursor: pointer;

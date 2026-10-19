@@ -27,6 +27,8 @@ export interface RunTaskListProps {
   onRetry?: (id: string) => void;
   onEditTask?: (id: string) => void;
   onAddTask?: () => void;
+  /** A secondary action beside + Add task; hidden when absent. */
+  onBulkImport?: () => void;
 }
 
 const CHIP: Record<RunStatus, { label: string; tone: ChipTone }> = {
@@ -89,7 +91,7 @@ const stop = (e: MouseEvent | KeyboardEvent) => e.stopPropagation();
 
 /** The run's tasks, grouped by where they stand, under the metro. */
 export function RunTaskList(props: RunTaskListProps) {
-  const { tasks, tasksById, mode, excluded, onAddTask } = props;
+  const { tasks, tasksById, mode, excluded, onAddTask, onBulkImport } = props;
   const groups = mode === "plan" ? PLAN_GROUPS : RUN_GROUPS;
   const ctx = { mode, tasksById, excluded };
   const statusById = new Map(tasks.map((t) => [t.id, runStatusOf(t, ctx)]));
@@ -114,11 +116,20 @@ export function RunTaskList(props: RunTaskListProps) {
           </section>
         );
       })}
-      {onAddTask && (
-        <button type="button" className={styles.addRow} onClick={onAddTask}>
-          <span>+ Add task</span>
-          {mode === "live" && <i className={styles.hint}>A new ready task is picked up by this run</i>}
-        </button>
+      {(onAddTask || onBulkImport) && (
+        <div className={styles.addLine}>
+          {onAddTask && (
+            <button type="button" className={styles.addRow} onClick={onAddTask}>
+              <span>+ Add task</span>
+              {mode === "live" && <i className={styles.hint}>A new ready task is picked up by this run</i>}
+            </button>
+          )}
+          {onBulkImport && (
+            <Button size="sm" variant="ghost" onClick={onBulkImport}>
+              Bulk import
+            </Button>
+          )}
+        </div>
       )}
     </div>
   );

@@ -22,7 +22,7 @@ import { useLiveShells } from "../../../conversation/ShellDock/useLiveShells";
 import { requestShellToggle } from "../../../conversation/shellToggleSignal";
 import { requestStreamReattach } from "../../../conversation/streamReattachSignal";
 import type { ChangesFocus } from "../../../files/changesModel";
-import { WORKSPACE_TABS, type WorkspaceTabId } from "./tabRegistry";
+import { toWorkspaceTabId, WORKSPACE_TABS, type WorkspaceTabId } from "./tabRegistry";
 import { RUN_EVENT_TYPES } from "./usePipelineRunning";
 import styles from "./SessionWorkspace.module.css";
 
@@ -34,7 +34,14 @@ export interface SessionWorkspaceProps {
   openTaskBreakdown?: OpenTaskBreakdown;
   /** This session's live agent state (useSessionAgentState) — only the delete dialog reads it, and only to say what the turn in flight is doing. */
   agentState?: SessionAgentState;
-  initialTab?: WorkspaceTabId;
+  /** A string, not a WorkspaceTabId: an old deep link may still name the retired "pipeline" tab (it opens Tasks). */
+  initialTab?: string;
+  /**
+   * Opens the Tasks tab on a run (a run_seq) or on Plan ("new") — the
+   * palette's Run pipeline… and the Dashboard's View run. A new object each
+   * time, so a repeat request re-applies even if this workspace is open.
+   */
+  openRun?: { run: number | "new" };
   /**
    * Sleep and wake this session. Not done here: both go through the one
    * controller the surface owns (useSessionSleep), which is what makes the
@@ -70,7 +77,8 @@ export function SessionWorkspace({
   pipelineClient,
   openTaskBreakdown = EMPTY_OPEN_TASK_BREAKDOWN,
   agentState,
-  initialTab,
+  initialTab: initialTabRequest,
+  openRun,
   onSleep,
   onWake,
   onClose,
@@ -81,6 +89,7 @@ export function SessionWorkspace({
   onOpenDelegate,
 }: SessionWorkspaceProps) {
   const [session, setSession] = useState<Session | null>(null);
+  const initialTab = toWorkspaceTabId(initialTabRequest);
   const [activeTab, setActiveTab] = useState<WorkspaceTabId>(initialTab ?? "conversation");
   const [visited, setVisited] = useState<Set<WorkspaceTabId>>(
     () => new Set([initialTab ?? "conversation"]),
@@ -99,6 +108,7 @@ export function SessionWorkspace({
   const [focusCommitFile, setFocusCommitFile] = useState<{ hash: string; path: string }>();
   const [focusChanges, setFocusChanges] = useState<ChangesFocus>();
   const [focusTask, setFocusTask] = useState<{ id: string }>();
+  const [focusRun, setFocusRun] = useState<{ run: number | "new" }>();
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
 
   const refetchSession = useCallback(() => {
@@ -197,6 +207,15 @@ export function SessionWorkspace({
     selectTab("tasks");
   }
 
+  // The palette's Run pipeline… and the Dashboard's View run: the Tasks tab
+  // on that run (or Plan).
+  useEffect(() => {
+    if (!openRun) return;
+    setFocusRun({ ...openRun });
+    setActiveTab("tasks");
+    setVisited((prev) => (prev.has("tasks") ? prev : new Set(prev).add("tasks")));
+  }, [openRun]);
+
   function commitName() {
     setEditingName(false);
     const trimmed = draftName.trim();
@@ -258,18 +277,30 @@ export function SessionWorkspace({
               onClick={() => selectTab(tab.id)}
             >
               {tab.label}
-              {tab.id === "tasks" && openTaskCount > 0 && (
-                // The badge counts OPEN work only (running + ready, which
-                // includes needs_review, + blocked); done and discarded
-                // tasks never count. A bare number reads as the total or as
-                // the done count, and matches neither, so the tooltip says
-                // what it is.
-                <span className={styles.badge} aria-hidden="true" title={openTasksTitle(openTaskBreakdown)}>
-                  {openTaskCount}
+              {tab.id === "tasks" && running ? (
+                // While a pipeline run is live the badge is the run: a
+                // spinner and how many tasks it is working on right now.
+                <span
+                  className={[styles.badge, styles.runBadge].join(" ")}
+                  aria-hidden="true"
+                  title={`Pipeline running · ${openTaskBreakdown.running} ${openTaskBreakdown.running === 1 ? "task" : "tasks"} in progress`}
+                  data-testid="tasks-run-badge"
+                >
+                  <span className={styles.spin} />
+                  {openTaskBreakdown.running}
                 </span>
-              )}
-              {tab.id === "pipeline" && running && (
-                <span className={styles.rundot} aria-hidden="true" title="run in progress" />
+              ) : (
+                tab.id === "tasks" &&
+                openTaskCount > 0 && (
+                  // The badge counts OPEN work only (running + ready, which
+                  // includes needs_review, + blocked); done and discarded
+                  // tasks never count. A bare number reads as the total or as
+                  // the done count, and matches neither, so the tooltip says
+                  // what it is.
+                  <span className={styles.badge} aria-hidden="true" title={openTasksTitle(openTaskBreakdown)}>
+                    {openTaskCount}
+                  </span>
+                )
               )}
             </button>
           ))}
@@ -359,6 +390,7 @@ export function SessionWorkspace({
             onOpenDelegate={onOpenDelegate}
             onOpenTask={openTask}
             focusTask={focusTask}
+            focusRun={focusRun}
           />
         </div>
       ))}

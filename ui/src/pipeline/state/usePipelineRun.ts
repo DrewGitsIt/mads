@@ -51,6 +51,10 @@ export interface StageAttempt {
   retries?: number;
   startedSeq: number;
   endedSeq?: number;
+  /** The opening envelope's timestamp (stage.started, or stage.skipped). */
+  startedAt?: string;
+  /** The closing envelope's timestamp; unset while the attempt is still open. */
+  endedAt?: string;
 }
 
 export interface TaskRunState {
@@ -128,6 +132,8 @@ function foldStageEvent(state: RunFoldState, env: Envelope): RunFoldState {
         status,
         startedSeq: env.seq,
         endedSeq: status === "skipped" ? env.seq : undefined,
+        startedAt: env.timestamp,
+        endedAt: status === "skipped" ? env.timestamp : undefined,
       },
     ];
     if (env.type === "stage.started") currentStage = stage;
@@ -153,6 +159,7 @@ function foldStageEvent(state: RunFoldState, env: Envelope): RunFoldState {
         ...attempts[openIndex],
         status,
         endedSeq: env.seq,
+        endedAt: env.timestamp,
         reason: env.type === "stage.failed" ? payload.reason : undefined,
       };
     }

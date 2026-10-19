@@ -30,11 +30,13 @@ import styles from "./SessionsSurface.module.css";
 export interface SessionsSurfaceProps {
   jumpToSessionId?: string;
   jumpToTab?: WorkspaceTabId;
+  /** With jumpToTab "tasks": the run to show (a run_seq, or "new" for Plan). A new object each time, so a repeat jump re-applies. */
+  jumpToRun?: { run: number | "new" };
   pipelineClient: PipelineClient;
 }
 
 /** Top-level Sessions surface (registered in App.tsx) — owns the shared session list so the rail and launchpad don't duplicate fetch/subscribe logic. */
-export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: SessionsSurfaceProps) {
+export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelineClient }: SessionsSurfaceProps) {
   const { sessions, loading, error, retry, createSession } = useSessionsList();
   // The error a user dismissed; a later, different failure shows again.
   const [dismissedError, setDismissedError] = useState<string | null>(null);
@@ -73,6 +75,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   // transition arrives. Opening a session retires its sticky "Done · your turn".
   const agentStates = useSessionAgentState(sessions, selectedId, fadeMs);
   const [initialTab, setInitialTab] = useState<WorkspaceTabId>();
+  const [openRun, setOpenRun] = useState<{ run: number | "new" }>();
   const [actionError, setActionError] = useState<{ title: string; message: string }>();
   const [provisioningSessionId, setProvisioningSessionId] = useState<string>();
   const [pendingFirstMessage, setPendingFirstMessage] =
@@ -83,8 +86,9 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
       setSelectedId(jumpToSessionId);
       setOpenDelegate(undefined);
       setInitialTab(jumpToTab);
+      setOpenRun(jumpToRun);
     }
-  }, [jumpToSessionId, jumpToTab]);
+  }, [jumpToSessionId, jumpToTab, jumpToRun]);
 
   /**
    * A session action (resume/delete) can fail for a session that isn't the
@@ -110,6 +114,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
     setSelectedId(session.id);
     setOpenDelegate(undefined);
     setInitialTab(undefined);
+    setOpenRun(undefined);
     setProvisioningSessionId(session.id);
     setPendingFirstMessage({ sessionId: session.id, text: goalText });
   }
@@ -208,11 +213,13 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
                 setOpenDelegate(undefined);
                 setSelectedId(id);
                 setInitialTab(undefined);
+                setOpenRun(undefined);
                 setActionError(undefined);
                 return;
               }
               setSelectedId((cur) => (cur === id ? undefined : id));
               setInitialTab(undefined);
+              setOpenRun(undefined);
               // A prior action's error toast is scoped to the surface, not the
               // session it named — clear it on navigation so it can't linger
               // over an unrelated session.
@@ -271,6 +278,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
               openTaskBreakdown={openTaskCounts[selectedId] ?? EMPTY_OPEN_TASK_BREAKDOWN}
               agentState={agentStates[selectedId]}
               initialTab={initialTab}
+              openRun={openRun}
               onSleep={sleep.requestSleep}
               onWake={sleep.wake}
               onClose={() => setSelectedId(undefined)}

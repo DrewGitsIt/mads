@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { ErrorBoundary } from "./components/ErrorBoundary/ErrorBoundary";
-import { Toast } from "./components/Toast/Toast";
 import { IconRail, type IconRailItem } from "./components/IconRail/IconRail";
 import { ConfigGateFailure } from "./ConfigGateFailure";
 import { CommandPalette } from "./features/command-palette/CommandPalette";
@@ -27,7 +26,9 @@ import {
   OPEN_LIBRARY_EVENT,
   OPEN_SESSION_EVENT,
   OPEN_SETTINGS_EVENT,
+  requestOpenSession,
   setRequestedLibraryShelf,
+  type OpenSessionDetail,
 } from "./appNavigation";
 import { setPlatform } from "./platform/shortcut";
 import styles from "./App.module.css";
@@ -43,9 +44,14 @@ const RAIL_ITEMS: IconRailItem[] = [
 // "sessions" is special-cased in the render switch below (needs
 // jumpToSessionId/jumpToTab/pipelineClient props SURFACES' ComponentType
 // signature can't carry), so it's deliberately absent here.
+// Run history's "View run" opens that session's Tasks tab on the run.
+function DashboardSurface() {
+  return <DashboardTab onDrillBack={({ sessionId, runSeq }) => requestOpenSession(sessionId, { run: runSeq })} />;
+}
+
 const SURFACES: Partial<Record<string, ComponentType>> = {
   library: LibrarySurface,
-  dashboard: DashboardTab,
+  dashboard: DashboardSurface,
   retro: RetroSurface,
   settings: SettingsSurface,
 };
@@ -98,7 +104,7 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [jumpToSessionId, setJumpToSessionId] = useState<string>();
   const [jumpToTab, setJumpToTab] = useState<WorkspaceTabId>();
-  const [launchError, setLaunchError] = useState<{ title: string; message: string }>();
+  const [jumpToRun, setJumpToRun] = useState<{ run: number | "new" }>();
   const { sessions, tasks, openTaskCounts } = useCommandPaletteData();
 
   useAttentionBadge(sessions, openTaskCounts);
@@ -125,10 +131,11 @@ export function App() {
   useEffect(() => {
     const openSettings = () => setActiveId("settings");
     const openSession = (e: Event) => {
-      const { sessionId } = (e as CustomEvent<{ sessionId: string }>).detail;
+      const { sessionId, run } = (e as CustomEvent<OpenSessionDetail>).detail;
       setActiveId("sessions", () => {
         setJumpToSessionId(sessionId);
-        setJumpToTab(undefined);
+        setJumpToTab(run === undefined ? undefined : "tasks");
+        setJumpToRun(run === undefined ? undefined : { run });
       });
     };
     const openLibrary = (e: Event) => {
@@ -158,28 +165,6 @@ export function App() {
     return <FirstRunWizard onComplete={() => setConfig({ ...config, onboarding_complete: true })} />;
   }
 
-  // The palette's launch used to fire-and-forget, so a refused start (a run
-  // already in flight, a bad template) simply did nothing. Only a start that
-  // took lands on the Pipeline tab; one that didn't says why, the way the
-  // Pipeline tab's own Start does.
-  async function startPipelineFromPalette(sessionId: string, label: string) {
-    setLaunchError(undefined);
-    try {
-      await pipelineClient.startPipeline(sessionId, "default-implementation");
-    } catch (err) {
-      const name = label.replace(/^Start pipeline · /, "");
-      setLaunchError({
-        title: `Couldn't start the pipeline for “${name || "Untitled session"}”`,
-        message: err instanceof Error ? err.message : String(err),
-      });
-      return;
-    }
-    setActiveId("sessions", () => {
-      setJumpToSessionId(sessionId);
-      setJumpToTab("pipeline");
-    });
-  }
-
   function handleDispatch(command: Command) {
     switch (command.kind) {
       case "jump-session":
@@ -187,10 +172,16 @@ export function App() {
         setActiveId("sessions", () => {
           setJumpToSessionId(command.sessionId);
           setJumpToTab(undefined);
+          setJumpToRun(undefined);
         });
         break;
-      case "start-pipeline":
-        if (command.sessionId) void startPipelineFromPalette(command.sessionId, command.label);
+      case "run-pipeline":
+        // Plan on that session's Tasks tab: pick a template and tasks there, then Run.
+        setActiveId("sessions", () => {
+          setJumpToSessionId(command.sessionId);
+          setJumpToTab("tasks");
+          setJumpToRun({ run: "new" });
+        });
         break;
       case "new-session":
         // Real create flow already lives in SessionsSurface; this just navigates there.
@@ -217,6 +208,7 @@ export function App() {
               <SessionsSurface
                 jumpToSessionId={jumpToSessionId}
                 jumpToTab={jumpToTab}
+                jumpToRun={jumpToRun}
                 pipelineClient={pipelineClient}
               />
             );
@@ -238,16 +230,6 @@ export function App() {
           );
         })()}
       </ErrorBoundary>
-      {launchError && (
-        <div className={styles.toastDock}>
-          <Toast
-            tone="bad"
-            title={launchError.title}
-            description={launchError.message}
-            onDismiss={() => setLaunchError(undefined)}
-          />
-        </div>
-      )}
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}

@@ -62,57 +62,6 @@
   font: var(--fs-chip) var(--mono);
 }
 
-/* ── status glyph (shape carries the status, not only color) ── */
-
-.glyph {
-  flex: none;
-  box-sizing: border-box;
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  border: 1.5px solid var(--text3);
-  border-radius: 50%;
-}
-
-.g_done {
-  background: var(--ok);
-  border-color: var(--ok);
-}
-
-.g_running {
-  border-color: var(--accent);
-  border-right-color: transparent;
-}
-
-.g_blocked {
-  background: var(--bad);
-  border-color: var(--bad);
-}
-
-.g_ready {
-  border-color: var(--text2);
-}
-
-.g_queued {
-  border-style: dashed;
-}
-
-.g_skipped,
-.g_excluded,
-.g_draft {
-  border-style: dotted;
-}
-
-.spin {
-  animation: rot 1s linear infinite;
-}
-
-@keyframes rot {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /* ── stage strip ───────────────────────────────────── */
 
 .strip {
@@ -206,7 +155,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .now .dot,
-  .spin,
   .lens {
     animation: none;
   }
@@ -335,6 +283,11 @@
   border-bottom: 1px solid var(--line-soft);
   font-size: var(--fs-sm);
   color: var(--text2);
+}
+
+.duration {
+  font-family: var(--mono);
+  color: var(--text3);
 }
 
 .outStage {

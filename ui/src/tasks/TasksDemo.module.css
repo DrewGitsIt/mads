@@ -1,19 +1,44 @@
 .demo {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   background: var(--bg0);
   color: var(--text);
 }
 
-.main {
-  flex: 1;
-  min-width: 0;
-  padding: var(--space-4);
-  overflow-y: auto;
+.switch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px dashed var(--line);
+  font: var(--fs-sm) var(--mono);
 }
 
-.rail {
-  width: 320px;
-  flex-shrink: 0;
-  border-left: 1px solid var(--line-soft);
+.switch a {
+  padding: 1px var(--space-2);
+  border-radius: var(--r-sm);
+  color: var(--text2);
+  text-decoration: none;
+}
+
+.switch a[aria-current] {
+  background: var(--bg3);
+  color: var(--text);
+}
+
+.label {
+  margin-left: var(--space-3);
+  color: var(--text3);
+}
+
+.label:first-child {
+  margin-left: 0;
+}
+
+.main {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-4);
+  overflow-y: auto;
 }

@@ -27,12 +27,11 @@ export const SESSION_SHELL_REFETCH_EVENT_TYPES = [
 
 /**
  * Every event type an open session workspace's shell (SessionWorkspace), its
- * Conversation tab (ConversationTab), and its Pipeline tab's live run fold
+ * Conversation tab (ConversationTab), and its Tasks tab's live run fold
  * (usePipelineRun) need between them: session lifecycle, a linked-session
  * inject/digest landing on the transcript, pipeline run status for the
- * tab's run-dot, Land's attempt/conflict/completion/refusal/auto-merge, and the
- * Pipeline tab's own
- * task/stage/file fold. ui/src/router/events.ts's bus unions subscribers'
+ * Tasks tab's running badge, Land's attempt/conflict/completion/refusal/
+ * auto-merge, and the run fold's own task/stage/file events. ui/src/router/events.ts's bus unions subscribers'
  * `types` by content, not by array identity, so passing a differently
  * recombined-but-equivalent array no longer risks a second connection —
  * still worth reusing this shared array for maintainability, but it's no

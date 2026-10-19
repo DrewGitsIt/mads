@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { Button } from "../../components/Button/Button";
 import { Caret } from "../../components/Caret/Caret";
 import { Chip } from "../../components/Chip/Chip";
@@ -7,6 +7,7 @@ import { SegmentedControl } from "../../components/SegmentedControl/SegmentedCon
 import { runStages } from "../../pipeline/plan/runStages";
 import type { PipelineRun, Template } from "../../router/types";
 import { formatElapsed, formatRunWhen, outcomeTone, runOrdinal, spanMs } from "./runBarFormat";
+import { useNow } from "./useNow";
 import styles from "./RunBar.module.css";
 
 export type RunBarView = "list" | "graph";
@@ -309,17 +310,6 @@ export function RunBar(props: RunBarProps) {
       )}
     </div>
   );
-}
-
-/** `Date.now()` as of this render; while `ticking`, re-renders each second. */
-function useNow(ticking: boolean): number {
-  const [, tick] = useReducer((x: number) => x + 1, 0);
-  useEffect(() => {
-    if (!ticking) return;
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [ticking]);
-  return Date.now();
 }
 
 function OutcomeChip({ outcome }: { outcome?: string }) {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { DEFAULT_TEMPLATE_ID, useRunTemplates } from "./useRunTemplates";
 import { FakeRouterClient, fixtureWorkspaces } from "../../router/fixtures";
 import { FakeEventSource } from "../../router/testFakeEventSource";
@@ -35,6 +35,9 @@ describe("useRunTemplates", () => {
   });
 
   afterEach(() => {
+    // Unmount before un-stubbing: a hook still mounted would open a real
+    // EventSource from a late effect (useSessionWorkspace's subscription).
+    cleanup();
     vi.unstubAllGlobals();
   });
 

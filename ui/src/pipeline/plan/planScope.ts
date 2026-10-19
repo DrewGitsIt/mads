@@ -57,6 +57,30 @@ export function runnableInPlan(
 }
 
 /**
+ * The Plan's one warning line, or undefined: the ready tasks that won't run
+ * because a dependency is left out (unticked, or a draft), and those
+ * dependencies — "cli, docs won't run (depends on core lib)".
+ */
+export function planWarning(
+  tasks: Task[],
+  tasksById: TasksById,
+  excluded: ReadonlySet<string>,
+): string | undefined {
+  const cut: Task[] = [];
+  const by = new Map<string, Task>();
+  for (const t of tasks) {
+    if (t.status !== "ready" || t.draft || excluded.has(t.id)) continue;
+    const dep = leftOutBy(t, tasksById, excluded);
+    if (!dep || !(dep.draft || excluded.has(dep.id))) continue;
+    cut.push(t);
+    by.set(dep.id, dep);
+  }
+  if (cut.length === 0) return undefined;
+  const names = (list: Task[]) => list.map((t) => t.title).join(", ");
+  return `${names(cut)} won't run (depends on ${names([...by.values()])})`;
+}
+
+/**
  * The task's wave: 1 with no dependencies, else 1 + the deepest dependency's
  * wave. Counts every known dependency, whatever its status. A dependency
  * cycle is broken where it closes (the edge back into the cycle counts as

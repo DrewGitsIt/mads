@@ -58,7 +58,7 @@ export class FakePipelineOutputSource implements PipelineOutputSource {
 }
 
 /**
- * Never delivers a turn — the demo mount and PipelineTab.test.tsx have no
+ * Never delivers a turn — the demo mount and TasksTab tests have no
  * scripted provider transcript, so every fixture task exercises the
  * fallback-to-raw-output path (DrillInFeed), same as a real fake-provider
  * run.
@@ -81,7 +81,7 @@ export class FakePipelineTurnsSource implements PipelineTurnsSource {
  * way the real client never would.
  */
 export class FakePipelineClient implements PipelineClient {
-  // Seedable by tests that exercise usePipelineRunHistory/RunPicker — empty
+  // Seedable by tests that exercise usePipelineRunHistory and the run menu — empty
   // by default so every pre-existing test (none of which touch runs
   // history) keeps seeing no runs, same as today.
   runs: PipelineRun[] = [];

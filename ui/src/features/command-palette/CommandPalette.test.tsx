@@ -67,13 +67,13 @@ describe("CommandPalette", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("clicking a start-pipeline row dispatches that command with the session id", () => {
+  it("clicking a run-pipeline row dispatches that command with the session id", () => {
     const { onDispatch } = renderPalette();
 
-    fireEvent.click(screen.getByTestId("start-pipeline:session-inactive"));
+    fireEvent.click(screen.getByTestId("run-pipeline:session-inactive"));
 
     expect(onDispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "start-pipeline", sessionId: "session-inactive" }),
+      expect.objectContaining({ kind: "run-pipeline", sessionId: "session-inactive" }),
     );
   });
 
@@ -85,7 +85,7 @@ describe("CommandPalette", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(onDispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "start-pipeline", sessionId: "session-active" }),
+      expect.objectContaining({ kind: "run-pipeline", sessionId: "session-active" }),
     );
   });
 

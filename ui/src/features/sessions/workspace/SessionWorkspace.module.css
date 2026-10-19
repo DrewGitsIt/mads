@@ -112,24 +112,31 @@
   margin-left: 6px;
 }
 
-.rundot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--ok);
-  margin-left: 7px;
-  animation: pulse 1.6s ease infinite;
+.runBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
-@keyframes pulse {
-  50% {
-    opacity: 0.35;
+.spin {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .rundot {
+  .spin {
     animation: none;
   }
 }

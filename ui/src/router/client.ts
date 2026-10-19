@@ -238,7 +238,7 @@ export interface RouterClient {
 
   // Batch (non-streaming) read of GET /events — a plain fetch (no explicit
   // Accept header) takes the Router's JSON branch instead of the SSE branch
-  // (Pipeline tab HANDOFF.md §2/§3). Used to replay historical pipeline runs.
+  // (pipeline HANDOFF.md §2/§3). Used to replay historical pipeline runs.
   getEvents(filter: { sessionId: string; since?: number; types?: string[] }): Promise<Envelope[]>;
 
   // --- Sessions (session-agnostic) ---

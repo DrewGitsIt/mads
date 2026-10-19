@@ -36,7 +36,7 @@ describe("SessionWorkspace", () => {
     resetShellDockCache();
   });
 
-  it("defaults to the Conversation tab, lazy-mounting the other three", async () => {
+  it("defaults to the Conversation tab, lazy-mounting the other two", async () => {
     renderWorkspace();
 
     await waitFor(() =>
@@ -46,13 +46,10 @@ describe("SessionWorkspace", () => {
     );
     expect(screen.getByRole("tab", { name: "Tasks" }).getAttribute("aria-selected")).toBe("false");
     expect(screen.getByRole("tab", { name: "Changes" }).getAttribute("aria-selected")).toBe("false");
-    expect(screen.getByRole("tab", { name: "Pipeline" }).getAttribute("aria-selected")).toBe(
-      "false",
-    );
+    expect(screen.queryByRole("tab", { name: "Pipeline" })).toBeNull();
 
     expect(screen.queryByRole("tabpanel", { name: "Tasks" })).toBeNull();
     expect(screen.queryByRole("tabpanel", { name: "Changes" })).toBeNull();
-    expect(screen.queryByRole("tabpanel", { name: "Pipeline" })).toBeNull();
   });
 
   // The title stands alone: no "ACTIVE"/"INACTIVE" chip beside it — the rail
@@ -96,15 +93,15 @@ describe("SessionWorkspace", () => {
     await waitFor(() => expect(screen.getByRole("tab", { name: "Conversation" })).toBeTruthy());
 
     fireEvent.click(screen.getByRole("tab", { name: "Tasks" }));
-    await waitFor(() => expect(screen.getByText("Graph")).toBeTruthy());
+    const graph = await screen.findByRole("radio", { name: "Graph" });
 
-    fireEvent.click(screen.getByText("Graph"));
-    await waitFor(() => expect(screen.getByText("Graph").className.includes("primary")).toBe(true));
+    fireEvent.click(graph);
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Graph" }).getAttribute("aria-checked")).toBe("true"));
 
     fireEvent.click(screen.getByRole("tab", { name: "Conversation" }));
     fireEvent.click(screen.getByRole("tab", { name: "Tasks" }));
 
-    expect(screen.getByText("Graph").className.includes("primary")).toBe(true);
+    expect(screen.getByRole("radio", { name: "Graph" }).getAttribute("aria-checked")).toBe("true");
   });
 
   it("shows the open-task-count badge on the Tasks tab, hidden at 0", async () => {
@@ -125,23 +122,21 @@ describe("SessionWorkspace", () => {
     expect(screen.getByRole("tab", { name: "Tasks" }).textContent).toBe("Tasks");
   });
 
-  it("shows a pipeline run-dot while a run is in flight, clearing on completion", async () => {
-    renderWorkspace();
-    await waitFor(() => expect(screen.getByRole("tab", { name: "Pipeline" })).toBeTruthy());
+  it("swaps the Tasks badge for a spinner and the running count while a run is in flight", async () => {
+    renderWorkspace({ openTaskBreakdown: { running: 2, ready: 3, blocked: 0 } });
+    const tasksTab = await screen.findByRole("tab", { name: "Tasks" });
+    expect(tasksTab.textContent).toBe("Tasks5");
 
     const source = FakeEventSource.instances.find((s) => s.url.includes("pipeline.started"));
-    expect(screen.getByRole("tab", { name: "Pipeline" }).querySelector('[title="run in progress"]')).toBeNull();
-
     act(() => {
       source?.emit(
         "pipeline.started",
         JSON.stringify({ seq: 1, type: "pipeline.started", actor: "user", session_id: SESSION_ID }),
       );
     });
-    await waitFor(() =>
-      expect(
-        screen.getByRole("tab", { name: "Pipeline" }).querySelector('[title="run in progress"]'),
-      ).toBeTruthy(),
+    await waitFor(() => expect(within(tasksTab).getByTestId("tasks-run-badge").textContent).toBe("2"));
+    expect(within(tasksTab).getByTestId("tasks-run-badge").getAttribute("title")).toBe(
+      "Pipeline running · 2 tasks in progress",
     );
 
     act(() => {
@@ -150,11 +145,33 @@ describe("SessionWorkspace", () => {
         JSON.stringify({ seq: 2, type: "pipeline.completed", actor: "user", session_id: SESSION_ID }),
       );
     });
+    await waitFor(() => expect(within(tasksTab).queryByTestId("tasks-run-badge")).toBeNull());
+    expect(tasksTab.textContent).toBe("Tasks5");
+  });
+
+  it("opens the retired pipeline tab id as Tasks", async () => {
+    renderWorkspace({ initialTab: "pipeline" });
     await waitFor(() =>
-      expect(
-        screen.getByRole("tab", { name: "Pipeline" }).querySelector('[title="run in progress"]'),
-      ).toBeNull(),
+      expect(screen.getByRole("tab", { name: "Tasks" }).getAttribute("aria-selected")).toBe("true"),
     );
+  });
+
+  it("openRun surfaces the Tasks tab on Plan", async () => {
+    const { rerender } = renderWorkspace();
+    await screen.findByRole("tab", { name: "Conversation" });
+    const props = {
+      sessionId: SESSION_ID,
+      routerClient: new FakeRouterClient(),
+      pipelineClient: new FakePipelineClient(),
+      onSleep: vi.fn(),
+      onWake: vi.fn(),
+      onClose: vi.fn(),
+    };
+    rerender(<SessionWorkspace {...props} openRun={{ run: "new" }} />);
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Tasks" }).getAttribute("aria-selected")).toBe("true"),
+    );
+    expect(await screen.findByRole("button", { name: /Run \d+ tasks?/ })).toBeTruthy();
   });
 
   it("folds Shell and Restart Agent into the single workspace kebab; Restart bounces the agent", async () => {

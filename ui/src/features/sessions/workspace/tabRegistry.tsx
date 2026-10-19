@@ -4,13 +4,23 @@ import { ContextRail } from "../../../context-rail/ContextRail";
 import { ChangesTab } from "../../../files/ChangesTab";
 import type { ChangesFocus } from "../../../files/changesModel";
 import type { PipelineClient } from "../../../pipeline/client/pipelineClient";
-import { PipelineTab } from "../../../pipeline/PipelineTab";
 import type { RouterClient } from "../../../router/client";
 import { TasksTab } from "../../../tasks/TasksTab";
 import { useTaskStore } from "../../../tasks/useTaskStore";
 import styles from "./ConversationTabView.module.css";
 
-export type WorkspaceTabId = "conversation" | "tasks" | "files" | "pipeline";
+export type WorkspaceTabId = "conversation" | "tasks" | "files";
+
+/**
+ * A tab id from outside the type system (a deep link, an old caller) as a
+ * real tab. The Pipeline tab folded into Tasks, so "pipeline" lands there;
+ * anything else unknown opens the Conversation.
+ */
+export function toWorkspaceTabId(id: string | undefined): WorkspaceTabId | undefined {
+  if (id === undefined) return undefined;
+  if (id === "pipeline") return "tasks";
+  return WORKSPACE_TABS.some((t) => t.id === id) ? (id as WorkspaceTabId) : "conversation";
+}
 
 export interface WorkspaceTabContext {
   sessionId: string;
@@ -41,6 +51,8 @@ export interface WorkspaceTabContext {
   onOpenTask?: (taskId: string) => void;
   /** Task to open in the Tasks tab's detail sheet, set by onOpenTask. A new object each time, so a repeat click re-opens. */
   focusTask?: { id: string };
+  /** Run the Tasks tab shows: a run_seq, or "new" for Plan (the palette's Run pipeline…, the Dashboard's View run). A new object each time. */
+  focusRun?: { run: number | "new" };
 }
 
 export interface WorkspaceTabDef {
@@ -97,13 +109,15 @@ function ConversationTabView({
   );
 }
 
-function TasksTabView({ sessionId, routerClient, pipelineClient, focusTask }: WorkspaceTabContext) {
+function TasksTabView({ sessionId, routerClient, pipelineClient, focusTask, focusRun, onOpenFile }: WorkspaceTabContext) {
   return (
     <TasksTab
       sessionId={sessionId}
       routerClient={routerClient}
       pipelineClient={pipelineClient}
       focusTask={focusTask}
+      focusRun={focusRun}
+      onOpenFile={onOpenFile}
     />
   );
 }
@@ -130,13 +144,8 @@ function ChangesTabView({
   );
 }
 
-function PipelineTabView({ sessionId, pipelineClient }: WorkspaceTabContext) {
-  return <PipelineTab sessionId={sessionId} pipelineClient={pipelineClient} />;
-}
-
 export const WORKSPACE_TABS: WorkspaceTabDef[] = [
   { id: "conversation", label: "Conversation", component: ConversationTabView },
   { id: "tasks", label: "Tasks", component: TasksTabView },
   { id: "files", label: "Changes", component: ChangesTabView },
-  { id: "pipeline", label: "Pipeline", component: PipelineTabView },
 ];
