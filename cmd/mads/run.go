@@ -263,6 +263,10 @@ func eventLine(env contracts.Envelope) string {
 
 // newRunID mints a run id in the Router's format (services/router's
 // supervisor.NewRunID), so CLI runs pair with their end events by id too.
+// It also makes the run's lease holder "pipeline:<runID>", like a Router
+// run's. No Router watches this process, so there is no ReleaseAll on
+// exit: the engine releases its own leases on Ctrl-C, and a crash's
+// leases go to the TTL sweep or the next launch's reap-on-launch.
 func newRunID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])

@@ -359,10 +359,14 @@ the Router picks up a new build without a restart.
 - **Supervision beats the lease TTL backstop, not just a graceful path** —
   `TestExternalKillReleasesLeasesAndEmitsCrashEvent` (`internal/supervisor`) spawns a real
   child, claims a task's lease with a 30s TTL, kills the child's OS process directly (not
-  via `Terminate`), and asserts the task is blocked and a `session.crashed` event lands —
-  in well under a second, proving it's supervision catching the exit and not the TTL
-  expiring underneath it. `TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent`
-  covers the same for Pipeline Engine children and `pipeline.failed`.
+  via `Terminate`), and asserts the lease is gone (the task's status untouched: losing a
+  lease never changes status) and a `session.crashed` event lands — in well under a
+  second, proving it's supervision catching the exit and not the TTL expiring underneath
+  it. `TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent` covers the same for
+  Pipeline Engine children and `pipeline.failed`: a run's engine claims under the holder
+  `pipeline:<runID>` (`supervisor.PipelineLeaseHolder`), so `onPipelineExit`'s
+  `ReleaseAll` frees exactly that run's leases, another run's survive, and the run's
+  in-flight tasks stay in_progress (Interrupted; docs/PIPELINE-LEASES-DESIGN.md).
 - **Orphaned-active sessions are reconciled, not left to rot.** Supervisor state
   (`sessions`/`pipelines` maps) is in-memory only, so every Router restart forgets every
   tracked child while `Session.Activity` in the Data Service still says `active` — nothing

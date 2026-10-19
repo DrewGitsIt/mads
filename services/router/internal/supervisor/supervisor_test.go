@@ -239,9 +239,24 @@ func TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent(t *testing.T) {
 	if err := admin.CreateTask(ctx, &task); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	runClient := dataclient.New(base, runID)
-	if err := runClient.Claim(ctx, task.ID, "", 30*time.Second); err != nil {
+	other := contracts.Task{
+		SessionID: sessionID,
+		Title:     "another run's task",
+		Source:    "test",
+		Status:    contracts.StatusInProgress,
+	}
+	if err := admin.CreateTask(ctx, &other); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	// The engine claims as actor "pipeline" under its run's holder
+	// (docs/PIPELINE-LEASES-DESIGN.md A1). A second run's lease must
+	// survive this run's exit.
+	runClient := dataclient.New(base, "pipeline")
+	if err := runClient.Claim(ctx, task.ID, "pipeline:"+runID, 30*time.Second); err != nil {
 		t.Fatalf("Claim: %v", err)
+	}
+	if err := runClient.Claim(ctx, other.ID, "pipeline:run_other", 30*time.Second); err != nil {
+		t.Fatalf("Claim (other run): %v", err)
 	}
 
 	pid, ok := sup.PipelinePID(runID)
@@ -259,9 +274,16 @@ func TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent(t *testing.T) {
 	// Supervision frees the lease; losing a lease changes no task status
 	// (docs/PIPELINE-LEASES-DESIGN.md A3).
 	eventually(t, 5*time.Second, func() bool {
-		leases, err := runClient.Leases(ctx)
-		return err == nil && len(leases) == 0
+		leases, err := runClient.LeasesOfKind(ctx, "pipeline")
+		return err == nil && len(leases) == 1
 	})
+	leases, err := runClient.LeasesOfKind(ctx, "pipeline")
+	if err != nil {
+		t.Fatalf("LeasesOfKind: %v", err)
+	}
+	if len(leases) != 1 || leases[0].TaskID != other.ID || leases[0].Holder != "pipeline:run_other" {
+		t.Fatalf("leases after the run's exit = %+v, want only the other run's lease on %s", leases, other.ID)
+	}
 	if got, err := admin.Task(ctx, task.ID); err != nil || got.Status != contracts.StatusInProgress {
 		t.Fatalf("task after supervision release: %+v, %v; want in_progress", got, err)
 	}
