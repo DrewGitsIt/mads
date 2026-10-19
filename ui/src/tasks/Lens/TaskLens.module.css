@@ -2,6 +2,9 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* The narrow rules at the end read the lens's own width: the same lens
+     sits in the wide list and in the graph's focus column. */
+  container-type: inline-size;
   border: 1px solid var(--line);
   border-radius: var(--r);
   background: var(--bg1);
@@ -277,6 +280,7 @@
 
 .outHead {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
@@ -286,6 +290,7 @@
 }
 
 .duration {
+  white-space: nowrap;
   font-family: var(--mono);
   color: var(--text3);
 }
@@ -330,4 +335,37 @@
   text-align: center;
   color: var(--text3);
   font-size: var(--fs-sm);
+}
+
+/* ── narrow (the graph's focus column) ─────────────── */
+
+/* Too narrow for the timeline beside a readable output: the stations
+   give up their fixed width, and the output goes above the side column. */
+@container (max-width: 660px) {
+  .strip {
+    padding-inline: var(--space-3);
+  }
+
+  .station {
+    min-width: 0;
+  }
+
+  .wire {
+    min-width: 8px;
+  }
+
+  .body {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .out {
+    order: -1;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .side {
+    border-right: none;
+    overflow-y: visible;
+  }
 }
