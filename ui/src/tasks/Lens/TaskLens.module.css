@@ -1,0 +1,380 @@
+.lens {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg1);
+  animation: lensIn var(--dur-slow) var(--ease-out);
+}
+
+@keyframes lensIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.995);
+  }
+}
+
+/* ── header ─────────────────────────────────────────── */
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.title {
+  font: 600 var(--fs-body) var(--sans);
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.close {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text3);
+  font: var(--fs-sm) var(--sans);
+  cursor: pointer;
+}
+
+.close:hover {
+  color: var(--text);
+}
+
+.kbd {
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg2);
+  font: var(--fs-chip) var(--mono);
+}
+
+/* ── status glyph (shape carries the status, not only color) ── */
+
+.glyph {
+  flex: none;
+  box-sizing: border-box;
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--text3);
+  border-radius: 50%;
+}
+
+.g_done {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+
+.g_running {
+  border-color: var(--accent);
+  border-right-color: transparent;
+}
+
+.g_blocked {
+  background: var(--bad);
+  border-color: var(--bad);
+}
+
+.g_ready {
+  border-color: var(--text2);
+}
+
+.g_queued {
+  border-style: dashed;
+}
+
+.g_skipped,
+.g_excluded,
+.g_draft {
+  border-style: dotted;
+}
+
+.spin {
+  animation: rot 1s linear infinite;
+}
+
+@keyframes rot {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── stage strip ───────────────────────────────────── */
+
+.strip {
+  display: flex;
+  align-items: flex-start;
+  margin: 0;
+  padding: var(--space-3) var(--space-4) var(--space-1);
+  list-style: none;
+  overflow-x: auto;
+}
+
+.stationItem {
+  display: flex;
+  align-items: flex-start;
+  flex: 1;
+}
+
+.stationItem:first-child {
+  flex: none;
+}
+
+.wire {
+  flex: 1;
+  min-width: 18px;
+  height: 2px;
+  margin-top: 8px;
+  background: var(--line);
+}
+
+.wireOn {
+  background: var(--ok);
+}
+
+.station {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 92px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.station:disabled {
+  cursor: default;
+}
+
+.station:focus-visible {
+  outline: none;
+}
+
+.station:focus-visible .dot {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.dot {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--line);
+  border-radius: 50%;
+  background: var(--bg3);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.done .dot {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: var(--accent-ink);
+}
+
+.now .dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 5px var(--accent-soft);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.station[data-still] .dot {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .now .dot,
+  .spin,
+  .lens {
+    animation: none;
+  }
+}
+
+@keyframes pulse {
+  50% {
+    box-shadow: 0 0 0 9px transparent;
+  }
+}
+
+.fail .dot {
+  background: var(--bad);
+  border-color: var(--bad);
+  color: var(--accent-ink);
+}
+
+.skip .dot {
+  background: var(--bg2);
+  border-style: dashed;
+}
+
+.stationName {
+  font: var(--fs-sm) var(--mono);
+  color: var(--text2);
+  white-space: nowrap;
+}
+
+.sel .stationName {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.sel .dot {
+  outline: 2px solid var(--text);
+  outline-offset: 3px;
+}
+
+.stationSub {
+  height: 14px;
+  font: var(--fs-chip) var(--sans);
+  color: var(--text3);
+  white-space: nowrap;
+}
+
+.warn {
+  color: var(--warn-fg);
+}
+
+/* ── blocked box ───────────────────────────────────── */
+
+.blocked {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--bad);
+  border-radius: var(--r);
+  background: var(--bad-soft);
+  font-size: var(--fs-ui);
+  color: var(--text);
+}
+
+.blockedText {
+  margin: 0;
+}
+
+.blockedActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* ── body ───────────────────────────────────────────── */
+
+.body {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  min-height: 340px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border-right: 1px solid var(--line-soft);
+  font-size: var(--fs-sm);
+  overflow-y: auto;
+}
+
+.h {
+  margin: 0 0 var(--space-2);
+  font: 600 var(--fs-chip) var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+
+.muted {
+  margin: 0;
+  color: var(--text3);
+}
+
+.acceptance {
+  margin: 0;
+  color: var(--text2);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.out {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.outHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line-soft);
+  font-size: var(--fs-sm);
+  color: var(--text2);
+}
+
+.outStage {
+  font-family: var(--mono);
+  color: var(--text);
+}
+
+.attemptSelect {
+  width: auto;
+}
+
+.viewToggle {
+  flex: none;
+}
+
+.handoff {
+  margin: var(--space-2) var(--space-3) 0;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--r-sm);
+  background: var(--bg2);
+  color: var(--text2);
+  font-size: var(--fs-sm);
+}
+
+.handoff b {
+  color: var(--text);
+}
+
+.feed {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  height: 380px;
+  min-height: 0;
+}
+
+.emptyOut {
+  margin: 0;
+  padding: var(--space-6) var(--space-3);
+  text-align: center;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}

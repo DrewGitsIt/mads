@@ -10,6 +10,10 @@ export interface DrillInFeedProps {
   attempts: StageAttempt[];
   outputSource: PipelineOutputSource;
   turnsSource: PipelineTurnsSource;
+  /** Show the raw log even when turns arrive (the lens's Raw log toggle). */
+  raw?: boolean;
+  /** Passed to AgentFeedView. */
+  showHeader?: boolean;
 }
 
 /**
@@ -20,12 +24,19 @@ export interface DrillInFeedProps {
  * falls back to the tee'd output exactly as it rendered before the feed
  * existed — the fallback layering DESIGN point 3 requires.
  */
-export function DrillInFeed({ task, attempts, outputSource, turnsSource }: DrillInFeedProps) {
+export function DrillInFeed({
+  task,
+  attempts,
+  outputSource,
+  turnsSource,
+  raw = false,
+  showHeader,
+}: DrillInFeedProps) {
   const [turns, setTurns] = useState<TranscriptMessage[]>([]);
   useEffect(() => turnsSource.onTurns(setTurns), [turnsSource]);
 
-  if (turns.length > 0) {
-    return <AgentFeedView task={task} attempts={attempts} turns={turns} />;
+  if (!raw && turns.length > 0) {
+    return <AgentFeedView task={task} attempts={attempts} turns={turns} showHeader={showHeader} />;
   }
   return <AgentOutputView source={outputSource} />;
 }

@@ -19,6 +19,7 @@ import { usePrefersReducedMotion } from "../GraphView/usePrefersReducedMotion";
 import { DependencyPicker } from "./DependencyPicker";
 import { NoteGroup } from "./NoteGroup";
 import { formatShortcut } from "../../platform/shortcut";
+import { useEscapeLayer } from "../../platform/escapeLayers";
 import styles from "./TaskDetailSheet.module.css";
 
 export interface TaskDetailSheetProps {
@@ -34,6 +35,16 @@ export interface TaskDetailSheetProps {
   /** Ambient capabilities the task's workspace already provides — rendered read-only here. */
   workspace?: Workspace | null;
   capabilities?: Capability[];
+  /**
+   * The pipeline is working on the task: show it, but nothing is editable and
+   * there is no Save. `lockedAt` names where the pipeline is, for the note.
+   */
+  readOnly?: boolean;
+  lockedAt?: { stage: string; attempt: number };
+  /** Shown above the fields as "Why it's blocked" (Edit & retry). */
+  pinnedReason?: string;
+  /** The Save button's label, e.g. "Save & retry". onSaved fires after the save lands. */
+  primaryLabel?: string;
 }
 
 const STATUS_OPTIONS: TaskStatus[] = [
@@ -70,11 +81,13 @@ function EditableTextField({
   value,
   placeholder,
   onCommit,
+  readOnly = false,
 }: {
   label: string;
   value: string;
   placeholder: string;
   onCommit: (value: string) => void;
+  readOnly?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draftValue, setDraftValue] = useState(value);
@@ -104,6 +117,18 @@ function EditableTextField({
     el.setSelectionRange(el.value.length, el.value.length);
     autosize(el);
   }, [editing]);
+
+  if (readOnly) {
+    return (
+      <div className={styles.readOnlyField} aria-label={label}>
+        {value ? (
+          <Markdown text={value} className={styles.preview} />
+        ) : (
+          <span className={styles.placeholder}>None</span>
+        )}
+      </div>
+    );
+  }
 
   if (editing) {
     return (
@@ -179,7 +204,14 @@ export function TaskDetailSheet({
   onSelectTask,
   workspace,
   capabilities = [],
+  readOnly = false,
+  lockedAt,
+  pinnedReason,
+  primaryLabel = "Save",
 }: TaskDetailSheetProps) {
+  // Esc closes the sheet before whatever opened it (a lens, a focus view).
+  // An in-field edit claims Escape first (preventDefault) to cancel itself.
+  useEscapeLayer(true, onClose);
   const [draft, setDraft] = useState<Task>(task);
   const [notes, setNotes] = useState<Note[]>(task.notes ?? []);
   const [saving, setSaving] = useState(false);
@@ -267,13 +299,28 @@ export function TaskDetailSheet({
           value={draft.title}
           onChange={(e) => set("title", e.target.value)}
           aria-label="Title"
+          readOnly={readOnly}
         />
       </SideSheetHeader>
       <SideSheetBody>
+        {readOnly && (
+          <p className={styles.lockNote} role="note">
+            Locked while the pipeline works on it
+            {lockedAt ? ` (${lockedAt.stage}, attempt ${lockedAt.attempt})` : ""}. Editing reopens once the
+            pipeline is done with the task.
+          </p>
+        )}
+        {pinnedReason && (
+          <div className={styles.pinned} role="note">
+            <span className={styles.pinnedLabel}>Why it&apos;s blocked</span>
+            <p className={styles.pinnedText}>{pinnedReason}</p>
+          </div>
+        )}
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Status</span>
           <select
             value={draft.status}
+            disabled={readOnly}
             onChange={(e) => set("status", e.target.value as TaskStatus)}
           >
             {STATUS_OPTIONS.map((s) => (
@@ -316,6 +363,7 @@ export function TaskDetailSheet({
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Labels</span>
           <input
+            readOnly={readOnly}
             value={(draft.labels ?? []).join(", ")}
             onChange={(e) =>
               set(
@@ -340,20 +388,34 @@ export function TaskDetailSheet({
               ))}
             </div>
           )}
-          <CapabilityPickerField
-            label="Task-specific capabilities"
-            capabilities={taskCapabilityOptions}
-            value={draft.required_capabilities ?? []}
-            onChange={(names) => set("required_capabilities", names)}
-          />
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleSuggestCapabilities}
-            disabled={suggesting || !draft.title.trim()}
-          >
-            {suggesting ? "Suggesting…" : "Suggest capabilities"}
-          </Button>
+          {readOnly ? (
+            (draft.required_capabilities ?? []).length > 0 ? (
+              <div className={styles.chips}>
+                {(draft.required_capabilities ?? []).map((name) => (
+                  <Chip key={name}>{name}</Chip>
+                ))}
+              </div>
+            ) : (
+              inheritedCapabilities.length === 0 && <span className={styles.placeholder}>None</span>
+            )
+          ) : (
+            <>
+              <CapabilityPickerField
+                label="Task-specific capabilities"
+                capabilities={taskCapabilityOptions}
+                value={draft.required_capabilities ?? []}
+                onChange={(names) => set("required_capabilities", names)}
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleSuggestCapabilities}
+                disabled={suggesting || !draft.title.trim()}
+              >
+                {suggesting ? "Suggesting…" : "Suggest capabilities"}
+              </Button>
+            </>
+          )}
           {suggestError && <p className={styles.error}>{suggestError}</p>}
           {suggestedCapabilities && suggestedCapabilities.length > 0 && (
             <div className={styles.chips}>
@@ -383,6 +445,7 @@ export function TaskDetailSheet({
             value={draft.description ?? ""}
             placeholder="Add a description…"
             onCommit={(value) => set("description", value)}
+            readOnly={readOnly}
           />
         </div>
 
@@ -393,6 +456,7 @@ export function TaskDetailSheet({
             value={draft.acceptance_criteria ?? ""}
             placeholder="Add acceptance criteria…"
             onCommit={(value) => set("acceptance_criteria", value)}
+            readOnly={readOnly}
           />
         </div>
 
@@ -403,6 +467,7 @@ export function TaskDetailSheet({
             value={draft.scope ?? ""}
             placeholder="Add scope…"
             onCommit={(value) => set("scope", value)}
+            readOnly={readOnly}
           />
         </div>
 
@@ -415,6 +480,7 @@ export function TaskDetailSheet({
           onSelectTask={onSelectTask}
           taskRunState={runState?.taskRunState}
           reducedMotion={reducedMotion}
+          readOnly={readOnly}
         />
 
         <div className={styles.notes}>
@@ -436,9 +502,11 @@ export function TaskDetailSheet({
         <Button variant="ghost" onClick={onClose}>
           Close
         </Button>
-        <Button onClick={handleSave} disabled={saving}>
-          {saving ? "Saving…" : "Save"}
-        </Button>
+        {!readOnly && (
+          <Button onClick={handleSave} disabled={saving}>
+            {saving ? "Saving…" : primaryLabel}
+          </Button>
+        )}
       </SideSheetFooter>
     </SideSheet>
   );
