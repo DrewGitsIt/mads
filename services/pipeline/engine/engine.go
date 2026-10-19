@@ -28,6 +28,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/inhibit"
 	"github.com/drewkidwell/mads/pkg/mergedriver"
+	"github.com/drewkidwell/mads/pkg/pipelineprogress"
 	"github.com/drewkidwell/mads/pkg/procid"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/pkg/template"
@@ -429,13 +430,13 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 	// kind, or a lease taken since the scan) parks the task for
 	// heldBackoff, so a task held elsewhere costs no claim per scan.
 	// Only a task the pipeline moved to in_progress can be Interrupted
-	// (inProgressLog): one a person, a session or the synthesizer set in
+	// (pipelineprogress.InProgressLog): one a person, a session or the synthesizer set in
 	// progress is never picked up, and not counted.
 	leased := map[string]bool{}
 	heldUntil := map[string]time.Time{}
-	var movedIn inProgressLog
+	var movedIn pipelineprogress.InProgressLog
 	interrupted := func(t contracts.Task) bool {
-		return t.Status == contracts.StatusInProgress && movedIn.movedBy(t.ID, e.cfg.Actor) &&
+		return t.Status == contracts.StatusInProgress && movedIn.MovedBy(t.ID, e.cfg.Actor) &&
 			!leased[t.ID] && !running[t.ID] && !time.Now().Before(heldUntil[t.ID])
 	}
 
@@ -787,9 +788,9 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) taskResult {
 
 	// A ready task becomes in_progress here; an Interrupted one already is,
 	// and continues the plan its progress record gives.
-	var plan pickupPlan
+	var plan pipelineprogress.Plan
 	if pickup {
-		plan = planPickup(e.loadProgress(ctx, task.ID), e.cfg.Template, e.cfg.TemplateVersion, e.wt != nil)
+		plan = pipelineprogress.PlanPickup(e.loadProgress(ctx, task.ID), e.cfg.Template, e.cfg.TemplateVersion, e.wt != nil)
 	} else if !e.setStatus(ctx, &task, contracts.StatusInProgress) {
 		return taskResult{status: task.Status}
 	}
@@ -813,7 +814,7 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) taskResult {
 		}
 		run.dir, run.worktree, run.branch = dir, dir, branch
 		setSnapshotDir(dir)
-		if plan.merged {
+		if plan.Merged {
 			// Picked up past the merge stage: the work is already in trunk
 			// and the remaining stages run there.
 			run.dir, run.merged = e.cfg.Cwd, true
@@ -835,10 +836,10 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) taskResult {
 	priorWork := false  // the next agent stage is told about the kept work
 	if pickup {
 		e.pickUp(ctx, task.ID, plan)
-		feedback, loopedInto, inFlight = plan.feedback, plan.onLoop, plan.inFlight
-		priorWork = plan.mode == pickupRestart
+		feedback, loopedInto, inFlight = plan.Feedback, plan.OnLoop, plan.InFlight
+		priorWork = plan.Mode == pipelineprogress.ModeRestart
 	}
-	for i := plan.start; i < len(stages); {
+	for i := plan.Start; i < len(stages); {
 		st := stages[i]
 		if ctx.Err() != nil {
 			return stopped()
@@ -873,20 +874,20 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) taskResult {
 		started := map[string]any{"stage": st.Name}
 		isAgent := st.Command == ""
 		switch {
-		case cont && isAgent && plan.ref != "" && e.cfg.Provider.Matrix()[provider.BehaviorOneShotResume].Works():
+		case cont && isAgent && plan.Ref != "" && e.cfg.Provider.Matrix()[provider.BehaviorOneShotResume].Works():
 			// Resume the interrupted agent session in place: the same
 			// attempt, logged in this run with a note of where it came from.
-			attempt = plan.attempt
+			attempt = plan.Attempt
 			e.mu.Lock()
 			e.attempts[attemptKey] = attempt
 			e.mu.Unlock()
-			in.resumeRef = plan.ref
-			in.preface = fmt.Sprintf("=== resumes run %d attempt %d (stage %s), interrupted ===", plan.rec.RunSeq, plan.attempt, st.Name)
+			in.resumeRef = plan.Ref
+			in.preface = fmt.Sprintf("=== resumes run %d attempt %d (stage %s), interrupted ===", plan.Rec.RunSeq, plan.Attempt, st.Name)
 			started["resumed"] = true
 		case cont && isAgent:
 			// No session to resume: a new attempt, told it is taking over.
-			in.resumeNote = resumingNote(plan.attempt, e.interruptedTail(task.ID, plan.rec, st.Name, plan.attempt))
-			in.preface = fmt.Sprintf("=== rerun after interruption of run %d attempt %d ===", plan.rec.RunSeq, plan.attempt)
+			in.resumeNote = resumingNote(plan.Attempt, e.interruptedTail(task.ID, plan.Rec, st.Name, plan.Attempt))
+			in.preface = fmt.Sprintf("=== rerun after interruption of run %d attempt %d ===", plan.Rec.RunSeq, plan.Attempt)
 			started["rerun"] = true
 		case cont:
 			// Command (and merge) stages rerun; templates are the user's,
@@ -971,8 +972,8 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) taskResult {
 					})
 					in = stageInput{
 						feedback:   feedback,
-						resumeNote: resumingNote(plan.attempt, e.interruptedTail(task.ID, plan.rec, st.Name, plan.attempt)),
-						preface:    fmt.Sprintf("=== rerun after interruption of run %d attempt %d (its session could not be resumed) ===", plan.rec.RunSeq, plan.attempt),
+						resumeNote: resumingNote(plan.Attempt, e.interruptedTail(task.ID, plan.Rec, st.Name, plan.Attempt)),
+						preface:    fmt.Sprintf("=== rerun after interruption of run %d attempt %d (its session could not be resumed) ===", plan.Rec.RunSeq, plan.Attempt),
 					}
 					output, err, blocked = e.runStageWithRetry(ctx, st, &task, in, run.dir, attempt, &lost, blockReason)
 				}
@@ -1070,27 +1071,27 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) taskResult {
 // pickUp records that this run picked an Interrupted task up
 // (contracts.StagePickedUp) and, for a resume, restores the task's loop and
 // attempt counters from its progress record.
-func (e *engine) pickUp(ctx context.Context, taskID string, plan pickupPlan) {
+func (e *engine) pickUp(ctx context.Context, taskID string, plan pipelineprogress.Plan) {
 	stages := e.cfg.Template.Stages
-	payload := map[string]any{"mode": plan.mode}
-	if plan.start < len(stages) {
-		payload["from_stage"] = stages[plan.start].Name
+	payload := map[string]any{"mode": plan.Mode}
+	if plan.Start < len(stages) {
+		payload["from_stage"] = stages[plan.Start].Name
 	}
-	if rec := plan.rec; rec != nil {
+	if rec := plan.Rec; rec != nil {
 		if rec.RunID != "" {
 			payload["resumed_from_run_id"] = rec.RunID
 		}
 		payload["resumed_from_run_seq"] = rec.RunSeq
 	}
-	if done := plan.completedBefore(stages); len(done) > 0 {
+	if done := plan.CompletedBefore(stages); len(done) > 0 {
 		payload["completed_stages"] = done
 	}
-	if plan.mode == pickupResume {
+	if plan.Mode == pipelineprogress.ModeResume {
 		e.mu.Lock()
-		for st, n := range plan.rec.Loops {
+		for st, n := range plan.Rec.Loops {
 			e.loops[taskID+"|"+st] = n
 		}
-		for st, n := range plan.rec.Attempts {
+		for st, n := range plan.Rec.Attempts {
 			e.attempts[taskID+"|"+st] = n
 		}
 		e.mu.Unlock()
@@ -1300,9 +1301,7 @@ type taskRun struct {
 
 // isMergeStage recognizes the template's merge directive; the engine
 // supplies the branch and serialization (spec §6).
-func isMergeStage(st template.Stage) bool {
-	return strings.HasPrefix(strings.TrimSpace(st.Command), "git merge")
-}
+var isMergeStage = pipelineprogress.IsMergeStage
 
 // buildStageCommand finds a stage literally named "build" with a non-empty
 // command, by convention — symmetric with how isMergeStage recognizes the
@@ -1330,14 +1329,7 @@ func buildStageCommand(stages []template.Stage) (string, bool) {
 // field on a verify stage means the same thing it says), and its own
 // on_fail (loop_back included) still governs what happens when its command
 // fails — see gateFailure and its handling in runTask.
-func gateStage(stages []template.Stage) (idx int, ok bool) {
-	for i, st := range stages {
-		if st.Name == "verify" && st.Command != "" {
-			return i, true
-		}
-	}
-	return 0, false
-}
+var gateStage = pipelineprogress.GateStage
 
 // gateFailure marks a post-rebase gate ("verify") command failure, distinct
 // from a rebase/merge conflict, so runTask's on_fail routing (above) can

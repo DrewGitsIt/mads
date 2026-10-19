@@ -1,4 +1,4 @@
-package engine
+package pipelineprogress
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/template"
 )
 
-// evLog builds an event history for progressOf, assigning seqs in order.
+// evLog builds an event history for Of, assigning seqs in order.
 type evLog struct{ evs []contracts.Envelope }
 
 func (l *evLog) add(t contracts.EventType, task string, payload map[string]any) int64 {
@@ -48,8 +48,8 @@ func TestProgressOfMidStage(t *testing.T) {
 	l.stage(contracts.StageStarted, r, "t1", "executor", map[string]any{"attempt": 2})
 	l.stage(contracts.StageAttemptRef, r, "t1", "executor", map[string]any{"attempt": 2, "ref": "ref-2"})
 
-	got := progressOf(l.evs, "t1")
-	want := &progress{
+	got := Of(l.evs, "t1")
+	want := &Progress{
 		RunID: "run_a", RunSeq: r, Template: "tpl", TemplateVersion: 3,
 		Stage: "executor", Attempt: 2, Ref: "ref-2",
 		Last: "code_review", LastOutcome: "failed", Feedback: "missing tests",
@@ -58,19 +58,19 @@ func TestProgressOfMidStage(t *testing.T) {
 		Attempts:  map[string]int{"executor": 2, "code_review": 1},
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("progressOf:\n got %+v\nwant %+v", got, want)
+		t.Errorf("Of:\n got %+v\nwant %+v", got, want)
 	}
 }
 
 func TestProgressOfNoUsableRecord(t *testing.T) {
-	if got := progressOf(nil, "t1"); got != nil {
+	if got := Of(nil, "t1"); got != nil {
 		t.Errorf("no events: %+v, want nil", got)
 	}
 	var l evLog
 	l.run("run_a", "tpl", 1)
 	// Legacy events: no run_seq.
 	l.add(contracts.StageStarted, "t1", map[string]any{"stage": "executor"})
-	if got := progressOf(l.evs, "t1"); got != nil {
+	if got := Of(l.evs, "t1"); got != nil {
 		t.Errorf("legacy events: %+v, want nil (restart)", got)
 	}
 }
@@ -83,13 +83,13 @@ func TestProgressOfBetweenStagesAndGateNesting(t *testing.T) {
 	l.stage(contracts.StageStarted, r, "t1", "merge", map[string]any{"attempt": 1})
 	l.stage(contracts.StageStarted, r, "t1", "verify", nil) // the land attempt's gate
 	l.stage(contracts.StageCompleted, r, "t1", "verify", nil)
-	got := progressOf(l.evs, "t1")
+	got := Of(l.evs, "t1")
 	if got.Stage != "merge" || got.Attempt != 1 {
 		t.Errorf("in flight = %s/%d, want merge/1 (the gate nests inside it)", got.Stage, got.Attempt)
 	}
 
 	l.stage(contracts.StageCompleted, r, "t1", "merge", nil)
-	got = progressOf(l.evs, "t1")
+	got = Of(l.evs, "t1")
 	if got.Stage != "" || got.Last != "merge" || got.LastOutcome != "completed" {
 		t.Errorf("after merge: %+v, want between stages after merge", got)
 	}
@@ -104,7 +104,7 @@ func TestProgressOfFailureClosesOpenStages(t *testing.T) {
 	l.stage(contracts.StageStarted, r, "t1", "verify", nil)
 	l.stage(contracts.StageFailed, r, "t1", "verify", map[string]any{"reason": "red"})
 	l.stage(contracts.StageStarted, r, "t1", "executor", map[string]any{"attempt": 2})
-	got := progressOf(l.evs, "t1")
+	got := Of(l.evs, "t1")
 	if got.Stage != "executor" || got.Attempt != 2 || got.Loops["verify"] != 1 {
 		t.Errorf("got %+v, want executor/2 in flight and one verify loop", got)
 	}
@@ -126,7 +126,7 @@ func TestProgressOfChainsResumes(t *testing.T) {
 	l.add(contracts.StagePickedUp, "t1", map[string]any{"run_seq": r2, "mode": "resume", "resumed_from_run_seq": r1, "from_stage": "executor"})
 	l.stage(contracts.StageStarted, r2, "t1", "executor", map[string]any{"attempt": 2, "resumed": true})
 
-	got := progressOf(l.evs, "t1")
+	got := Of(l.evs, "t1")
 	if got.RunSeq != r2 || got.RunID != "run_b" {
 		t.Errorf("last run = %d/%s, want %d/run_b", got.RunSeq, got.RunID, r2)
 	}
@@ -161,50 +161,79 @@ func TestPlanPickup(t *testing.T) {
 	if verr != nil {
 		t.Fatal(verr)
 	}
-	base := func() *progress {
-		return &progress{RunSeq: 9, Template: "tpl", TemplateVersion: 2, Loops: map[string]int{}, Attempts: map[string]int{}}
+	base := func() *Progress {
+		return &Progress{RunSeq: 9, Template: "tpl", TemplateVersion: 2, Loops: map[string]int{}, Attempts: map[string]int{}}
 	}
 	cases := []struct {
 		name    string
-		rec     func() *progress
+		rec     func() *Progress
 		version int
-		want    pickupPlan
+		want    Plan
 	}{
-		{"no record", func() *progress { return nil }, 2, pickupPlan{mode: pickupRestart}},
-		{"other template", func() *progress { r := base(); r.Template = "other"; r.Stage = "review"; return r }, 2,
-			pickupPlan{mode: pickupRestart}},
-		{"edited template", func() *progress { r := base(); r.Stage = "review"; return r }, 3, pickupPlan{mode: pickupRestart}},
-		{"unknown version", func() *progress { r := base(); r.TemplateVersion = 0; r.Stage = "review"; return r }, 0,
-			pickupPlan{mode: pickupRestart}},
-		{"in flight", func() *progress { r := base(); r.Stage, r.Attempt, r.Ref = "review", 2, "ref"; return r }, 2,
-			pickupPlan{mode: pickupResume, start: 1, inFlight: true, attempt: 2, ref: "ref"}},
-		{"after completed", func() *progress { r := base(); r.Last, r.LastOutcome = "executor", "completed"; return r }, 2,
-			pickupPlan{mode: pickupResume, start: 1}},
-		{"after merge skips the gate", func() *progress { r := base(); r.Last, r.LastOutcome = "merge", "completed"; return r }, 2,
-			pickupPlan{mode: pickupResume, start: 4, merged: true}},
-		{"after a failure with loops left", func() *progress {
+		{"no record", func() *Progress { return nil }, 2, Plan{Mode: ModeRestart}},
+		{"other template", func() *Progress { r := base(); r.Template = "other"; r.Stage = "review"; return r }, 2,
+			Plan{Mode: ModeRestart}},
+		{"edited template", func() *Progress { r := base(); r.Stage = "review"; return r }, 3, Plan{Mode: ModeRestart}},
+		{"unknown version", func() *Progress { r := base(); r.TemplateVersion = 0; r.Stage = "review"; return r }, 0,
+			Plan{Mode: ModeRestart}},
+		{"in flight", func() *Progress { r := base(); r.Stage, r.Attempt, r.Ref = "review", 2, "ref"; return r }, 2,
+			Plan{Mode: ModeResume, Start: 1, InFlight: true, Attempt: 2, Ref: "ref"}},
+		{"after completed", func() *Progress { r := base(); r.Last, r.LastOutcome = "executor", "completed"; return r }, 2,
+			Plan{Mode: ModeResume, Start: 1}},
+		{"after merge skips the gate", func() *Progress { r := base(); r.Last, r.LastOutcome = "merge", "completed"; return r }, 2,
+			Plan{Mode: ModeResume, Start: 4, Merged: true}},
+		{"after a failure with loops left", func() *Progress {
 			r := base()
 			r.Last, r.LastOutcome, r.Feedback = "review", "failed", "fix it"
 			r.Loops["review"] = 1
 			return r
-		}, 2, pickupPlan{mode: pickupResume, start: 0, onLoop: true, feedback: "fix it"}},
-		{"after a failure with no loops left", func() *progress {
+		}, 2, Plan{Mode: ModeResume, Start: 0, OnLoop: true, Feedback: "fix it"}},
+		{"after a failure with no loops left", func() *Progress {
 			r := base()
 			r.Last, r.LastOutcome = "review", "failed"
 			r.Loops["review"] = 2
 			return r
-		}, 2, pickupPlan{mode: pickupResume, start: 1}},
-		{"in flight past merge", func() *progress { r := base(); r.Stage, r.Attempt = "docs", 1; return r }, 2,
-			pickupPlan{mode: pickupResume, start: 4, merged: true, inFlight: true, attempt: 1}},
+		}, 2, Plan{Mode: ModeResume, Start: 1}},
+		{"in flight past merge", func() *Progress { r := base(); r.Stage, r.Attempt = "docs", 1; return r }, 2,
+			Plan{Mode: ModeResume, Start: 4, Merged: true, InFlight: true, Attempt: 1}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			rec := c.rec()
-			got := planPickup(rec, tpl, c.version, true)
-			c.want.rec = rec
+			got := PlanPickup(rec, tpl, c.version, true)
+			c.want.Rec = rec
 			if !reflect.DeepEqual(got, c.want) {
 				t.Errorf("got %+v\nwant %+v", got, c.want)
 			}
 		})
+	}
+}
+
+func TestInProgressLogMostRecentMoveWins(t *testing.T) {
+	var evs []contracts.Envelope
+	move := func(task, actor, from, to string) {
+		raw, _ := json.Marshal(map[string]string{"from": from, "to": to})
+		evs = append(evs, contracts.Envelope{Seq: int64(len(evs) + 1), Type: contracts.TaskStatusChanged, TaskID: task, Actor: actor, Payload: raw})
+	}
+	move("user", "user", "ready", "in_progress")
+	move("pipe", "pipeline", "ready", "in_progress")
+	move("both", "pipeline", "ready", "in_progress")
+	move("both", "user", "in_progress", "blocked")
+	move("both", "user", "blocked", "in_progress")
+	move("synth", "synthesizer", "ready", "in_progress")
+	move("back", "user", "ready", "in_progress")
+	move("back", "user", "in_progress", "ready")
+	move("back", "pipeline", "ready", "in_progress")
+
+	var log InProgressLog
+	log.Fold(evs[:4]) // folded in pages, as the scheduler does
+	log.Fold(evs[4:])
+	for task, want := range map[string]bool{"user": false, "pipe": true, "both": false, "synth": false, "back": true, "none": false} {
+		if got := log.MovedBy(task, "pipeline"); got != want {
+			t.Errorf("%s: MovedBy(pipeline) = %v, want %v", task, got, want)
+		}
+	}
+	if log.since != int64(len(evs)) {
+		t.Errorf("since = %d, want %d", log.since, len(evs))
 	}
 }

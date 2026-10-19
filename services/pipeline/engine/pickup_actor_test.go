@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -71,34 +70,5 @@ func TestOnlyPipelineStartedTasksArePickedUp(t *testing.T) {
 	}
 	if picks := stageEvents(t, h, contracts.StagePickedUp, seeded[1].ID); len(picks) != 1 {
 		t.Errorf("pipeline-set task pickups = %d, want 1", len(picks))
-	}
-}
-
-func TestInProgressLogMostRecentMoveWins(t *testing.T) {
-	var evs []contracts.Envelope
-	move := func(task, actor, from, to string) {
-		raw, _ := json.Marshal(map[string]string{"from": from, "to": to})
-		evs = append(evs, contracts.Envelope{Seq: int64(len(evs) + 1), Type: contracts.TaskStatusChanged, TaskID: task, Actor: actor, Payload: raw})
-	}
-	move("user", "user", "ready", "in_progress")
-	move("pipe", "pipeline", "ready", "in_progress")
-	move("both", "pipeline", "ready", "in_progress")
-	move("both", "user", "in_progress", "blocked")
-	move("both", "user", "blocked", "in_progress")
-	move("synth", "synthesizer", "ready", "in_progress")
-	move("back", "user", "ready", "in_progress")
-	move("back", "user", "in_progress", "ready")
-	move("back", "pipeline", "ready", "in_progress")
-
-	var log inProgressLog
-	log.fold(evs[:4]) // folded in pages, as the scheduler does
-	log.fold(evs[4:])
-	for task, want := range map[string]bool{"user": false, "pipe": true, "both": false, "synth": false, "back": true, "none": false} {
-		if got := log.movedBy(task, "pipeline"); got != want {
-			t.Errorf("%s: movedBy(pipeline) = %v, want %v", task, got, want)
-		}
-	}
-	if log.since != int64(len(evs)) {
-		t.Errorf("since = %d, want %d", log.since, len(evs))
 	}
 }
