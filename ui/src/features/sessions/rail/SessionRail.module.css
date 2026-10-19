@@ -223,12 +223,13 @@
   opacity: 0.6;
 }
 
-/* Checked-off cards recede until the pointer or focus reaches one. */
+/* Checked-off cards recede until the pointer or focus reaches one, or it is open. */
 .doneList .row {
   opacity: 0.72;
 }
 .doneList .row:hover,
-.doneList .row:focus-visible {
+.doneList .row:focus-visible,
+.doneList .row.selected {
   opacity: 1;
 }
 
@@ -338,9 +339,17 @@
   background: var(--bg2);
 }
 
+/* The open card. A lightness step alone (bg1 → bg3, ~1.1:1) vanished in glare
+   and sat one step from :hover, so it wears an accent outline: an edge, not
+   the unseen card's wash and leading bar. In the link editor the outline is
+   the editor's own vocabulary (.linkCenter, .linkPicked), so it steps aside. */
 .selected {
   background: var(--bg3);
   border-color: var(--line);
+}
+.selected:not([data-link-edit]) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 /* A card the user hasn't met yet — freshly imported, or created by something
