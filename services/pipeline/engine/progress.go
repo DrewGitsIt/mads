@@ -14,7 +14,8 @@ import (
 
 // Picking up an Interrupted task (docs/PIPELINE-LEASES-DESIGN.md B2).
 //
-// An Interrupted task is in_progress with no live lease: work started and
+// An Interrupted task is in_progress with no live lease, moved to
+// in_progress by the pipeline (inProgressLog): pipeline work started and
 // nobody is doing it now. It is a scheduler concept, derived and never
 // stored. A run that claims one continues the task's progress record —
 // rebuilt from the events earlier runs left behind (progressOf) — instead of
@@ -65,6 +66,58 @@ type progress struct {
 	Completed []string       // stages completed, in order of completion (deduplicated)
 	Loops     map[string]int // stage -> stage.failed count (on_fail loop-backs taken)
 	Attempts  map[string]int // stage -> highest attempt number seen
+}
+
+// inProgressLog remembers, per task, who made its most recent
+// task.status_changed into in_progress (the envelope's actor). Interrupted
+// is a pipeline-only concept: only a task the pipeline itself moved to
+// in_progress (the engine's setStatus, under its actor, "pipeline") can be
+// Interrupted. A task a person, a session or the synthesizer set in
+// progress is theirs, and no run picks it up. The most recent transition
+// wins, so a pipeline-started task that someone later sets in progress
+// again is theirs too. fold is fed the session's task.status_changed
+// events, any number of times, in seq order (the scheduler pages them
+// incrementally).
+type inProgressLog struct {
+	by    map[string]string // task -> actor of its latest move into in_progress
+	since int64             // the last seq folded
+}
+
+func (l *inProgressLog) fold(evs []contracts.Envelope) {
+	if l.by == nil {
+		l.by = map[string]string{}
+	}
+	for _, ev := range evs {
+		if ev.Seq > l.since {
+			l.since = ev.Seq
+		}
+		if ev.Type != contracts.TaskStatusChanged || ev.TaskID == "" {
+			continue
+		}
+		var p struct {
+			To string `json:"to"`
+		}
+		if json.Unmarshal(ev.Payload, &p) == nil && p.To == string(contracts.StatusInProgress) {
+			l.by[ev.TaskID] = ev.Actor
+		}
+	}
+}
+
+// movedBy reports whether actor made taskID's latest move into in_progress.
+func (l *inProgressLog) movedBy(taskID, actor string) bool {
+	return l.by[taskID] == actor
+}
+
+// refreshInProgress pages the session's task.status_changed events since
+// the last refresh into l. Best-effort: a failed read keeps what l knew.
+func (e *engine) refreshInProgress(ctx context.Context, l *inProgressLog) {
+	for {
+		batch, err := e.cfg.Data.Events(ctx, l.since, e.cfg.SessionID, []string{string(contracts.TaskStatusChanged)})
+		if err != nil || len(batch) == 0 {
+			return
+		}
+		l.fold(batch)
+	}
 }
 
 // pickupEventTypes is every event type progressOf reads.

@@ -428,11 +428,15 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 	// leases (any run's); a claim that still conflicts (a holder of another
 	// kind, or a lease taken since the scan) parks the task for
 	// heldBackoff, so a task held elsewhere costs no claim per scan.
+	// Only a task the pipeline moved to in_progress can be Interrupted
+	// (inProgressLog): one a person, a session or the synthesizer set in
+	// progress is never picked up, and not counted.
 	leased := map[string]bool{}
 	heldUntil := map[string]time.Time{}
+	var movedIn inProgressLog
 	interrupted := func(t contracts.Task) bool {
-		return t.Status == contracts.StatusInProgress && !leased[t.ID] && !running[t.ID] &&
-			!time.Now().Before(heldUntil[t.ID])
+		return t.Status == contracts.StatusInProgress && movedIn.movedBy(t.ID, e.cfg.Actor) &&
+			!leased[t.ID] && !running[t.ID] && !time.Now().Before(heldUntil[t.ID])
 	}
 
 	// Continuous scheduler: fill free slots from the ready set, then wait
@@ -464,8 +468,9 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 			}
 		}
 		if maybeInterrupted {
-			// Only worth a request when some in_progress task could be
+			// Only worth requests when some in_progress task could be
 			// Interrupted. A failed read keeps the last scan's view.
+			e.refreshInProgress(ctx, &movedIn)
 			if ls, err := e.cfg.Data.LeasesOfKind(ctx, e.cfg.Actor); err == nil {
 				clear(leased)
 				for _, l := range ls {

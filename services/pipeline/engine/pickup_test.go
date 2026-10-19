@@ -726,6 +726,11 @@ func TestInterruptedHeldElsewhereIsSkippedQuietly(t *testing.T) {
 	h := w.h
 	ctx := context.Background()
 	seeded := h.seed(contracts.Task{Title: "other run's"}, contracts.Task{Title: "someone's"}, contracts.Task{Title: "slow"})
+	// Both were started by the pipeline (so they'd be Interrupted but for
+	// the leases), then leased by someone else.
+	for _, task := range seeded[:2] {
+		pipelineStarted(t, h, task)
+	}
 	other := dataclient.New(h.base, "pipeline")
 	if err := other.Claim(ctx, seeded[0].ID, "pipeline:run_other", time.Minute); err != nil {
 		t.Fatal(err)
@@ -733,16 +738,6 @@ func TestInterruptedHeldElsewhereIsSkippedQuietly(t *testing.T) {
 	someone := dataclient.New(h.base, "thief")
 	if err := someone.Claim(ctx, seeded[1].ID, "", time.Minute); err != nil {
 		t.Fatal(err)
-	}
-	for _, task := range seeded[:2] {
-		task.Status = contracts.StatusInProgress
-		c := other
-		if task.ID == seeded[1].ID {
-			c = someone
-		}
-		if err := c.UpdateTask(ctx, &task); err != nil {
-			t.Fatal(err)
-		}
 	}
 
 	counter := newClaimCounter(t, h.base)

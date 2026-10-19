@@ -49,6 +49,10 @@ func TestReapOnLaunchReclaimsAndResumes(t *testing.T) {
 	if err := h.data.ClaimWithIdentity(ctx, task.ID, "pipeline:run_dead", time.Minute, identity); err != nil {
 		t.Fatal(err)
 	}
+	// The dead engine moved the task to in_progress under its lease, as
+	// setStatus does: h.data is a "pipeline" client holding that lease's
+	// token, so task.status_changed records actor "pipeline" — what makes
+	// the task Interrupted once the lease is gone.
 	task.Status = contracts.StatusInProgress
 	if err := h.data.UpdateTask(ctx, &task); err != nil {
 		t.Fatal(err)

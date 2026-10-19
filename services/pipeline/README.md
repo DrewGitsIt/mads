@@ -30,8 +30,10 @@ prove dead; losing a lease never changes a task's status
 (docs/PIPELINE-LEASES-DESIGN.md).
 
 **Interrupted tasks are picked up** (docs/PIPELINE-LEASES-DESIGN.md B2). A
-task that is `in_progress` with no live lease is Interrupted (derived, never
-stored); the scheduler runs it like a ready task, under the same dependency,
+task that is `in_progress` with no live lease, and whose latest move into
+in_progress was the pipeline's (`task.status_changed` actor `pipeline`), is
+Interrupted (derived, never stored; a task a person, session or the
+synthesizer set in progress is never picked up or counted); the scheduler runs it like a ready task, under the same dependency,
 draft, exclusion and concurrency rules. An in_progress task another run
 holds is that run's: pre-filtered by the pipeline leases each scan, and a
 claim conflict parks it for 30s, so it is neither claimed every scan nor

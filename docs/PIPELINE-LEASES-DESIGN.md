@@ -39,7 +39,10 @@ or reboot mid-run therefore throws away every in-flight task's progress.
   `stage.attempt_ref` (the agent's native session id, recorded as soon as
   the provider announces it, `engine.go:1784`).
 - Task state is not tied to a run. A task is **Interrupted** when it is
-  `in_progress` with no live lease: work started and nobody is doing it
+  `in_progress` with no live lease, moved to in_progress by the pipeline
+  (its most recent `task.status_changed` into in_progress has actor
+  `pipeline`; one set by a person, a session or the synthesizer never is):
+  work started and nobody is doing it
   now. Interrupted is a *pipeline* concept, derived and never stored. It
   shows in the Tasks tab's run views and never in a task's own status.
   Blocked (needs a person) and Needs review are not Interrupted.
@@ -158,6 +161,19 @@ same dependency rules and the same exclude box. When it claims one, it
 continues the task's **progress record**: the task's last run, that run's
 template version, its completed stages, and the interrupted stage's last
 attempt and `stage.attempt_ref`, all from existing events.
+
+Events this adds (`contracts.StagePickedUp`, `services/pipeline/engine/progress.go`):
+
+- `stage.picked_up` (per task, when a run picks it up): `{run_seq, mode:
+  "resume"|"restart", from_stage, resumed_from_run_id,
+  resumed_from_run_seq, completed_stages}`; `resumed_from_*` are omitted
+  when there is no usable record.
+- Every `stage.*` event for a task carries `run_seq` (the writing run's
+  `pipeline.started` seq), and `stage.started` carries `attempt`.
+- The picked-up stage's `stage.started` adds `resumed: true` (agent
+  session resumed, same attempt) or `rerun: true` (a new attempt; plus
+  `resume_error` when a resume failed and fell back). Attempt numbers
+  continue from the earlier run, so read `attempt`, don't count events.
 
 1. **Keep the worktree.** `worktrees.create` no longer wipes an existing
    `mads/<taskID>` worktree or branch for an Interrupted task. It reuses
