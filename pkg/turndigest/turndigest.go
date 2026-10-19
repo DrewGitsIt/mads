@@ -4,8 +4,8 @@
 // consolidates what used to be sibling implementations: the per-turn digest
 // push's system prompt (services/router/internal/job), the session child's
 // digest rendering (services/session/internal/runner), and — reserved via
-// the Audience constants — get_summary's transcript tail and pipeline-run
-// digests.
+// the Audience constants — get_session_summary's transcript tail and
+// pipeline-run digests.
 //
 // The pipeline is headroom-inspired: a deterministic normalize pass first
 // (collapse repeated tool calls, merge adjacent assistant fragments, cap
@@ -53,8 +53,8 @@ type Audience string
 const (
 	// MonitorPush is the per-turn push to a read-link monitor.
 	MonitorPush Audience = "monitor_push"
-	// LeaderCatchup is reserved for get_summary's transcript tail: a leader
-	// agent catching up on a session it delegates to.
+	// LeaderCatchup is reserved for get_session_summary's transcript tail: a
+	// leader agent catching up on a session it delegates to.
 	LeaderCatchup Audience = "leader_catchup"
 	// RunDigest is reserved for pipeline-run digests.
 	RunDigest Audience = "run_digest"

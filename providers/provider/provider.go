@@ -195,6 +195,12 @@ type MCPServerRef struct {
 	Type string
 	// URL is the endpoint for Type "http"/"sse". Unused for stdio.
 	URL string
+	// AlwaysLoad asks the harness to put this server's tools in the prompt
+	// up front rather than behind its deferred tool search, for a server the
+	// agent should see without having to go looking (the linked-session
+	// tools, 2026-10-19). claude-code honors it (alwaysLoad, 2.1.285+);
+	// other providers ignore it.
+	AlwaysLoad bool
 }
 
 // OneShotRequest is a single non-interactive invocation — the Fast Model

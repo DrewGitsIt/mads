@@ -96,14 +96,20 @@ func (s *server) announceOrchestrateGrant(link contracts.Link) {
 const grantNoticeSource = "mads"
 
 // orchestrateGrantNotice is the text of announceOrchestrateGrant's notice.
+// Its tone matches the link tools' own MCP instructions (pkg/orchestratemcp,
+// 2026-10-19): the user made this link and suggests these tools, so the
+// notice names them by what they're for rather than as a capability list.
 func orchestrateGrantNotice(mads, routerURL, leaderID, subjectID, subjectName string) string {
 	flags := "-session " + leaderID
 	if routerURL != "" {
 		flags += " -router " + routerURL
 	}
-	return fmt.Sprintf("You now lead %q (%s) through a Leader link. Your orchestrate tools "+
-		"(list_links, get_summary, send_message) mount the next time you're idle. "+
-		"Until then, the same actions work from a shell:\n\n"+
+	return fmt.Sprintf("The user has linked you to the session %q (%s) as its leader, "+
+		"and suggests you communicate with it through your MADS link tools: "+
+		"message_session to send it instructions or answers, get_session_summary to read its replies, "+
+		"get_session_turns to audit its exact tool calls. Messages you send appear in its conversation, "+
+		"attributed to you; its replies come back to you as digests. "+
+		"The tools load the next time you're idle. Until then, the same actions work from a shell:\n\n"+
 		"  %[3]s orchestrate subjects %[4]s\n"+
 		"  %[3]s orchestrate summary %[4]s -subject %[2]s\n"+
 		"  %[3]s orchestrate send %[4]s -subject %[2]s -text \"your message\"\n\n"+

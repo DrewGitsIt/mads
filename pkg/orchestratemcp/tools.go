@@ -2,15 +2,31 @@ package orchestratemcp
 
 import "github.com/drewkidwell/mads/pkg/contracts"
 
+// sessionParam is the `session` argument every per-session tool takes: the
+// linked session's name, resolved per call against list_linked_sessions
+// (resolve.go). Names over link or session IDs (2026-10-19): a name is what
+// the agent reads in its conversation and what the user calls the session,
+// so it's the handle the agent reaches for.
+var sessionParam = map[string]any{
+	"type":        "string",
+	"description": "The linked session's name, as list_linked_sessions shows it. Its session ID also works.",
+}
+
 // toolDefs is the full tools/list response body for a session holding the
-// orchestrate grant — every tool this server implements, each mapping 1:1
-// onto one Router orchestrate route. A session holding only the read grant
-// gets readOnlyToolDefs() instead: everything except send_message, which
+// orchestrate grant — every tool this server implements, each mapping onto
+// one Router orchestrate route. A session holding only the read grant gets
+// readOnlyToolDefs() instead: everything except message_session, which
 // stays orchestrate-only (item 1, "pull tools for read grants").
+//
+// Fixed verbs named for what the agent wants done, with descriptions that
+// say what happens on the other side (2026-10-19): a leader that can't tell
+// what these tools do won't pick them to reach its linked sessions.
 var toolDefs = []map[string]any{
 	{
-		"name":        "list_links",
-		"description": "List the sessions this session holds an orchestrate link to.",
+		"name": "list_linked_sessions",
+		"description": "List the sessions the user has linked to you, and how you can reach each: its name (pass it as `session` to the other tools), " +
+			"session ID, grants (orchestrate lets you message it; read lets you read its summary and turns), " +
+			"what it's doing right now, and its cadence (how its progress comes back to you).",
 		"inputSchema": map[string]any{
 			"type":                 "object",
 			"properties":           map[string]any{},
@@ -18,67 +34,77 @@ var toolDefs = []map[string]any{
 		},
 	},
 	{
-		"name":        "get_summary",
-		"description": "Get a linked subject session's current summary, or its recent transcript if no summary exists yet.",
+		"name": "message_session",
+		"description": "Send a message to a linked session. It appears in that session's conversation, attributed to you; " +
+			"if the session is in the middle of a turn, the message queues until that turn ends. " +
+			"The session's reply comes back to you as a digest. Set wait_ms to wait briefly for the reply and get it in this result.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"subject_session_id": map[string]any{"type": "string"},
+				"session": sessionParam,
+				"text":    map[string]any{"type": "string", "description": "The message, as you want the session to read it."},
+				"wait_ms": map[string]any{"type": "integer", "description": "How long to wait for the reply before returning, in milliseconds, up to 30000. Omit or 0 to return as soon as the message is delivered."},
 			},
-			"required":             []string{"subject_session_id"},
+			"required":             []string{"session", "text"},
 			"additionalProperties": false,
 		},
 	},
 	{
-		"name":        "get_turns",
-		"description": "Get the raw turn deltas for a cited range — drill down into a get_summary digest's turn range.",
+		"name": "get_session_summary",
+		"description": "Read a compressed account of what a linked session has said and done, focused on its replies. " +
+			"Cheap in tokens, so use it first. It cites turn numbers you can pass to get_session_turns for the exact record.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"subject_session_id": map[string]any{"type": "string"},
-				"from_turn":          map[string]any{"type": "integer"},
-				"to_turn":            map[string]any{"type": "integer"},
+				"session": sessionParam,
 			},
-			"required":             []string{"subject_session_id", "from_turn", "to_turn"},
+			"required":             []string{"session"},
 			"additionalProperties": false,
 		},
 	},
 	{
-		"name":        "send_message",
-		"description": "Send a message into a linked subject session's conversation. Delivered asynchronously; optionally wait briefly for a reply before returning.",
+		"name": "get_session_turns",
+		"description": "Read a linked session's exact turns for a range: its words verbatim and every tool call it made " +
+			"(the tool and the file or path it acted on; tool output isn't included). " +
+			"Use it to audit what the session actually did, or to read exactly what it said.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"link_id": map[string]any{"type": "string"},
-				"text":    map[string]any{"type": "string"},
-				"wait_ms": map[string]any{"type": "integer", "description": "milliseconds to wait for a reply before returning, capped at 30000; omit or 0 for immediate return"},
+				"session":   sessionParam,
+				"from_turn": map[string]any{"type": "integer", "description": "First turn number in the range, inclusive."},
+				"to_turn":   map[string]any{"type": "integer", "description": "Last turn number in the range, inclusive."},
 			},
-			"required":             []string{"link_id", "text"},
+			"required":             []string{"session", "from_turn", "to_turn"},
 			"additionalProperties": false,
 		},
 	},
 	{
-		"name":        "check_mailbox",
-		"description": "Drain a link's queued digest backlog: an on_signal link accumulates the subject's turn digests instead of pushing them; this returns everything queued since your last wake or check, oldest first, and clears it.",
+		"name": "check_mailbox",
+		"description": "Collect the digests waiting from a linked session. On an on_signal link, the session's turn digests wait here " +
+			"instead of coming to you after each turn. This returns everything that arrived since you were last woken " +
+			"or last checked, oldest first, and clears it.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"link_id": map[string]any{"type": "string"},
+				"session": sessionParam,
 			},
-			"required":             []string{"link_id"},
+			"required":             []string{"session"},
 			"additionalProperties": false,
 		},
 	},
 	{
-		"name":        "set_attention",
-		"description": "Flip your own attention level on a link you hold: per_turn to receive pushed digests as the subject's turns complete, on_signal to be woken only when the subject needs attention (permission request, crash, task done/blocked), or manual_only to stop all pushes and catch up on demand via get_summary/get_turns instead.",
+		"name": "set_attention",
+		"description": "Choose how a linked session's progress reaches you. per_turn: a digest each time it finishes a turn. " +
+			"on_signal: you're woken only when it needs attention (a permission request, a crash, a task done or blocked), " +
+			"and other digests wait for check_mailbox. manual_only: nothing is sent; you catch up with get_session_summary " +
+			"and get_session_turns when you choose.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"link_id": map[string]any{"type": "string"},
+				"session": sessionParam,
 				"cadence": map[string]any{"type": "string", "enum": cadenceEnum()},
 			},
-			"required":             []string{"link_id", "cadence"},
+			"required":             []string{"session", "cadence"},
 			"additionalProperties": false,
 		},
 	},
@@ -94,15 +120,33 @@ func cadenceEnum() []string {
 	return vals
 }
 
-// readOnlyToolDefs is toolDefs minus send_message — the slice spawned for a
-// session that holds only the read grant (item 1).
+// readOnlyToolDefs is toolDefs minus message_session — the slice spawned
+// for a session that holds only the read grant (item 1).
 func readOnlyToolDefs() []map[string]any {
 	out := make([]map[string]any, 0, len(toolDefs))
 	for _, t := range toolDefs {
-		if t["name"] == "send_message" {
+		if t["name"] == "message_session" {
 			continue
 		}
 		out = append(out, t)
 	}
 	return out
 }
+
+// instructions is the initialize result's server instructions: a harness
+// shows them to the model alongside the tools, so this is where the server
+// says what the tools are for as a set (2026-10-19). Deliberately names no
+// sessions — the server starts once per process while links come and go
+// under it — and no other way of reaching a session: it says what these
+// tools do, not what to avoid.
+const instructions = "The user has linked you to other MADS sessions and suggests you communicate with them through these tools: " +
+	"list_linked_sessions to see who they are, message_session to send them instructions or answers, " +
+	"get_session_summary to read their replies, get_session_turns to audit their exact tool calls. " +
+	"Messages you send appear in the linked session's conversation, attributed to you; its replies come back to you as digests."
+
+// readOnlyInstructions is instructions for a read-grant-only server, which
+// has no message_session: the user linked these sessions for watching.
+const readOnlyInstructions = "The user has linked you to other MADS sessions so you can follow their work through these tools: " +
+	"list_linked_sessions to see who they are, get_session_summary to read what they said and did, " +
+	"get_session_turns to audit their exact tool calls. " +
+	"Their progress also comes back to you as digests, as each link's cadence sets (see set_attention)."

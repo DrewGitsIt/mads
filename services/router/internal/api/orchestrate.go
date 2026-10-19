@@ -14,23 +14,24 @@ import (
 	"github.com/drewkidwell/mads/pkg/turndigest"
 )
 
-// orchestrateTranscriptTailLen bounds get_summary's live-transcript fallback
-// (no Session.Summary yet) to a short, recent slice — this endpoint answers
-// a leader agent's tool call, not a UI pane, so it stays terse by default.
+// orchestrateTranscriptTailLen bounds get_session_summary's live-transcript
+// fallback (no Session.Summary yet) to a short, recent slice — this endpoint
+// answers a leader agent's tool call, not a UI pane, so it stays terse by
+// default.
 const orchestrateTranscriptTailLen = 20
 
 // orchestrateLiveTurnLimit bounds how many of a subject's most recent
-// session.turn_ended envelopes get_summary's live-compression path
+// session.turn_ended envelopes get_session_summary's live-compression path
 // considers — enough real material for a useful digest without querying a
 // long-running subject's entire turn history on every leader tool call.
 const orchestrateLiveTurnLimit = 20
 
-// orchestrateSummaryBudgetTokens is get_summary's live-compression budget:
-// terse enough for a leader's tool-call turn, generous enough that a
+// orchestrateSummaryBudgetTokens is get_session_summary's live-compression
+// budget: terse enough for a leader's tool-call turn, generous enough that a
 // long-transcript fixture still yields readable prose citing a turn range.
 const orchestrateSummaryBudgetTokens = 1000
 
-// maxOrchestrateWaitMS caps send_message's optional bounded wait so a
+// maxOrchestrateWaitMS caps message_session's optional bounded wait so a
 // leader's tool call can never hold the Router's handler goroutine open
 // indefinitely.
 const maxOrchestrateWaitMS int64 = 30000
@@ -40,8 +41,9 @@ const maxOrchestrateWaitMS int64 = 30000
 const orchestratePollInterval = 50 * time.Millisecond
 
 // handleOrchestrateSubjects lists the subjects {id} (the leader session)
-// holds an orchestrate grant over — the orchestrate MCP server's list_links
-// tool (docs/LINKED-SESSIONS-DESIGN.md decomposition item 5).
+// holds an orchestrate or read grant over — the link tools'
+// list_linked_sessions, and the table they resolve a tool's `session`
+// argument against (docs/LINKED-SESSIONS-DESIGN.md decomposition item 5).
 func (s *server) handleOrchestrateSubjects(w http.ResponseWriter, r *http.Request) {
 	leaderID := r.PathValue("id")
 	links, err := s.data.LinksForSession(r.Context(), leaderID)
@@ -55,6 +57,7 @@ func (s *server) handleOrchestrateSubjects(w http.ResponseWriter, r *http.Reques
 		SubjectName      string   `json:"subject_name"`
 		Grants           []string `json:"grants"`
 		Activity         string   `json:"activity"`
+		Cadence          string   `json:"cadence"`
 	}
 	out := []orchestrateSubject{}
 	for _, l := range links {
@@ -77,15 +80,17 @@ func (s *server) handleOrchestrateSubjects(w http.ResponseWriter, r *http.Reques
 			SubjectName:      name,
 			Grants:           grants,
 			Activity:         activity,
+			Cadence:          string(l.Cadence),
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 // findOrchestrateLink locates the (at most one) link from leaderID to
-// subjectID that carries the orchestrate or read grant — get_summary/
-// get_turns are pull tools available to both leaders and monitors (item 1,
-// "pull tools for read grants"); only send_message stays orchestrate-only.
+// subjectID that carries the orchestrate or read grant — get_session_summary/
+// get_session_turns are pull tools available to both leaders and monitors
+// (item 1, "pull tools for read grants"); only message_session stays
+// orchestrate-only.
 // No dedicated single-pair lookup exists on the Data Service (L1), so this
 // filters LinksForSession the same way handleOrchestrateSubjects does.
 func (s *server) findOrchestrateLink(ctx context.Context, leaderID, subjectID string) (*contracts.Link, error) {
@@ -103,8 +108,8 @@ func (s *server) findOrchestrateLink(ctx context.Context, leaderID, subjectID st
 	return nil, nil
 }
 
-// handleOrchestrateSummary answers {id}'s (the leader) get_summary tool call
-// for the subject named by the "for" query param. A live subject (one with
+// handleOrchestrateSummary answers {id}'s (the leader) get_session_summary
+// tool call for the subject named by the "for" query param. A live subject (one with
 // session.turn_ended envelopes) gets a compressed digest of its most recent
 // turns via pkg/turndigest, with the subject's durable Session.Summary
 // prepended as a "prologue" field when present — the durable summary alone
@@ -169,9 +174,9 @@ func (s *server) handleOrchestrateSummary(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// orchestrateSummaryFallback is get_summary's pre-digest behavior, unchanged:
-// the subject's durable Session.Summary when set, else a short raw
-// transcript tail.
+// orchestrateSummaryFallback is get_session_summary's pre-digest behavior,
+// unchanged: the subject's durable Session.Summary when set, else a short
+// raw transcript tail.
 func (s *server) orchestrateSummaryFallback(ctx context.Context, subject contracts.Session) map[string]string {
 	if subject.Summary != "" {
 		return map[string]string{"source": "summary", "text": subject.Summary}
@@ -198,8 +203,8 @@ func (s *server) orchestrateTurnEnvelopes(ctx context.Context, subjectID string)
 // (the Data Service's global, gapless, monotonically increasing log
 // position, pkg/contracts/event.go) as the turn's anchor number — the one
 // stable identifier a turn_ended envelope carries, and exactly what
-// get_turns's from_turn/to_turn need to recover the same range a digest
-// cites. turndigest.Parse recovers the structured Entry list (kind + text,
+// get_session_turns's from_turn/to_turn need to recover the same range a
+// digest cites. turndigest.Parse recovers the structured Entry list (kind + text,
 // tool calls reduced to name+path) from the delta's rendered line format,
 // the same normalized shape GenerateDigest already builds from the same
 // payload for its own compression (services/router/internal/job/digest.go)
@@ -217,8 +222,8 @@ func orchestrateTurnFromEnvelope(env contracts.Envelope) turndigest.Turn {
 }
 
 // orchestrateTurnEntry is one turndigest.Entry tagged with the turn number
-// (envelope Seq) it came from — get_turns's response shape, so a leader can
-// see turn boundaries within the range it's drilling into.
+// (envelope Seq) it came from — get_session_turns's response shape, so a
+// leader can see turn boundaries within the range it's drilling into.
 type orchestrateTurnEntry struct {
 	Turn int    `json:"turn"`
 	Kind string `json:"kind"`
@@ -227,12 +232,13 @@ type orchestrateTurnEntry struct {
 	Path string `json:"path,omitempty"`
 }
 
-// handleOrchestrateGetTurns answers {id}'s (the leader) get_turns tool call:
-// the normalized (turndigest.Parse'd, not model-compressed) entries for the
-// subject's session.turn_ended envelopes whose turn number (Seq) falls in
-// [from_turn, to_turn] — recoverable loss instead of minimal loss, letting a
-// leader drill down into the anchor range a get_summary digest cited. Gated
-// by the same orchestrate-link check as get_summary.
+// handleOrchestrateGetTurns answers {id}'s (the leader) get_session_turns
+// tool call: the normalized (turndigest.Parse'd, not model-compressed)
+// entries for the subject's session.turn_ended envelopes whose turn number
+// (Seq) falls in [from_turn, to_turn] — recoverable loss instead of minimal
+// loss, letting a leader drill down into the anchor range a
+// get_session_summary digest cited. Gated by the same orchestrate-link check
+// as get_session_summary.
 func (s *server) handleOrchestrateGetTurns(w http.ResponseWriter, r *http.Request) {
 	leaderID := r.PathValue("id")
 	subjectID := r.URL.Query().Get("for")
@@ -400,7 +406,7 @@ func (s *server) resolveLinkAttribution(ctx context.Context, link contracts.Link
 
 // deliverLinkMessage POSTs text into link's subject session's /inject
 // endpoint. It duplicates deliverDigest's POST logic (job/digest.go) rather
-// than reusing postJSONToChild: send_message composes its own response
+// than reusing postJSONToChild: message_session composes its own response
 // (optionally augmented with a bounded-wait reply below), so there is
 // nothing for postJSONToChild's direct-to-ResponseWriter write to attach to
 // — the same "different execution context" reasoning that already justifies
@@ -434,7 +440,7 @@ func (s *server) deliverLinkMessage(ctx context.Context, link contracts.Link, te
 	return true, nil
 }
 
-// handleOrchestrateMessage delivers a leader's send_message tool call into
+// handleOrchestrateMessage delivers a leader's message_session tool call into
 // its subject's conversation, always attributed and queued exactly like
 // plain inject (decisions 1-2) — the orchestrate grant only changes who may
 // call it, not how delivery works (decision 3: trust stays capped by the

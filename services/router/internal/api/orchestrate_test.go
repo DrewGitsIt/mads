@@ -44,12 +44,11 @@ func TestOrchestrateRoutes404WhenFlagOff(t *testing.T) {
 	}
 }
 
-// TestOrchestrateSubjectsListShape proves list_links surfaces links where
-// the leader is the granting session and the link carries the orchestrate
-// OR read grant (item 1, "pull tools for read grants") — a Monitor-preset
-// link (read only) now appears alongside a Leader-preset link, while a link
-// where the leader is the subject rather than the grantor is still
-// excluded.
+// TestOrchestrateSubjectsListShape proves list_linked_sessions surfaces links
+// where the leader is the granting session and the link carries the orchestrate
+// OR read grant (item 1, "pull tools for read grants") — a Monitor-preset link
+// (read only) now appears alongside a Leader-preset link, while a link where
+// the leader is the subject rather than the grantor is still excluded.
 func TestOrchestrateSubjectsListShape(t *testing.T) {
 	srv := newTestServer(t)
 	setLinkedSessionsFlag(t, srv.URL, true)
@@ -103,6 +102,7 @@ func TestOrchestrateSubjectsListShape(t *testing.T) {
 		SubjectName      string   `json:"subject_name"`
 		Grants           []string `json:"grants"`
 		Activity         string   `json:"activity"`
+		Cadence          string   `json:"cadence"`
 	}
 	list := decodeJSON[[]orchestrateSubject](t, listResp)
 	if len(list) != 2 {
@@ -118,6 +118,10 @@ func TestOrchestrateSubjectsListShape(t *testing.T) {
 	}
 	if len(got.Grants) != 3 {
 		t.Fatalf("grants = %v, want 3 entries", got.Grants)
+	}
+	// The link tools' list_linked_sessions reports each link's cadence.
+	if !contracts.LinkCadence(got.Cadence).Valid() {
+		t.Fatalf("cadence = %q, want a registered cadence", got.Cadence)
 	}
 	gotMon, ok := byLinkID[monLink.ID]
 	if !ok || gotMon.SubjectSessionID != other.ID || gotMon.SubjectName != "other" {
@@ -183,8 +187,8 @@ func TestOrchestrateMessage404WhenSubjectNotRunning(t *testing.T) {
 	}
 }
 
-// TestOrchestrateSummaryUsesSessionSummary proves get_summary prefers the
-// subject's Summary field when one is set, without touching the transcript.
+// TestOrchestrateSummaryUsesSessionSummary proves get_session_summary prefers
+// the subject's Summary field when one is set, without touching the transcript.
 func TestOrchestrateSummaryUsesSessionSummary(t *testing.T) {
 	srv, base := newTestServerWithData(t)
 	setLinkedSessionsFlag(t, srv.URL, true)
@@ -220,8 +224,8 @@ func TestOrchestrateSummaryUsesSessionSummary(t *testing.T) {
 	}
 }
 
-// TestOrchestrateSummaryNoOrchestrateLinkForbidden proves get_summary refuses
-// to serve a subject the leader has no orchestrate link to.
+// TestOrchestrateSummaryNoOrchestrateLinkForbidden proves get_session_summary
+// refuses to serve a subject the leader has no orchestrate link to.
 func TestOrchestrateSummaryNoOrchestrateLinkForbidden(t *testing.T) {
 	srv := newTestServer(t)
 	setLinkedSessionsFlag(t, srv.URL, true)
@@ -240,7 +244,8 @@ func TestOrchestrateSummaryNoOrchestrateLinkForbidden(t *testing.T) {
 
 // appendTurnEnded appends a session.turn_ended envelope carrying delta for
 // sessionID — the same shape Runner.pushTurnEnded persists — and returns it
-// with its assigned Seq, the turn number get_summary/get_turns anchor on.
+// with its assigned Seq, the turn number get_session_summary/get_session_turns
+// anchor on.
 func appendTurnEnded(t *testing.T, c *dataclient.Client, sessionID, delta string) contracts.Envelope {
 	t.Helper()
 	raw, err := json.Marshal(map[string]string{"delta": delta})
@@ -259,12 +264,11 @@ func appendTurnEnded(t *testing.T, c *dataclient.Client, sessionID, delta string
 	return env
 }
 
-// TestOrchestrateSummaryCompressesLiveTurns proves get_summary on a subject
-// with session.turn_ended envelopes returns compressed prose citing the turn
-// range, with the durable Summary carried alongside as a "prologue" rather
-// than short-circuiting the whole response (the staleness this rework
-// fixes: a durable summary alone can't reflect turns that landed after it
-// was written).
+// TestOrchestrateSummaryCompressesLiveTurns proves get_session_summary on a
+// subject with session.turn_ended envelopes returns compressed prose citing the
+// turn range, with the durable Summary carried alongside as a "prologue" rather
+// than short-circuiting the whole response (the staleness this rework fixes: a
+// durable summary alone can't reflect turns that landed after it was written).
 func TestOrchestrateSummaryCompressesLiveTurns(t *testing.T) {
 	srv, base := newTestServerWithData(t)
 	setLinkedSessionsFlag(t, srv.URL, true)
@@ -394,9 +398,9 @@ func TestOrchestrateSummaryNoEnvelopesUnchanged(t *testing.T) {
 	}
 }
 
-// TestOrchestrateGetTurnsReturnsCitedRange proves get_turns recovers the
-// normalized entries for the exact turn range a get_summary digest would
-// cite.
+// TestOrchestrateGetTurnsReturnsCitedRange proves get_session_turns recovers
+// the normalized entries for the exact turn range a get_session_summary digest
+// would cite.
 func TestOrchestrateGetTurnsReturnsCitedRange(t *testing.T) {
 	srv, base := newTestServerWithData(t)
 	setLinkedSessionsFlag(t, srv.URL, true)
@@ -425,7 +429,7 @@ func TestOrchestrateGetTurnsReturnsCitedRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("get_turns: status %d", resp.StatusCode)
+		t.Fatalf("get_session_turns: status %d", resp.StatusCode)
 	}
 	type turnsResp struct {
 		FromTurn int `json:"from_turn"`
@@ -454,8 +458,8 @@ func TestOrchestrateGetTurnsReturnsCitedRange(t *testing.T) {
 	}
 }
 
-// TestOrchestrateGetTurnsNoOrchestrateLinkForbidden proves get_turns is
-// gated by the same orchestrate-link check as get_summary.
+// TestOrchestrateGetTurnsNoOrchestrateLinkForbidden proves get_session_turns is
+// gated by the same orchestrate-link check as get_session_summary.
 func TestOrchestrateGetTurnsNoOrchestrateLinkForbidden(t *testing.T) {
 	srv := newTestServer(t)
 	setLinkedSessionsFlag(t, srv.URL, true)
@@ -468,7 +472,7 @@ func TestOrchestrateGetTurnsNoOrchestrateLinkForbidden(t *testing.T) {
 		t.Fatal(err)
 	}
 	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("get_turns without link: status %d, want 403", resp.StatusCode)
+		t.Fatalf("get_session_turns without link: status %d, want 403", resp.StatusCode)
 	}
 }
 
@@ -639,7 +643,7 @@ func appendLinkMessageInjected(t *testing.T, c *dataclient.Client, leaderID, lin
 	}
 }
 
-// TestOrchestrateMessageBoundedWaitReturnsReply proves send_message's
+// TestOrchestrateMessageBoundedWaitReturnsReply proves message_session's
 // optional wait_ms picks up a reply that lands as a link.message_injected
 // event on the leader's own session before the deadline (docs/
 // LINKED-SESSIONS-DESIGN.md decision 1: quick-question ergonomics on top of
@@ -680,7 +684,7 @@ func TestOrchestrateMessageBoundedWaitReturnsReply(t *testing.T) {
 	}
 }
 
-// TestOrchestrateMessageBoundedWaitTimesOut proves send_message degrades to
+// TestOrchestrateMessageBoundedWaitTimesOut proves message_session degrades to
 // the documented "still working" note when no reply lands before wait_ms
 // elapses, rather than blocking indefinitely.
 func TestOrchestrateMessageBoundedWaitTimesOut(t *testing.T) {

@@ -1296,7 +1296,8 @@ func mcpServersEqual(a, b []provider.MCPServerRef) bool {
 		return false
 	}
 	for i := range a {
-		if a[i].Name != b[i].Name || a[i].Command != b[i].Command || len(a[i].Env) != len(b[i].Env) {
+		if a[i].Name != b[i].Name || a[i].Command != b[i].Command || a[i].AlwaysLoad != b[i].AlwaysLoad ||
+			len(a[i].Env) != len(b[i].Env) {
 			return false
 		}
 		for j := range a[i].Env {

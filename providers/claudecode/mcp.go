@@ -17,6 +17,10 @@ type mcpServerJSON struct {
 	Command string            `json:"command"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
+	// AlwaysLoad loads the server's tools into the prompt at launch instead
+	// of behind tool search. claude-code 2.1.285 accepts it in both the
+	// --mcp-config file and the live mcp_set_servers request.
+	AlwaysLoad bool `json:"alwaysLoad,omitempty"`
 }
 
 type mcpConfigFile struct {
@@ -59,7 +63,7 @@ func writeMCPConfig(servers []provider.MCPServerRef) (path string, err error) {
 
 // mcpServerEntry is one stdio server as claude's config takes it: the
 // command split into binary and args, the binary resolved to an absolute
-// path, env as a map.
+// path, env as a map, alwaysLoad carried through.
 func mcpServerEntry(s provider.MCPServerRef) (mcpServerJSON, error) {
 	fields := strings.Fields(s.Command)
 	if len(fields) == 0 {
@@ -69,7 +73,7 @@ func mcpServerEntry(s provider.MCPServerRef) (mcpServerJSON, error) {
 	if resolved, lookErr := exec.LookPath(bin); lookErr == nil {
 		bin = resolved
 	}
-	entry := mcpServerJSON{Command: bin, Args: fields[1:]}
+	entry := mcpServerJSON{Command: bin, Args: fields[1:], AlwaysLoad: s.AlwaysLoad}
 	for _, kv := range s.Env {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok {

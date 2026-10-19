@@ -118,12 +118,28 @@ func (r *Runner) setupMCP(ctx context.Context, name string) {
 	r.reportHealth(ctx, c.Name, healthy, reason)
 }
 
+// linkToolsServerName is the link tools server's provider-facing name, so
+// the agent sees mcp__mads-links__message_session rather than a name
+// carrying this session's own ID (2026-10-19). Each provider process mounts
+// only its own session's server, so the fixed name never collides there.
+// The local capability registry keeps the session-scoped
+// orchestrateCapabilityName: its pid files live in $MADS_HOME/mcp, shared by
+// every session process on the machine.
+const linkToolsServerName = "mads-links"
+
+// orchestrateCapabilityName is the local registry key for sessionID's link
+// tools process.
+func orchestrateCapabilityName(sessionID string) string {
+	return "orchestrate-" + sessionID
+}
+
 // setupOrchestrate materializes the leader/monitor capability (docs/
 // LINKED-SESSIONS-DESIGN.md decisions 1-3): a synthetic, session-scoped MCP
-// server exposing list_links/get_summary/get_turns/set_attention, plus
-// send_message for orchestrate-grant holders, spawned whenever this session
-// holds at least one orchestrate OR read grant. A read-grant-only session
-// (e.g. a monitor) gets the read-only slice — never send_message, which
+// server exposing list_linked_sessions/get_session_summary/
+// get_session_turns/check_mailbox/set_attention, plus message_session for
+// orchestrate-grant holders, spawned whenever this session holds at least
+// one orchestrate OR read grant. A read-grant-only session (e.g. a monitor)
+// gets the read-only slice — never message_session, which
 // stays orchestrate-only — signaled to the spawned subprocess via
 // MADS_ORCHESTRATE_READONLY. Unlike setupCapabilities' declared
 // capabilities, this one is never stored via r.data.Capability — it's
@@ -178,7 +194,7 @@ func (r *Runner) setupOrchestrate(ctx context.Context, sess contracts.Session) (
 		madsCmd = madsbin.Path()
 	}
 	c := contracts.Capability{
-		Name: "orchestrate-" + r.sessionID,
+		Name: orchestrateCapabilityName(r.sessionID),
 		Type: contracts.CapabilityMCP,
 		// The same command both starts the local helper here and goes to the
 		// provider as its MCP server, so it must resolve without $PATH: a
@@ -196,7 +212,10 @@ func (r *Runner) setupOrchestrate(ctx context.Context, sess contracts.Session) (
 		log.Printf("runner: start orchestrate capability: %v", err)
 		return nil, fmt.Errorf("start the orchestrate tools (%s): %w", c.Config.Command, err)
 	}
-	return &provider.MCPServerRef{Name: c.Name, Command: c.Config.Command, Env: env}, nil
+	// AlwaysLoad: the tools are how the user meant this session to reach its
+	// linked sessions, so they belong in the prompt from the start, not
+	// behind a tool search the agent may never run (2026-10-19).
+	return &provider.MCPServerRef{Name: linkToolsServerName, Command: c.Config.Command, Env: env, AlwaysLoad: true}, nil
 }
 
 // RefreshOrchestrate re-evaluates this session's held orchestrate grants
@@ -251,7 +270,7 @@ func (r *Runner) RefreshOrchestrate(ctx context.Context) error {
 	}
 
 	if desired == nil && r.MCPRegistry != nil {
-		if err := r.MCPRegistry.Stop(ctx, "orchestrate-"+r.sessionID); err != nil {
+		if err := r.MCPRegistry.Stop(ctx, orchestrateCapabilityName(r.sessionID)); err != nil {
 			log.Printf("runner: stop orchestrate capability: %v", err)
 		}
 	}

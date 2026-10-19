@@ -21,8 +21,8 @@ const orchestrateUsage = `mads orchestrate — use a leader/monitor link from a 
 
 -session is the leading (granting) session and defaults to $MADS_SESSION_ID;
 -router defaults to $MADS_ROUTER_URL, then http://localhost:17373. These are
-the same Router calls as the list_links, get_summary and send_message MCP
-tools, for when a new grant hasn't mounted as tools yet.
+the same Router calls as the list_linked_sessions, get_session_summary and
+message_session MCP tools, for when a new grant hasn't mounted as tools yet.
 `
 
 // cmdOrchestrate dispatches "mads orchestrate <subcommand>". Output is the

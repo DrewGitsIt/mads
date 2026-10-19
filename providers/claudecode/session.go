@@ -572,7 +572,7 @@ func (s *streamSession) Interrupt(_ context.Context) error {
 // claude-mcp-hot-mount.md). Servers the process was launched with aren't in
 // the dynamic set, so a change that drops one is ErrMCPHotSetUnsupported.
 // So is one that changes a launch server's config under the same name — a
-// read-only orchestrate server gaining send_message differs only in env —
+// read-only link tools server gaining message_session differs only in env —
 // and a non-stdio server, which this adapter never passes live.
 func (s *streamSession) SetMCPServers(ctx context.Context, servers []provider.MCPServerRef) error {
 	s.mu.Lock()
@@ -623,7 +623,7 @@ func (s *streamSession) SetMCPServers(ctx context.Context, servers []provider.MC
 // field, env in order (callers build it deterministically).
 func sameMCPServer(a, b provider.MCPServerRef) bool {
 	return a.Name == b.Name && a.Command == b.Command && a.Type == b.Type && a.URL == b.URL &&
-		slices.Equal(a.Env, b.Env)
+		a.AlwaysLoad == b.AlwaysLoad && slices.Equal(a.Env, b.Env)
 }
 
 // control sends one control_request and waits for its control_response.

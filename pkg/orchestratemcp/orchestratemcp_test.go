@@ -42,13 +42,73 @@ func runLinesMode(t *testing.T, router *httptest.Server, sessionID string, readO
 	return resps
 }
 
-func TestInitializeAndToolsList(t *testing.T) {
-	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// defaultSubjects is the subjects route's body for fakeRouter: one linked
+// session, "payments", over link lnk_1.
+const defaultSubjects = `[{"link_id":"lnk_1","subject_session_id":"ses_pay","subject_name":"payments","grants":["read","inject","orchestrate"],"activity":"idle","cadence":"on_signal"}]`
+
+// routerCall is one non-subjects request fakeRouter saw.
+type routerCall struct {
+	Method, Path, Actor string
+	Body                map[string]any
+}
+
+// fakeRouter serves subjects (the resolution table every per-session tool
+// reads first) for leaderID and records every other request, answering it
+// with status and reply.
+func fakeRouter(t *testing.T, leaderID, subjects string, status int, reply string) (*httptest.Server, *[]routerCall) {
+	t.Helper()
+	var calls []routerCall
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/sessions/"+leaderID+"/orchestrate/subjects" {
+			_, _ = w.Write([]byte(subjects))
+			return
+		}
+		c := routerCall{Method: r.Method, Path: r.URL.Path, Actor: r.Header.Get("X-Mads-Actor")}
+		if r.URL.RawQuery != "" {
+			c.Path += "?" + r.URL.RawQuery
+		}
+		_ = json.NewDecoder(r.Body).Decode(&c.Body)
+		calls = append(calls, c)
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(reply))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &calls
+}
+
+func noRouter(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected request to router: %s %s", r.Method, r.URL.Path)
 	}))
-	defer router.Close()
+	t.Cleanup(srv.Close)
+	return srv
+}
 
-	resps := runLines(t, router, "leader-1",
+// resultText returns a tools/call result's text and isError.
+func resultText(t *testing.T, resp rpcResponse) (string, bool) {
+	t.Helper()
+	if resp.Error != nil {
+		t.Fatalf("resp is a JSON-RPC error %+v, want a tool result", resp.Error)
+	}
+	result := resp.Result.(map[string]any)
+	content := result["content"].([]any)[0].(map[string]any)
+	return content["text"].(string), result["isError"] == true
+}
+
+func toolsByName(t *testing.T, resp rpcResponse) map[string]map[string]any {
+	t.Helper()
+	tools := resp.Result.(map[string]any)["tools"].([]any)
+	out := map[string]map[string]any{}
+	for _, tool := range tools {
+		m := tool.(map[string]any)
+		out[m["name"].(string)] = m
+	}
+	return out
+}
+
+func TestInitializeAndToolsList(t *testing.T) {
+	resps := runLines(t, noRouter(t), "leader-1",
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
@@ -61,245 +121,321 @@ func TestInitializeAndToolsList(t *testing.T) {
 	if !ok || initResult["protocolVersion"] != protocolVersion {
 		t.Fatalf("initialize result = %+v", resps[0].Result)
 	}
+	instr, _ := initResult["instructions"].(string)
+	for _, want := range []string{"list_linked_sessions", "message_session", "get_session_summary", "get_session_turns", "attributed to you"} {
+		if !strings.Contains(instr, want) {
+			t.Errorf("instructions %q missing %q", instr, want)
+		}
+	}
 
-	listResult, ok := resps[1].Result.(map[string]any)
-	if !ok {
-		t.Fatalf("tools/list result = %+v", resps[1].Result)
+	tools := toolsByName(t, resps[1])
+	// Every per-session tool takes `session`; list_linked_sessions takes
+	// nothing (2026-10-19 rename).
+	want := map[string][]string{
+		"list_linked_sessions": nil,
+		"message_session":      {"session", "text"},
+		"get_session_summary":  {"session"},
+		"get_session_turns":    {"session", "from_turn", "to_turn"},
+		"check_mailbox":        {"session"},
+		"set_attention":        {"session", "cadence"},
 	}
-	tools, ok := listResult["tools"].([]any)
-	if !ok || len(tools) != 6 {
-		t.Fatalf("tools = %+v, want 6 entries", listResult["tools"])
+	if len(tools) != len(want) {
+		t.Fatalf("tools = %v, want exactly %v", tools, want)
 	}
-	names := map[string]bool{}
-	for _, tool := range tools {
-		m := tool.(map[string]any)
-		names[m["name"].(string)] = true
-	}
-	for _, want := range []string{"list_links", "get_summary", "get_turns", "send_message", "set_attention"} {
-		if !names[want] {
-			t.Errorf("tools/list missing %q, got %v", want, names)
+	for name, required := range want {
+		tool, ok := tools[name]
+		if !ok {
+			t.Errorf("tools/list missing %q", name)
+			continue
+		}
+		if d, _ := tool["description"].(string); d == "" {
+			t.Errorf("%s has no description", name)
+		}
+		schema := tool["inputSchema"].(map[string]any)
+		props := schema["properties"].(map[string]any)
+		var got []string
+		if r, ok := schema["required"].([]any); ok {
+			for _, v := range r {
+				got = append(got, v.(string))
+			}
+		}
+		if strings.Join(got, ",") != strings.Join(required, ",") {
+			t.Errorf("%s required = %v, want %v", name, got, required)
+		}
+		if required == nil {
+			continue
+		}
+		session, ok := props["session"].(map[string]any)
+		if !ok || session["description"] == "" || session["description"] == nil {
+			t.Errorf("%s session param = %+v, want a described string", name, props["session"])
 		}
 	}
 }
 
-// TestReadOnlyToolsListExcludesSendMessage proves a read-grant-only session
-// (MADS_ORCHESTRATE_READONLY, plumbed through as New's readOnly bool) never
-// advertises send_message — the pull tools it does get, list_links/
-// get_summary/get_turns/set_attention, all remain (item 1: "pull tools for
-// read grants").
-func TestReadOnlyToolsListExcludesSendMessage(t *testing.T) {
-	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("unexpected request to router: %s %s", r.Method, r.URL.Path)
-	}))
-	defer router.Close()
-
-	resps := runLinesMode(t, router, "monitor-1", true,
-		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`,
+// TestReadOnlyToolsListExcludesMessageSession proves a read-grant-only
+// session (MADS_ORCHESTRATE_READONLY, plumbed through as New's readOnly
+// bool) never advertises message_session — the pull tools it does get all
+// remain (item 1: "pull tools for read grants") — and that its instructions
+// don't point at a tool it lacks.
+func TestReadOnlyToolsListExcludesMessageSession(t *testing.T) {
+	resps := runLinesMode(t, noRouter(t), "monitor-1", true,
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
 	)
-	if len(resps) != 1 {
-		t.Fatalf("got %d responses, want 1", len(resps))
+	if len(resps) != 2 {
+		t.Fatalf("got %d responses, want 2", len(resps))
 	}
-	listResult := resps[0].Result.(map[string]any)
-	tools := listResult["tools"].([]any)
-	names := map[string]bool{}
-	for _, tool := range tools {
-		names[tool.(map[string]any)["name"].(string)] = true
+	instr, _ := resps[0].Result.(map[string]any)["instructions"].(string)
+	if instr == "" || strings.Contains(instr, "message_session") {
+		t.Fatalf("read-only instructions = %q, want non-empty and without message_session", instr)
 	}
-	if names["send_message"] {
-		t.Fatalf("tools/list in read-only mode advertised send_message: %v", names)
+	tools := toolsByName(t, resps[1])
+	if _, ok := tools["message_session"]; ok {
+		t.Fatalf("tools/list in read-only mode advertised message_session: %v", tools)
 	}
-	for _, want := range []string{"list_links", "get_summary", "get_turns", "set_attention"} {
-		if !names[want] {
-			t.Errorf("read-only tools/list missing %q, got %v", want, names)
+	for _, want := range []string{"list_linked_sessions", "get_session_summary", "get_session_turns", "check_mailbox", "set_attention"} {
+		if _, ok := tools[want]; !ok {
+			t.Errorf("read-only tools/list missing %q", want)
 		}
 	}
 }
 
-// TestReadOnlySendMessageRejected proves a read-only Server refuses a
-// send_message tools/call outright — never forwarding it to the Router —
+// TestReadOnlyMessageSessionRejected proves a read-only Server refuses a
+// message_session tools/call outright — never forwarding it to the Router —
 // even if a read-grant-only session's agent tries to call it anyway.
-func TestReadOnlySendMessageRejected(t *testing.T) {
-	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("unexpected request to router: %s %s", r.Method, r.URL.Path)
-	}))
-	defer router.Close()
-
-	resps := runLinesMode(t, router, "monitor-1", true,
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send_message","arguments":{"link_id":"lnk_1","text":"hello"}}}`,
+func TestReadOnlyMessageSessionRejected(t *testing.T) {
+	resps := runLinesMode(t, noRouter(t), "monitor-1", true,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"message_session","arguments":{"session":"payments","text":"hello"}}}`,
 	)
 	if len(resps) != 1 {
 		t.Fatalf("got %d responses, want 1", len(resps))
 	}
 	if resps[0].Error == nil {
-		t.Fatalf("resp = %+v, want an error rejecting send_message", resps[0])
+		t.Fatalf("resp = %+v, want an error rejecting message_session", resps[0])
 	}
 }
 
-// TestToolsCallSetAttention proves set_attention forwards to the Router's
-// per-session attention route with the caller's own session ID and the
-// link_id/cadence tool arguments (item 2).
+// TestToolsCallSetAttention proves set_attention resolves the session name
+// to its link and forwards to the Router's per-session attention route with
+// the caller's own session ID (item 2).
 func TestToolsCallSetAttention(t *testing.T) {
-	var gotPath string
-	var gotBody map[string]any
-	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		_ = json.NewDecoder(r.Body).Decode(&gotBody)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"id":"lnk_1","cadence":"manual_only"}`))
-	}))
-	defer router.Close()
-
+	router, calls := fakeRouter(t, "monitor-1", defaultSubjects, http.StatusOK, `{"id":"lnk_1","cadence":"manual_only"}`)
 	resps := runLines(t, router, "monitor-1",
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"set_attention","arguments":{"link_id":"lnk_1","cadence":"manual_only"}}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"set_attention","arguments":{"session":"payments","cadence":"manual_only"}}}`,
 	)
-	if len(resps) != 1 {
-		t.Fatalf("got %d responses, want 1", len(resps))
+	if _, isErr := resultText(t, resps[0]); isErr {
+		t.Fatalf("isError = true, want false")
 	}
-	if gotPath != "/sessions/monitor-1/orchestrate/attention" {
-		t.Fatalf("router saw path %q", gotPath)
+	if len(*calls) != 1 || (*calls)[0].Path != "/sessions/monitor-1/orchestrate/attention" {
+		t.Fatalf("router saw %+v", *calls)
 	}
-	if gotBody["link_id"] != "lnk_1" || gotBody["cadence"] != "manual_only" {
-		t.Fatalf("router saw body %+v", gotBody)
-	}
-	result := resps[0].Result.(map[string]any)
-	if result["isError"] != false {
-		t.Fatalf("isError = %v, want false", result["isError"])
+	if b := (*calls)[0].Body; b["link_id"] != "lnk_1" || b["cadence"] != "manual_only" {
+		t.Fatalf("router saw body %+v", b)
 	}
 }
 
-func TestToolsCallListLinks(t *testing.T) {
-	var gotPath, gotMethod, gotActor string
+func TestToolsCallCheckMailbox(t *testing.T) {
+	router, calls := fakeRouter(t, "leader-1", defaultSubjects, http.StatusOK, `[]`)
+	resps := runLines(t, router, "leader-1",
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_mailbox","arguments":{"session":"payments"}}}`,
+	)
+	if _, isErr := resultText(t, resps[0]); isErr {
+		t.Fatalf("isError = true, want false")
+	}
+	if len(*calls) != 1 || (*calls)[0].Path != "/sessions/leader-1/orchestrate/mailbox" || (*calls)[0].Body["link_id"] != "lnk_1" {
+		t.Fatalf("router saw %+v", *calls)
+	}
+}
+
+// TestToolsCallListLinkedSessions proves list_linked_sessions reshapes the
+// subjects route into the agent-facing rows: the name it passes back as
+// `session`, the session ID, grants, activity, cadence — and no link ID.
+func TestToolsCallListLinkedSessions(t *testing.T) {
+	var gotActor string
 	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath, gotMethod, gotActor = r.URL.Path, r.Method, r.Header.Get("X-Mads-Actor")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`[{"link_id":"lnk_1","subject_name":"subject"}]`))
+		if r.Method != http.MethodGet || r.URL.Path != "/sessions/leader-1/orchestrate/subjects" {
+			t.Fatalf("router saw %s %s", r.Method, r.URL.Path)
+		}
+		gotActor = r.Header.Get("X-Mads-Actor")
+		_, _ = w.Write([]byte(defaultSubjects))
 	}))
 	defer router.Close()
 
 	resps := runLines(t, router, "leader-1",
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_links","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_linked_sessions","arguments":{}}}`,
 	)
-	if len(resps) != 1 {
-		t.Fatalf("got %d responses, want 1", len(resps))
-	}
-	if gotMethod != http.MethodGet || gotPath != "/sessions/leader-1/orchestrate/subjects" {
-		t.Fatalf("router saw %s %s", gotMethod, gotPath)
-	}
 	if gotActor != "session-leader-1" {
 		t.Fatalf("X-Mads-Actor = %q, want session-leader-1", gotActor)
 	}
-	result := resps[0].Result.(map[string]any)
-	if result["isError"] != false {
-		t.Fatalf("isError = %v, want false", result["isError"])
+	text, isErr := resultText(t, resps[0])
+	if isErr {
+		t.Fatalf("isError = true: %s", text)
 	}
-	content := result["content"].([]any)[0].(map[string]any)
-	if content["text"] != `[{"link_id":"lnk_1","subject_name":"subject"}]` {
-		t.Fatalf("content text = %q", content["text"])
+	want := `[{"name":"payments","session_id":"ses_pay","grants":["read","inject","orchestrate"],"activity":"idle","cadence":"on_signal"}]`
+	if text != want {
+		t.Fatalf("content text = %s, want %s", text, want)
 	}
 }
 
-func TestToolsCallGetSummary(t *testing.T) {
-	var gotPath string
+func TestToolsCallGetSessionSummary(t *testing.T) {
+	router, calls := fakeRouter(t, "leader-1", defaultSubjects, http.StatusOK, `{"source":"summary","text":"did the thing"}`)
+	resps := runLines(t, router, "leader-1",
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_session_summary","arguments":{"session":"payments"}}}`,
+	)
+	if len(*calls) != 1 || (*calls)[0].Path != "/sessions/leader-1/orchestrate/summary?for=ses_pay" {
+		t.Fatalf("router saw %+v", *calls)
+	}
+	if text, _ := resultText(t, resps[0]); text != `{"source":"summary","text":"did the thing"}` {
+		t.Fatalf("content text = %q", text)
+	}
+}
+
+func TestToolsCallGetSessionTurns(t *testing.T) {
+	router, calls := fakeRouter(t, "leader-1", defaultSubjects, http.StatusOK, `{"from_turn":1,"to_turn":2,"entries":[]}`)
+	resps := runLines(t, router, "leader-1",
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_session_turns","arguments":{"session":"payments","from_turn":1,"to_turn":2}}}`,
+	)
+	if len(*calls) != 1 || (*calls)[0].Path != "/sessions/leader-1/orchestrate/turns?for=ses_pay&from_turn=1&to_turn=2" {
+		t.Fatalf("router saw %+v", *calls)
+	}
+	if text, _ := resultText(t, resps[0]); text != `{"from_turn":1,"to_turn":2,"entries":[]}` {
+		t.Fatalf("content text = %q", text)
+	}
+}
+
+func TestToolsCallMessageSession(t *testing.T) {
+	router, calls := fakeRouter(t, "leader-1", defaultSubjects, http.StatusAccepted, `{"status":"delivered"}`)
+	resps := runLines(t, router, "leader-1",
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"message_session","arguments":{"session":"payments","text":"hello","wait_ms":500}}}`,
+	)
+	if _, isErr := resultText(t, resps[0]); isErr {
+		t.Fatalf("isError = true, want false")
+	}
+	if len(*calls) != 1 || (*calls)[0].Path != "/links/lnk_1/orchestrate/message" {
+		t.Fatalf("router saw %+v", *calls)
+	}
+	if b := (*calls)[0].Body; b["text"] != "hello" || b["wait_ms"] != float64(500) {
+		t.Fatalf("router saw body %+v", b)
+	}
+}
+
+// TestSessionResolution covers the `session` lookup order — exact name,
+// then exact session ID, then case-insensitive name — and the errors an
+// agent can act on: unknown lists the valid names, ambiguous lists the
+// candidates with IDs. Errors are isError tool results, never JSON-RPC
+// errors, and never reach a per-session route.
+func TestSessionResolution(t *testing.T) {
+	subjects := `[
+		{"link_id":"lnk_pay","subject_session_id":"ses_pay","subject_name":"payments","grants":["orchestrate"]},
+		{"link_id":"lnk_PAY","subject_session_id":"ses_PAY","subject_name":"Payments","grants":["orchestrate"]},
+		{"link_id":"lnk_api","subject_session_id":"ses_api","subject_name":"API work","grants":["orchestrate"]},
+		{"link_id":"lnk_w1","subject_session_id":"ses_w1","subject_name":"worker","grants":["read"]},
+		{"link_id":"lnk_w2","subject_session_id":"ses_w2","subject_name":"worker","grants":["read"]}
+	]`
+	cases := []struct {
+		name, session string
+		wantPath      string   // the summary route's ?for= on success
+		wantErr       []string // substrings of the isError text otherwise
+	}{
+		{name: "exact name wins over case-insensitive", session: "Payments", wantPath: "ses_PAY"},
+		{name: "exact name", session: "payments", wantPath: "ses_pay"},
+		{name: "session ID", session: "ses_w2", wantPath: "ses_w2"},
+		{name: "case-insensitive name", session: "api WORK", wantPath: "ses_api"},
+		{name: "unknown lists names", session: "billing",
+			wantErr: []string{`"billing"`, `"payments"`, `"API work"`, `"worker" (ses_w1)`, `"worker" (ses_w2)`}},
+		{name: "ambiguous lists names and IDs", session: "worker",
+			wantErr: []string{"More than one", `"worker" (ses_w1)`, `"worker" (ses_w2)`, "session ID"}},
+		{name: "ambiguous case-insensitive", session: "PAYMENTS",
+			wantErr: []string{`"payments" (ses_pay)`, `"Payments" (ses_PAY)`}},
+		{name: "empty", session: "", wantErr: []string{"session is required", `"payments"`}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			router, calls := fakeRouter(t, "leader-1", subjects, http.StatusOK, `{}`)
+			args, _ := json.Marshal(map[string]any{"session": tc.session})
+			resps := runLines(t, router, "leader-1",
+				`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_session_summary","arguments":`+string(args)+`}}`,
+			)
+			text, isErr := resultText(t, resps[0])
+			if tc.wantErr == nil {
+				if isErr {
+					t.Fatalf("isError: %s", text)
+				}
+				if len(*calls) != 1 || (*calls)[0].Path != "/sessions/leader-1/orchestrate/summary?for="+tc.wantPath {
+					t.Fatalf("router saw %+v, want summary for %s", *calls, tc.wantPath)
+				}
+				return
+			}
+			if !isErr {
+				t.Fatalf("isError = false, text %q", text)
+			}
+			if len(*calls) != 0 {
+				t.Fatalf("router saw %+v, want no per-session call", *calls)
+			}
+			for _, want := range tc.wantErr {
+				if !strings.Contains(text, want) {
+					t.Errorf("error %q missing %q", text, want)
+				}
+			}
+		})
+	}
+}
+
+// TestSessionResolutionNoLinks: with nothing linked, the error says so
+// rather than listing an empty set.
+func TestSessionResolutionNoLinks(t *testing.T) {
+	router, _ := fakeRouter(t, "leader-1", `[]`, http.StatusOK, `{}`)
+	resps := runLines(t, router, "leader-1",
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_mailbox","arguments":{"session":"payments"}}}`,
+	)
+	text, isErr := resultText(t, resps[0])
+	if !isErr || !strings.Contains(text, "no linked sessions") {
+		t.Fatalf("result = %q (isError %v), want a no-linked-sessions error", text, isErr)
+	}
+}
+
+// TestSessionResolutionPerCall proves the lookup isn't cached: a rename
+// between two calls on the same server resolves to the new name.
+func TestSessionResolutionPerCall(t *testing.T) {
+	name := "untitled"
+	var forParams []string
 	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path + "?" + r.URL.RawQuery
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"source":"summary","text":"did the thing"}`))
+		if strings.HasSuffix(r.URL.Path, "/orchestrate/subjects") {
+			_, _ = w.Write([]byte(`[{"link_id":"lnk_1","subject_session_id":"ses_1","subject_name":"` + name + `"}]`))
+			name = "payments" // the session is auto-renamed after the first lookup
+			return
+		}
+		forParams = append(forParams, r.URL.Query().Get("for"))
+		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer router.Close()
 
 	resps := runLines(t, router, "leader-1",
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_summary","arguments":{"subject_session_id":"ses_subject"}}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_session_summary","arguments":{"session":"untitled"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_session_summary","arguments":{"session":"payments"}}}`,
 	)
-	if len(resps) != 1 {
-		t.Fatalf("got %d responses, want 1", len(resps))
+	for i, resp := range resps {
+		if text, isErr := resultText(t, resp); isErr {
+			t.Fatalf("call %d: isError: %s", i+1, text)
+		}
 	}
-	if gotPath != "/sessions/leader-1/orchestrate/summary?for=ses_subject" {
-		t.Fatalf("router saw path %q", gotPath)
-	}
-	result := resps[0].Result.(map[string]any)
-	content := result["content"].([]any)[0].(map[string]any)
-	if content["text"] != `{"source":"summary","text":"did the thing"}` {
-		t.Fatalf("content text = %q", content["text"])
-	}
-}
-
-func TestToolsCallGetTurns(t *testing.T) {
-	var gotPath string
-	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path + "?" + r.URL.RawQuery
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"from_turn":1,"to_turn":2,"entries":[]}`))
-	}))
-	defer router.Close()
-
-	resps := runLines(t, router, "leader-1",
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_turns","arguments":{"subject_session_id":"ses_subject","from_turn":1,"to_turn":2}}}`,
-	)
-	if len(resps) != 1 {
-		t.Fatalf("got %d responses, want 1", len(resps))
-	}
-	if gotPath != "/sessions/leader-1/orchestrate/turns?for=ses_subject&from_turn=1&to_turn=2" {
-		t.Fatalf("router saw path %q", gotPath)
-	}
-	result := resps[0].Result.(map[string]any)
-	content := result["content"].([]any)[0].(map[string]any)
-	if content["text"] != `{"from_turn":1,"to_turn":2,"entries":[]}` {
-		t.Fatalf("content text = %q", content["text"])
-	}
-}
-
-func TestToolsCallSendMessage(t *testing.T) {
-	var gotPath string
-	var gotBody map[string]any
-	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		_ = json.NewDecoder(r.Body).Decode(&gotBody)
-		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write([]byte(`{"status":"delivered"}`))
-	}))
-	defer router.Close()
-
-	resps := runLines(t, router, "leader-1",
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send_message","arguments":{"link_id":"lnk_1","text":"hello","wait_ms":500}}}`,
-	)
-	if len(resps) != 1 {
-		t.Fatalf("got %d responses, want 1", len(resps))
-	}
-	if gotPath != "/links/lnk_1/orchestrate/message" {
-		t.Fatalf("router saw path %q", gotPath)
-	}
-	if gotBody["text"] != "hello" || gotBody["wait_ms"] != float64(500) {
-		t.Fatalf("router saw body %+v", gotBody)
-	}
-	result := resps[0].Result.(map[string]any)
-	if result["isError"] != false {
-		t.Fatalf("isError = %v, want false", result["isError"])
+	if strings.Join(forParams, ",") != "ses_1,ses_1" {
+		t.Fatalf("summary calls for %v, want ses_1 twice", forParams)
 	}
 }
 
 func TestToolsCallErrorStatusMarksIsError(t *testing.T) {
-	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(`{"error":"link does not carry the orchestrate grant"}`))
-	}))
-	defer router.Close()
-
+	router, _ := fakeRouter(t, "leader-1", defaultSubjects, http.StatusForbidden, `{"error":"link does not carry the orchestrate grant"}`)
 	resps := runLines(t, router, "leader-1",
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send_message","arguments":{"link_id":"lnk_1","text":"hello"}}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"message_session","arguments":{"session":"payments","text":"hello"}}}`,
 	)
-	result := resps[0].Result.(map[string]any)
-	if result["isError"] != true {
-		t.Fatalf("isError = %v, want true", result["isError"])
+	if _, isErr := resultText(t, resps[0]); !isErr {
+		t.Fatalf("isError = false, want true")
 	}
 }
 
 func TestToolsCallUnknownToolReturnsError(t *testing.T) {
-	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("unexpected request to router: %s", r.URL.Path)
-	}))
-	defer router.Close()
-
-	resps := runLines(t, router, "leader-1",
+	resps := runLines(t, noRouter(t), "leader-1",
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"nonexistent","arguments":{}}}`,
 	)
 	if resps[0].Error == nil {

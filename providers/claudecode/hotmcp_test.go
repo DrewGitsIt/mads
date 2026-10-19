@@ -2,6 +2,7 @@ package claudecode
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -71,6 +72,9 @@ func TestStreamSessionHotSetsMCPServers(t *testing.T) {
 	if !strings.Contains(after, `"MADS_SESSION_ID":"sess-123"`) {
 		t.Errorf("env didn't reach the dynamic server config: %s", after)
 	}
+	if !strings.Contains(after, `"alwaysLoad":true`) {
+		t.Errorf("alwaysLoad didn't reach the dynamic server config: %s", after)
+	}
 	cmd := after[strings.Index(after, `"command":"`)+len(`"command":"`):]
 	cmd = cmd[:strings.Index(cmd, `"`)]
 	if !filepath.IsAbs(cmd) && cmd != "mads" {
@@ -107,7 +111,7 @@ func TestStreamSessionHotSetRefusesDroppingLaunchServer(t *testing.T) {
 // launched with only read links gets the read-only orchestrate server; when
 // a link gains orchestrate, the same-named server differs only in env (no
 // MADS_ORCHESTRATE_READONLY), and skipping it as "already mounted" left
-// send_message missing while the link read active (2026-10-19).
+// the messaging tool missing while the link read active (2026-10-19).
 func TestStreamSessionHotSetRefusesChangingLaunchServer(t *testing.T) {
 	p := testProvider(t)
 	readOnly := orchestrateMCPRef()
@@ -126,6 +130,52 @@ func TestStreamSessionHotSetRefusesChangingLaunchServer(t *testing.T) {
 	}
 	if err := hs.SetMCPServers(context.Background(), []provider.MCPServerRef{readOnly}); err != nil {
 		t.Fatalf("unchanged launch server: %v", err)
+	}
+}
+
+// alwaysLoad is part of a launch-time server's identity too: a server
+// launched without it (the link tools before 2026-10-19) can't gain it live,
+// so the runner cycles the process instead of leaving the tools deferred.
+func TestStreamSessionHotSetRefusesAlwaysLoadChange(t *testing.T) {
+	p := testProvider(t)
+	deferred := orchestrateMCPRef()
+	deferred.AlwaysLoad = false
+	sess, err := p.Start(context.Background(), provider.StartOptions{
+		Mode: provider.ModeACP, MCPServers: []provider.MCPServerRef{deferred},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sess.Close() }()
+	err = sess.(provider.MCPHotSetter).SetMCPServers(context.Background(), []provider.MCPServerRef{orchestrateMCPRef()})
+	if !errors.Is(err, provider.ErrMCPHotSetUnsupported) {
+		t.Fatalf("changing a launch server's alwaysLoad: err = %v, want ErrMCPHotSetUnsupported", err)
+	}
+}
+
+// mcpServerEntry writes alwaysLoad only when set, so every other server's
+// config entry is byte-for-byte what it was before the field existed.
+func TestMCPServerEntryAlwaysLoad(t *testing.T) {
+	for _, tc := range []struct {
+		always bool
+		want   string
+	}{{true, `"alwaysLoad":true`}, {false, ""}} {
+		ref := orchestrateMCPRef()
+		ref.AlwaysLoad = tc.always
+		entry, err := mcpServerEntry(ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.want != "" && !strings.Contains(string(raw), tc.want) {
+			t.Errorf("AlwaysLoad=%v: entry %s, want %s", tc.always, raw, tc.want)
+		}
+		if tc.want == "" && strings.Contains(string(raw), "alwaysLoad") {
+			t.Errorf("AlwaysLoad=false: entry %s, want no alwaysLoad key", raw)
+		}
 	}
 }
 

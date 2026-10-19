@@ -220,14 +220,14 @@ Links are directed edges; nothing is 1:1 by design:
    `POST /links/{id}/orchestrate/message` with an optional `wait_ms` bounded
    wait, per decision 1's async-with-quick-question-ergonomics carve-out) plus
    an MCP-over-stdio server (`pkg/orchestratemcp`, hand-rolled JSON-RPC 2.0
-   framing — no SDK dependency) exposing `list_links`/`get_summary`/
-   `send_message`, materialized only when a session holds an `orchestrate`
+   framing — no SDK dependency) exposing the link tools (named below),
+   materialized only when a session holds an `orchestrate`
    grant and the `linked-sessions` flag is on (`Runner.setupOrchestrate`),
    via a new `StartOptions.MCPServers` descriptor on `provider.Provider`.
    `providers/claudecode` now threads `StartOptions.MCPServers` into a real
    `--mcp-config`/`--strict-mcp-config` launch on both transports
    (`providers/claudecode/mcp.go`), so a live claude-code agent holding an
-   `orchestrate` grant can reach `list_links`/`get_summary`/`send_message`.
+   `orchestrate` grant can reach them.
    `providers/kirocli` declares `BehaviorMCPServers` unsupported
    (`providers/kirocli/README.md`) pending a confirmed live mechanism — the
    capability simply doesn't materialize for kiro-cli sessions, and the
@@ -251,6 +251,31 @@ Links are directed edges; nothing is 1:1 by design:
    live grant pending indefinitely. Until the tools mount, the Router's
    grant notice gives the agent `mads orchestrate subjects|summary|send`
    commands that do the same thing from a shell.
+
+   **Link tools (2026-10-19).** A leader ignored the tools and reached its
+   subject another way, so its messages bypassed MADS. The tools now say
+   plainly what they're for, and nothing else changed about the routes.
+   The provider sees one server, `mads-links` (tools appear as
+   `mcp__mads-links__message_session`), with fixed verbs:
+   `list_linked_sessions`, `message_session(session, text, wait_ms?)`,
+   `get_session_summary(session)`,
+   `get_session_turns(session, from_turn, to_turn)`,
+   `check_mailbox(session)`, `set_attention(session, cadence)`. A read-grant-
+   only server omits `message_session`. `session` is the linked session's
+   name (its ID also works). The server resolves it on every call against
+   the subjects route: exact name, then exact ID, then case-insensitive
+   name. Unknown or ambiguous names come back as tool errors listing the
+   valid names, with IDs when two share a name. It's never cached, because
+   sessions get renamed. The Router routes and the `mads orchestrate` CLI
+   still take link and session IDs. The server's `initialize` carries
+   instructions saying the user linked these sessions and suggests these
+   tools, and that messages arrive attributed to the sender with replies
+   returning as digests. They name no sessions, since links change under a
+   running server. The server is marked `alwaysLoad`
+   (`provider.MCPServerRef.AlwaysLoad`; claude-code 2.1.285+) so its tools
+   sit in the prompt instead of behind tool search. The local capability
+   registry still keys the process `orchestrate-<session id>`: its pid
+   files live in the shared `$MADS_HOME/mcp`.
 6. **L3 Implicit hand-raiser**: pipeline start/session-activation hooks
    auto-granting `{read, inject}` over own-session runs.
 7. **L4 Link UI**: rail multi-select + Link flow + grouping/badges +

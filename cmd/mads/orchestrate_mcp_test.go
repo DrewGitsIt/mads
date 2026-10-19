@@ -43,7 +43,7 @@ func TestCmdOrchestrateMCPServesToolsList(t *testing.T) {
 	if err := cmdOrchestrateMCP(in, &out); err != nil {
 		t.Fatalf("cmdOrchestrateMCP: %v", err)
 	}
-	if !strings.Contains(out.String(), "list_links") {
-		t.Fatalf("output = %q, want it to advertise list_links", out.String())
+	if !strings.Contains(out.String(), "list_linked_sessions") {
+		t.Fatalf("output = %q, want it to advertise list_linked_sessions", out.String())
 	}
 }

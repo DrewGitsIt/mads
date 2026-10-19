@@ -695,9 +695,10 @@ func TestPathScopeSettingsReachLaunch(t *testing.T) {
 // services/session/internal/runner/orchestrate_test.go.
 func orchestrateMCPRef() provider.MCPServerRef {
 	return provider.MCPServerRef{
-		Name:    "orchestrate-sess-123",
-		Command: "mads internal orchestrate-mcp",
-		Env:     []string{"MADS_ROUTER_URL=http://localhost:9999", "MADS_SESSION_ID=sess-123"},
+		Name:       "mads-links",
+		Command:    "mads internal orchestrate-mcp",
+		Env:        []string{"MADS_ROUTER_URL=http://localhost:9999", "MADS_SESSION_ID=sess-123"},
+		AlwaysLoad: true,
 	}
 }
 
@@ -889,9 +890,12 @@ func assertOrchestrateMCPEcho(t *testing.T, text string) {
 	if err := dec.Decode(&cfg); err != nil {
 		t.Fatalf("mcp_config payload isn't the written file: %v (%q)", err, text)
 	}
-	entry, ok := cfg.MCPServers["orchestrate-sess-123"]
+	entry, ok := cfg.MCPServers["mads-links"]
 	if !ok {
-		t.Fatalf("orchestrate-sess-123 server missing from config: %+v", cfg)
+		t.Fatalf("mads-links server missing from config: %+v", cfg)
+	}
+	if !entry.AlwaysLoad {
+		t.Errorf("alwaysLoad not set in the --mcp-config entry: %+v", entry)
 	}
 	wantCmd := "mads"
 	if resolved, err := exec.LookPath("mads"); err == nil {
@@ -1033,9 +1037,10 @@ func TestRealClaudeMCPSmoke(t *testing.T) {
 		Mode: provider.ModeACP,
 		Cwd:  t.TempDir(),
 		MCPServers: []provider.MCPServerRef{{
-			Name:    "orchestrate-smoke",
-			Command: "mads internal orchestrate-mcp",
-			Env:     []string{"MADS_ROUTER_URL=http://localhost:1", "MADS_SESSION_ID=smoke"},
+			Name:       "mads-links",
+			Command:    "mads internal orchestrate-mcp",
+			Env:        []string{"MADS_ROUTER_URL=http://localhost:1", "MADS_SESSION_ID=smoke"},
+			AlwaysLoad: true,
 		}},
 	})
 	if err != nil {
@@ -1063,8 +1068,8 @@ func TestRealClaudeMCPSmoke(t *testing.T) {
 			t.Fatal("no turn end")
 		}
 	}
-	if !strings.Contains(text, "list_links") {
-		t.Fatalf("claude did not report the orchestrate server's list_links tool: %q", text)
+	if !strings.Contains(text, "list_linked_sessions") {
+		t.Fatalf("claude did not report the orchestrate server's list_linked_sessions tool: %q", text)
 	}
 }
 
@@ -1120,7 +1125,7 @@ func TestRealClaudeMCPHotSetSmoke(t *testing.T) {
 		}
 	}
 	const ask = "Without calling any tool, list the exact names of every tool you have whose name starts with mcp__, comma-separated. If there are none, reply NONE."
-	if first := turn(ask); strings.Contains(first, "list_links") {
+	if first := turn(ask); strings.Contains(first, "list_linked_sessions") {
 		t.Fatalf("turn 1 already sees orchestrate tools: %q", first)
 	}
 	ref := sess.Ref()
@@ -1128,15 +1133,16 @@ func TestRealClaudeMCPHotSetSmoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := sess.(provider.MCPHotSetter).SetMCPServers(ctx, []provider.MCPServerRef{{
-		Name:    "orchestrate-smoke",
-		Command: filepath.Join(binDir, "mads") + " internal orchestrate-mcp",
-		Env:     []string{"MADS_ROUTER_URL=http://localhost:1", "MADS_SESSION_ID=smoke"},
+		Name:       "mads-links",
+		Command:    filepath.Join(binDir, "mads") + " internal orchestrate-mcp",
+		Env:        []string{"MADS_ROUTER_URL=http://localhost:1", "MADS_SESSION_ID=smoke"},
+		AlwaysLoad: true,
 	}}); err != nil {
 		t.Fatalf("SetMCPServers: %v", err)
 	}
 
-	if second := turn("Check again now. " + ask); !strings.Contains(second, "list_links") {
-		t.Fatalf("turn 2 after the hot set doesn't see list_links: %q", second)
+	if second := turn("Check again now. " + ask); !strings.Contains(second, "list_linked_sessions") {
+		t.Fatalf("turn 2 after the hot set doesn't see list_linked_sessions: %q", second)
 	}
 	if sess.Ref() != ref {
 		t.Errorf("session ref changed %q → %q; the hot set restarted the conversation", ref, sess.Ref())

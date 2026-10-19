@@ -35,7 +35,7 @@ func startOrchestrateLeader(t *testing.T) (*Runner, *fake.Fake, *dataclient.Clie
 		t.Fatalf("start: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Shutdown(ctx) })
-	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), orchestrateCapabilityName(leader.ID)) })
 	return r, fp, leaderData, leader, base
 }
 

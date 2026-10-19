@@ -136,7 +136,7 @@ func TestSetupOrchestrateWithGrant(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Shutdown(ctx) })
-	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), orchestrateCapabilityName(leader.ID)) })
 
 	// MCPServers is keyed by the fake's internal ref, but ProviderRef isn't
 	// persisted until the provider announces it (fresh session — see
@@ -154,8 +154,11 @@ func TestSetupOrchestrateWithGrant(t *testing.T) {
 		t.Fatalf("MCPServers = %+v, want 1 entry", refs)
 	}
 	got := refs[0]
-	if got.Name != "orchestrate-"+leader.ID {
-		t.Errorf("Name = %q, want orchestrate-%s", got.Name, leader.ID)
+	if got.Name != linkToolsServerName {
+		t.Errorf("Name = %q, want %s", got.Name, linkToolsServerName)
+	}
+	if !got.AlwaysLoad {
+		t.Errorf("AlwaysLoad = false, want the link tools loaded up front")
 	}
 	// Absolute, so neither the provider nor MCPRegistry depends on its own
 	// PATH to find mads.
@@ -174,7 +177,7 @@ func TestSetupOrchestrateWithGrant(t *testing.T) {
 // read-only mode via MADS_ORCHESTRATE_READONLY — pkg/orchestratemcp's own
 // tests (TestReadOnlyToolsListExcludesSendMessage,
 // TestReadOnlySendMessageRejected) prove that env var actually excludes/
-// rejects send_message; this proves the Runner wires it for the right grant
+// rejects message_session; this proves the Runner wires it for the right grant
 // shape and not for an orchestrate holder (TestSetupOrchestrateWithGrant's
 // 2-entry Env has no such marker).
 func TestSetupOrchestrateWithReadGrantOnlyIsReadOnly(t *testing.T) {
@@ -208,7 +211,7 @@ func TestSetupOrchestrateWithReadGrantOnlyIsReadOnly(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Shutdown(ctx) })
-	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+monitor.ID) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), orchestrateCapabilityName(monitor.ID)) })
 
 	ch, unsubscribe := r.Subscribe()
 	if err := r.Send(ctx, "echo hi"); err != nil {
@@ -306,7 +309,7 @@ func TestRefreshOrchestrateMaterializesLive(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Shutdown(ctx) })
-	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), orchestrateCapabilityName(leader.ID)) })
 
 	// No link yet at boot: no MCP server should have materialized.
 	assertNoOrchestrateMCPServer(t, leaderData, fp, leader.ID)
@@ -338,8 +341,8 @@ func TestRefreshOrchestrateMaterializesLive(t *testing.T) {
 	}
 
 	refs := providerMCPServers(t, leaderData, fp, leader.ID)
-	if len(refs) != 1 || refs[0].Name != "orchestrate-"+leader.ID {
-		t.Fatalf("MCPServers = %+v, want one orchestrate-%s entry", refs, leader.ID)
+	if len(refs) != 1 || refs[0].Name != linkToolsServerName {
+		t.Fatalf("MCPServers = %+v, want one %s entry", refs, linkToolsServerName)
 	}
 
 	got, err := leaderData.Link(ctx, link.ID)
@@ -381,7 +384,7 @@ func TestRefreshOrchestrateNoResumeRefLeavesPendingRestart(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Shutdown(ctx) })
-	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), orchestrateCapabilityName(leader.ID)) })
 
 	link, err := leaderData.CreateLink(ctx, contracts.LinkRequest{
 		GrantingSessionID: leader.ID,
@@ -438,7 +441,7 @@ func TestRefreshOrchestrateDefersWhileBusy(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Shutdown(ctx) })
-	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), orchestrateCapabilityName(leader.ID)) })
 
 	// Drive one full turn first so the ref is announced (see
 	// TestRefreshOrchestrateMaterializesLive) before starting the slow one.
@@ -493,8 +496,8 @@ drained:
 
 	waitOrchestrateStatus(t, leaderData, link.ID, contracts.OrchestrateActive)
 	refs = providerMCPServers(t, leaderData, fp, leader.ID)
-	if len(refs) != 1 || refs[0].Name != "orchestrate-"+leader.ID {
-		t.Fatalf("MCPServers after deferred apply = %+v, want one orchestrate-%s entry", refs, leader.ID)
+	if len(refs) != 1 || refs[0].Name != linkToolsServerName {
+		t.Fatalf("MCPServers after deferred apply = %+v, want one %s entry", refs, linkToolsServerName)
 	}
 }
 
@@ -527,7 +530,7 @@ func TestRefreshOrchestrateUnsupportedProviderDegradesLinkStatus(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Shutdown(ctx) })
-	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), orchestrateCapabilityName(leader.ID)) })
 
 	ch, unsubscribe := r.Subscribe()
 	if err := r.Send(ctx, "echo hi"); err != nil {
@@ -601,7 +604,7 @@ func TestRefreshOrchestrateDowngradesToReadOnlyOnGrantRemoval(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Shutdown(ctx) })
-	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), orchestrateCapabilityName(leader.ID)) })
 
 	// Grant held at boot: materialized immediately (TestSetupOrchestrateWithGrant).
 	ch, unsubscribe := r.Subscribe()
@@ -639,7 +642,7 @@ func TestRefreshOrchestrateDowngradesToReadOnlyOnGrantRemoval(t *testing.T) {
 	if !foundReadOnly {
 		t.Fatalf("Env = %v, want MADS_ORCHESTRATE_READONLY=1 after downgrade to monitor", refs[0].Env)
 	}
-	if !r.MCPRegistry.Running("orchestrate-" + leader.ID) {
+	if !r.MCPRegistry.Running(orchestrateCapabilityName(leader.ID)) {
 		t.Fatal("orchestrate-mcp capability process not running after downgrade to read-only")
 	}
 }
@@ -682,7 +685,7 @@ func TestRefreshOrchestrateTeardownOnLinkDeletion(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Shutdown(ctx) })
-	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), orchestrateCapabilityName(leader.ID)) })
 
 	// Grant held at boot: materialized immediately (TestSetupOrchestrateWithGrant).
 	ch, unsubscribe := r.Subscribe()
@@ -704,7 +707,7 @@ func TestRefreshOrchestrateTeardownOnLinkDeletion(t *testing.T) {
 	}
 
 	assertNoOrchestrateMCPServer(t, leaderData, fp, leader.ID)
-	if r.MCPRegistry.Running("orchestrate-" + leader.ID) {
+	if r.MCPRegistry.Running(orchestrateCapabilityName(leader.ID)) {
 		t.Fatal("orchestrate-mcp capability process still running after link deletion")
 	}
 }
@@ -750,7 +753,7 @@ func startLeaderWithTurn(t *testing.T, madsCmd string) (r *Runner, fp *fake.Fake
 		t.Fatalf("start: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Shutdown(ctx) })
-	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), orchestrateCapabilityName(leader.ID)) })
 
 	ch, unsubscribe := r.Subscribe()
 	if err := r.Send(ctx, "echo hi"); err != nil {

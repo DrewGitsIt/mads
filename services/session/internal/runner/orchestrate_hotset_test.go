@@ -37,7 +37,7 @@ func TestRefreshOrchestrateHotSetsWithoutCycling(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Shutdown(ctx) })
-	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), orchestrateCapabilityName(leader.ID)) })
 	runTurn(t, r, "echo hi")
 
 	link, err := data.CreateLink(ctx, contracts.LinkRequest{
@@ -59,7 +59,7 @@ func TestRefreshOrchestrateHotSetsWithoutCycling(t *testing.T) {
 		t.Fatalf("hot sets = %d, want 1", fp.HotSetCalls())
 	}
 	refs := providerMCPServers(t, data, fp, leader.ID)
-	if len(refs) != 1 || refs[0].Name != "orchestrate-"+leader.ID {
+	if len(refs) != 1 || refs[0].Name != linkToolsServerName {
 		t.Fatalf("live MCP servers = %+v, want the orchestrate server", refs)
 	}
 
@@ -84,7 +84,7 @@ func TestRefreshOrchestrateHotSetsWithoutCycling(t *testing.T) {
 // server. Upgrading a link to Leader keeps the server's name and drops
 // MADS_ORCHESTRATE_READONLY, which a live change can't apply to a
 // launch-time server, so the refresh must cycle the provider to mount
-// send_message — not report the link active with the read-only tools still
+// message_session — not report the link active with the read-only tools still
 // live (2026-10-19).
 func TestRefreshOrchestrateUpgradeFromReadOnlyCycles(t *testing.T) {
 	putMadsOnPath(t)
@@ -113,7 +113,7 @@ func TestRefreshOrchestrateUpgradeFromReadOnlyCycles(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Shutdown(ctx) })
-	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), orchestrateCapabilityName(leader.ID)) })
 	runTurn(t, r, "echo hi")
 	if refs := providerMCPServers(t, data, fp, leader.ID); len(refs) != 1 || !slices.Contains(refs[0].Env, "MADS_ORCHESTRATE_READONLY=1") {
 		t.Fatalf("launch MCP servers = %+v, want the read-only orchestrate server", refs)

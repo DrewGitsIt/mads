@@ -108,17 +108,17 @@ func NewClient(routerURL, sessionID string) *Client {
 	return &Client{c: newClient(routerURL, sessionID)}
 }
 
-// Subjects lists the links this session holds (list_links).
+// Subjects lists the links this session holds (list_linked_sessions reads the same route).
 func (c *Client) Subjects(ctx context.Context) (int, []byte, error) {
 	return c.c.listLinks(ctx)
 }
 
-// Summary returns a subject's current summary (get_summary).
+// Summary returns a subject's current summary (get_session_summary).
 func (c *Client) Summary(ctx context.Context, subjectSessionID string) (int, []byte, error) {
 	return c.c.getSummary(ctx, subjectSessionID)
 }
 
-// Send messages a subject over linkID (send_message). waitMS > 0 waits up
+// Send messages a subject over linkID (message_session). waitMS > 0 waits up
 // to that long for the subject's reply.
 func (c *Client) Send(ctx context.Context, linkID, text string, waitMS int64) (int, []byte, error) {
 	return c.c.sendMessage(ctx, linkID, text, waitMS)
