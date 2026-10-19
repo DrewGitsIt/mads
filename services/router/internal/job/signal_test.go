@@ -3,6 +3,7 @@ package job_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -319,8 +320,8 @@ func TestDeliverSignalTaskTerminalReachesImplicitHandRaiser(t *testing.T) {
 	if !strings.Contains(req.Text, "Blocker: missing credentials") {
 		t.Errorf("notice %q missing blocker note", req.Text)
 	}
-	if !strings.Contains(req.Text, "reply with exactly NOOP") {
-		t.Errorf("notice %q missing the noop instruction", req.Text)
+	if strings.Contains(req.Text, "NOOP") {
+		t.Errorf("blocked notice %q offers NOOP; it needs the leader's decision", req.Text)
 	}
 	if req.Attribution.LinkID != link.ID {
 		t.Errorf("attribution link = %q, want %q", req.Attribution.LinkID, link.ID)
@@ -509,5 +510,60 @@ func TestDeliverSignalQuietWhenNoPipelineRunning(t *testing.T) {
 
 	if out := logs.String(); strings.Contains(out, "will go unnoticed") {
 		t.Errorf("unexpected unheard-terminal warning with no pipeline running: %q", out)
+	}
+}
+
+// Only a done task's notice offers NOOP; blocked, wont_do and needs_review
+// ask the leader for a decision, so each carries its own request instead.
+func TestDeliverSignalTaskTerminalNoopOnlyForDone(t *testing.T) {
+	cases := []struct {
+		status   contracts.TaskStatus
+		wantNoop bool
+		wantText string
+	}{
+		{contracts.StatusDone, true, ""},
+		{contracts.StatusBlocked, false, "This needs you: unblock it"},
+		{contracts.StatusWontDo, false, "The agent gave up on it."},
+		{contracts.StatusNeedsReview, false, "waiting on your review"},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.status), func(t *testing.T) {
+			base := datatest.Start(t)
+			data := dataclient.New(base, "router")
+			enableLinkedSessions(t, data)
+
+			watched := mustCreateSession(t, data, contracts.Session{Name: "watched session"})
+			monitor := mustCreateSession(t, data, contracts.Session{Name: "on-signal monitor"})
+			mustCreateLink(t, data, contracts.LinkRequest{
+				GrantingSessionID: monitor.ID, SubjectSessionID: watched.ID,
+				Grants: []contracts.Grant{contracts.GrantRead}, Cadence: contracts.CadenceOnSignal,
+			})
+			task := contracts.Task{SessionID: watched.ID, Title: "wire the adapter", Source: "test", Status: contracts.StatusInProgress}
+			if err := data.CreateTask(context.Background(), &task); err != nil {
+				t.Fatalf("CreateTask: %v", err)
+			}
+
+			server := newCaptureServer(t, http.StatusAccepted)
+			runner := job.New(data, fastmodel.NewWithBackend(&countingBackend{}, fastmodel.Config{}), registryclient.New(""))
+			runner.SetResolver(stubResolver{monitor.ID: server.addr()})
+
+			runSignal(t, base, runner, watched.ID, job.Signal{
+				Kind: job.SignalTaskTerminal, TaskID: task.ID, ToStatus: string(tc.status),
+			})
+
+			if got := server.count(); got != 1 {
+				t.Fatalf("monitor received %d deliveries, want 1", got)
+			}
+			text := server.requests()[0].Text
+			if !strings.HasPrefix(text, fmt.Sprintf("Task %q is now %s.", "wire the adapter", tc.status)) {
+				t.Errorf("notice %q has the wrong opening", text)
+			}
+			if got := strings.Contains(text, "NOOP"); got != tc.wantNoop {
+				t.Errorf("notice %q offers NOOP = %v, want %v", text, got, tc.wantNoop)
+			}
+			if !strings.Contains(text, tc.wantText) {
+				t.Errorf("notice %q missing %q", text, tc.wantText)
+			}
+		})
 	}
 }

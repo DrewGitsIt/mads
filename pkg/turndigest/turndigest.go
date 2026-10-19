@@ -77,6 +77,8 @@ type Request struct {
 	// Classify asks the model to lead its reply with an actionability
 	// verdict line, parsed off into Result.Actionable/Reason. Opt-in so
 	// non-triaging callers keep their prompt (and replies) byte-identical.
+	// Currently unused by the Router: the on_signal wake that consumed the
+	// verdict was turned off (2026-10-19), but the option is general and kept.
 	// Only meaningful on the compressed path — a verbatim or degraded
 	// result is never actionable, because no model ever looked at it.
 	Classify bool

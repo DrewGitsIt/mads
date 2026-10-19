@@ -83,61 +83,70 @@ func TestDigestQueuesToOnSignalMailboxAndSignalFlushesIt(t *testing.T) {
 	}
 }
 
-// A digest the fast model marks actionable wakes the on_signal monitor
-// immediately — verdict reason leading, verdict line stripped, and the
-// queued backlog flushed in the same forced turn — instead of queueing.
-func TestActionableDigestWakesOnSignalMonitor(t *testing.T) {
+// A digest never wakes an on_signal monitor, whatever it says: the verdict
+// request is not even sent to the Fast Model, and a reply that happens to
+// look like an "actionable" verdict is just queued. per_turn on the same
+// subject still gets its forced-turn delivery.
+func TestDigestNeverWakesOnSignalMonitor(t *testing.T) {
 	base := datatest.Start(t)
 	data := dataclient.New(base, "router")
 	enableLinkedSessions(t, data)
 
 	watched := mustCreateSession(t, data, contracts.Session{Name: "watched session"})
-	monitor := mustCreateSession(t, data, contracts.Session{Name: "on-signal monitor"})
+	onSignal := mustCreateSession(t, data, contracts.Session{Name: "on-signal monitor"})
+	perTurn := mustCreateSession(t, data, contracts.Session{Name: "per-turn monitor"})
 	link := mustCreateLink(t, data, contracts.LinkRequest{
-		GrantingSessionID: monitor.ID, SubjectSessionID: watched.ID,
+		GrantingSessionID: onSignal.ID, SubjectSessionID: watched.ID,
 		Grants: []contracts.Grant{contracts.GrantRead}, Cadence: contracts.CadenceOnSignal,
 	})
-	if err := data.AppendLinkDigest(context.Background(), link.ID, contracts.LinkDigest{Text: "older queued digest"}); err != nil {
-		t.Fatalf("AppendLinkDigest: %v", err)
-	}
+	mustCreateLink(t, data, contracts.LinkRequest{
+		GrantingSessionID: perTurn.ID, SubjectSessionID: watched.ID,
+		Grants: []contracts.Grant{contracts.GrantRead}, Cadence: contracts.CadencePerTurn,
+	})
 
-	server := newCaptureServer(t, http.StatusAccepted)
-	backend := &countingBackend{reply: "ACTIONABLE: yes — waiting on a Bash approval\nThe agent parked a tool call."}
+	onSignalServer := newCaptureServer(t, http.StatusAccepted)
+	perTurnServer := newCaptureServer(t, http.StatusAccepted)
+	backend := &countingBackend{reply: "ACTIONABLE: yes — blocked waiting on its own subagents\nThe agent is waiting."}
 	fm := fastmodel.NewWithBackend(backend, fastmodel.Config{})
 
 	runner := job.New(data, fm, registryclient.New(""))
-	runner.SetResolver(stubResolver{monitor.ID: server.addr()})
+	runner.SetResolver(stubResolver{onSignal.ID: onSignalServer.addr(), perTurn.ID: perTurnServer.addr()})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	if _, err := runner.Spawn(ctx, job.DigestKind, watched.ID,
-		job.GenerateDigest(watched.ID, []string{"user: hi\nassistant: parked\n"})); err != nil {
+		job.GenerateDigest(watched.ID, []string{"user: hi\nassistant: waiting\n"})); err != nil {
 		t.Fatalf("Spawn digest: %v", err)
 	}
+	eventually(t, 5*time.Second, func() bool { return perTurnServer.count() == 1 })
+	verify := dataclient.New(base, "test-verify")
 	eventually(t, 5*time.Second, func() bool {
-		return server.count() == 1
+		evs, err := verify.Events(ctx, 0, watched.ID, []string{"job.completed"})
+		return err == nil && len(evs) > 0
 	})
 
-	text := server.requests()[0].Text
-	if !strings.Contains(text, "Needs attention: waiting on a Bash approval") {
-		t.Errorf("wake %q missing the verdict reason lead", text)
+	if got := onSignalServer.count(); got != 0 {
+		t.Fatalf("on-signal monitor received %d deliveries from a digest, want 0", got)
 	}
-	if !strings.Contains(text, "The agent parked a tool call.") {
-		t.Errorf("wake %q missing the digest body", text)
+	backend.mu.Lock()
+	prompts := append([]string(nil), backend.prompts...)
+	systems := append([]string(nil), backend.systems...)
+	backend.mu.Unlock()
+	for i := range prompts {
+		if strings.Contains(prompts[i], "ACTIONABLE") || strings.Contains(systems[i], "ACTIONABLE") {
+			t.Errorf("fast model request %d asks for an actionability verdict; Classify must be off", i)
+		}
 	}
-	if strings.Contains(text, "ACTIONABLE:") {
-		t.Errorf("wake %q leaks the raw verdict line", text)
-	}
-	if !strings.Contains(text, "older queued digest") {
-		t.Errorf("wake %q missing the flushed backlog", text)
+	if !strings.Contains(perTurnServer.requests()[0].Text, "reply with exactly NOOP") {
+		t.Errorf("per_turn delivery lost its noop instruction")
 	}
 
 	backlog, err := data.DrainLinkDigests(ctx, link.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(backlog) != 0 {
-		t.Fatalf("mailbox holds %d digests after an actionable wake, want 0", len(backlog))
+	if len(backlog) != 1 {
+		t.Fatalf("mailbox holds %d digests, want 1 queued", len(backlog))
 	}
 }

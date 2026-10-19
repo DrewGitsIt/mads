@@ -85,7 +85,7 @@ var toolDefs = []map[string]any{
 	},
 	{
 		"name": "check_mailbox",
-		"description": "Collect the digests waiting from a linked session. On an on_signal link, the session's turn digests wait here " +
+		"description": "Collect the digests waiting from a linked session. On an on_signal link, the session's turn digests always wait here " +
 			"instead of coming to you after each turn. This returns everything that arrived since you were last woken " +
 			"or last checked, oldest first, and clears it.",
 		"inputSchema": map[string]any{
@@ -99,10 +99,11 @@ var toolDefs = []map[string]any{
 	},
 	{
 		"name": "set_attention",
-		"description": "Choose how a linked session's progress reaches you. per_turn: a digest each time it finishes a turn. " +
-			"on_signal: you're woken only when it needs attention (a permission request, a crash, a task done or blocked), " +
-			"and other digests wait for check_mailbox. manual_only: nothing is sent; you catch up with get_session_summary " +
-			"and get_session_turns when you choose.",
+		"description": "Choose how a linked session's progress reaches you. per_turn: a digest of every response the session gives. " +
+			"Use it while you're actively working with a session. on_signal: you're woken only when it needs you: a permission " +
+			"request, a crash, or one of its MADS Tasks reaching done, blocked, won't do, or needs review. Everything else waits " +
+			"for you to check_mailbox. Use it for long unattended runs. manual_only: nothing is sent directly to you. " +
+			"Catch up with get_session_summary and get_session_turns.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{

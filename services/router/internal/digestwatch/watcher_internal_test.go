@@ -3,6 +3,7 @@ package digestwatch
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"strings"
@@ -66,5 +67,34 @@ func TestSubscribeRetryReturnsNilWhenContextDone(t *testing.T) {
 	got := subscribeRetry(ctx, "session.turn_ended", time.Millisecond, time.Millisecond, subscribe)
 	if got != nil {
 		t.Fatalf("expected nil channel once ctx is done, got %v", got)
+	}
+}
+
+// signalFor wakes the leader on the four task statuses that hand it
+// something to act on, and on nothing else.
+func TestSignalForTaskStatuses(t *testing.T) {
+	for _, tc := range []struct {
+		to     contracts.TaskStatus
+		wantOK bool
+	}{
+		{contracts.StatusDone, true},
+		{contracts.StatusBlocked, true},
+		{contracts.StatusWontDo, true},
+		{contracts.StatusNeedsReview, true},
+		{contracts.StatusReady, false},
+		{contracts.StatusInProgress, false},
+	} {
+		env := contracts.Envelope{
+			Type: contracts.TaskStatusChanged, SessionID: "ses_1", TaskID: "tsk_1",
+			Payload: json.RawMessage(`{"to":"` + string(tc.to) + `"}`),
+		}
+		sig, ok := signalFor(env)
+		if ok != tc.wantOK {
+			t.Errorf("signalFor(to=%s) ok = %v, want %v", tc.to, ok, tc.wantOK)
+			continue
+		}
+		if ok && (sig.Kind != "task_terminal" || sig.ToStatus != string(tc.to) || sig.TaskID != "tsk_1") {
+			t.Errorf("signalFor(to=%s) = %+v", tc.to, sig)
+		}
 	}
 }

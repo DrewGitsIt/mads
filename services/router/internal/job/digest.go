@@ -90,10 +90,8 @@ func GenerateDigest(sessionID string, deltas []string) Func {
 			// BudgetTokens deliberately 0: monitors always get a compressed
 			// digest, and a skippable backend degrades to empty ⇒ no push
 			// (both today's behavior).
-			// Classify only when an on_signal reader exists: the verdict
-			// decides wake-vs-mailbox for them, and costs per_turn-only
-			// fan-outs nothing.
-			Classify: len(mailbox) > 0,
+			// Classify deliberately off: no digest content wakes anyone
+			// (see the on_signal fan-out below).
 		})
 		if err != nil {
 			return fmt.Errorf("digest: compress: %w", err)
@@ -116,20 +114,14 @@ func GenerateDigest(sessionID string, deltas []string) Func {
 			}
 		}
 		for _, l := range mailbox {
-			// The fast model triages while it compresses: an actionable
-			// digest (blocked, failing, waiting on input, drifting) wakes
-			// the on_signal monitor immediately, backlog included; a quiet
-			// one just queues. Wake failure (monitor not running, delivery
-			// error) falls back to the mailbox so nothing is lost.
-			if res.Actionable && deps.Resolver != nil {
-				wakeText := text
-				if res.Reason != "" {
-					wakeText = "Needs attention: " + res.Reason + "\n\n" + text
-				}
-				if wakeMonitor(ctx, deps, l, sess.Name, wakeText) {
-					continue
-				}
-			}
+			// on_signal digests ALWAYS queue; nothing here wakes the monitor.
+			// The Fast Model used to triage while it compressed and wake on an
+			// "actionable" verdict, but it false-alarmed ("blocked waiting on
+			// its own subagents/runs"), so the wake-on-turn decision is off
+			// (2026-10-19). It is meant to return as an intent-based
+			// classifier, developed separately (not a frontier/fast LLM
+			// call); that is where a wake would be re-added. Until then the
+			// deterministic signals (DeliverSignal) are the only wakes.
 			if err := deps.Data.AppendLinkDigest(ctx, l.ID, contracts.LinkDigest{
 				Text: text, FromTurn: res.FromTurn, ToTurn: res.ToTurn,
 			}); err != nil {
