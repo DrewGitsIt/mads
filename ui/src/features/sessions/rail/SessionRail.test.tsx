@@ -2122,13 +2122,52 @@ describe("SessionRail — recursive link tree", () => {
         agentStates={{ rail: { subagents: 0, awaitingSince: isoAgo(MINUTE), awaitingTool: "Bash" } }}
       />,
     );
-    // One group needs the user: Captain's. Watcher only points at Rail.
-    expect(chip("Attn.").textContent).toBe("Attn.1");
+    // One group needs the user: Captain's, and all four of its cards count
+    // there. Watcher only points at Rail, so it counts just itself.
+    expect(chip("Attn.").textContent).toBe("Attn.4");
     expect(chip("Idle").textContent).toBe("Idle1");
+    expect(chip("All").textContent).toBe("All5");
     fireEvent.click(chip("Attn."));
     expect(cardNames()).toEqual(["Captain", "Deploy", "Rail", "Merge"]);
     fireEvent.click(chip("Idle"));
     expect(cardNames()).toEqual(["Watcher"]);
+  });
+
+  it("counts every card of a 3-level chain under its group's chip and under All", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(
+      <SessionRail
+        sessions={[captain, deploy, railS, merge, watcher]}
+        openTaskCounts={{}}
+        links={chain}
+        // Captain is mid-turn; the rest of its chain, and Watcher, are quiet.
+        agentStates={{ captain: { subagents: 0, workingSince: isoAgo(30_000) } }}
+      />,
+    );
+    // Two groups (Captain's chain and Watcher), five cards.
+    expect(chip("All").textContent).toBe("All5");
+    expect(chip("Working").textContent).toBe("Working4");
+    expect(chip("Idle").textContent).toBe("Idle1");
+    expect(chip("Attn.").textContent).toBe("Attn.0");
+    // The count is what the chip shows.
+    fireEvent.click(chip("Working"));
+    expect(cardNames()).toEqual(["Captain", "Deploy", "Rail", "Merge"]);
+  });
+
+  it("counts an unlinked rail one per session, as before", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(
+      <SessionRail
+        sessions={[captain, deploy, railS, merge]}
+        openTaskCounts={{}}
+        links={[]}
+        agentStates={{ deploy: { subagents: 0, workingSince: isoAgo(30_000) } }}
+      />,
+    );
+    expect(chip("All").textContent).toBe("All4");
+    expect(chip("Working").textContent).toBe("Working1");
+    expect(chip("Idle").textContent).toBe("Idle3");
+    expect(chip("Attn.").textContent).toBe("Attn.0");
   });
 
   it("checks a root off with every session under it, and pulls it back for a parked grandchild only", () => {

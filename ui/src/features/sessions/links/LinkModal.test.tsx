@@ -240,6 +240,49 @@ describe("LinkModal with the rail", () => {
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
   });
 
+  it("toggles a brief overview from the (i) button, closing any edge editor", () => {
+    render(<Harness client={fakeClient()} />);
+    openOn("Deploy");
+    const info = within(dialog()).getByRole("button", { name: "How links work" });
+    fireEvent.click(badge("Deploy", "leads", "Rail"));
+    expect(within(dialog()).getByRole("group", { name: /^Edit link/ })).toBeTruthy();
+    fireEvent.click(info);
+    expect(info.getAttribute("aria-expanded")).toBe("true");
+    expect(within(dialog()).getByText(/reads and directs/)).toBeTruthy();
+    expect(within(dialog()).queryByRole("group", { name: /^Edit link/ })).toBeNull();
+    // Opening an edge editor closes the overview.
+    fireEvent.click(badge("Deploy", "leads", "Rail"));
+    expect(within(dialog()).queryByText(/reads and directs/)).toBeNull();
+    fireEvent.click(info);
+    fireEvent.click(info);
+    expect(within(dialog()).queryByText(/reads and directs/)).toBeNull();
+    expect(info.getAttribute("aria-expanded")).toBe("false");
+    expect(within(dialog()).queryByText(/unsaved/)).toBeNull();
+  });
+
+  it("closes the overview on Esc before anything else, without asking to discard", () => {
+    render(<Harness client={fakeClient()} />);
+    openOn("Deploy");
+    fireEvent.click(rail().getByText("Solo"));
+    fireEvent.click(within(dialog()).getByRole("button", { name: "How links work" }));
+    expect(within(dialog()).getByText(/reads and directs/)).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(within(dialog()).queryByText(/reads and directs/)).toBeNull();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    // The next Esc reaches the discard flow as before.
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.getByRole("alertdialog", { name: "Discard 1 unsaved change?" })).toBeTruthy();
+  });
+
+  it("draws no lane labels and no legend under the sky", () => {
+    render(<Harness client={fakeClient()} />);
+    openOn("Deploy");
+    for (const text of [/Leads \/ monitors this/, /Led \/ monitored by this/, /flows down/, /flows up/, /fast = Follow/]) {
+      expect(within(dialog()).queryByText(text)).toBeNull();
+    }
+  });
+
   it("closes at once with nothing unsaved, from Esc, × or a click on the pane", () => {
     render(<Harness client={fakeClient()} />);
     openOn("Deploy");

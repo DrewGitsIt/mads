@@ -1,5 +1,6 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "../../../components/Button/Button";
+import { Popover } from "../../../components/Popover/Popover";
 import type { OrchestrateStatus } from "../../../router/types";
 import {
   CADENCES,
@@ -38,8 +39,8 @@ const Y_UP = 70;
 const Y_FOCUS = 200;
 const Y_DOWN = 330;
 const POP_W = 256;
-/** How far below the sky the edge editor may hang: over the legend, never the footer. */
-const POP_OVERHANG = 28;
+/** How far below the sky the edge editor may hang: into the gap, never over the footer. */
+const POP_OVERHANG = 10;
 
 interface Point {
   x: number;
@@ -94,6 +95,48 @@ function MuteIcon() {
 
 const roleClass = (e: { role: string }) => (e.role === "leader" ? styles.lead : styles.mon);
 
+/** The (i) popover: what a leader and a monitor can do, and what cadence decides. */
+function LinksInfo() {
+  return (
+    <div className={styles.info}>
+      <p>
+        <b>
+          Leader <span className={styles.infoLead}>♛</span>
+        </b>
+        : reads and directs. Tools: <code>list_links</code>, <code>get_summary</code>, <code>get_turns</code>,{" "}
+        <code>check_mailbox</code>, <code>set_attention</code>, and <code>send_message</code>, which delivers into the
+        other session&rsquo;s conversation, attributed, after its current turn. A session has at most one leader, and
+        a leader&rsquo;s reach is capped by that session&rsquo;s own trust level.
+      </p>
+      <p>
+        <b>
+          Monitor <span className={styles.infoMon}>◉</span>
+        </b>
+        : reads only. The same tools except <code>send_message</code>; it never speaks into the session.
+      </p>
+      <p>
+        <b>Cadence</b> is set per line and decides when updates arrive:
+      </p>
+      <ul>
+        <li>
+          <b>Follow</b>: a digest after each burst of activity.
+        </li>
+        <li>
+          <b>Signals</b> (default): woken only when the session needs attention (a permission request, a crash, a task
+          done or blocked). Other digests wait in a mailbox until the next wake or <code>check_mailbox</code>.
+        </li>
+        <li>
+          <b>Muted</b>: nothing is pushed. The agent can still catch up with <code>get_summary</code>.
+        </li>
+      </ul>
+      <p>
+        You set cadence here. The leading or monitoring agent can also change its own with{" "}
+        <code>set_attention</code>.
+      </p>
+    </div>
+  );
+}
+
 /**
  * The link editor (docs/mockups/link-modal-constellation.html): centred on one
  * session, its holders above, its subjects below, one line per link. It
@@ -115,12 +158,22 @@ export function LinkModal({ editor, statusOf }: LinkModalProps) {
     rootRef.current?.focus();
   }, []);
 
-  // Esc peels one layer: the confirm, then an open edge editor, then the
-  // modal itself (which asks first when anything is unsaved). A key another
-  // control already handled (the rail's search field) is left alone.
+  // The (i) overview. View state only: never an unsaved change. It and the
+  // edge editor share the space, so opening either closes the other.
+  const [infoOpen, setInfoOpen] = useState(false);
+  const closeInfo = useCallback(() => setInfoOpen(false), []);
+  useEffect(() => {
+    if (pick) setInfoOpen(false);
+  }, [pick]);
+
+  // Esc peels one layer: the info popover, then the confirm, then an open
+  // edge editor, then the modal itself (which asks first when anything is
+  // unsaved). A key another control already handled (the rail's search
+  // field) is left alone.
   const escRef = useRef<() => void>(() => undefined);
   escRef.current = () => {
-    if (editor.confirm) editor.keepEditing();
+    if (infoOpen) setInfoOpen(false);
+    else if (editor.confirm) editor.keepEditing();
     else if (editor.pick) editor.pickEdge(undefined);
     else editor.requestClose();
   };
@@ -388,12 +441,6 @@ export function LinkModal({ editor, statusOf }: LinkModalProps) {
         ? "Retry"
         : `Save ${plural(n, "change")}`;
 
-  const lineLegend = (cls: string) => (
-    <svg viewBox="0 0 34 8" aria-hidden="true">
-      <path className={[styles.wire, cls, styles.perTurn].join(" ")} d="M1 4 L33 4" />
-    </svg>
-  );
-
   return (
     <div
       ref={rootRef}
@@ -433,18 +480,34 @@ export function LinkModal({ editor, statusOf }: LinkModalProps) {
             </div>
           )}
         </div>
+        <Popover
+          open={infoOpen}
+          onClose={closeInfo}
+          className={styles.infoPop}
+          anchor={
+            <button
+              type="button"
+              className={[styles.i, infoOpen ? styles.iOn : ""].filter(Boolean).join(" ")}
+              aria-label="How links work"
+              title="How links work"
+              aria-expanded={infoOpen}
+              onClick={() => {
+                if (!infoOpen && pick) editor.pickEdge(undefined);
+                setInfoOpen(!infoOpen);
+              }}
+            >
+              i
+            </button>
+          }
+        >
+          <LinksInfo />
+        </Popover>
         <button type="button" className={styles.x} aria-label="Close" onClick={editor.requestClose}>
           ×
         </button>
       </div>
 
       <div className={styles.skyWrap}>
-        <span className={styles.lane} style={{ top: 10 }}>
-          Leads / monitors this
-        </span>
-        <span className={styles.lane} style={{ bottom: 8 }}>
-          Led / monitored by this
-        </span>
         <div
           ref={skyRef}
           className={styles.skyScroll}
@@ -520,16 +583,6 @@ export function LinkModal({ editor, statusOf }: LinkModalProps) {
           </div>
         </div>
         {picked && edgeEditor(picked)}
-      </div>
-
-      <div className={styles.legend} aria-hidden="true">
-        <span>
-          {lineLegend(styles.lead)}♛ Leads: flows down
-        </span>
-        <span>
-          {lineLegend(styles.mon)}◉ Monitors: flows up
-        </span>
-        <span>fast = Follow · slow = Signals · still = Muted</span>
       </div>
 
       <div className={styles.mf}>

@@ -305,8 +305,17 @@ export function SessionRail({
       mostUrgentBucket([row.session, ...railDescendants(row)].map(bucketOf)),
     ]),
   );
-  const counts: Record<RailFilter, number> = { all: rows.length, working: 0, needs: 0, idle: 0 };
-  for (const bucket of bucketByRowId.values()) counts[bucket] += 1;
+  // Each chip counts the session cards its filter would show — a group's
+  // root and everything nested under it, never shortcut rows — while the
+  // filter itself still keeps or drops whole groups by their rolled-up
+  // bucket. Like the buckets, this runs over `rows`, so a live search
+  // narrows the counts too.
+  const counts: Record<RailFilter, number> = { all: 0, working: 0, needs: 0, idle: 0 };
+  for (const row of rows) {
+    const cards = 1 + railDescendants(row).length;
+    counts.all += cards;
+    counts[bucketByRowId.get(row.session.id) ?? "idle"] += cards;
+  }
 
   // Narrowing only — the survivors keep the order they already had, which is
   // the whole reason a chip can do triage without a group's side effects.
