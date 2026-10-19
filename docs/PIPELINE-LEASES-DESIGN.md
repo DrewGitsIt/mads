@@ -102,12 +102,15 @@ lease is Interrupted, and Part B is how it continues.
 - The Router's exit cleanup calls `ReleaseAll("pipeline:" + runID)`, which
   now matches, and ends the run as interrupted (B1).
 - A live engine whose heartbeat gets `lease_lost` aborts the task as
-  today: it kills the agent and stops writing. It snapshots the worktree
-  (commits stray work, backs up the branch) **only if the task's lease is
-  still free**. If another run already holds it, that run owns the
-  worktree now and commits stray work itself on pickup (B2), so two
-  processes never write one worktree. (This is the woken-laptop case: the
-  lease expired during sleep and a new run took the task.)
+  today: it kills the agent and stops writing. To snapshot the worktree
+  (commit stray work, back up the branch) it first **claims the task
+  again** under its own holder, snapshots while holding that claim, then
+  releases it. If the claim conflicts, another run owns the task and the
+  worktree, so the snapshot is skipped and that run commits stray work on
+  pickup (B2). The claim makes "is it free?" and "write the worktree"
+  atomic, so two processes never write one worktree. (This is the
+  woken-laptop case: the lease expired during sleep and a new run took the
+  task.) It is an explicit claim, not a renewal re-taking a lost lease.
 - The post-renewal "did my task's status move?" check (`engine.go:654`)
   goes away, because a re-take can no longer happen. The wall-clock gap
   check stays.
