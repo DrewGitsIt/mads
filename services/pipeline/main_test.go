@@ -81,7 +81,7 @@ func TestResolveAgentEnv_IsolatedSelectsBoundCredentialsFromParentEnv(t *testing
 // TestBuildProviderRegistryIncludesGoose pins the registration set the
 // pipeline child boots with: goose alongside the pre-existing three.
 func TestBuildProviderRegistryIncludesGoose(t *testing.T) {
-	reg, err := buildProviderRegistry(t.TempDir(), agentenv.ModeInherit, nil, nil)
+	reg, err := buildProviderRegistry(t.TempDir(), agentenv.ModeInherit, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,6 +89,28 @@ func TestBuildProviderRegistryIncludesGoose(t *testing.T) {
 		if _, err := reg.Get(name); err != nil {
 			t.Fatalf("Get(%q): %v", name, err)
 		}
+	}
+}
+
+// TestBuildProviderRegistryFakeScenario: -fake-scenario scripts the fake the
+// same way `mads run -fake-scenario` does, and a scenario that can't be
+// loaded fails the run up front instead of silently running unscripted.
+func TestBuildProviderRegistryFakeScenario(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "scenario.yaml")
+	src := "name: t\nrules:\n  - match: \"\"\n    reply: \"STAGE: pass\"\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := buildProviderRegistry(dir, agentenv.ModeInherit, nil, nil, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.Get("fake"); err != nil {
+		t.Fatalf("Get(fake): %v", err)
+	}
+	if _, err := buildProviderRegistry(dir, agentenv.ModeInherit, nil, nil, filepath.Join(dir, "missing.yaml")); err == nil {
+		t.Fatal("missing scenario file: want an error")
 	}
 }
 
@@ -173,7 +195,7 @@ func TestRunDrainsSeededBatchLikeCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := run(context.Background(), "run_1", sess.ID, tpl.ID, base, t.TempDir(), nil); err != nil {
+	if err := run(context.Background(), "run_1", sess.ID, tpl.ID, base, t.TempDir(), "", nil); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -402,7 +424,7 @@ func TestRunUsesSessionDirNotWorkspaceRepo(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			marker := "ran-" + strings.ReplaceAll(tc.name, " ", "-")
 			tpl := seedRun(t, client, &tc.sess, "name: where-"+tc.sess.Name+"\nstages:\n  - name: verify\n    command: touch "+marker+"\n")
-			if err := run(ctx, "run_1", tc.sess.ID, tpl.ID, base, t.TempDir(), nil); err != nil {
+			if err := run(ctx, "run_1", tc.sess.ID, tpl.ID, base, t.TempDir(), "", nil); err != nil {
 				t.Fatalf("run: %v", err)
 			}
 			if _, err := os.Stat(filepath.Join(dirRepo, marker)); err != nil {
@@ -443,7 +465,7 @@ stages:
 		t.Fatal(err)
 	}
 
-	if err := run(ctx, "run_1", sess.ID, tpl.ID, base, t.TempDir(), nil); err != nil {
+	if err := run(ctx, "run_1", sess.ID, tpl.ID, base, t.TempDir(), "", nil); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(folder, "piped.txt")); err != nil {
