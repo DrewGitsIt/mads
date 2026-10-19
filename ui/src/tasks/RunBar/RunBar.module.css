@@ -1,0 +1,249 @@
+.bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  min-width: 0;
+}
+
+/* ── dropdown triggers ─────────────────────────────────── */
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg1);
+  color: var(--text);
+  font: var(--fs-sm) var(--sans);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.trigger:hover {
+  border-color: var(--text3);
+}
+
+.trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.strong {
+  font-weight: 600;
+}
+
+.key,
+.caret {
+  color: var(--text3);
+  font-size: 11px;
+}
+
+/* ── middle of the bar ─────────────────────────────────── */
+.warning {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 12px var(--sans);
+  color: var(--warn-fg);
+}
+
+.meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+  font: var(--fs-sm) var(--sans);
+  color: var(--text2);
+}
+
+.elapsed {
+  font-family: var(--mono);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.error {
+  font: var(--fs-sm) var(--sans);
+  color: var(--bad-fg);
+}
+
+.spin {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: runBarSpin 0.9s linear infinite;
+}
+
+@keyframes runBarSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
+/* ── popovers ──────────────────────────────────────────── */
+.runPop {
+  width: 420px;
+  background: var(--bg1);
+  border-radius: 12px;
+  padding: 6px;
+}
+
+.templatePop {
+  width: 560px;
+  max-width: calc(100vw - 2 * var(--space-4));
+  background: var(--bg1);
+  border-radius: 12px;
+  padding: 6px;
+}
+
+.menu {
+  display: flex;
+  flex-direction: column;
+}
+
+.menuHeading {
+  padding: 6px var(--space-2) var(--space-1);
+  font: var(--fs-chip) var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+
+.menuFooter {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: 6px;
+  padding: var(--space-2) var(--space-2) 2px;
+  border-top: 1px solid var(--line-soft);
+  font: 12px var(--sans);
+  color: var(--text3);
+}
+
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px var(--space-3);
+  align-items: center;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--r);
+  background: none;
+  color: var(--text);
+  font: var(--fs-body) var(--sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.item:hover,
+.item:focus-visible {
+  background: var(--bg2);
+  outline: none;
+}
+
+.item[aria-checked="true"] {
+  background: var(--accent-soft);
+}
+
+.item:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.itemName {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.itemMeta {
+  color: var(--text3);
+  font-size: 11.5px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.itemDesc {
+  grid-column: 1 / -1;
+  color: var(--text3);
+  font-size: 12px;
+}
+
+.itemExtra {
+  grid-column: 1 / -1;
+  margin-top: 3px;
+}
+
+/* ── stage chain ───────────────────────────────────────── */
+.chain {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  font: 11.5px var(--mono);
+  color: var(--text2);
+}
+
+.chainStep {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.chainArrow {
+  color: var(--text3);
+}
+
+.stage {
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--bg2);
+}
+
+.command {
+  background: transparent;
+  border: 1px dashed var(--line);
+}
+
+.loop {
+  color: var(--warn-fg);
+}
