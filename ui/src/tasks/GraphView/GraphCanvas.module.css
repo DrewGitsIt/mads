@@ -5,6 +5,37 @@
   overflow: hidden;
   background: var(--bg0);
   border-radius: var(--r);
+
+  /* xyflow's controls and minimap default to a light theme; route them
+     through the kit's tokens so they follow the theme and palette. */
+  --xy-controls-button-background-color: var(--bg1);
+  --xy-controls-button-background-color-hover: var(--bg3);
+  --xy-controls-button-color: var(--text2);
+  --xy-controls-button-color-hover: var(--text);
+  --xy-controls-button-border-color: var(--line-soft);
+  --xy-controls-box-shadow: 0 0 0 1px var(--line);
+  --xy-minimap-background-color: var(--bg1);
+  --xy-minimap-mask-background-color: color-mix(in srgb, var(--bg0) 65%, transparent);
+  --xy-minimap-mask-stroke-color: var(--line);
+  --xy-minimap-node-background-color: var(--bg3);
+  --xy-minimap-node-stroke-color: var(--line);
+  --xy-background-pattern-dots-color: var(--line-soft);
+  --xy-attribution-background-color: transparent;
+}
+
+.wrapper :global(.react-flow__controls) {
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+
+.wrapper :global(.react-flow__controls-button svg) {
+  fill: currentColor;
+}
+
+.wrapper :global(.react-flow__minimap) {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  overflow: hidden;
 }
 
 .arrowDefault path {

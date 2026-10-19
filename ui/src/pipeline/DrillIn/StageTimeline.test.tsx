@@ -42,7 +42,11 @@ describe("StageTimeline", () => {
     expect(screen.queryByText("loop-back 1")).toBeNull();
     expect(screen.getByText("loop-back 2")).toBeTruthy();
     expect(screen.getByText("loop-back 3")).toBeTruthy();
-    expect(screen.getAllByText("failed").length).toBe(3);
+    // Status is a coloured dot; the word is there for screen readers only.
+    expect(screen.getAllByText("failed:").length).toBe(3);
+    expect(
+      screen.getAllByTestId("stage-timeline-entry").map((li) => li.querySelector("[data-status]")?.getAttribute("data-status")),
+    ).toEqual(["failed", "failed", "failed"]);
     expect(screen.getAllByText(/missing error handling/).length).toBe(3);
   });
 

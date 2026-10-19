@@ -462,7 +462,8 @@ function GraphCanvasInner({
       <Background />
       {/* Bottom-left belongs to the zoom-level control when a run is shown. */}
       <Controls position={runViews ? "top-left" : "bottom-left"} />
-      <MiniMap />
+      {/* The focus column is too narrow for a minimap; it would cover the nodes. */}
+      {!focusTaskId && <MiniMap />}
       <FlowPanel position="top-right" className={styles.topRight}>
         {legend}
         <Button variant="secondary" size="sm" onClick={onAutoLayout}>

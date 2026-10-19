@@ -8,14 +8,17 @@ export interface ZoomLevelControlProps {
   onChange: (level: ZoomLevel) => void;
   /** Focus needs a task to zoom into; off in Plan or with nothing to show. */
   focusDisabled: boolean;
+  /** The narrow focus column: drops the gesture hint and tightens up to stay on one row. */
+  compact?: boolean;
 }
 
 /** The Graph view's semantic zoom: Overview · Cards · Focus, bottom-left of the canvas. */
-export function ZoomLevelControl({ value, onChange, focusDisabled }: ZoomLevelControlProps) {
+export function ZoomLevelControl({ value, onChange, focusDisabled, compact = false }: ZoomLevelControlProps) {
   return (
-    <div className={styles.zoomer}>
+    <div className={[styles.zoomer, compact && styles.compact].filter(Boolean).join(" ")}>
       <SegmentedControl<ZoomLevel>
         aria-label="Zoom level"
+        className={styles.group}
         value={value}
         onChange={onChange}
         options={[
@@ -29,7 +32,7 @@ export function ZoomLevelControl({ value, onChange, focusDisabled }: ZoomLevelCo
           },
         ]}
       />
-      <span className={styles.hint}>⌘ scroll / pinch</span>
+      {!compact && <span className={styles.hint}>⌘ scroll / pinch</span>}
     </div>
   );
 }

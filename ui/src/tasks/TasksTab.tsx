@@ -335,7 +335,7 @@ export function TasksTab({
   }
 
   const focusTaskObj = focusTaskId && mode !== "plan" ? tasksById[focusTaskId] : undefined;
-  const renderLens = (taskId: string) => {
+  const renderLens = (taskId: string, showCloseHint = true) => {
     const task = tasksById[taskId];
     if (!task) return null;
     return (
@@ -356,6 +356,7 @@ export function TasksTab({
         onRetry={retry}
         onWontDo={wontDo}
         blockReason={blockReasons[taskId]}
+        showCloseHint={showCloseHint}
       />
     );
   };
@@ -423,7 +424,8 @@ export function TasksTab({
               onRetry={retry}
               focusTaskId={focusTaskObj?.id}
               onFocusTask={setFocusTaskId}
-              renderFocus={renderLens}
+              // The focus breadcrumb already offers "Esc back to graph".
+              renderFocus={(id) => renderLens(id, false)}
             />
           )}
         </div>

@@ -97,7 +97,10 @@ describe("TaskLens", () => {
     setup();
     expect(screen.getAllByTestId("stage-timeline-entry")).toHaveLength(5);
     expect(screen.getByText(`↺ ${REVIEW_1}`)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "executor #2" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "executor #2, started" })).toBeTruthy();
+    // Status is a dot for the eye; screen readers get it in the name.
+    expect(screen.getByRole("button", { name: "code_review, failed" })).toBeTruthy();
+    expect(screen.queryByText("failed")).toBeNull();
   });
 
   it("opens the newest attempt's output and turns, scoped to the run", () => {
@@ -132,7 +135,7 @@ describe("TaskLens", () => {
 
   it("clicking a timeline entry opens that attempt", () => {
     const { client } = setup();
-    fireEvent.click(screen.getByRole("button", { name: "code_review" }));
+    fireEvent.click(screen.getByRole("button", { name: "code_review, failed" }));
     expect(lastTarget(client, "output")).toEqual({ run: 7, stage: "code_review", attempt: 1 });
     expect(screen.getByText(/Passed to/).textContent).toBe("↳ Passed to executor attempt 2 as its feedback.");
   });
@@ -207,6 +210,13 @@ describe("TaskLens", () => {
     expect(props.onClose).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(props.onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops the close hint when the host offers its own (graph focus), but Esc still closes", () => {
+    const { props } = setup({ showCloseHint: false });
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 
   it("says why a queued task has no output yet", () => {

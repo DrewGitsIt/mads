@@ -436,6 +436,7 @@ export function TaskGraphView({
               value={focused ? "focus" : zoom}
               onChange={handleZoomLevel}
               focusDisabled={!onFocusTask || !focusCandidate}
+              compact={!!focused}
             />
           )}
         </div>

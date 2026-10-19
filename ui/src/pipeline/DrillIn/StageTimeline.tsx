@@ -1,6 +1,6 @@
-import { Chip, type ChipTone } from "../../components/Chip/Chip";
+import { Chip } from "../../components/Chip/Chip";
 import { formatElapsed, spanMs } from "../../tasks/RunBar/runBarFormat";
-import type { StageAttempt, StageAttemptStatus } from "../state/usePipelineRun";
+import type { StageAttempt } from "../state/usePipelineRun";
 import styles from "./StageTimeline.module.css";
 
 export interface StageTimelineProps {
@@ -25,19 +25,11 @@ export function attemptDuration(attempt: StageAttempt, now?: number): string | u
   return undefined;
 }
 
-function statusTone(status: StageAttemptStatus): ChipTone {
-  switch (status) {
-    case "completed":
-      return "ok";
-    case "failed":
-      return "bad";
-    case "skipped":
-      return "neutral";
-    default:
-      return "info";
-  }
-}
-
+/**
+ * Every attempt in order: a status dot (colour for the eye, hidden text for
+ * screen readers), the stage name with `#N` for a repeat attempt, and the
+ * attempt's length. A failed attempt's reason sits underneath.
+ */
 export function StageTimeline({ attempts, onSelect, selectedIndex, now }: StageTimelineProps) {
   if (attempts.length === 0) {
     return <p className={styles.empty}>No stages started yet.</p>;
@@ -47,6 +39,17 @@ export function StageTimeline({ attempts, onSelect, selectedIndex, now }: StageT
     <ol className={styles.timeline} data-testid="stage-timeline">
       {attempts.map((attempt, i) => {
         const duration = attemptDuration(attempt, now);
+        const retries = attempt.retries ?? 0;
+        const name = (
+          <>
+            <span className={styles.dot} data-status={attempt.status} aria-hidden="true" />
+            <span className={styles.srOnly}>{attempt.status}: </span>
+            <span className={styles.name} title={attempt.stage}>
+              {attempt.stage}
+            </span>
+            {attempt.attempt > 1 && onSelect && <span className={styles.attemptNo}>#{attempt.attempt}</span>}
+          </>
+        );
         return (
           <li
             key={i}
@@ -54,6 +57,7 @@ export function StageTimeline({ attempts, onSelect, selectedIndex, now }: StageT
               .filter(Boolean)
               .join(" ")}
             data-testid="stage-timeline-entry"
+            data-status={attempt.status}
           >
             <div className={styles.row}>
               {onSelect ? (
@@ -61,17 +65,23 @@ export function StageTimeline({ attempts, onSelect, selectedIndex, now }: StageT
                   type="button"
                   className={styles.stageButton}
                   aria-pressed={i === selectedIndex}
+                  aria-label={`${attempt.stage}${attempt.attempt > 1 ? ` #${attempt.attempt}` : ""}, ${attempt.status}`}
                   onClick={() => onSelect(i)}
                 >
-                  {attempt.stage}
-                  {attempt.attempt > 1 ? ` #${attempt.attempt}` : ""}
+                  {name}
                 </button>
               ) : (
-                <span className={styles.stage}>{attempt.stage}</span>
+                <span className={styles.stage}>{name}</span>
               )}
               {attempt.attempt > 1 && !onSelect && <Chip tone="warn">loop-back {attempt.attempt}</Chip>}
-              {!!attempt.retries && attempt.retries > 0 && <Chip tone="info">retried ×{attempt.retries}</Chip>}
-              <Chip tone={statusTone(attempt.status)}>{attempt.status}</Chip>
+              {retries > 0 &&
+                (onSelect ? (
+                  <span className={styles.retries} title={`retried ×${retries}`} aria-label={`retried ×${retries}`}>
+                    ↻{retries}
+                  </span>
+                ) : (
+                  <Chip tone="info">retried ×{retries}</Chip>
+                ))}
               {duration && (
                 <span className={styles.duration}>
                   {attempt.status === "started" ? "live " : ""}

@@ -45,6 +45,11 @@ export interface TaskLensProps {
   onDiscuss?: (taskId: string) => void;
   /** Overrides the last failed attempt's reason in the blocked box. */
   blockReason?: string;
+  /**
+   * Shows the "Esc close" button in the header (default). Off where the host
+   * already offers the same way out, e.g. the graph's focus breadcrumb.
+   */
+  showCloseHint?: boolean;
   className?: string;
 }
 
@@ -103,6 +108,7 @@ export function TaskLens({
   onWontDo,
   onDiscuss,
   blockReason,
+  showCloseHint = true,
   className,
 }: TaskLensProps) {
   useEscapeLayer(true, onClose);
@@ -157,9 +163,11 @@ export function TaskLens({
         <Button variant="ghost" size="sm" onClick={() => onOpenDetails(task.id, "details")}>
           Task details
         </Button>
-        <button type="button" className={styles.close} onClick={onClose} aria-label="Close">
-          <kbd className={styles.kbd}>Esc</kbd> close
-        </button>
+        {showCloseHint && (
+          <button type="button" className={styles.close} onClick={onClose} aria-label="Close">
+            <kbd className={styles.kbd}>Esc</kbd> close
+          </button>
+        )}
       </header>
 
       <ol className={styles.strip} aria-label="Stages">

@@ -12,12 +12,24 @@
   background: var(--bg1);
 }
 
-.zoomer > :first-child {
+.zoomer .group {
   border: 0;
+  flex-wrap: nowrap;
 }
 
 .hint {
   color: var(--text3);
   font-size: var(--fs-chip);
   white-space: nowrap;
+}
+
+/* The focus column (~300px): no hint, tighter segments, one row. */
+.compact {
+  left: var(--space-2);
+  bottom: var(--space-2);
+  padding: 2px;
+}
+
+.compact [role="radio"] {
+  padding: 4px 8px;
 }

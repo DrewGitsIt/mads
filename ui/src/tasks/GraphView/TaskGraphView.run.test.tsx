@@ -127,6 +127,7 @@ describe("TaskGraphView — live run", () => {
   it("switches between Overview rings and Cards from the zoom control", () => {
     const { container } = renderView(tasks, { mode: "live", taskRunState });
     expect(screen.getByText("⌘ scroll / pinch")).toBeTruthy();
+    expect(container.querySelector(".react-flow__minimap")).toBeTruthy();
     expect(container.querySelector("svg path[data-state]")).toBeNull();
     fireEvent.click(screen.getByRole("radio", { name: "Overview" }));
     expect(container.querySelectorAll("svg path[data-state]").length).toBe(tasks.length * STAGES.length);
@@ -177,6 +178,9 @@ describe("TaskGraphView — live run", () => {
       expect(container.querySelector('.react-flow__node[data-id="r"] svg[class*="focused"]')).toBeTruthy();
       expect(container.querySelector('.react-flow__node[data-id="n"] svg[class*="focused"]')).toBeNull();
       expect(screen.getByRole("radio", { name: "Focus" }).getAttribute("aria-checked")).toBe("true");
+      // The column is narrow: no minimap over the nodes, no gesture hint.
+      expect(container.querySelector(".react-flow__minimap")).toBeNull();
+      expect(screen.queryByText("⌘ scroll / pinch")).toBeNull();
     });
 
     it("lists upstream and unblocked tasks as chips that refocus", () => {
