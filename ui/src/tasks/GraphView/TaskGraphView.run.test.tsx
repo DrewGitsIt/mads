@@ -232,6 +232,76 @@ describe("TaskGraphView — live run", () => {
   });
 });
 
+describe("TaskGraphView — the tray in a run", () => {
+  // n has no edges, so it waits in the tray; a -> b is on the canvas.
+  const a = task({ id: "a", title: "A", status: "done" });
+  const b = task({ id: "b", title: "B", status: "done", dependencies: ["a"] });
+  const notes = task({ id: "n", title: "Release notes", draft: true });
+  const tasks = [a, b, notes];
+
+  function Tray({ mode, onFocusTask }: { mode?: "plan" | "live" | "past"; onFocusTask: (id?: string) => void }) {
+    const [focus, setFocus] = useState<string | undefined>();
+    return (
+      <TaskGraphView
+        sessionId="session-tray"
+        routerClient={new FakeRouterClient()}
+        tasks={tasks}
+        tasksById={Object.fromEntries(tasks.map((t) => [t.id, t]))}
+        stages={mode ? STAGES : undefined}
+        mode={mode}
+        focusTaskId={focus}
+        onFocusTask={(id) => {
+          onFocusTask(id);
+          setFocus(id);
+        }}
+        renderFocus={(id) => <div data-testid="lens">lens for {id}</div>}
+      />
+    );
+  }
+
+  it("a past run's tray speaks in run statuses: a draft is not in this run, and no slot is promised", () => {
+    render(<Tray mode="past" onFocusTask={vi.fn()} />);
+    expect(screen.getByText("No dependencies.")).toBeTruthy();
+    expect(screen.queryByText("Runs when a slot opens · in this order.")).toBeNull();
+    const card = screen.getByRole("button", { name: "Release notes: Not in this run" });
+    expect(within(card).getByText("Not in this run")).toBeTruthy();
+    expect(within(card).queryByText("Ready")).toBeNull();
+  });
+
+  it.each(["live", "past"] as const)("clicking a tray card in a %s run focuses it, and Esc closes the lens", (mode) => {
+    const onFocusTask = vi.fn();
+    render(<Tray mode={mode} onFocusTask={onFocusTask} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Release notes/ }));
+    expect(onFocusTask).toHaveBeenLastCalledWith("n");
+    expect(screen.getByTestId("lens").textContent).toBe("lens for n");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onFocusTask).toHaveBeenLastCalledWith(undefined);
+    expect(screen.queryByTestId("lens")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Release notes/ })).toBeTruthy();
+  });
+
+  it("Enter on a focused tray card zooms in too", () => {
+    const onFocusTask = vi.fn();
+    render(<Tray mode="live" onFocusTask={onFocusTask} />);
+    fireEvent.keyDown(screen.getByRole("button", { name: /^Release notes/ }), { key: "Enter" });
+    expect(onFocusTask).toHaveBeenLastCalledWith("n");
+  });
+
+  it("Plan keeps the slot caption and doesn't focus from the tray", () => {
+    render(<Tray mode="plan" onFocusTask={vi.fn()} />);
+    expect(screen.getByText("Runs when a slot opens · in this order.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Release notes/ })).toBeNull();
+    expect(screen.getByText("Release notes").closest("[draggable]")?.textContent).toContain("Not in this run");
+  });
+
+  it("with no run the tray is unchanged", () => {
+    render(<Tray onFocusTask={vi.fn()} />);
+    expect(screen.getByText("Runs when a slot opens · in this order.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Release notes/ })).toBeNull();
+    expect(screen.getByText("Release notes").closest("[draggable]")?.textContent).not.toContain("Not in this run");
+  });
+});
+
 describe("TaskGraphView — no run handed over", () => {
   it("draws the plain status cards with no zoom control", () => {
     const a = task({ id: "a" });

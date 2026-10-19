@@ -390,6 +390,9 @@ export function TaskGraphView({
             tasksById={tasksById}
             containerRef={trayRef}
             reducedMotion={reducedMotion}
+            mode={runMode}
+            runViews={runViews}
+            onFocusTask={runViews && runMode !== "plan" && onFocusTask ? (id) => onFocusTask(id) : undefined}
           />
           {showStatusStrip && (
             <StatusFilterStrip

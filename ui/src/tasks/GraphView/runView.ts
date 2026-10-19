@@ -1,3 +1,4 @@
+import type { ChipTone } from "../../components/Chip/Chip";
 import { leftOutBy, waveOf } from "../../pipeline/plan/planScope";
 import type { RunStage } from "../../pipeline/plan/runStages";
 import { runStatusOf, type RunMode, type RunStatus } from "../../pipeline/plan/runStatus";
@@ -24,6 +25,18 @@ export const RUN_STATUS_LABEL: Record<RunStatus, string> = {
   skipped: "Not in this run",
   excluded: "Not in this run",
   draft: "Not in this run",
+};
+
+/** The chip tone for each run status, wherever the graph shows one as a chip. */
+export const RUN_STATUS_TONE: Record<RunStatus, ChipTone> = {
+  ready: "neutral",
+  queued: "neutral",
+  running: "info",
+  blocked: "bad",
+  done: "ok",
+  skipped: "draft",
+  excluded: "draft",
+  draft: "draft",
 };
 
 export interface StageCell {

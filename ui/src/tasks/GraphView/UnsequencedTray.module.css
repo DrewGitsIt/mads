@@ -28,6 +28,20 @@
   max-width: 220px;
 }
 
+.clickable {
+  cursor: pointer;
+}
+
+.clickable:hover {
+  border-color: var(--line);
+  background: var(--bg2);
+}
+
+.clickable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .card:active {
   cursor: grabbing;
 }

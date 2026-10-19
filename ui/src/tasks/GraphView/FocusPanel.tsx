@@ -1,19 +1,9 @@
 import type { ReactNode } from "react";
-import { Chip, type ChipTone } from "../../components/Chip/Chip";
+import { Chip } from "../../components/Chip/Chip";
 import type { RunStatus } from "../../pipeline/plan/runStatus";
 import type { Task } from "../../router/types";
+import { RUN_STATUS_TONE } from "./runView";
 import styles from "./FocusPanel.module.css";
-
-const TONE: Record<RunStatus, ChipTone> = {
-  ready: "neutral",
-  queued: "neutral",
-  running: "info",
-  blocked: "bad",
-  done: "ok",
-  skipped: "draft",
-  excluded: "draft",
-  draft: "draft",
-};
 
 export interface FocusPanelProps {
   task: Task;
@@ -38,7 +28,7 @@ function Neighbours({
   return (
     <>
       {tasks.map((t) => (
-        <Chip key={t.id} tone={TONE[statusOf(t.id) ?? "queued"]} onClick={() => onFocusTask(t.id)}>
+        <Chip key={t.id} tone={RUN_STATUS_TONE[statusOf(t.id) ?? "queued"]} onClick={() => onFocusTask(t.id)}>
           {t.title}
         </Chip>
       ))}

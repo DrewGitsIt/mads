@@ -87,6 +87,16 @@ function tasks(): Task[] {
   } else if (mode === "live") {
     copy.find((t) => t.id === recordedTaskIds.flakyApi)!.status = "in_progress";
   }
+  // No dependencies: the graph's tray holds it.
+  copy.push({
+    ...structuredClone(recordedTasks[0]),
+    id: "tsk_demo_tray",
+    title: "release notes",
+    status: "ready",
+    draft: true,
+    dependencies: [],
+    notes: [],
+  });
   return copy;
 }
 
