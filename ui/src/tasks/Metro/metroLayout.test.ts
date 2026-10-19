@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RunStage } from "../../pipeline/plan/runStages";
-import type { RunMode } from "../../pipeline/plan/runStatus";
+import type { PickupInfo, RunMode } from "../../pipeline/plan/runStatus";
 import type { TaskRunState } from "../../pipeline/state/usePipelineRun";
 import type { Task } from "../../router/types";
 import { ARC_TOP, arcLevels, metroLayout, shortTitle, stationXs, STACK_MAX } from "./metroLayout";
@@ -8,7 +8,14 @@ import { attempt, byId, DEFAULT_STAGES, runState, task } from "./testTasks";
 
 function layoutOf(
   tasks: Task[],
-  opts: { mode?: RunMode; excluded?: string[]; rs?: Record<string, TaskRunState>; stages?: RunStage[]; focus?: string } = {},
+  opts: {
+    mode?: RunMode;
+    excluded?: string[];
+    rs?: Record<string, TaskRunState>;
+    stages?: RunStage[];
+    focus?: string;
+    pickup?: PickupInfo;
+  } = {},
 ) {
   return metroLayout({
     tasks,
@@ -18,6 +25,7 @@ function layoutOf(
     taskRunState: opts.rs ?? {},
     stages: opts.stages ?? DEFAULT_STAGES,
     focusTaskId: opts.focus,
+    pickup: opts.pickup,
   });
 }
 
@@ -83,6 +91,38 @@ describe("metroLayout placement", () => {
       rs: { b: runState("b", [attempt("build", 1, "failed"), attempt("executor", 2, "completed"), attempt("verify", 1, "failed")], "verify") },
     });
     expect(l.blocked[0].key).toBe("blocked:verify");
+  });
+});
+
+describe("metroLayout Interrupted tokens", () => {
+  const tasks = [task("res", { status: "in_progress" }), task("rst", { status: "in_progress" }), task("bare", { status: "in_progress" })];
+  const pickup: PickupInfo = {
+    sharedDirectory: false,
+    tasks: {
+      res: { task_id: "res", mode: "resume", from_stage: "code_review", template_name: "t", template_version: 1 },
+      rst: { task_id: "rst", mode: "restart", from_stage: "architect", template_name: "t", template_version: 2 },
+      bare: { task_id: "bare", mode: "resume", template_name: "t", template_version: 1 },
+    },
+  };
+
+  it("in Plan, sits at the stage a resume picks up from; a restart, or no stage, waits at Ready", () => {
+    const l = layoutOf(tasks, { mode: "plan", pickup });
+    expect(l.above.map((s) => [s.key, ids(s.tokens)])).toEqual([["stage:code_review", ["res"]]]);
+    expect(l.above[0].tokens[0].status).toBe("interrupted");
+    expect(ids(l.start.tokens)).toEqual(["rst", "bare"]);
+    expect(l.stations.some((s) => s.hot)).toBe(false);
+  });
+
+  it("in a live run that hasn't picked it up yet, sits where it will resume", () => {
+    const l = layoutOf(tasks, { pickup });
+    expect(l.above.map((s) => [s.key, ids(s.tokens)])).toEqual([["stage:code_review", ["res"]]]);
+    expect(ids(l.start.tokens)).toEqual(["rst", "bare"]);
+  });
+
+  it("in a past run, sits where that run's record says it stopped", () => {
+    const rs = { res: runState("res", [attempt("executor", 1, "started")], "executor") };
+    const l = layoutOf([tasks[0]], { mode: "past", rs });
+    expect(l.above.map((s) => [s.key, ids(s.tokens)])).toEqual([["stage:executor", ["res"]]]);
   });
 });
 

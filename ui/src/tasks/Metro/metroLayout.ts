@@ -1,6 +1,6 @@
 import type { Task } from "../../router/types";
 import type { RunStage } from "../../pipeline/plan/runStages";
-import { runStatusOf, type RunMode, type RunStatus } from "../../pipeline/plan/runStatus";
+import { interruptedIds, runStatusOf, type PickupInfo, type RunMode, type RunStatus } from "../../pipeline/plan/runStatus";
 import type { TaskRunState } from "../../pipeline/state/usePipelineRun";
 
 // Pure layout for the List view's metro line (docs/TASKS-PIPELINE-DESIGN.md,
@@ -119,8 +119,11 @@ export interface MetroInput {
   taskRunState: Record<string, TaskRunState>;
   stages: RunStage[];
   focusTaskId?: string;
-  /** Plan and live: the session's Interrupted tasks (the pickup endpoint's). */
-  interrupted?: ReadonlySet<string>;
+  /**
+   * Plan and live: the session's Interrupted tasks and where a run picks
+   * each up (the pickup endpoint's answer).
+   */
+  pickup?: PickupInfo;
 }
 
 /** A title cut to fit a token: whole words where it can, an ellipsis when it cuts. */
@@ -250,7 +253,8 @@ function buildArcs(stages: RunStage[], xs: number[]): MetroArc[] {
 }
 
 export function metroLayout(input: MetroInput): MetroLayout {
-  const { tasks, tasksById, mode, excluded, taskRunState, stages, focusTaskId, interrupted } = input;
+  const { tasks, tasksById, mode, excluded, taskRunState, stages, focusTaskId, pickup } = input;
+  const interrupted = interruptedIds(pickup);
   const xs = stationXs(stages.length);
   const xOf = new Map(stages.map((s, i) => [s.name, xs[i]]));
   const ctx = { mode, tasksById, excluded, taskRunState, interrupted };
@@ -274,9 +278,13 @@ export function metroLayout(input: MetroInput): MetroLayout {
     if (status === "draft" || status === "skipped" || status === "excluded") out.push(token);
     else if (status === "ready" || status === "queued") start.push(token);
     else if (status === "interrupted") {
-      // Where it stopped, when this run's record says (past); else waiting
-      // at the start for a run to pick it up (Plan, live).
-      const stage = rs?.currentStage && xOf.has(rs.currentStage) ? rs.currentStage : undefined;
+      // Where it stopped, when this run's record says (past); else where a
+      // run will resume it (Plan, live: the pickup answer's from_stage). A
+      // restart, or no answer, waits at the start.
+      const p = pickup?.tasks[task.id];
+      const resumeAt = p?.mode === "resume" ? p.from_stage : undefined;
+      const where = rs?.currentStage ?? resumeAt;
+      const stage = where && xOf.has(where) ? where : undefined;
       if (stage === undefined) start.push(token);
       else at.set(stage, [...(at.get(stage) ?? []), token]);
     }

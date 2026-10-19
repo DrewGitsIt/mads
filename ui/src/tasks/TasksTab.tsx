@@ -404,7 +404,7 @@ export function TasksTab({
                 stages={stages}
                 focusTaskId={focusTaskObj?.id}
                 onSelectTask={selectRow}
-                interrupted={interrupted}
+                pickup={pickup}
               />
               {focusTaskObj ? (
                 renderLens(focusTaskObj.id)

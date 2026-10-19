@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import type { Task } from "../../router/types";
-import type { RunMode } from "../../pipeline/plan/runStatus";
+import type { PickupInfo, RunMode } from "../../pipeline/plan/runStatus";
 import type { RunStage } from "../../pipeline/plan/runStages";
 import type { TaskRunState } from "../../pipeline/state/usePipelineRun";
 import { Popover } from "../../components/Popover/Popover";
@@ -20,8 +20,8 @@ export interface MetroMapProps {
   /** The task being zoomed into: its token gets a ring and its path through the stations lights up. */
   focusTaskId?: string;
   onSelectTask: (id: string) => void;
-  /** Plan and live: the session's Interrupted tasks. */
-  interrupted?: ReadonlySet<string>;
+  /** Plan and live: the session's Interrupted tasks and where a run picks each up. */
+  pickup?: PickupInfo;
 }
 
 const FOCUS_CLASS: Record<StationFocus, string | undefined> = {
@@ -42,11 +42,11 @@ export function MetroMap({
   stages,
   focusTaskId,
   onSelectTask,
-  interrupted,
+  pickup,
 }: MetroMapProps) {
   const layout = useMemo(
-    () => metroLayout({ tasks, tasksById, mode, excluded, taskRunState, stages, focusTaskId, interrupted }),
-    [tasks, tasksById, mode, excluded, taskRunState, stages, focusTaskId, interrupted],
+    () => metroLayout({ tasks, tasksById, mode, excluded, taskRunState, stages, focusTaskId, pickup }),
+    [tasks, tasksById, mode, excluded, taskRunState, stages, focusTaskId, pickup],
   );
   const [openStack, setOpenStack] = useState<string | null>(null);
   const { geometry: g } = layout;
