@@ -41,6 +41,29 @@
   stroke-dasharray: 6 5;
 }
 
+/* ── run view edges ────────────────────────────────────────── */
+.edgeChainDone :global(.react-flow__edge-path) {
+  stroke: var(--ok);
+}
+
+.edgeHot :global(.react-flow__edge-path) {
+  stroke: var(--accent);
+}
+
+.edgeHotStatic :global(.react-flow__edge-path) {
+  stroke-dasharray: 5 4;
+}
+
+.edgeCut :global(.react-flow__edge-path) {
+  stroke: var(--bad);
+  stroke-dasharray: 2 4;
+}
+
+.edgeCritical :global(.react-flow__edge-path) {
+  stroke: var(--warn);
+  stroke-width: 2.5px;
+}
+
 .edgeIntoBlocked :global(.react-flow__edge-path) {
   stroke: var(--bad);
 }
@@ -51,6 +74,12 @@
 
 .dimmed {
   opacity: 0.35;
+}
+
+.topRight {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
 }
 
 .edgeDeleteButton {

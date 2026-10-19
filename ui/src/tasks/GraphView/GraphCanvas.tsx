@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Background,
   BaseEdge,
@@ -25,9 +25,11 @@ import { Button } from "../../components/Button/Button";
 import type { TaskRunState } from "../../pipeline/state/usePipelineRun";
 import type { Task } from "../../router/types";
 import { computeHighlightSet } from "./highlight";
-import type { GraphEdgeLayout, GraphNodeLayout } from "./layout";
+import { NODE_HEIGHT, NODE_WIDTH, type GraphEdgeLayout, type GraphNodeLayout } from "./layout";
+import type { EdgeRunKind, NodeRunView } from "./runView";
+import { RING_SIZE } from "./StageRing";
 import { TASK_ID_DRAG_TYPE } from "./tray";
-import { TaskNode, type TaskNodeType } from "./TaskNode";
+import { TaskNode, type GraphLevel, type TaskNodeType } from "./TaskNode";
 import { usePrefersReducedMotion } from "./usePrefersReducedMotion";
 import styles from "./GraphCanvas.module.css";
 
@@ -73,6 +75,27 @@ export interface GraphCanvasProps {
   onConnect?: (source: string, target: string) => void;
   /** Fires on Backspace/Delete with one or more edges selected, and from the per-edge X affordance. */
   onDeleteEdges?: (pairs: { from: string; to: string }[]) => void;
+  /** The run being shown, per task id. With it, nodes draw the run view; without it, the plain status cards. */
+  runViews?: Record<string, NodeRunView>;
+  /** Run-view edge treatments by edge id; replaces the plain live/done edge styling when `runViews` is set. */
+  edgeKinds?: Record<string, EdgeRunKind>;
+  /** Overview draws rings, Cards draws cards. Needs `runViews`. */
+  level?: GraphLevel;
+  /** The node the focus view is zoomed into — ringed. */
+  focusTaskId?: string;
+  /** Drawn in the top-right panel, before Auto-layout. */
+  legend?: ReactNode;
+  /** Fires when the user zooms (wheel, pinch, controls) — not on programmatic fits. */
+  onUserZoom?: (zoom: number) => void;
+  /** Bumped by the caller to re-fit the view once the canvas has resized (e.g. entering focus). */
+  refitSignal?: number;
+}
+
+// Node boxes are positioned by their top-left; layout positions are centers.
+function halfSize(level: GraphLevel | undefined, hasRun: boolean) {
+  return hasRun && level === "overview"
+    ? { x: RING_SIZE / 2, y: RING_SIZE / 2 }
+    : { x: NODE_WIDTH / 2, y: NODE_HEIGHT / 2 };
 }
 
 function toXYNodes(
@@ -85,11 +108,17 @@ function toXYNodes(
   columns: string[] | undefined,
   statusDimmedIds: Set<string> | null | undefined,
   reducedMotion: boolean,
+  runViews: Record<string, NodeRunView> | undefined,
+  level: GraphLevel | undefined,
+  focusTaskId: string | undefined,
 ): TaskNodeType[] {
   return canvasNodes.map((n) => ({
     id: n.id,
     type: "taskNode",
-    position: { x: n.x - n.width / 2, y: n.y - n.height / 2 },
+    position:
+      runViews !== undefined && level === "overview"
+        ? { x: n.x - RING_SIZE / 2, y: n.y - RING_SIZE / 2 }
+        : { x: n.x - n.width / 2, y: n.y - n.height / 2 },
     // Selecting a node for highlight also selects it in xyflow's own
     // built-in sense; without this, Backspace with a node selected would
     // ALSO delete the node via onNodesDelete, not just the intended edges.
@@ -103,9 +132,19 @@ function toXYNodes(
       unsequenced: unsequencedIds.has(n.id),
       inCycle: cycleNodeIds.has(n.id),
       dimmed: (highlightSet !== null && !highlightSet.has(n.id)) || (statusDimmedIds?.has(n.id) ?? false),
+      run: runViews?.[n.id],
+      level,
+      focused: focusTaskId === n.id,
     },
   }));
 }
+
+const EDGE_KIND_CLASS: Record<EdgeRunKind, string | undefined> = {
+  critical: styles.edgeCritical,
+  cut: styles.edgeCut,
+  hot: styles.edgeHot,
+  done: styles.edgeChainDone,
+};
 
 /*
  * Bare marker id, not a "url(#id)" string — xyflow's own markerEnd
@@ -126,6 +165,7 @@ function toXYEdges(
   highlightSet: Set<string> | null,
   statusDimmedIds: Set<string> | null | undefined,
   reducedMotion: boolean,
+  edgeKinds: Record<string, EdgeRunKind> | undefined,
   onDeleteEdge?: (from: string, to: string) => void,
 ): TaskEdgeType[] {
   return edges.map((e) => {
@@ -136,6 +176,29 @@ function toXYEdges(
     const fromStatus = tasksById[e.from]?.status;
     const toStatus = tasksById[e.to]?.status;
     const isLive = fromStatus === "in_progress";
+    if (edgeKinds) {
+      // Run view: an edge into a running task flows; the rest is by kind.
+      const kind = edgeKinds[e.id];
+      const hot = kind === "hot";
+      return {
+        id: e.id,
+        source: e.from,
+        target: e.to,
+        type: "depEdge",
+        markerEnd: markerFor(e, selectedEdgeIds),
+        animated: hot && !reducedMotion,
+        className:
+          [
+            kind && EDGE_KIND_CLASS[kind],
+            hot && reducedMotion && styles.edgeHotStatic,
+            e.inCycle && styles.edgeCycle,
+            dimmed && styles.dimmed,
+          ]
+            .filter(Boolean)
+            .join(" ") || undefined,
+        data: { inCycle: e.inCycle, onDelete: onDeleteEdge ? () => onDeleteEdge(e.from, e.to) : undefined },
+      };
+    }
     return {
       id: e.id,
       source: e.from,
@@ -205,15 +268,35 @@ function GraphCanvasInner({
   autoLayoutSignal,
   onConnect,
   onDeleteEdges,
+  runViews,
+  edgeKinds,
+  level,
+  focusTaskId,
+  legend,
+  onUserZoom,
+  refitSignal,
 }: GraphCanvasProps) {
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<Set<string>>(new Set());
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const highlightSet = selectedNodeId ? computeHighlightSet(selectedNodeId, edges) : null;
   const reducedMotion = usePrefersReducedMotion();
   const [nodes, setNodes] = useState<TaskNodeType[]>(() =>
-    toXYNodes(canvasNodes, tasksById, unsequencedIds, cycleNodeIds, highlightSet, taskRunState, columns, statusDimmedIds, reducedMotion),
+    toXYNodes(
+      canvasNodes,
+      tasksById,
+      unsequencedIds,
+      cycleNodeIds,
+      highlightSet,
+      taskRunState,
+      columns,
+      statusDimmedIds,
+      reducedMotion,
+      runViews,
+      level,
+      focusTaskId,
+    ),
   );
-  const { screenToFlowPosition, fitBounds } = useReactFlow();
+  const { screenToFlowPosition, fitBounds, fitView } = useReactFlow();
 
   useEffect(() => {
     if (selectedNodeId === null) return;
@@ -242,18 +325,54 @@ function GraphCanvasInner({
     });
   }, [autoLayoutSignal, extent, fitBounds]);
 
+  // The canvas resizes over the focus transition; fit once it has settled.
+  const previousRefitSignal = useRef(refitSignal);
+  useEffect(() => {
+    if (refitSignal === undefined || refitSignal === previousRefitSignal.current) return;
+    previousRefitSignal.current = refitSignal;
+    const timer = setTimeout(() => void fitView({ padding: 0.2 }), reducedMotion ? 0 : 320);
+    return () => clearTimeout(timer);
+  }, [refitSignal, fitView, reducedMotion]);
+
   // Re-sync from the parent's authoritative layout whenever it changes — the
   // parent is the source of truth for node membership/position (§7); local
   // state below only exists to make in-progress drags feel responsive.
   useEffect(() => {
     setNodes(
-      toXYNodes(canvasNodes, tasksById, unsequencedIds, cycleNodeIds, highlightSet, taskRunState, columns, statusDimmedIds, reducedMotion),
+      toXYNodes(
+        canvasNodes,
+        tasksById,
+        unsequencedIds,
+        cycleNodeIds,
+        highlightSet,
+        taskRunState,
+        columns,
+        statusDimmedIds,
+        reducedMotion,
+        runViews,
+        level,
+        focusTaskId,
+      ),
     );
     // highlightSet is intentionally omitted: it's derived from selectedNodeId
     // + edges (already deps below) every render, re-listing it here would
     // just be a redundant identity-changes-every-render trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canvasNodes, tasksById, unsequencedIds, cycleNodeIds, selectedNodeId, edges, taskRunState, columns, statusDimmedIds, reducedMotion]);
+  }, [
+    canvasNodes,
+    tasksById,
+    unsequencedIds,
+    cycleNodeIds,
+    selectedNodeId,
+    edges,
+    taskRunState,
+    columns,
+    statusDimmedIds,
+    reducedMotion,
+    runViews,
+    level,
+    focusTaskId,
+  ]);
 
   const xyEdges = toXYEdges(
     edges,
@@ -262,6 +381,7 @@ function GraphCanvasInner({
     highlightSet,
     statusDimmedIds,
     reducedMotion,
+    runViews ? (edgeKinds ?? {}) : undefined,
     onDeleteEdges && ((from, to) => onDeleteEdges([{ from, to }])),
   );
 
@@ -287,7 +407,9 @@ function GraphCanvasInner({
         "clientX" in event
           ? { x: event.clientX, y: event.clientY }
           : { x: event.touches[0]?.clientX ?? 0, y: event.touches[0]?.clientY ?? 0 };
-      onNodeDragStop?.(node.id, point, node.position);
+      // Layout positions are node centers; xyflow's are top-left corners.
+      const half = halfSize(node.data.level, node.data.run !== undefined);
+      onNodeDragStop?.(node.id, point, { x: node.position.x + half.x, y: node.position.y + half.y });
     },
     [onNodeDragStop],
   );
@@ -332,12 +454,17 @@ function GraphCanvasInner({
       onConnect={handleConnect}
       onEdgesDelete={handleEdgesDelete}
       onPaneClick={() => setSelectedNodeId(null)}
+      onMove={(event, viewport) => {
+        if (event) onUserZoom?.(viewport.zoom);
+      }}
       fitView
     >
       <Background />
-      <Controls />
+      {/* Bottom-left belongs to the zoom-level control when a run is shown. */}
+      <Controls position={runViews ? "top-left" : "bottom-left"} />
       <MiniMap />
-      <FlowPanel position="top-right">
+      <FlowPanel position="top-right" className={styles.topRight}>
+        {legend}
         <Button variant="secondary" size="sm" onClick={onAutoLayout}>
           Auto-layout
         </Button>

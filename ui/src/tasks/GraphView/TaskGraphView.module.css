@@ -8,10 +8,48 @@
   min-height: 0;
 }
 
+.body {
+  display: flex;
+  gap: var(--space-3);
+  flex: 1;
+  min-height: 0;
+}
+
 .canvas {
   position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
+  max-width: 100%;
+  transition: max-width var(--dur-slow) var(--ease-io);
+}
+
+/* Focus: the graph narrows to a column beside the lens. */
+.focus .canvas {
+  max-width: 300px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .canvas {
+    transition: none;
+  }
+}
+
+.legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text3);
+  font-size: var(--fs-chip);
+  white-space: nowrap;
+}
+
+.legendSwatch {
+  display: inline-block;
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--warn);
 }
 
 .toast {
