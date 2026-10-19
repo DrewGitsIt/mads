@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -147,6 +148,75 @@ func TestPipelineTaskTurnsNoRefRendersEndOnly(t *testing.T) {
 	got := collectOutputFrames(t, frames, 1, 5*time.Second)
 	if got[0].event != "end" || got[0].data != "" {
 		t.Fatalf("frame = %+v, want a bare end event with no data frames preceding it", got[0])
+	}
+}
+
+// TestPipelineTaskTurnsPinnedAttemptByRun covers ?run=&stage=&attempt= on
+// the turns feed: the ref resolved is the one recorded for that stage and
+// attempt within that run (refs between its pipeline.started and the
+// next), not the newest attempt's and not a later run's same-named attempt.
+// A finished attempt sends its turns once, then "end".
+func TestPipelineTaskTurnsPinnedAttemptByRun(t *testing.T) {
+	runsDir := t.TempDir()
+	fp := fake.New()
+	srv, data := newPipelineTurnsTestServer(t, runsDir, fp)
+	sessionID, taskID := seedSessionTask(t, data, contracts.StatusInProgress)
+	ctx := context.Background()
+	sess, err := data.Session(ctx, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Provider = "fake"
+	if err := data.UpdateSession(ctx, &sess); err != nil {
+		t.Fatal(err)
+	}
+	ref := driveConversation(t, fp)
+
+	appendEv := func(typ contracts.EventType, taskID string, payload map[string]any) int64 {
+		t.Helper()
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := &contracts.Envelope{Type: typ, SessionID: sessionID, TaskID: taskID, Payload: raw}
+		if err := data.Append(ctx, env); err != nil {
+			t.Fatal(err)
+		}
+		return env.Seq
+	}
+	run1 := appendEv(contracts.PipelineStarted, "", map[string]any{})
+	appendEv(contracts.StageAttemptRef, taskID, map[string]any{"stage": "executor", "attempt": 1, "ref": ref})
+	appendEv(contracts.StageAttemptRef, taskID, map[string]any{"stage": "executor", "attempt": 2, "ref": "no-such-ref"})
+	run2 := appendEv(contracts.PipelineStarted, "", map[string]any{})
+	appendEv(contracts.StageAttemptRef, taskID, map[string]any{"stage": "executor", "attempt": 1, "ref": "no-such-ref"})
+
+	now := time.Now()
+	writeTaskLog(t, runsDir, sessionID, fmt.Sprint(run1), taskID, "executor-attempt-1.log", "a1", now.Add(-3*time.Minute))
+	writeTaskLog(t, runsDir, sessionID, fmt.Sprint(run1), taskID, "executor-attempt-2.log", "a2", now.Add(-2*time.Minute))
+	writeTaskLog(t, runsDir, sessionID, fmt.Sprint(run2), taskID, "executor-attempt-1.log", "b1", now)
+
+	base := srv.URL + "/sessions/" + sessionID + "/pipeline/tasks/" + taskID + "/turns"
+	frames, cancel := openTurnsSSE(t, base+fmt.Sprintf("?run=%d&stage=executor&attempt=1", run1))
+	got := collectOutputFrames(t, frames, 2, 5*time.Second)
+	cancel()
+	var msgs []contracts.TranscriptMessage
+	if err := json.Unmarshal([]byte(got[0].data), &msgs); err != nil {
+		t.Fatalf("frame data not a normalized turn array: %v (%q)", err, got[0].data)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want run 1 attempt 1's 2 turns: %+v", len(msgs), msgs)
+	}
+	if got[1].event != "end" {
+		t.Fatalf("frame 1 = %+v, want event %q", got[1], "end")
+	}
+
+	// Same stage/attempt without ?run= is the latest run's — whose ref
+	// resolves to no transcript, so an empty turn list.
+	frames, cancel = openTurnsSSE(t, base+"?stage=executor&attempt=1")
+	defer cancel()
+	got = collectOutputFrames(t, frames, 1, 5*time.Second)
+	if got[0].data != "[]" {
+		t.Fatalf("frame 0 = %+v, want the latest run's empty turn list", got[0])
 	}
 }
 

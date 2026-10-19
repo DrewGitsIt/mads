@@ -238,6 +238,167 @@ func TestPipelineTaskOutputGrowingFile(t *testing.T) {
 	}
 }
 
+// writeTaskLog writes one captured attempt log under runsDir and stamps its
+// mtime, so tests control which file latestLogFile sees as newest.
+func writeTaskLog(t *testing.T, runsDir, sessionID, run, taskID, name, content string, mod time.Time) {
+	t.Helper()
+	taskDir := filepath.Join(runsDir, sessionID, run, taskID)
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(taskDir, name)
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(p, mod, mod); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestPipelineTaskOutputRunParam covers ?run=: an earlier run's newest log
+// is served instead of the latest run's, and — since that run is over even
+// though the task is still in progress in a newer one — it ends after its
+// contents rather than tailing forever.
+func TestPipelineTaskOutputRunParam(t *testing.T) {
+	runsDir := t.TempDir()
+	srv, data := newPipelineOutputTestServer(t, runsDir)
+	sessionID, taskID := seedSessionTask(t, data, contracts.StatusInProgress)
+	now := time.Now()
+	writeTaskLog(t, runsDir, sessionID, "1", taskID, "executor-attempt-1.log", "run one exec", now.Add(-2*time.Minute))
+	writeTaskLog(t, runsDir, sessionID, "1", taskID, "code_review-attempt-1.log", "run one review", now.Add(-time.Minute))
+	writeTaskLog(t, runsDir, sessionID, "2", taskID, "executor-attempt-1.log", "run two", now)
+
+	frames, cancel := openOutputSSE(t, srv.URL+"/sessions/"+sessionID+"/pipeline/tasks/"+taskID+"/output?run=1")
+	defer cancel()
+
+	got := collectOutputFrames(t, frames, 2, 5*time.Second)
+	if got[0].data != "run one review" {
+		t.Fatalf("frame 0 = %+v, want data %q", got[0], "run one review")
+	}
+	if got[1].event != "end" {
+		t.Fatalf("frame 1 = %+v, want event %q", got[1], "end")
+	}
+}
+
+// TestPipelineTaskOutputPinnedFinishedAttempt covers ?stage=&attempt= on an
+// attempt that is no longer being written (newer logs exist): exactly that
+// file's contents, then "end" — never a newer file.
+func TestPipelineTaskOutputPinnedFinishedAttempt(t *testing.T) {
+	runsDir := t.TempDir()
+	srv, data := newPipelineOutputTestServer(t, runsDir)
+	sessionID, taskID := seedSessionTask(t, data, contracts.StatusInProgress)
+	now := time.Now()
+	writeTaskLog(t, runsDir, sessionID, "1", taskID, "executor-attempt-1.log", "first try", now.Add(-2*time.Minute))
+	writeTaskLog(t, runsDir, sessionID, "1", taskID, "executor-attempt-2.log", "second try", now.Add(-time.Minute))
+	writeTaskLog(t, runsDir, sessionID, "1", taskID, "code_review-attempt-1.log", "reviewing", now)
+
+	for _, q := range []string{"?stage=executor&attempt=1", "?run=1&stage=executor&attempt=1"} {
+		frames, cancel := openOutputSSE(t, srv.URL+"/sessions/"+sessionID+"/pipeline/tasks/"+taskID+"/output"+q)
+		got := collectOutputFrames(t, frames, 2, 5*time.Second)
+		cancel()
+		if got[0].data != "first try" {
+			t.Fatalf("%s: frame 0 = %+v, want data %q", q, got[0], "first try")
+		}
+		if got[1].event != "end" {
+			t.Fatalf("%s: frame 1 = %+v, want event %q", q, got[1], "end")
+		}
+	}
+}
+
+// TestPipelineTaskOutputPinnedLiveAttempt covers a pinned attempt that IS
+// the file currently being written: it keeps tailing, then ends once the
+// task leaves that stage (a newer log appears) — without switching to it.
+func TestPipelineTaskOutputPinnedLiveAttempt(t *testing.T) {
+	runsDir := t.TempDir()
+	srv, data := newPipelineOutputTestServer(t, runsDir)
+	sessionID, taskID := seedSessionTask(t, data, contracts.StatusInProgress)
+	old := time.Now().Add(-time.Minute)
+	writeTaskLog(t, runsDir, sessionID, "1", taskID, "executor-attempt-1.log", "start ", old)
+
+	frames, cancel := openOutputSSE(t, srv.URL+"/sessions/"+sessionID+"/pipeline/tasks/"+taskID+"/output?stage=executor&attempt=1")
+	defer cancel()
+
+	got := collectOutputFrames(t, frames, 1, 5*time.Second)
+	if got[0].data != "start " {
+		t.Fatalf("frame 0 = %+v, want data %q", got[0], "start ")
+	}
+
+	logPath := filepath.Join(runsDir, sessionID, "1", taskID, "executor-attempt-1.log")
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("more"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got2 := collectOutputFrames(t, frames, 1, 5*time.Second)
+	if got2[0].data != "more" {
+		t.Fatalf("frame 1 = %+v, want data %q", got2[0], "more")
+	}
+
+	writeTaskLog(t, runsDir, sessionID, "1", taskID, "code_review-attempt-1.log", "review output", time.Now().Add(time.Minute))
+	end := collectOutputFrames(t, frames, 1, 5*time.Second)
+	if end[0].event != "end" {
+		t.Fatalf("final frame = %+v, want event %q (not the next stage's output)", end[0], "end")
+	}
+}
+
+// TestPipelineTaskOutputPinnedMissing covers the honest-empty rule for a
+// named run or attempt that was never captured: zero chunks, then "end".
+func TestPipelineTaskOutputPinnedMissing(t *testing.T) {
+	runsDir := t.TempDir()
+	srv, data := newPipelineOutputTestServer(t, runsDir)
+	sessionID, taskID := seedSessionTask(t, data, contracts.StatusInProgress)
+	writeTaskLog(t, runsDir, sessionID, "1", taskID, "executor-attempt-1.log", "exec", time.Now())
+
+	for _, q := range []string{"?stage=executor&attempt=2", "?run=7", "?run=7&stage=executor&attempt=1"} {
+		frames, cancel := openOutputSSE(t, srv.URL+"/sessions/"+sessionID+"/pipeline/tasks/"+taskID+"/output"+q)
+		got := collectOutputFrames(t, frames, 1, 5*time.Second)
+		cancel()
+		if got[0].event != "end" || got[0].data != "" {
+			t.Fatalf("%s: frame = %+v, want a bare end event", q, got[0])
+		}
+	}
+}
+
+// TestPipelineTaskLogQueryBadRequest covers contract 3's validation on both
+// drill-in endpoints, path traversal through stage included.
+func TestPipelineTaskLogQueryBadRequest(t *testing.T) {
+	runsDir := t.TempDir()
+	srv, data := newPipelineOutputTestServer(t, runsDir)
+	sessionID, taskID := seedSessionTask(t, data, contracts.StatusDone)
+	writeTaskLog(t, runsDir, sessionID, "1", taskID, "executor-attempt-1.log", "exec", time.Now())
+
+	for _, q := range []string{
+		"?run=abc",
+		"?run=-1",
+		"?run=",
+		"?stage=executor",
+		"?attempt=1",
+		"?stage=executor&attempt=x",
+		"?stage=executor&attempt=0",
+		"?stage=&attempt=1",
+		"?stage=..%2F" + taskID + "%2Fexecutor&attempt=1",
+		"?stage=..&attempt=1",
+		"?stage=a%2Fb&attempt=1",
+		"?stage=a%5Cb&attempt=1",
+	} {
+		for _, ep := range []string{"output", "turns"} {
+			resp, err := http.Get(srv.URL + "/sessions/" + sessionID + "/pipeline/tasks/" + taskID + "/" + ep + q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("%s%s: status = %d, want 400", ep, q, resp.StatusCode)
+			}
+		}
+	}
+}
+
 // TestPipelineTaskOutputStageTransition covers §3's re-glob-on-poll: a newer
 // *.log file appearing mid-connection (the task moved to its next stage)
 // makes the handler switch to tailing it, continuing the same output stream
