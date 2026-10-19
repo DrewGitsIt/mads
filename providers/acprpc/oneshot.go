@@ -16,11 +16,17 @@ import (
 // and the EventSessionRef announcement are solved for every ACP agent
 // with no per-harness one-shot argv or session-list ref fallback. Usage
 // comes from the prompt result / usage_update snapshot on the turn end.
+//
+// req.Resume swaps session/new for session/load of that ref (Start's resume
+// path): the replayed history is buffered, never streamed to OnEvent, and
+// the ref reported is the resumed one. An agent that doesn't advertise
+// loadSession fails with an error wrapping provider.ErrUnsupported.
 func (e *Engine) OneShot(ctx context.Context, req provider.OneShotRequest) (*provider.OneShotResult, error) {
 	sess, err := e.Start(ctx, provider.StartOptions{
 		Mode:         provider.ModeACP,
 		Model:        req.Model,
 		Cwd:          req.Cwd,
+		Resume:       req.Resume,
 		SystemPrompt: req.System,
 		Trust:        provider.TrustFull,
 	})

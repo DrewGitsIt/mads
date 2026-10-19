@@ -2,9 +2,11 @@ package claudecode
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -162,6 +164,89 @@ func TestStartStreamResumeWithoutForkIsInPlace(t *testing.T) {
 	m := forkEchoRE.FindStringSubmatch(streamForkEcho(t, sess))
 	if m == nil || m[1] != orig || m[2] != "false" || m[3] != "" {
 		t.Fatalf("argv echo = %v, want resume=%s fork=false and no --session-id", m, orig)
+	}
+}
+
+// A one-shot's resume half is exactly `--resume <ref>`, never forked, and
+// nothing at all for a fresh one-shot.
+func TestOneShotResumeArgs(t *testing.T) {
+	if got := oneShotResumeArgs(provider.OneShotRequest{Prompt: "x"}); got != nil {
+		t.Fatalf("fresh one-shot resume args = %q, want none", got)
+	}
+	got := oneShotResumeArgs(provider.OneShotRequest{Prompt: "x", Resume: "abc-123"})
+	if !slices.Equal(got, []string{"--resume", "abc-123"}) {
+		t.Fatalf("resume args = %q, want [--resume abc-123]", got)
+	}
+}
+
+// A resumed one-shot reaches claude as `-p <prompt> --resume <ref>` (no
+// fork flags) on both output formats, continues that conversation, and
+// reports the same session id: claude appends to the resumed session in
+// place. The streaming path announces it too.
+func TestOneShotResumeIsInPlace(t *testing.T) {
+	p := testProvider(t)
+	orig, _ := seedOriginal(t, p)
+
+	res, err := p.OneShot(context.Background(), provider.OneShotRequest{Prompt: "fork-echo", Resume: orig})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := forkEchoRE.FindStringSubmatch(res.Text)
+	if m == nil || m[1] != orig || m[2] != "false" || m[3] != "" {
+		t.Fatalf("argv echo = %v, want resume=%s fork=false and no --session-id", m, orig)
+	}
+	if res.Ref != orig {
+		t.Fatalf("Ref = %q, want the resumed ref %q", res.Ref, orig)
+	}
+
+	var announced []string
+	res, err = p.OneShot(context.Background(), provider.OneShotRequest{
+		Prompt: "recall", Resume: orig,
+		OnEvent: func(ev provider.Event) {
+			if ev.Kind == provider.EventSessionRef {
+				announced = append(announced, ev.Ref)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Text, "earlier") {
+		t.Fatalf("resumed stream one-shot reply %q lost the seeded turn", res.Text)
+	}
+	if res.Ref != orig || !slices.Equal(announced, []string{orig}) {
+		t.Fatalf("Ref = %q, announced %q; want the resumed ref %q once", res.Ref, announced, orig)
+	}
+}
+
+// A resumed one-shot's total_cost_usd is the conversation's running total;
+// the result carries only this invocation's share.
+func TestResumedOneShotCostIsItsOwn(t *testing.T) {
+	p := testProvider(t)
+	const ref = "native-resumed"
+	path := filepath.Join(p.cfg.TranscriptDir, "proj", ref+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"cost-state","sessionId":"` + ref + `","totalCostUSD":0.0183063}` + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	baseline := p.resumeCostBaseline(provider.OneShotRequest{Resume: ref})
+	if baseline != 0.0183063 {
+		t.Fatalf("baseline = %v, want the transcript's last cost-state", baseline)
+	}
+	if got := p.resumeCostBaseline(provider.OneShotRequest{}); got != 0 {
+		t.Fatalf("fresh baseline = %v, want 0", got)
+	}
+	res, _ := withCostBaseline(&provider.OneShotResult{Usage: provider.Usage{CostUSD: 0.0208454}}, nil, baseline)
+	if want := 0.0208454 - 0.0183063; math.Abs(res.Usage.CostUSD-want) > 1e-9 {
+		t.Fatalf("cost = %v, want %v", res.Usage.CostUSD, want)
+	}
+	// Below the baseline: a count that started over, all of it new.
+	res, _ = withCostBaseline(&provider.OneShotResult{Usage: provider.Usage{CostUSD: 0.002}}, nil, baseline)
+	if res.Usage.CostUSD != 0.002 {
+		t.Fatalf("cost = %v, want 0.002 untouched", res.Usage.CostUSD)
 	}
 }
 

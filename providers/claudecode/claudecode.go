@@ -131,6 +131,9 @@ func (p *Provider) Matrix() provider.Matrix {
 		// OnEvent set ⇒ --output-format stream-json --verbose, the same
 		// wire format the interactive transport already parses.
 		provider.BehaviorOneShotStream: provider.Native,
+		// `claude -p … --resume <ref>`: the interactive path's flag
+		// (resumeArgs), and the same session id continues in place.
+		provider.BehaviorOneShotResume: provider.Native,
 		// The structured transport's system/init line announces the ref at
 		// connect (session.go). The terminal transport prints nothing, and a
 		// structured session's own announcement can itself be dropped or
@@ -257,7 +260,9 @@ func (p *Provider) OneShot(ctx context.Context, req provider.OneShotRequest) (*p
 	if req.System != "" {
 		args = append(args, "--append-system-prompt", req.System)
 	}
+	args = append(args, oneShotResumeArgs(req)...)
 	args = append(args, p.cfg.ExtraArgs...)
+	baseline := p.resumeCostBaseline(req) // before the run appends its own cost-state
 
 	cmd := exec.CommandContext(ctx, p.cfg.Bin, args...)
 	cmd.Dir = req.Cwd
@@ -279,7 +284,39 @@ func (p *Provider) OneShot(ctx context.Context, req provider.OneShotRequest) (*p
 		}
 		return nil, fmt.Errorf("claude -p: %w: %s", err, detail)
 	}
-	return parseOneShot(stdout.Bytes())
+	res, err := parseOneShot(stdout.Bytes())
+	return withCostBaseline(res, err, baseline)
+}
+
+// oneShotResumeArgs is a one-shot's --resume half: the interactive path's
+// own resumeArgs, never forked. `claude -p <prompt> --resume <ref>` appends
+// the prompt to that session's transcript and keeps its session id, so the
+// result's session_id (OneShotResult.Ref, EventSessionRef) is req.Resume.
+func oneShotResumeArgs(req provider.OneShotRequest) []string {
+	args, _ := resumeArgs(provider.StartOptions{Resume: req.Resume})
+	return args
+}
+
+// resumeCostBaseline is what a resumed one-shot's conversation had already
+// cost: claude's total_cost_usd is the conversation's running total,
+// restored from the transcript on --resume the same way a resumed
+// interactive session's is (streamSession.costSeen). Read before the run,
+// which appends its own cost-state as it ends. Zero for a fresh one-shot.
+func (p *Provider) resumeCostBaseline(req provider.OneShotRequest) float64 {
+	if req.Resume == "" {
+		return 0
+	}
+	return p.restoredCostTotal(req.Resume)
+}
+
+// withCostBaseline makes a result's CostUSD this invocation's own cost by
+// subtracting baseline (resumeCostBaseline). A total below the baseline is
+// taken as a count that started over: all of it new.
+func withCostBaseline(res *provider.OneShotResult, err error, baseline float64) (*provider.OneShotResult, error) {
+	if err == nil && baseline > 0 && res.Usage.CostUSD >= baseline {
+		res.Usage.CostUSD -= baseline
+	}
+	return res, err
 }
 
 // oneShotStream runs the same one-shot invocation on the stream-json wire
@@ -294,7 +331,9 @@ func (p *Provider) oneShotStream(ctx context.Context, req provider.OneShotReques
 	if req.System != "" {
 		args = append(args, "--append-system-prompt", req.System)
 	}
+	args = append(args, oneShotResumeArgs(req)...)
 	args = append(args, p.cfg.ExtraArgs...)
+	baseline := p.resumeCostBaseline(req) // before the run appends its own cost-state
 
 	cmd := exec.CommandContext(ctx, p.cfg.Bin, args...)
 	cmd.Dir = req.Cwd
@@ -351,7 +390,8 @@ func (p *Provider) oneShotStream(ctx context.Context, req provider.OneShotReques
 	if resultLine == nil {
 		return nil, fmt.Errorf("claude -p: no result line in stream-json output")
 	}
-	return parseOneShot(resultLine)
+	res, err := parseOneShot(resultLine)
+	return withCostBaseline(res, err, baseline)
 }
 
 // parseOneShot decodes the --output-format json result object.

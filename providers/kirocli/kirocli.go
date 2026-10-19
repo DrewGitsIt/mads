@@ -119,6 +119,12 @@ func (p *Provider) Matrix() provider.Matrix {
 		// README.md. OneShot never calls OnEvent; the engine falls back to
 		// a single end-of-run chunk.
 		provider.BehaviorOneShotStream: provider.Unsupported,
+		// `chat --no-interactive` prints plain text and reports no session
+		// id, so a one-shot never yields a ref to resume, and no kiro doc
+		// pins a resume flag for it. Interactive resume (--resume-id over
+		// PTY, session/load over ACP) is a separate row. OneShot with
+		// Resume returns provider.ErrResumeUnsupported.
+		provider.BehaviorOneShotResume: provider.Unsupported,
 		// ACP's session/new response carries the ref synchronously, before
 		// Start even returns (the acprpc engine's Start) — no announcement
 		// subscription needed there. The terminal transport prints nothing and has no
@@ -258,6 +264,9 @@ func (p *Provider) startACP(ctx context.Context, opts provider.StartOptions) (pr
 // output — stdout is captured as plain text and Usage stays zero-valued,
 // consistent with CostReporting=Unsupported.
 func (p *Provider) OneShot(ctx context.Context, req provider.OneShotRequest) (*provider.OneShotResult, error) {
+	if req.Resume != "" {
+		return nil, provider.ErrResumeUnsupported // BehaviorOneShotResume: see Matrix
+	}
 	args := []string{"chat", "--no-interactive", req.Prompt}
 	if req.Model != "" {
 		args = append(args, "--model", req.Model)

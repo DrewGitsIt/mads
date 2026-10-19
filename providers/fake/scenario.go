@@ -94,6 +94,13 @@ type Rule struct {
 	// rule, overriding the deterministic length-based default — metrics
 	// tests need exact numbers to assert against, not computed guesses.
 	Usage *UsageOverride `yaml:"usage,omitempty"`
+	// Resumed restricts the rule to one-shots that continue a session
+	// (OneShotRequest.Resume set), so a scenario can script a resumed
+	// attempt differently from a fresh one with the same prompt. Put it
+	// before the unrestricted rule it overrides. An empty-match Resumed
+	// rule catches resumed one-shots only, so it may sit before fresh
+	// rules (it still shadows any Resumed rule after it).
+	Resumed bool `yaml:"resumed,omitempty"`
 }
 
 // UsageOverride pins one or more of a scripted one-shot's usage fields; unset
@@ -139,7 +146,7 @@ func (sc Scenario) Validate() error {
 				probs = append(probs, fmt.Sprintf("rule %d tool %d: content without a path", i, j))
 			}
 		}
-		if r.Match == "" && i != len(sc.Rules)-1 {
+		if r.Match == "" && !r.Resumed && i != len(sc.Rules)-1 {
 			probs = append(probs, fmt.Sprintf("rule %d: catch-all (empty match) shadows later rules", i))
 		}
 	}
@@ -166,8 +173,13 @@ func LoadScenario(path string) (Scenario, error) {
 }
 
 // match returns the first rule matching prompt, or nil for built-in handling.
-func (sc Scenario) match(prompt string) *Rule {
+// resumed says the prompt is a one-shot continuing a session
+// (OneShotRequest.Resume); a Resumed rule matches nothing else.
+func (sc Scenario) match(prompt string, resumed bool) *Rule {
 	for i := range sc.Rules {
+		if sc.Rules[i].Resumed && !resumed {
+			continue
+		}
 		if sc.Rules[i].Match == "" || strings.Contains(prompt, sc.Rules[i].Match) {
 			return &sc.Rules[i]
 		}

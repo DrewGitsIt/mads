@@ -230,6 +230,19 @@ func TestNoCompleter(t *testing.T) {
 	}
 }
 
+// `chat --no-interactive` takes no session to continue: a resumed one-shot
+// is refused with the typed error before anything spawns, never run fresh.
+func TestOneShotResumeIsRefused(t *testing.T) {
+	p := New(Config{Bin: "kiro-cli-not-installed"})
+	if p.Matrix()[provider.BehaviorOneShotResume].Works() {
+		t.Fatal("one_shot_resume declared working")
+	}
+	_, err := p.OneShot(context.Background(), provider.OneShotRequest{Prompt: "echo x", Resume: "sess-1"})
+	if !errors.Is(err, provider.ErrResumeUnsupported) || !errors.Is(err, provider.ErrUnsupported) {
+		t.Fatalf("err = %v, want ErrResumeUnsupported (wrapping ErrUnsupported)", err)
+	}
+}
+
 // TestRealKiroSmoke exercises the real binary. Opt-in: kiro-cli is not
 // installed on this machine, so this both spends real tokens elsewhere and
 // cannot be exercised here — it must skip cleanly rather than fail.

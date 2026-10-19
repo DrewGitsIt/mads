@@ -220,6 +220,10 @@ func (p *Provider) Matrix() provider.Matrix {
 		// Native-strength — session/new returns it synchronously.
 		provider.BehaviorOneShot:       provider.Emulated,
 		provider.BehaviorOneShotStream: provider.Emulated,
+		// The engine's one-shot loads the ref with session/load (goose
+		// advertises loadSession; acp-load-replay capture) instead of
+		// session/new — Emulated like the one-shot it rides.
+		provider.BehaviorOneShotResume: provider.Emulated,
 		// The engine's DiscoverModels probe reads the live agent's model
 		// configOption — no LLM call, no static list.
 		provider.BehaviorModelDiscovery: provider.Native,

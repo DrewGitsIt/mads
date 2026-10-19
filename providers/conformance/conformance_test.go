@@ -43,6 +43,7 @@ func TestRunAgainstHonestStub(t *testing.T) {
 func TestHonestPartialStubPasses(t *testing.T) {
 	p := newStub(map[provider.Behavior]provider.Support{
 		provider.BehaviorResume:          provider.Unsupported,
+		provider.BehaviorOneShotResume:   provider.Unsupported,
 		provider.BehaviorTranscript:      provider.Unsupported,
 		provider.BehaviorModelDiscovery:  provider.Unsupported,
 		provider.BehaviorPTY:             provider.Unsupported,
@@ -130,6 +131,18 @@ func TestMismatchesAreCaught(t *testing.T) {
 				provider.BehaviorResume: provider.Unsupported,
 			}, lies{acceptAnyResume: true}),
 			provider.BehaviorResume, "declared unsupported but Start with Resume succeeded",
+		},
+		{
+			"resumed one-shot silently starts fresh",
+			newStub(nil, lies{oneShotFreshOnResume: true}),
+			provider.BehaviorOneShotResume, "lost context",
+		},
+		{
+			"declared-unsupported one-shot resume silently starts fresh",
+			newStub(map[provider.Behavior]provider.Support{
+				provider.BehaviorOneShotResume: provider.Unsupported,
+			}, lies{oneShotFreshOnResume: true}),
+			provider.BehaviorOneShotResume, "declared unsupported but OneShot with Resume succeeded",
 		},
 		{
 			// Self-proves the relaxed trust rule: announcing a disallowed

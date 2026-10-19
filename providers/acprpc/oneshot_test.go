@@ -104,3 +104,47 @@ func TestOneShotContextCancellation(t *testing.T) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }
+
+// A resumed one-shot loads the ref (session/load) instead of minting one:
+// it recalls the earlier one-shot's turn, reports and announces the same
+// ref, and the replayed history never reaches OnEvent as new output.
+func TestOneShotResumeLoadsTheRef(t *testing.T) {
+	dir := t.TempDir()
+	e := testEngine(t, gooseConfig(), "goose", dir)
+	first, err := e.OneShot(context.Background(), provider.OneShotRequest{Prompt: "echo mk-first"})
+	if err != nil {
+		t.Fatalf("seed OneShot: %v", err)
+	}
+	var col eventCollector
+	res, err := e.OneShot(context.Background(), provider.OneShotRequest{
+		Prompt: "recall", Resume: first.Ref, OnEvent: col.add,
+	})
+	if err != nil {
+		t.Fatalf("resumed OneShot: %v", err)
+	}
+	if res.Ref != first.Ref {
+		t.Fatalf("resumed Ref = %q, want the resumed %q", res.Ref, first.Ref)
+	}
+	if !strings.Contains(res.Text, "mk-first") {
+		t.Fatalf("resumed reply %q lost the earlier turn", res.Text)
+	}
+	events := col.all()
+	if len(events) == 0 || events[0].Kind != provider.EventSessionRef || events[0].Ref != first.Ref {
+		t.Fatalf("first OnEvent must announce the resumed ref; got %+v", events[:min(len(events), 2)])
+	}
+	for _, ev := range events {
+		if ev.Kind == provider.EventText && strings.Contains(ev.Text, "you said mk-first") {
+			t.Fatalf("replayed history leaked into OnEvent: %+v", ev)
+		}
+	}
+}
+
+// An agent without loadSession refuses a resumed one-shot with
+// ErrUnsupported rather than starting fresh.
+func TestOneShotResumeWithoutLoadSessionRefuses(t *testing.T) {
+	e := testEngine(t, syntheticConfig(), "synthetic", t.TempDir())
+	_, err := e.OneShot(context.Background(), provider.OneShotRequest{Prompt: "echo x", Resume: "sess-1"})
+	if !errors.Is(err, provider.ErrUnsupported) {
+		t.Fatalf("err = %v, want ErrUnsupported", err)
+	}
+}

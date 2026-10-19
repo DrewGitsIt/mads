@@ -149,6 +149,12 @@ func Check(ctx context.Context, p provider.Provider, s Script) []Result {
 	oneShot, oneShotErr := c.oneShot()
 	c.add(provider.BehaviorOneShot, oneShotErr, "")
 	c.add(provider.BehaviorOneShotStream, c.oneShotStream(), "")
+	if m[provider.BehaviorOneShotResume].Works() {
+		note, err := c.oneShotResume(structured)
+		c.add(provider.BehaviorOneShotResume, err, note)
+	} else {
+		c.add(provider.BehaviorOneShotResume, c.oneShotResumeRefused(), "")
+	}
 
 	if m[provider.BehaviorResume].Works() {
 		if structured {
@@ -571,6 +577,75 @@ func (c *checker) oneShotStream() error {
 		return fmt.Errorf("streamed chunks %q do not contain marker %q", strings.Join(chunks, ""), marker)
 	case !working && len(chunks) != 0:
 		return fmt.Errorf("declared unsupported but OnEvent fired %d times", len(chunks))
+	}
+	return nil
+}
+
+// oneShotResume proves OneShotRequest.Resume continues a conversation: a
+// marker sent in a first one-shot must be recallable by a second one-shot
+// resuming the ref the first reported, and the resumed call must report a
+// ref (announced and returned alike). A provider whose one-shots report no
+// ref is seeded from an interactive session's Ref instead, when it has the
+// structured transport to drive one.
+func (c *checker) oneShotResume(structured bool) (note string, err error) {
+	marker := "mk-oneshot-resume"
+	first, err := c.p.OneShot(c.ctx, provider.OneShotRequest{Prompt: c.s.Echo(marker)})
+	if err != nil {
+		return "", fmt.Errorf("seed OneShot: %w", err)
+	}
+	ref := first.Ref
+	if ref == "" {
+		if !structured {
+			return "not probed: one-shots report no ref and there is no structured session to seed one", nil
+		}
+		sess, err := c.p.Start(c.ctx, provider.StartOptions{Mode: provider.ModeACP})
+		if err != nil {
+			return "", fmt.Errorf("seed Start(acp): %w", err)
+		}
+		_, _, err = c.turn(sess, c.s.Echo(marker))
+		ref = sess.Ref()
+		_ = sess.Close()
+		if err != nil {
+			return "", fmt.Errorf("seed turn: %w", err)
+		}
+		if ref == "" {
+			return "", errors.New("declared working but neither a one-shot nor a session reported a ref to resume")
+		}
+		note = "seeded from an interactive session: one-shots report no ref"
+	}
+	var announced string
+	res, err := c.p.OneShot(c.ctx, provider.OneShotRequest{
+		Prompt: c.s.Recall(),
+		Resume: ref,
+		OnEvent: func(ev provider.Event) {
+			if ev.Kind == provider.EventSessionRef && announced == "" {
+				announced = ev.Ref
+			}
+		},
+	})
+	switch {
+	case err != nil:
+		return note, fmt.Errorf("OneShot(resume=%s): %w", ref, err)
+	case !strings.Contains(res.Text, marker):
+		return note, fmt.Errorf("resumed one-shot lost context: recall reply %q missing marker %q", res.Text, marker)
+	case res.Ref == "":
+		return note, errors.New("resumed one-shot reported no ref")
+	case announced != "" && announced != res.Ref:
+		return note, fmt.Errorf("resumed one-shot announced ref %q but returned %q", announced, res.Ref)
+	}
+	return note, nil
+}
+
+// oneShotResumeRefused checks the unsupported declaration is honest: a
+// one-shot with Resume set must fail with ErrUnsupported (the provider's
+// ErrResumeUnsupported wraps it), never silently start fresh.
+func (c *checker) oneShotResumeRefused() error {
+	_, err := c.p.OneShot(c.ctx, provider.OneShotRequest{Prompt: c.s.Echo("mk-no-resume"), Resume: "some-ref"})
+	switch {
+	case err == nil:
+		return errors.New("declared unsupported but OneShot with Resume succeeded")
+	case !errors.Is(err, provider.ErrUnsupported):
+		return fmt.Errorf("declared unsupported: OneShot with Resume must return ErrUnsupported, got: %v", err)
 	}
 	return nil
 }
