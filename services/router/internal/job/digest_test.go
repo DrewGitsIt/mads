@@ -96,13 +96,17 @@ func (s stubResolver) SessionAddr(sessionID string) (string, bool) {
 type countingBackend struct {
 	reply string
 
-	mu    sync.Mutex
-	calls int
+	mu      sync.Mutex
+	calls   int
+	systems []string
+	prompts []string
 }
 
 func (b *countingBackend) Complete(ctx context.Context, system, prompt, model string) (string, provider.Usage, error) {
 	b.mu.Lock()
 	b.calls++
+	b.systems = append(b.systems, system)
+	b.prompts = append(b.prompts, prompt)
 	b.mu.Unlock()
 	return b.reply, provider.Usage{}, nil
 }

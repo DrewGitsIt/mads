@@ -74,17 +74,21 @@ Links are directed edges; nothing is 1:1 by design:
      insufficient.
    - `on_signal` (default): nothing pushed per turn. The monitor is woken
      only by attention signals from the subject — a permission request
-     parking a tool call, a session crash, a task reaching done or blocked.
+     parking a tool call, a session crash, a task reaching done, blocked, wont_do or needs_review.
      Signals are composed deterministically (no fast-model call) and
      delivered to every non-manual explicit read link, per_turn included: a
      permission pause parks the subject mid-turn, so the turn digest that
      would report it may never fire. Turn digests still accumulate on the
      link's capped mailbox (oldest dropped first) and flush as context in
      the next wake's forced turn, or on demand via the agent-facing
-     check_mailbox tool. The fast model triages while it compresses: a
-     digest it marks actionable (blocked, failing, waiting on input,
-     drifting) wakes the monitor immediately instead of queueing, so
-     on_signal isn't limited to the deterministic terminal events.
+     check_mailbox tool. Digest content never wakes the
+     monitor: a Fast Model "actionable" verdict used to, but false-alarmed
+     ("blocked waiting on its own subagents/runs") and was turned off
+     (2026-10-19). Waking on a turn's content is meant to return as an
+     intent-based classifier, developed separately (not a frontier/fast LLM
+     call). The noop line is offered on done-task, permission and crash
+     wakes only; blocked, wont_do and needs_review notices ask for a
+     decision instead.
      Rationale: a monitor is an LLM — every pushed
      digest forces a full-inference turn over its whole context, and on a
      healthy subject almost every such turn concludes "nothing to do". The

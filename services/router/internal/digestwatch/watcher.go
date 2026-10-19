@@ -238,7 +238,12 @@ func signalFor(env contracts.Envelope) (job.Signal, bool) {
 			log.Printf("digestwatch: decode task.status_changed payload for %s: %v", env.SessionID, err)
 			return job.Signal{}, false
 		}
-		if p.To != string(contracts.StatusDone) && p.To != string(contracts.StatusBlocked) {
+		// done, blocked, wont_do (the agent may give up early) and
+		// needs_review each hand the leader something to act on;
+		// ready/in_progress are ordinary motion.
+		switch contracts.TaskStatus(p.To) {
+		case contracts.StatusDone, contracts.StatusBlocked, contracts.StatusWontDo, contracts.StatusNeedsReview:
+		default:
 			return job.Signal{}, false
 		}
 		return job.Signal{Kind: job.SignalTaskTerminal, TaskID: env.TaskID, ToStatus: p.To}, true

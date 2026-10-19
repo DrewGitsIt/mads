@@ -100,6 +100,14 @@ func DeliverSignal(sessionID string, sig Signal) Func {
 			return nil // e.g. the terminal task was deleted mid-flight
 		}
 
+		// Only a done task is plausibly "nothing to do"; every other
+		// terminal asks the leader for a decision, so offering NOOP there
+		// would invite the exact dismissal it exists to prevent.
+		closing := ""
+		if sig.Kind != SignalTaskTerminal || sig.ToStatus == string(contracts.StatusDone) {
+			closing = noopInstruction
+		}
+
 		delivered := 0
 		for _, l := range targets {
 			source := sess.Name
@@ -109,7 +117,7 @@ func DeliverSignal(sessionID string, sig Signal) Func {
 				// name the source what it actually is.
 				source = implicitSourceName
 			}
-			if wakeMonitor(ctx, deps, l, source, text) {
+			if wakeMonitor(ctx, deps, l, source, text, closing) {
 				delivered++
 			}
 		}
@@ -154,8 +162,8 @@ func pipelineRunning(ctx context.Context, deps Deps, sessionID string) bool {
 // implicit hand-raiser: the run, not the session's own name.
 const implicitSourceName = "your pipeline run"
 
-// noopInstruction closes every monitor-facing push (per-turn digests and
-// wakes alike) so a monitor with nothing to do can answer in one cheap,
+// noopInstruction closes monitor-facing pushes that may need no action
+// (per-turn digests, permission and crash wakes, done-task wakes) so a monitor with nothing to do can answer in one cheap,
 // recognizable token — the UI collapses digest-attributed turns answered
 // with exactly NOOP into a quiet-check chip instead of transcript clutter.
 const noopInstruction = "\n\n(If nothing here needs your action, reply with exactly NOOP.)"
@@ -168,8 +176,10 @@ const noopInstruction = "\n\n(If nothing here needs your action, reply with exac
 // is re-queued so it isn't lost, at the cost of a possible interleave with
 // digests appended meanwhile. Returns whether delivery happened, so a
 // caller with somewhere better to put text (the digest job's mailbox) can
-// fall back. Best-effort: one monitor's failure must not affect the others.
-func wakeMonitor(ctx context.Context, deps Deps, l contracts.Link, sourceName, text string) bool {
+// fall back. closing is appended last (noopInstruction, or "" for a wake
+// that must be acted on, not dismissed). Best-effort: one monitor's failure
+// must not affect the others.
+func wakeMonitor(ctx context.Context, deps Deps, l contracts.Link, sourceName, text, closing string) bool {
 	addr, ok := targetAddr(ctx, deps, l)
 	if !ok {
 		return false
@@ -183,7 +193,7 @@ func wakeMonitor(ctx context.Context, deps Deps, l contracts.Link, sourceName, t
 	if len(backlog) > 0 {
 		body = text + "\n\n" + renderBacklog(backlog)
 	}
-	body += noopInstruction
+	body += closing
 	if err := deliverDigest(ctx, addr, body, contracts.Attribution{
 		LinkID: l.ID, SourceName: sourceName, DigestAttributed: true,
 	}); err != nil {
@@ -204,8 +214,8 @@ func wakeMonitor(ctx context.Context, deps Deps, l contracts.Link, sourceName, t
 // granting session is the run's own session, the one agent that has to hear
 // about its own run, so a dormant child is woken through deps.Waker (the
 // same wake a composer send gets) instead of being skipped. The forced turn
-// stays digest-attributed with the noop instruction, so it can't
-// self-amplify.
+// stays digest-attributed, so the UI treats it as a push rather than
+// the user's own message.
 func targetAddr(ctx context.Context, deps Deps, l contracts.Link) (string, bool) {
 	if addr, ok := deps.Resolver.SessionAddr(l.GrantingSessionID); ok {
 		return addr, true
@@ -258,13 +268,19 @@ func signalNotice(ctx context.Context, deps Deps, sig Signal) (string, error) {
 			return "", fmt.Errorf("signal: load task: %w", err)
 		}
 		text := fmt.Sprintf("Task %q is now %s.", task.Title, sig.ToStatus)
-		if sig.ToStatus == string(contracts.StatusBlocked) {
+		switch contracts.TaskStatus(sig.ToStatus) {
+		case contracts.StatusBlocked:
 			for i := len(task.Notes) - 1; i >= 0; i-- {
 				if task.Notes[i].Type == contracts.NoteBlocker {
 					text += fmt.Sprintf("\nBlocker: %s", task.Notes[i].Content)
 					break
 				}
 			}
+			text += "\n\nThis needs you: unblock it, or decide what should change."
+		case contracts.StatusWontDo:
+			text += "\n\nThe agent gave up on it. Decide whether that was right, and reopen or redirect it if not."
+		case contracts.StatusNeedsReview:
+			text += "\n\nIt is waiting on your review."
 		}
 		return text, nil
 	default:

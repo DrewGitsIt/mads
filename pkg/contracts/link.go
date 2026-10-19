@@ -62,8 +62,11 @@ const (
 	CadencePerTurn LinkCadence = "per_turn"
 	// CadenceOnSignal pushes nothing per turn; the monitor is woken only by
 	// attention signals from the subject — a permission request, a crash, a
-	// task reaching done or blocked. Default: a monitor should pay for a
-	// turn only when the subject actually needs attention.
+	// task reaching done, blocked, wont_do or needs_review. Turn digests
+	// never wake it: they queue on the link mailbox for check_mailbox.
+	// (Waking on a turn's content is to return as an intent-based
+	// classifier; 2026-10-19.) Default: a monitor should pay for a turn
+	// only when the subject actually needs attention.
 	CadenceOnSignal LinkCadence = "on_signal"
 	// CadenceManualOnly pushes nothing; the monitor's user pulls via the
 	// subject's existing transcript/summary reads instead.
