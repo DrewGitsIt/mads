@@ -327,7 +327,7 @@ describe("SessionRail", () => {
       expect(document.activeElement).toBe(archive);
       expect(cluster.getAttribute("data-anchored")).toBe("");
 
-      // :focus-within still holds it open, so the coordinates must not go.
+      // :focus-visible still holds it open, so the coordinates must not go.
       fireEvent.mouseLeave(row);
       expect(cluster.getAttribute("data-anchored")).toBe("");
     });
@@ -369,7 +369,9 @@ describe("SessionRail", () => {
       expect(rest).not.toMatch(/margin-left/);
       // Hidden until the row's rect has been measured into an inline style.
       expect(css).toMatch(/\.row:hover \.actionCluster\[data-anchored\]/);
-      expect(css).toMatch(/\.row:focus-within \.actionCluster\[data-anchored\]/);
+      // Keyboard focus reveals it; a click's focus does not pin it open.
+      expect(css).toMatch(/\.row:has\(:focus-visible\) \.actionCluster\[data-anchored\]/);
+      expect(css).not.toMatch(/\.row:focus-within \.actionCluster/);
     });
 
     // Hanging outside the rail means overlapping the conversation pane, whose

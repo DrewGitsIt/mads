@@ -920,6 +920,11 @@ function reasonFor(
   return match ? matchReason(session, match, wsIndex) : undefined;
 }
 
+/** Whether the row, or something in it, holds focus the keyboard put there. */
+function keyboardFocusIn(row: HTMLElement | null): boolean {
+  return row !== null && (row.matches(":focus-visible") || row.querySelector(":focus-visible") !== null);
+}
+
 /**
  * Where the hover action cluster paints: just past the card's right edge,
  * centred on the row (.actionCluster carries the translateY(-50%)). Fixed,
@@ -1182,14 +1187,15 @@ function SessionRow({
         hovering.current = false;
         // Moving onto the cluster never lands here — it is a DOM child of the
         // row, so :hover and mouseleave both ignore where it paints. Keep the
-        // anchor while something inside still holds focus, though: the reveal
-        // is also :focus-within, and dropping it would yank the button the
-        // keyboard is standing on out from under it.
-        if (!rowRef.current?.contains(document.activeElement)) setClusterAt(undefined);
+        // anchor while the keyboard is inside, though: the reveal is also
+        // :focus-visible, and dropping it would yank the button the keyboard
+        // is standing on out from under it. A click's focus doesn't count —
+        // the cluster is a hover affordance for the pointer.
+        if (!keyboardFocusIn(rowRef.current)) setClusterAt(undefined);
       }}
       onFocus={() => {
         onSeen(session.id);
-        anchorCluster();
+        if (keyboardFocusIn(rowRef.current)) anchorCluster();
       }}
       onBlur={(e) => {
         if (hovering.current) return;

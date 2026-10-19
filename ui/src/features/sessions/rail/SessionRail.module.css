@@ -649,8 +649,11 @@
     transform 0.14s ease-out;
 }
 
+/* Hover, or keyboard focus. Not :focus-within: clicking a card focuses it,
+   and that left the cluster pinned open after the pointer had gone. */
 .row:hover .actionCluster[data-anchored],
-.row:focus-within .actionCluster[data-anchored] {
+.row:focus-visible .actionCluster[data-anchored],
+.row:has(:focus-visible) .actionCluster[data-anchored] {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(-50%) translateX(0);
