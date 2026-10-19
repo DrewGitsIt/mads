@@ -220,7 +220,10 @@ export function foldReducer(state: RunFoldState, env: Envelope): RunFoldState {
     case "pipeline.cancelled":
     case "pipeline.failed": {
       if (state.runStartSeq === undefined || env.seq < state.runStartSeq) return state;
-      const payload = env.payload as { outcome?: string } | undefined;
+      const payload = env.payload as { outcome?: string; run_id?: string } | undefined;
+      // Another run's end (e.g. the Router marking an older run lost at
+      // startup) must not finish this one.
+      if (payload?.run_id && state.runId && payload.run_id !== state.runId) return state;
       return {
         ...state,
         phase: "finished",

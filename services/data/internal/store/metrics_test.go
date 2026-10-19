@@ -200,3 +200,26 @@ func TestPipelineRunsLegacyNeverRunningForever(t *testing.T) {
 		t.Errorf("%d runs report running, want only the newest", running)
 	}
 }
+
+// TestPipelineRunsLostReadsInterrupted: the Router's lost-run sweep closes a
+// run whose engine died unseen with pipeline.failed {reason: "lost"}; run
+// history reports that as interrupted, while a crash stays failed.
+func TestPipelineRunsLostReadsInterrupted(t *testing.T) {
+	l := openMigratedDB(t)
+	metrics := NewMetrics(l, NewTasks(l), NewCapabilities(l))
+	appendRunEvents(t, l, "ses_lost",
+		runEvent(contracts.PipelineStarted, `{"run_id":"run_crash"}`),
+		runEvent(contracts.PipelineFailed, `{"run_id":"run_crash","reason":"exit status 1"}`),
+		runEvent(contracts.PipelineStarted, `{"run_id":"run_lost"}`),
+		runEvent(contracts.PipelineFailed, `{"run_id":"run_lost","reason":"lost","run_seq":3}`),
+	)
+	runs, err := metrics.PipelineRuns(context.Background(), "ses_lost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := outcomes(runs)
+	want := []string{"run_crash:failed", "run_lost:interrupted"}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("runs = %v, want %v", got, want)
+	}
+}

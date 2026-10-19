@@ -372,7 +372,18 @@ func (m *Metrics) pipelineRunsForSession(ctx context.Context, sessionID string) 
 			}
 		case contracts.PipelineFailed:
 			if r := target(ids.RunID); r != nil {
-				closeRun(r, env.Timestamp, env.Seq, "failed")
+				// The Router's lost-run sweep (reason "lost") closes a run
+				// whose engine died unseen, e.g. in a reboot: the same
+				// "interrupted" the stale-run rule below reports.
+				var f struct {
+					Reason string `json:"reason"`
+				}
+				_ = json.Unmarshal(env.Payload, &f)
+				outcome := "failed"
+				if f.Reason == "lost" {
+					outcome = "interrupted"
+				}
+				closeRun(r, env.Timestamp, env.Seq, outcome)
 			}
 		}
 	}

@@ -177,6 +177,10 @@ const (
 	PipelineCompleted EventType = "pipeline.completed"
 	// PipelineFailed fires when the Router's supervision detects a Pipeline
 	// Engine child exited unexpectedly. Payload: {"run_id": string, "reason": string}.
+	// At startup the Router also appends it with reason "lost" (plus
+	// "run_seq" and "evidence") for a run whose engine provably died unseen,
+	// e.g. in a reboot (docs/PIPELINE-LEASES-DESIGN.md B1); run_id is absent
+	// only for runs from before pipeline.started carried one.
 	PipelineFailed EventType = "pipeline.failed"
 
 	StageStarted   EventType = "stage.started"

@@ -487,6 +487,20 @@ describe("foldReducer pipeline.started", () => {
     expect(state.runId).toBe("r2");
     expect(state.excludedTaskIds).toEqual([]);
   });
+
+  it("ignores another run's end event, such as an older run marked lost", () => {
+    const failed = (seq: number, payload: Record<string, unknown>): Envelope => ({
+      ...started(seq, payload),
+      type: "pipeline.failed",
+      actor: "router",
+    });
+    let state = foldReducer(initialRunFoldState, started(9, { run_id: "r2" }));
+    state = foldReducer(state, failed(10, { run_id: "r1", reason: "lost" }));
+    expect(state.phase).toBe("running");
+    state = foldReducer(state, failed(11, { run_id: "r2", reason: "lost" }));
+    expect(state.phase).toBe("finished");
+    expect(state.outcome).toBe("failed");
+  });
 });
 
 describe("foldReducer stage timestamps", () => {
