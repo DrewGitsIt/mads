@@ -81,6 +81,7 @@ type PipelineRun struct {
 	TasksDone    int       `json:"tasks_done"`
 	TasksBlocked int       `json:"tasks_blocked"`
 	TasksSkipped int       `json:"tasks_skipped"`
+	TasksLeftOut int       `json:"tasks_left_out,omitempty"` // excluded from the run, or stranded only by an exclusion; never makes it incomplete
 	CostUSD      float64   `json:"cost_usd"`
 	Agents       []string  `json:"agents,omitempty"` // distinct agents selected during the run, sorted
 }

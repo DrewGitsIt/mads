@@ -259,6 +259,7 @@ type pipelineCompletedPayload struct {
 	Done    int    `json:"done"`
 	Blocked int    `json:"blocked"`
 	Skipped int    `json:"skipped"`
+	LeftOut int    `json:"left_out"`
 }
 
 // PipelineRuns answers GET /metrics/pipelines: reconstructed pipeline runs
@@ -364,6 +365,7 @@ func (m *Metrics) pipelineRunsForSession(ctx context.Context, sessionID string) 
 			r.run.TasksDone = p.Done
 			r.run.TasksBlocked = p.Blocked
 			r.run.TasksSkipped = p.Skipped
+			r.run.TasksLeftOut = p.LeftOut
 		case contracts.PipelineCancelled:
 			if r := target(ids.RunID); r != nil {
 				closeRun(r, env.Timestamp, env.Seq, "cancelled")

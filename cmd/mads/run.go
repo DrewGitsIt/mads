@@ -32,7 +32,7 @@ func cmdRun(args []string, out io.Writer) error {
 	session := fs.String("session", "", "session ID (required)")
 	workspace := fs.String("workspace", ".", "workspace repo the run works in")
 	tplName := fs.String("template", "default-implementation", "pipeline template (registry name)")
-	exclude := fs.String("exclude", "", "comma-separated task IDs to leave out of the run (dependents report skipped)")
+	exclude := fs.String("exclude", "", "comma-separated task IDs to leave out of the run (dependents stranded only by them are left out too; neither makes the run incomplete)")
 	providerName := fs.String("provider", "claude-code", "agent provider: claude-code, kiro-cli, goose, or fake")
 	model := fs.String("model", "", "model override for agent stages")
 	concurrency := fs.Int("concurrency", 5, "simultaneous tasks — agent stages run in parallel up to "+
@@ -157,7 +157,11 @@ func cmdRun(args []string, out io.Writer) error {
 		return err
 	}
 
-	_, _ = fmt.Fprintf(out, "\ndone %d · blocked %d · skipped %d\n", len(sum.Done), len(sum.Blocked), len(sum.Skipped))
+	_, _ = fmt.Fprintf(out, "\ndone %d · blocked %d · skipped %d", len(sum.Done), len(sum.Blocked), len(sum.Skipped))
+	if len(sum.LeftOut) > 0 { // never makes the run incomplete (see engine.Summary)
+		_, _ = fmt.Fprintf(out, " · left out %d", len(sum.LeftOut))
+	}
+	_, _ = fmt.Fprintln(out)
 	for _, id := range sum.Blocked {
 		t, err := client.Task(ctx, id)
 		if err != nil {

@@ -42,9 +42,14 @@ shape tasks, pick a template, run it, watch it, and zoom into any task.
 ## Contracts (backend ↔ UI)
 
 1. `POST /pipelines` body gains optional `exclude_task_ids: string[]`. The
-   engine never launches an excluded task. A task that (transitively) depends
-   on an excluded task is reported as skipped, exactly like an unsatisfiable
-   dependency today. Unknown ids are a 400. If every ready task is excluded,
+   engine never launches an excluded task. A task that can't run *only*
+   because a dependency (at any depth) is excluded is left out too. Left-out
+   tasks don't make the run incomplete: `pipeline.completed` reports them as
+   `left_out` (a count, separate from `skipped`), and the outcome is
+   `completed` when nothing is blocked or skipped. A task whose chain also
+   hits an unsatisfiable dependency that wasn't excluded (blocked, draft,
+   wont_do, needs_review, …) is skipped and the run reads `incomplete`, as
+   before. Unknown ids are a 400. If every ready task is excluded,
    400 "no ready tasks".
 2. `pipeline.started` payload gains `run_id` (the Router's run id, the one
    `POST /pipelines/{id}/cancel` takes) and `excluded_task_ids`. The UI's run

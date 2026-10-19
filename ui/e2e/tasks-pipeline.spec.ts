@@ -238,9 +238,9 @@ test.describe("tasks tab: pipeline journey", () => {
 
     // A finished run: its outcome in the bar, and New run.
     await expect(runTrigger(panel)).toContainText("Run 1");
-    // The left-out root's dependent is reported skipped (contract B1), so the
-    // run reads incomplete even though everything it ran is done.
-    await expect(runTrigger(panel)).toContainText("incomplete");
+    // The left-out root and its dependent are reported left out, not skipped
+    // (contract 1): everything else is done, so the run reads completed.
+    await expect(runTrigger(panel)).toContainText("completed");
     await expect(panel.getByRole("button", { name: "New run", exact: true })).toBeVisible();
     await expect(group(panel, "Done").locator(`li[data-task="${lensId}"]`)).toBeVisible();
 
@@ -267,7 +267,7 @@ test.describe("tasks tab: pipeline journey", () => {
     await runTrigger(panel).click();
     await page.getByRole("menu", { name: "Runs" }).getByRole("menuitemradio", { name: /^Run 1/ }).click();
     await expect(runTrigger(panel)).toContainText("Run 1");
-    await expect(runTrigger(panel)).toContainText("incomplete");
+    await expect(runTrigger(panel)).toContainText("completed");
     await expect(group(panel, "Done").locator(`li[data-task="${lensId}"]`)).toBeVisible();
     await panel.getByTestId("metro").locator(`button[data-task="${lensId}"]`).click();
     const lens = panel.getByTestId("task-lens");

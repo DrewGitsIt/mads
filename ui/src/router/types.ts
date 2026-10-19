@@ -1445,6 +1445,8 @@ export interface PipelineRun {
   tasks_done: number;
   tasks_blocked: number;
   tasks_skipped: number;
+  /** Excluded from the run, or stranded only by an exclusion; never makes it incomplete. */
+  tasks_left_out?: number;
   cost_usd: number;
   agents?: string[];
 }

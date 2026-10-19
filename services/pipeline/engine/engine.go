@@ -68,8 +68,9 @@ type Config struct {
 	TemplateVersion int
 	// ExcludeTaskIDs are tasks this run leaves out: never launched, their
 	// statuses untouched. A ready task that (transitively) depends on one
-	// can never start, so it reports skipped at quiescence like any other
-	// unsatisfiable dependency. Echoed on pipeline.started.
+	// can never start; at quiescence it reports left out (Summary.LeftOut,
+	// pipeline.completed "left_out"), not skipped, unless something else
+	// on its chain is unsatisfiable too. Echoed on pipeline.started.
 	ExcludeTaskIDs []string
 	// Cwd is where command stages run and agent one-shots execute. W3.2
 	// replaces this with per-task worktrees.
@@ -172,6 +173,10 @@ type Summary struct {
 	Done    []string // task IDs that completed every stage
 	Blocked []string // task IDs blocked by stage failure
 	Skipped []string // task IDs never eligible (unsatisfiable dependencies)
+	// LeftOut holds the run's explicit exclusions (Config.ExcludeTaskIDs
+	// still unfinished in the session) plus the tasks stranded only by
+	// them. They don't make the run incomplete — see leftOutOnly.
+	LeftOut []string
 }
 
 // Run executes the pipeline to quiescence: no runnable tasks remain. It
@@ -451,10 +456,20 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 		}
 		if len(running) == 0 {
 			// Quiescent: nothing running, nothing can start. Anything
-			// still ready has unsatisfiable dependencies this run —
-			// including a dependency on a left-out task.
+			// still ready has unsatisfiable dependencies this run. Those
+			// stranded only by an explicit exclusion are left out, not
+			// skipped; everything else is skipped.
+			memo := map[string]bool{}
 			for _, t := range tasks {
-				if t.Status == contracts.StatusReady && !t.Draft && !excluded[t.ID] && !leftOut[t.ID] {
+				switch {
+				case leftOut[t.ID]:
+					if t.Status != contracts.StatusDone {
+						summary.LeftOut = append(summary.LeftOut, t.ID)
+					}
+				case t.Status != contracts.StatusReady || t.Draft || excluded[t.ID]:
+				case leftOutOnly(t.ID, byID, leftOut, excluded, memo, map[string]bool{}):
+					summary.LeftOut = append(summary.LeftOut, t.ID)
+				default:
 					summary.Skipped = append(summary.Skipped, t.ID)
 				}
 			}
@@ -490,16 +505,57 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 		outcome = "incomplete"
 	}
 	completed := map[string]any{
-		"outcome": outcome,
-		"done":    len(summary.Done),
-		"blocked": len(summary.Blocked),
-		"skipped": len(summary.Skipped),
+		"outcome":  outcome,
+		"done":     len(summary.Done),
+		"blocked":  len(summary.Blocked),
+		"skipped":  len(summary.Skipped),
+		"left_out": len(summary.LeftOut),
 	}
 	if e.cfg.RunID != "" {
 		completed["run_id"] = e.cfg.RunID
 	}
 	e.event(ctx, contracts.PipelineCompleted, "", completed)
 	return summary, nil
+}
+
+// leftOutOnly reports whether a stuck ready task can't run only because
+// of explicit exclusions (contract 1): every unfinished dependency, at any
+// depth, is either an excluded task or a ready task that is itself
+// stranded only by exclusions. One unsatisfiable dependency anywhere on the
+// chain — blocked, draft, wont_do, needs_review, unknown, claimed elsewhere,
+// or a cycle — makes it skipped instead, even if an exclusion also sits
+// upstream: the run genuinely couldn't finish it.
+func leftOutOnly(id string, byID map[string]contracts.Task, leftOut, unclaimable, memo, visiting map[string]bool) bool {
+	if v, ok := memo[id]; ok {
+		return v
+	}
+	if visiting[id] {
+		return false
+	}
+	visiting[id] = true
+	defer delete(visiting, id)
+	result, hitExclusion := true, false
+	for _, dep := range byID[id].Dependencies {
+		d, known := byID[dep]
+		switch {
+		case leftOut[dep]:
+			hitExclusion = true
+		case !known:
+			result = false
+		case d.Status == contracts.StatusDone:
+		case d.Status == contracts.StatusReady && !d.Draft && !unclaimable[dep] &&
+			leftOutOnly(dep, byID, leftOut, unclaimable, memo, visiting):
+			hitExclusion = true
+		default:
+			result = false
+		}
+		if !result {
+			break
+		}
+	}
+	result = result && hitExclusion
+	memo[id] = result
+	return result
 }
 
 // runnable selects confirmed ready tasks whose dependencies are all done.
