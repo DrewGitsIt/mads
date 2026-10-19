@@ -24,6 +24,7 @@ import "@xyflow/react/dist/style.css";
 import { Button } from "../../components/Button/Button";
 import type { TaskRunState } from "../../pipeline/state/usePipelineRun";
 import type { Task } from "../../router/types";
+import { carryMeasured } from "./carryMeasured";
 import { computeHighlightSet } from "./highlight";
 import { NODE_HEIGHT, NODE_WIDTH, type GraphEdgeLayout, type GraphNodeLayout } from "./layout";
 import type { EdgeRunKind, NodeRunView } from "./runView";
@@ -338,20 +339,24 @@ function GraphCanvasInner({
   // parent is the source of truth for node membership/position (§7); local
   // state below only exists to make in-progress drags feel responsive.
   useEffect(() => {
-    setNodes(
-      toXYNodes(
-        canvasNodes,
-        tasksById,
-        unsequencedIds,
-        cycleNodeIds,
-        highlightSet,
-        taskRunState,
-        columns,
-        statusDimmedIds,
-        reducedMotion,
-        runViews,
-        level,
-        focusTaskId,
+    // Keep xyflow's measured sizes; fresh objects without them hide the nodes (see carryMeasured).
+    setNodes((prev) =>
+      carryMeasured(
+        prev,
+        toXYNodes(
+          canvasNodes,
+          tasksById,
+          unsequencedIds,
+          cycleNodeIds,
+          highlightSet,
+          taskRunState,
+          columns,
+          statusDimmedIds,
+          reducedMotion,
+          runViews,
+          level,
+          focusTaskId,
+        ),
       ),
     );
     // highlightSet is intentionally omitted: it's derived from selectedNodeId
