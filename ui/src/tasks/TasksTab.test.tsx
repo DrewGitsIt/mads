@@ -135,7 +135,9 @@ describe("TasksTab", { timeout: 15_000 }, () => {
       fireEvent.click(screen.getByRole("button", { name: /Add task/ }));
       const titleInput = (await screen.findByLabelText("Title")) as HTMLInputElement;
       expect(titleInput.value).toBe("New task");
-      expect(create).toHaveBeenCalledWith(expect.objectContaining({ session_id: "session-active", draft: true }));
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({ session_id: "session-active", draft: true, source: "user" }),
+      );
     });
 
     it("starts the run with the unticked tasks left out, then follows it live", async () => {

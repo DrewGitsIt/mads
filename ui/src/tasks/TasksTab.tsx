@@ -269,7 +269,8 @@ export function TasksTab({
   async function addTask() {
     try {
       // A draft, so a live run can't pick it up before it's written.
-      const task = await routerClient.createTask({ session_id: sessionId, title: "New task", draft: true });
+      // source is required by the Data Service (a 400 without it).
+      const task = await routerClient.createTask({ session_id: sessionId, title: "New task", draft: true, source: "user" });
       setCreated(task);
       openDetails(task.id);
     } catch (err) {

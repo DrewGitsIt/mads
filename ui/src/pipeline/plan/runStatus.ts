@@ -1,6 +1,6 @@
 import type { Task } from "../../router/types";
 import { isDependencyQueued } from "../../tasks/ListView/statusPresentation";
-import { leftOutBy } from "./planScope";
+import { excludedUpstream, leftOutBy } from "./planScope";
 
 /**
  * Where a task stands relative to the run the Tasks tab is showing — the one
@@ -37,13 +37,18 @@ export function runStatusOf(task: Task, ctx: RunStatusContext): RunStatus {
   // interrupted one: it won't be picked up.
   if (task.status === "in_progress") return ctx.mode === "plan" ? "skipped" : "running";
   if (task.status === "blocked") {
-    if (ctx.mode !== "plan" && isDependencyQueued(task, ctx.tasksById)) return ctx.mode === "live" ? "queued" : "skipped";
+    if (ctx.mode !== "plan" && isDependencyQueued(task, ctx.tasksById)) {
+      if (ctx.mode === "past" || excludedUpstream(task, ctx.tasksById, ctx.excluded)) return "skipped";
+      return "queued";
+    }
     return "blocked";
   }
   if (task.status === "ready") {
     if (ctx.mode === "past") return "skipped";
-    if (leftOutBy(task, ctx.tasksById, ctx.excluded)) return ctx.mode === "plan" ? "skipped" : "queued";
-    return ctx.mode === "plan" ? "ready" : "queued";
+    if (ctx.mode === "plan") return leftOutBy(task, ctx.tasksById, ctx.excluded) ? "skipped" : "ready";
+    // Live: a dependency the run left out means it never runs (the engine
+    // reports it skipped); any other unfinished dependency is a wait.
+    return excludedUpstream(task, ctx.tasksById, ctx.excluded) ? "skipped" : "queued";
   }
   // needs_review / wont_do: outside any run's reach.
   return "skipped";

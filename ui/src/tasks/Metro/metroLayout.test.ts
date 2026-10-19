@@ -41,9 +41,10 @@ describe("metroLayout placement", () => {
   it("puts each status where the design says (live)", () => {
     const l = layoutOf(tasks, { rs, excluded: ["excl"] });
     expect(l.startLabel).toBe("Queued");
-    expect(ids(l.start.tokens)).toEqual(["ready", "dep"]);
+    // dep depends on a task the run left out: it never runs, so it is out too.
+    expect(ids(l.start.tokens)).toEqual(["ready"]);
     expect(ids(l.done.tokens)).toEqual(["done"]);
-    expect(ids(l.out.tokens)).toEqual(["draft", "excl"]);
+    expect(ids(l.out.tokens)).toEqual(["draft", "excl", "dep"]);
     expect(l.above.map((s) => [s.key, ids(s.tokens)])).toEqual([["stage:executor", ["run"]]]);
     expect(l.blocked.map((s) => [s.key, ids(s.tokens)])).toEqual([["blocked:code_review", ["blk"]]]);
     expect(l.blocked[0].heading).toBe("Blocked at code_review");

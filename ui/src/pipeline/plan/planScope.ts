@@ -41,6 +41,30 @@ export function leftOutBy(
   return undefined;
 }
 
+/**
+ * The dependency, at any depth, that the run left out — excluded, or a
+ * draft — so `task` can never run in it. Unlike leftOutBy, a dependency
+ * that's merely not done yet (queued, running) isn't a cut: in a live run
+ * that's a wait. Done dependencies aren't looked past.
+ */
+export function excludedUpstream(
+  task: Task,
+  tasksById: TasksById,
+  excluded: ReadonlySet<string>,
+  seen: Set<string> = new Set(),
+): Task | undefined {
+  for (const id of task.dependencies ?? []) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const dep = tasksById[id];
+    if (!dep || dep.status === "done") continue;
+    if (excluded.has(dep.id) || dep.draft) return dep;
+    const upstream = excludedUpstream(dep, tasksById, excluded, seen);
+    if (upstream) return upstream;
+  }
+  return undefined;
+}
+
 /** The tasks this plan will launch: ready, confirmed, included, and nothing upstream in the way. */
 export function runnableInPlan(
   tasks: Task[],

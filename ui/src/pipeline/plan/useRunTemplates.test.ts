@@ -10,7 +10,8 @@ function template(id: string, name: string): Template {
 }
 
 const templates = [
-  template(DEFAULT_TEMPLATE_ID, "default-implementation"),
+  // The shipped default's id is not its name (migration 0006_templates).
+  template("tpl_system_default", DEFAULT_TEMPLATE_ID),
   template("tpl_fast", "fast-path"),
 ];
 
@@ -45,8 +46,8 @@ describe("useRunTemplates", () => {
     const { result } = renderHook(() => useRunTemplates(new TemplatesClient(), "session-active"));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.templates.map((t) => t.id)).toEqual([DEFAULT_TEMPLATE_ID, "tpl_fast"]);
-    expect(result.current.defaultTemplateId).toBe(DEFAULT_TEMPLATE_ID);
+    expect(result.current.templates.map((t) => t.id)).toEqual(["tpl_system_default", "tpl_fast"]);
+    expect(result.current.defaultTemplateId).toBe("tpl_system_default");
   });
 
   it("resolves the workspace's bound template by name to its id", async () => {
@@ -71,6 +72,6 @@ describe("useRunTemplates", () => {
     );
 
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.defaultTemplateId).toBe(DEFAULT_TEMPLATE_ID);
+    expect(result.current.defaultTemplateId).toBe("tpl_system_default");
   });
 });

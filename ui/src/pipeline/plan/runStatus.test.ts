@@ -32,6 +32,22 @@ describe("runStatusOf", () => {
     expect(runStatusOf(task("r", "in_progress"), ctx("live"))).toBe("running");
   });
 
+  it("live: a dependent of a task the run left out is not in this run, not queued", () => {
+    expect(runStatusOf(a, ctx("live", ["a"]))).toBe("excluded");
+    expect(runStatusOf(b, ctx("live", ["a"]))).toBe("skipped");
+    expect(runStatusOf(c, ctx("live", ["a"]))).toBe("skipped");
+    // Two levels down, and through a draft, likewise.
+    const d = task("d", "ready", { dependencies: ["b"] });
+    const draft = task("x", "ready", { draft: true });
+    const e = task("e", "ready", { dependencies: ["x"] });
+    const deep = { mode: "live" as const, tasksById: { ...byId, d, x: draft, e }, excluded: new Set(["a"]) };
+    expect(runStatusOf(d, deep)).toBe("skipped");
+    expect(runStatusOf(e, deep)).toBe("skipped");
+    // A dependency that's running is a wait, not a cut.
+    const running = task("a", "in_progress");
+    expect(runStatusOf(b, { mode: "live", tasksById: { ...byId, a: running }, excluded: new Set() })).toBe("queued");
+  });
+
   it("past: whatever never started was skipped; a real block stays blocked", () => {
     expect(runStatusOf(b, ctx("past"))).toBe("skipped");
     expect(runStatusOf(task("x", "blocked"), ctx("past"))).toBe("blocked");

@@ -4,7 +4,7 @@ import { subscribeToEvents } from "../../router/events";
 import type { Template } from "../../router/types";
 import { useSessionWorkspace } from "../../tasks/useSessionWorkspace";
 
-/** The template a run uses when the session's workspace doesn't bind one. */
+/** The name of the template a run uses when the session's workspace doesn't bind one. */
 export const DEFAULT_TEMPLATE_ID = "default-implementation";
 
 const TEMPLATE_EVENT_TYPES = ["template.created", "template.updated", "template.deleted"];
@@ -14,7 +14,8 @@ export interface UseRunTemplates {
   /**
    * The workspace's bound template (`defaults.template`, which the workspace
    * editor stores by name; an id is accepted too), resolved to its id. Falls
-   * back to DEFAULT_TEMPLATE_ID when none is bound or it names no template.
+   * back to the template named DEFAULT_TEMPLATE_ID (its id; the name itself
+   * until the list loads) when none is bound or it names no template.
    * Can change once the workspace resolves, so seed a picker from it rather
    * than snapshotting it on first render.
    */
@@ -56,9 +57,10 @@ export function useRunTemplates(routerClient: RouterClient, sessionId: string): 
 
   const bound = workspace?.defaults.template;
   const defaultTemplateId = useMemo(() => {
-    if (!bound) return DEFAULT_TEMPLATE_ID;
-    const match = templates.find((t) => t.id === bound) ?? templates.find((t) => t.name === bound);
-    return match?.id ?? DEFAULT_TEMPLATE_ID;
+    // Templates are referred to by id or by name; the shipped default's id
+    // (tpl_system_default) isn't its name, so the fallback resolves too.
+    const resolve = (ref: string) => (templates.find((t) => t.id === ref) ?? templates.find((t) => t.name === ref))?.id;
+    return (bound && resolve(bound)) || resolve(DEFAULT_TEMPLATE_ID) || DEFAULT_TEMPLATE_ID;
   }, [bound, templates]);
 
   return { templates, defaultTemplateId, loading, error };
