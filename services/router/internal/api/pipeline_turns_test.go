@@ -220,6 +220,55 @@ func TestPipelineTaskTurnsPinnedAttemptByRun(t *testing.T) {
 	}
 }
 
+// Refs that name their run (run_seq) resolve by it, even when another run
+// started on the session in between — overlapping runs, or a run that
+// resumed an interrupted attempt after another run began.
+func TestPipelineTaskTurnsRefByRunSeq(t *testing.T) {
+	runsDir := t.TempDir()
+	fp := fake.New()
+	srv, data := newPipelineTurnsTestServer(t, runsDir, fp)
+	sessionID, taskID := seedSessionTask(t, data, contracts.StatusInProgress)
+	ctx := context.Background()
+	sess, err := data.Session(ctx, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Provider = "fake"
+	if err := data.UpdateSession(ctx, &sess); err != nil {
+		t.Fatal(err)
+	}
+	ref := driveConversation(t, fp)
+	appendEv := func(typ contracts.EventType, taskID string, payload map[string]any) int64 {
+		t.Helper()
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := &contracts.Envelope{Type: typ, SessionID: sessionID, TaskID: taskID, Payload: raw}
+		if err := data.Append(ctx, env); err != nil {
+			t.Fatal(err)
+		}
+		return env.Seq
+	}
+	run1 := appendEv(contracts.PipelineStarted, "", map[string]any{})
+	run2 := appendEv(contracts.PipelineStarted, "", map[string]any{})
+	appendEv(contracts.StageAttemptRef, taskID, map[string]any{"stage": "executor", "attempt": 1, "ref": "no-such-ref", "run_seq": run2})
+	appendEv(contracts.StageAttemptRef, taskID, map[string]any{"stage": "executor", "attempt": 1, "ref": ref, "run_seq": run1})
+	writeTaskLog(t, runsDir, sessionID, fmt.Sprint(run1), taskID, "executor-attempt-1.log", "a1", time.Now().Add(-time.Minute))
+	writeTaskLog(t, runsDir, sessionID, fmt.Sprint(run2), taskID, "executor-attempt-1.log", "b1", time.Now())
+
+	frames, cancel := openTurnsSSE(t, srv.URL+"/sessions/"+sessionID+"/pipeline/tasks/"+taskID+fmt.Sprintf("/turns?run=%d&stage=executor&attempt=1", run1))
+	defer cancel()
+	got := collectOutputFrames(t, frames, 1, 5*time.Second)
+	var msgs []contracts.TranscriptMessage
+	if err := json.Unmarshal([]byte(got[0].data), &msgs); err != nil {
+		t.Fatalf("frame data not a normalized turn array: %v (%q)", err, got[0].data)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want run 1's ref resolved past run 2's start: %+v", len(msgs), msgs)
+	}
+}
+
 // TestPipelineTaskTurnsServesNormalizedTranscript is the happy path: once
 // the engine's stage.attempt_ref event lands for the task's current
 // stage/attempt, the endpoint resolves it, reads the provider transcript,

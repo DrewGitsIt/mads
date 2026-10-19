@@ -149,30 +149,41 @@ func (s *server) turnsFor(ctx context.Context, sess contracts.Session, ref strin
 // no such stage.attempt_ref event has landed yet (the one-shot hasn't
 // announced a ref, or never will).
 //
-// The ref payload carries no run, but runSeq is the run's pipeline.started
-// seq (engine.go), so the run's refs are exactly those after runSeq and
-// before the session's next pipeline.started — otherwise an earlier run's
-// executor attempt 1 would answer for a later run's, or vice versa.
+// runSeq is the run's pipeline.started seq (engine.go). A ref payload's
+// run_seq names its run exactly; older engines wrote none, and their run's
+// refs are those after runSeq and before the session's next
+// pipeline.started — otherwise an earlier run's executor attempt 1 would
+// answer for a later run's, or vice versa.
 func (s *server) findAttemptRef(ctx context.Context, sessionID, taskID string, runSeq int64, stage string, attempt int) (string, bool) {
 	evs, err := s.data.Events(ctx, runSeq, sessionID, []string{string(contracts.StageAttemptRef), string(contracts.PipelineStarted)})
 	if err != nil {
 		return "", false
 	}
+	// Newer engines also stamp run_seq on the ref; one naming another run
+	// (two runs overlapping on the session) is never this run's. A
+	// resumed attempt (docs/PIPELINE-LEASES-DESIGN.md B2) re-records its
+	// ref under the run that resumed it, so it resolves the same way.
 	type refPayload struct {
 		Stage   string `json:"stage"`
 		Attempt int    `json:"attempt"`
 		Ref     string `json:"ref"`
+		RunSeq  int64  `json:"run_seq"`
 	}
 	var ref string
+	pastNextRun := false
 	for _, ev := range evs {
 		if ev.Type == contracts.PipelineStarted {
-			break
+			pastNextRun = true // only refs naming their run count from here
+			continue
 		}
 		if ev.TaskID != taskID {
 			continue
 		}
 		var p refPayload
 		if err := json.Unmarshal(ev.Payload, &p); err != nil {
+			continue
+		}
+		if p.RunSeq != 0 && p.RunSeq != runSeq || p.RunSeq == 0 && pastNextRun {
 			continue
 		}
 		if p.Stage == stage && p.Attempt == attempt && p.Ref != "" {

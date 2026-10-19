@@ -220,6 +220,26 @@ const (
 	// interchangeable. Payload: {"stage": string, "attempt": int,
 	// "stage_attempt": int, "max": int, "reason": string}.
 	StageRetried EventType = "stage.retried"
+	// StagePickedUp fires when a pipeline run claims an Interrupted task
+	// (in_progress with no live lease) and continues it
+	// (docs/PIPELINE-LEASES-DESIGN.md B2), before its first stage event in
+	// that run. mode "resume": the same template and version as the task's
+	// last run, continuing at from_stage, with completed_stages (the stages
+	// before from_stage that the record shows completed) skipped. mode
+	// "restart": a different or edited template, or no usable record, so
+	// from_stage is the first stage and the worktree is kept.
+	// resumed_from_* name the task's last run and are omitted when there is
+	// no record. Payload: {"run_seq": int, "mode": "resume"|"restart",
+	// "from_stage": string, "resumed_from_run_id": string,
+	// "resumed_from_run_seq": int, "completed_stages": []string}.
+	//
+	// Every stage.* event the engine writes for a task also carries run_seq
+	// (the writing run's pipeline.started seq); stage.started carries the
+	// stage's attempt number, plus resumed: true when it continues an
+	// interrupted agent session as the same attempt, or rerun: true when it
+	// is a new attempt replacing an interrupted one (a command stage's
+	// rerun, or an agent stage whose session could not be resumed).
+	StagePickedUp EventType = "stage.picked_up"
 
 	RetroStarted   EventType = "retro.started"
 	RetroProgress  EventType = "retro.progress"
@@ -478,7 +498,7 @@ var EventTypes = []EventType{
 	FileChanged,
 	CommitCreated, CommitLinked, CommitUndone,
 	PipelineStarted, PipelinePaused, PipelineResumed, PipelineCancelled, PipelineCompleted, PipelineFailed,
-	StageStarted, StageCompleted, StageFailed, StageSkipped, StageRateLimited, StageRateLimitCleared, StageRetried,
+	StageStarted, StageCompleted, StageFailed, StageSkipped, StageRateLimited, StageRateLimitCleared, StageRetried, StagePickedUp,
 	RetroStarted, RetroProgress, RetroCompleted, RetroFailed,
 	RetroCancelled, RetroDPAAccepted, RetroDPARejected, RetroDPAEdited, RetroFollowUpCreated,
 	JobQueued, JobStarted, JobCompleted, JobFailed, JobCancelled,
