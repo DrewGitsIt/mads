@@ -25,6 +25,8 @@ export const fixtureOutputChunks = [
  */
 export class FakePipelineOutputSource implements PipelineOutputSource {
   private listeners = new Set<(chunk: string) => void>();
+  private endListeners = new Set<() => void>();
+  private ended = false;
   private timer?: ReturnType<typeof setInterval>;
   private index = 0;
 
@@ -39,6 +41,13 @@ export class FakePipelineOutputSource implements PipelineOutputSource {
     return () => this.listeners.delete(listener);
   }
 
+  /** Fires once every chunk has been replayed, like the server's `end`. */
+  onEnd(listener: () => void): () => void {
+    if (this.ended) listener();
+    else this.endListeners.add(listener);
+    return () => this.endListeners.delete(listener);
+  }
+
   close(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
@@ -49,6 +58,8 @@ export class FakePipelineOutputSource implements PipelineOutputSource {
     this.timer = setInterval(() => {
       if (this.index >= this.chunks.length) {
         this.close();
+        this.ended = true;
+        for (const listener of this.endListeners) listener();
         return;
       }
       const chunk = this.chunks[this.index++];
@@ -90,6 +101,9 @@ export class FakePipelineClient implements PipelineClient {
   // stream asked for, without spying.
   startCalls: { sessionId: string; templateId: string; opts?: StartPipelineOptions }[] = [];
   streamCalls: { kind: "output" | "turns"; taskId: string; target?: TaskStreamTarget }[] = [];
+  // The chunks a stream replays; the canned lines unless this says otherwise
+  // ([] is a log with no output: zero chunks, then the end).
+  outputChunksFor?: (taskId: string, target?: TaskStreamTarget) => string[] | undefined;
 
   constructor(private tasks: Task[] = recordedTasks.map((t) => ({ ...t }))) {}
 
@@ -130,7 +144,7 @@ export class FakePipelineClient implements PipelineClient {
 
   streamTaskOutput(_sessionId: string, taskId: string, target?: TaskStreamTarget): PipelineOutputSource {
     this.streamCalls.push({ kind: "output", taskId, target });
-    return new FakePipelineOutputSource();
+    return new FakePipelineOutputSource(this.outputChunksFor?.(taskId, target));
   }
 
   streamTaskTurns(_sessionId: string, taskId: string, target?: TaskStreamTarget): PipelineTurnsSource {

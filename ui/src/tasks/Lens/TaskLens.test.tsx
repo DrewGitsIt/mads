@@ -165,6 +165,27 @@ describe("TaskLens", () => {
     expect(client.streamCalls.slice(before).map((c) => c.kind)).toEqual(["output"]);
   });
 
+  it("says No output. when a finished attempt's log ends empty, instead of an empty terminal", async () => {
+    const client = new FakePipelineClient([]);
+    client.outputChunksFor = (_id, target) => (target?.stage === "build" ? [] : undefined);
+    const { container } = setup({ pipelineClient: client });
+    fireEvent.click(screen.getByRole("button", { name: "build: done" }));
+    expect(await screen.findByText("No output.")).toBeTruthy();
+    expect(container.querySelector('[data-testid="terminal-view"]')).toBeNull();
+  });
+
+  it("keeps the terminal while a log with output plays, or before its end", async () => {
+    const client = new FakePipelineClient([]);
+    client.outputChunksFor = (_id, target) => (target?.stage === "build" ? ["ok\r\n"] : undefined);
+    const { container } = setup({ pipelineClient: client });
+    // The live executor attempt: nothing has arrived yet, so the terminal waits.
+    expect(container.querySelector('[data-testid="terminal-view"]')).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "build: done" }));
+    await new Promise((r) => setTimeout(r, 120));
+    expect(screen.queryByText("No output.")).toBeNull();
+    expect(container.querySelector('[data-testid="terminal-view"]')).toBeTruthy();
+  });
+
   it("follows a new attempt as it starts, unless an older one was picked", () => {
     const { client, props, rerender } = setup();
     const next: StageAttempt[] = [

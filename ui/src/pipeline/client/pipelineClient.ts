@@ -11,6 +11,11 @@ import { FOLD_EVENT_TYPES } from "../state/usePipelineRun";
 export interface PipelineOutputSource {
   /** Returns an unsubscribe function. */
   onChunk(listener: (chunk: string) => void): () => void;
+  /**
+   * The stream's terminal `end`: the log has nothing more to give. A late
+   * listener is called at once. Returns an unsubscribe function.
+   */
+  onEnd?(listener: () => void): () => void;
   close(): void;
 }
 
@@ -131,12 +136,23 @@ export class FetchPipelineClient implements PipelineClient {
 
   streamTaskOutput(sessionId: string, taskId: string, target?: TaskStreamTarget): PipelineOutputSource {
     const es = new EventSource(taskStreamUrl(sessionId, taskId, "output", target));
-    es.addEventListener("end", () => es.close());
+    const endListeners = new Set<() => void>();
+    let ended = false;
+    es.addEventListener("end", () => {
+      es.close();
+      ended = true;
+      for (const listener of endListeners) listener();
+    });
     return {
       onChunk(listener: (chunk: string) => void): () => void {
         const handler = (ev: MessageEvent<string>) => listener(JSON.parse(ev.data) as string);
         es.addEventListener("message", handler);
         return () => es.removeEventListener("message", handler);
+      },
+      onEnd(listener: () => void): () => void {
+        if (ended) listener();
+        else endListeners.add(listener);
+        return () => endListeners.delete(listener);
       },
       close(): void {
         es.close();

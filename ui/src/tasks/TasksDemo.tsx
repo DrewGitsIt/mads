@@ -123,6 +123,8 @@ const routerClient = new DemoRouterClient(
   demoTasks,
 );
 const pipelineClient = new FakePipelineClient(demoTasks.map((t) => ({ ...t })));
+// `mads merge` prints nothing: its log is the lens's empty-output state.
+pipelineClient.outputChunksFor = (_taskId, target) => (target?.stage === "merge" ? [] : undefined);
 if (mode !== "plan") {
   pipelineClient.runs = [run];
   pipelineClient.runEvents = envs;

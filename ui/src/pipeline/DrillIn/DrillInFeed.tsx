@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Task, TranscriptMessage } from "../../router/types";
 import type { StageAttempt } from "../state/usePipelineRun";
 import type { PipelineOutputSource, PipelineTurnsSource } from "../client/pipelineClient";
@@ -14,6 +14,8 @@ export interface DrillInFeedProps {
   raw?: boolean;
   /** Passed to AgentFeedView. */
   showHeader?: boolean;
+  /** Passed to AgentOutputView: drawn when the log ends with no output. */
+  empty?: ReactNode;
 }
 
 /**
@@ -31,6 +33,7 @@ export function DrillInFeed({
   turnsSource,
   raw = false,
   showHeader,
+  empty,
 }: DrillInFeedProps) {
   const [turns, setTurns] = useState<TranscriptMessage[]>([]);
   useEffect(() => turnsSource.onTurns(setTurns), [turnsSource]);
@@ -38,5 +41,5 @@ export function DrillInFeed({
   if (!raw && turns.length > 0) {
     return <AgentFeedView task={task} attempts={attempts} turns={turns} showHeader={showHeader} />;
   }
-  return <AgentOutputView source={outputSource} />;
+  return <AgentOutputView source={outputSource} empty={empty} />;
 }

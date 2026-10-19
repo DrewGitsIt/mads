@@ -440,6 +440,9 @@ function AttemptOutput({
   const next = attempts[index + 1];
   const handoffTo = attempt.status === "failed" && next && next.attempt > 1 ? next : undefined;
 
+  // The log ended without a chunk: say so rather than draw an empty terminal.
+  const noOutput = <p className={styles.emptyOut}>No output.</p>;
+
   return (
     <>
       <div className={styles.outHead}>
@@ -512,7 +515,7 @@ function AttemptOutput({
             )}
           </p>
         ) : raw || !turnsSource ? (
-          outputSource && <AgentOutputView key={streamKey} source={outputSource} />
+          outputSource && <AgentOutputView key={streamKey} source={outputSource} empty={noOutput} />
         ) : (
           outputSource && (
             <DrillInFeed
@@ -522,6 +525,7 @@ function AttemptOutput({
               outputSource={outputSource}
               turnsSource={turnsSource}
               showHeader={false}
+              empty={noOutput}
             />
           )
         )}

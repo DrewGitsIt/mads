@@ -201,6 +201,20 @@ describe("FetchPipelineClient", () => {
       expect(es.closed).toBe(true);
     });
 
+    it("tells onEnd listeners about the 'end', and a late one at once", () => {
+      const client = new FetchPipelineClient();
+      const source = client.streamTaskOutput("ses_1", "t1");
+      const early = vi.fn();
+      source.onEnd?.(early);
+
+      FakeEventSource.instances[0].emit("end", "");
+      expect(early).toHaveBeenCalledTimes(1);
+
+      const late = vi.fn();
+      source.onEnd?.(late);
+      expect(late).toHaveBeenCalledTimes(1);
+    });
+
     it("close() closes the underlying EventSource", () => {
       const client = new FetchPipelineClient();
       const source = client.streamTaskOutput("ses_1", "t1");
