@@ -1,6 +1,6 @@
 import { router, ROUTER_BASE, type RouterClient } from "../../router/client";
 import { getAllEvents } from "../../router/eventPages";
-import type { Envelope, PipelineRun, Task, TranscriptMessage } from "../../router/types";
+import type { Envelope, PipelinePickup, PipelineRun, Task, TranscriptMessage } from "../../router/types";
 import { FOLD_EVENT_TYPES } from "../state/usePipelineRun";
 
 /**
@@ -81,7 +81,10 @@ export interface PipelineClient {
     templateId: string,
     opts?: StartPipelineOptions,
   ): Promise<{ run_id: string }>;
+  /** Stops the run (the run bar's Stop). Every task keeps its state; in-flight ones become Interrupted. */
   cancelPipeline(runId: string): Promise<void>;
+  /** The session's Interrupted tasks and where a run of `templateId` would pick each up. */
+  getPickup(sessionId: string, templateId: string): Promise<PipelinePickup>;
   retryTask(taskId: string): Promise<Task>;
   // Both reject — no backend capability exists (HANDOFF.md §1: the engine
   // has no pause hook, and there's no per-task agent-override mechanism).
@@ -116,6 +119,10 @@ export class FetchPipelineClient implements PipelineClient {
 
   async cancelPipeline(runId: string): Promise<void> {
     await this.client.cancelPipelineRun(runId);
+  }
+
+  async getPickup(sessionId: string, templateId: string): Promise<PipelinePickup> {
+    return this.client.pipelinePickup(sessionId, templateId);
   }
 
   async retryTask(taskId: string): Promise<Task> {

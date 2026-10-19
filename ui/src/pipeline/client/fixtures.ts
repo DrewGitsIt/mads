@@ -5,10 +5,120 @@ import type {
   StartPipelineOptions,
   TaskStreamTarget,
 } from "./pipelineClient";
-import type { Envelope, PipelineRun, Task } from "../../router/types";
-import { recordedSessionId, recordedTasks } from "./recordedRun";
+import type { Envelope, PipelinePickup, PipelineRun, Task } from "../../router/types";
+import { recordedEnvelopes, recordedSessionId, recordedTaskIds, recordedTasks } from "./recordedRun";
 
 export const fixtureSessionId = recordedSessionId;
+
+// ── An interrupted run, and the run that picks its task up ──
+// (docs/PIPELINE-LEASES-DESIGN.md B1/B2), built from the recorded run.
+
+/** The recorded run's last event before Stop: flaky api's third code_review attempt has just opened. */
+export const STOPPED_AT_SEQ = 46;
+/** The recorded run's pipeline.started seq: Run 1. */
+export const STOPPED_RUN_SEQ = recordedEnvelopes.find((e) => e.type === "pipeline.started")!.seq;
+/** The picking-up run's pipeline.started seq: Run 2. */
+export const PICKUP_RUN_SEQ = STOPPED_AT_SEQ + 2;
+
+/**
+ * Run 1, stopped: the recording up to flaky api's third code_review
+ * attempt, then pipeline.cancelled. flaky api is left in flight:
+ * Interrupted.
+ */
+export function stoppedRunEnvelopes(): Envelope[] {
+  const at = recordedEnvelopes.find((e) => e.seq === STOPPED_AT_SEQ)!.timestamp;
+  return [
+    ...recordedEnvelopes
+      .filter((e) => e.seq <= STOPPED_AT_SEQ)
+      .map((e) =>
+        e.type === "pipeline.started"
+          ? { ...e, payload: { ...(e.payload as object), run_id: "run_stopped", template_version: 3 } }
+          : e,
+      ),
+    {
+      seq: STOPPED_AT_SEQ + 1,
+      timestamp: at,
+      type: "pipeline.cancelled",
+      session_id: recordedSessionId,
+      actor: "router",
+      payload: { run_id: "run_stopped" },
+    },
+  ];
+}
+
+/**
+ * Run 1 stopped, then Run 2 picks flaky api up: same template and version,
+ * so it resumes the interrupted code_review attempt (3), with the stages Run
+ * 1 completed done.
+ */
+export function pickedUpRunEnvelopes(): Envelope[] {
+  const stopped = stoppedRunEnvelopes();
+  const at = stopped[stopped.length - 1].timestamp;
+  const ev = (seq: number, type: string, payload: Record<string, unknown>, taskId?: string): Envelope => ({
+    seq,
+    timestamp: at,
+    type,
+    session_id: recordedSessionId,
+    ...(taskId ? { task_id: taskId } : {}),
+    actor: "pipeline",
+    payload,
+  });
+  return [
+    ...stopped,
+    ev(PICKUP_RUN_SEQ, "pipeline.started", {
+      run_id: "run_pickup",
+      template: "default-implementation",
+      template_version: 3,
+    }),
+    ev(
+      PICKUP_RUN_SEQ + 1,
+      "stage.picked_up",
+      {
+        run_seq: PICKUP_RUN_SEQ,
+        mode: "resume",
+        from_stage: "code_review",
+        resumed_from_run_id: "run_stopped",
+        resumed_from_run_seq: STOPPED_RUN_SEQ,
+        completed_stages: ["architect", "executor", "build"],
+      },
+      recordedTaskIds.flakyApi,
+    ),
+    ev(
+      PICKUP_RUN_SEQ + 2,
+      "stage.started",
+      { stage: "code_review", run_seq: PICKUP_RUN_SEQ, attempt: 3, resumed: true },
+      recordedTaskIds.flakyApi,
+    ),
+  ];
+}
+
+/** The tasks as Run 1's Stop left them: flaky api in progress (Interrupted), cli waiting on it. */
+export function stoppedRunTasks(): Task[] {
+  return recordedTasks.map((t) => {
+    const copy = structuredClone(t);
+    if (copy.id === recordedTaskIds.flakyApi) {
+      copy.status = "in_progress";
+      copy.notes = (copy.notes ?? []).filter((n) => n.type !== "blocker");
+    }
+    return copy;
+  });
+}
+
+/** What the pickup endpoint answers for the stopped run's task under the same template. */
+export const stoppedRunPickup: PipelinePickup = {
+  shared_directory: false,
+  tasks: [
+    {
+      task_id: recordedTaskIds.flakyApi,
+      mode: "resume",
+      from_stage: "code_review",
+      last_run_seq: STOPPED_RUN_SEQ,
+      last_run_id: "run_stopped",
+      template_name: "default-implementation",
+      template_version: 3,
+    },
+  ],
+};
 
 /** Canned agent-output lines the demo mount and AgentOutputView.test.tsx replay. */
 export const fixtureOutputChunks = [
@@ -100,6 +210,10 @@ export class FakePipelineClient implements PipelineClient {
   // Recorded so tests can assert what a run was started with and which log a
   // stream asked for, without spying.
   startCalls: { sessionId: string; templateId: string; opts?: StartPipelineOptions }[] = [];
+  cancelCalls: string[] = [];
+  // What getPickup answers: no Interrupted tasks unless a test or the demo says so.
+  pickup: PipelinePickup = { shared_directory: false, tasks: [] };
+  pickupCalls: { sessionId: string; templateId: string }[] = [];
   streamCalls: { kind: "output" | "turns"; taskId: string; target?: TaskStreamTarget }[] = [];
   // The chunks a stream replays; the canned lines unless this says otherwise
   // ([] is a log with no output: zero chunks, then the end).
@@ -120,7 +234,14 @@ export class FakePipelineClient implements PipelineClient {
     return { run_id: "run_fixture" };
   }
 
-  async cancelPipeline(_runId: string): Promise<void> {}
+  async cancelPipeline(runId: string): Promise<void> {
+    this.cancelCalls.push(runId);
+  }
+
+  async getPickup(sessionId: string, templateId: string): Promise<PipelinePickup> {
+    this.pickupCalls.push({ sessionId, templateId });
+    return structuredClone(this.pickup);
+  }
 
   async retryTask(taskId: string): Promise<Task> {
     const task = this.tasks.find((t) => t.id === taskId);

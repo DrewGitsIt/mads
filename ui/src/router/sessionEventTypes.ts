@@ -53,6 +53,7 @@ export const WORKSPACE_SESSION_EVENT_TYPES = [
   "stage.failed",
   "stage.skipped",
   "stage.retried",
+  "stage.picked_up",
   "file.changed",
   "commit.undone",
 ];

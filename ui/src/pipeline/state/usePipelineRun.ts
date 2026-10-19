@@ -23,6 +23,7 @@ export const FOLD_EVENT_TYPES = [
   "stage.failed",
   "stage.skipped",
   "stage.retried",
+  "stage.picked_up",
   "file.changed",
 ];
 
@@ -32,13 +33,20 @@ export type StageAttemptStatus = "started" | "completed" | "failed" | "skipped";
 export interface StageAttempt {
   stage: string;
   /**
-   * 1-based count of stage.started events (stage ENTRIES) for this stage on
-   * this task — i.e. how many times the pipeline has loop-backed into this
-   * stage. Policy retries (structural failure: timeout, provider crash) do
-   * NOT emit stage.started — they happen inside a single stage entry and are
-   * counted separately by `retries` below, not folded into this number.
+   * 1-based stage-entry number for this stage on this task: stage.started's
+   * `attempt`. It continues across runs when a run picks an Interrupted task
+   * up, so read it, don't count events (events from before it was recorded
+   * fall back to counting this run's entries). Policy retries (structural
+   * failure: timeout, provider crash) do NOT emit stage.started — they happen
+   * inside a single stage entry and are counted separately by `retries`.
    */
   attempt: number;
+  /** A picked-up attempt continuing in this run: the interrupted agent session, resumed (same attempt). */
+  resumed?: boolean;
+  /** A new attempt that reruns a stage an interruption cut short. */
+  rerun?: boolean;
+  /** Set with `rerun` when resuming the agent session failed and the run fell back to a new attempt. */
+  resumeError?: string;
   status: StageAttemptStatus;
   /** stage.failed's `reason` — the loop-back/blocker feedback text (HANDOFF.md §1c). */
   reason?: string;
@@ -57,12 +65,27 @@ export interface StageAttempt {
   endedAt?: string;
 }
 
+/** How this run picked an Interrupted task up (stage.picked_up). */
+export interface TaskPickup {
+  /** resume: same template and version, continuing where it stopped. restart: first stage, worktree kept. */
+  mode: "resume" | "restart";
+  fromStage?: string;
+  /** run_seq of the run it continues from; absent when that run left no usable record. */
+  resumedFromRunSeq?: number;
+  /** Stages an earlier run completed, which this run skips: done in this run's view. */
+  completedStages: string[];
+  seq: number;
+  at?: string;
+}
+
 export interface TaskRunState {
   taskId: string;
   /** Stage of the most recent stage.started for this task this run; the board column. */
   currentStage?: string;
   attempts: StageAttempt[];
   touchedFiles: string[];
+  /** Set when this run picked the task up after an interruption. */
+  pickup?: TaskPickup;
 }
 
 export interface RunFoldState {
@@ -108,13 +131,65 @@ function findOpenAttemptIndex(attempts: StageAttempt[], stage: string): number {
   return -1;
 }
 
+interface StagePayload {
+  stage?: string;
+  reason?: string;
+  /** The writing run's pipeline.started seq (absent on older events). */
+  run_seq?: number;
+  attempt?: number;
+  resumed?: boolean;
+  rerun?: boolean;
+  resume_error?: string;
+}
+
+// A stage event another run wrote: two runs can overlap on one session, and
+// stage events carry the writer's run_seq. Older events carry none.
+function otherRun(state: RunFoldState, payload: { run_seq?: number }): boolean {
+  return typeof payload.run_seq === "number" && payload.run_seq > 0 && payload.run_seq !== state.runStartSeq;
+}
+
+function foldPickedUp(state: RunFoldState, env: Envelope): RunFoldState {
+  if (state.phase !== "running" || state.runStartSeq === undefined || env.seq < state.runStartSeq) {
+    return state;
+  }
+  const taskId = env.task_id;
+  const payload = env.payload as
+    | {
+        run_seq?: number;
+        mode?: string;
+        from_stage?: string;
+        resumed_from_run_seq?: number;
+        completed_stages?: string[] | null;
+      }
+    | undefined;
+  if (!taskId || !payload || otherRun(state, payload)) return state;
+  const existing = taskRunStateOf(state, taskId);
+  const pickup: TaskPickup = {
+    mode: payload.mode === "resume" ? "resume" : "restart",
+    fromStage: payload.from_stage || undefined,
+    resumedFromRunSeq: payload.resumed_from_run_seq || undefined,
+    completedStages: payload.completed_stages ?? [],
+    seq: env.seq,
+    at: env.timestamp,
+  };
+  // The stages an earlier run completed are this run's too (shown done):
+  // columns they'd have opened, had this run run them.
+  const missing = pickup.completedStages.filter((s) => !state.columns.includes(s));
+  return {
+    ...state,
+    columns: missing.length > 0 ? [...missing, ...state.columns] : state.columns,
+    taskRunState: { ...state.taskRunState, [taskId]: { ...existing, pickup } },
+  };
+}
+
 function foldStageEvent(state: RunFoldState, env: Envelope): RunFoldState {
   if (state.phase !== "running" || state.runStartSeq === undefined || env.seq < state.runStartSeq) {
     return state;
   }
   const taskId = env.task_id;
-  const payload = env.payload as { stage?: string; reason?: string } | undefined;
+  const payload = env.payload as StagePayload | undefined;
   if (!taskId || !payload?.stage) return state;
+  if (otherRun(state, payload)) return state;
   const stage = payload.stage;
 
   const existing = taskRunStateOf(state, taskId);
@@ -122,7 +197,23 @@ function foldStageEvent(state: RunFoldState, env: Envelope): RunFoldState {
   let currentStage = existing.currentStage;
 
   if (env.type === "stage.started" || env.type === "stage.skipped") {
-    const attemptNumber = attempts.filter((a) => a.stage === stage).length + 1;
+    // A resume that failed starts a new attempt over the one it opened:
+    // that one ends here, failed with the reason.
+    if (env.type === "stage.started" && payload.resume_error) {
+      const openIndex = findOpenAttemptIndex(attempts, stage);
+      if (openIndex !== -1) {
+        attempts = attempts.slice();
+        attempts[openIndex] = {
+          ...attempts[openIndex],
+          status: "failed",
+          endedSeq: env.seq,
+          endedAt: env.timestamp,
+          reason: `couldn't resume: ${payload.resume_error}`,
+        };
+      }
+    }
+    const counted = attempts.filter((a) => a.stage === stage).length + 1;
+    const attemptNumber = typeof payload.attempt === "number" && payload.attempt > 0 ? payload.attempt : counted;
     const status: StageAttemptStatus = env.type === "stage.started" ? "started" : "skipped";
     attempts = [
       ...attempts,
@@ -134,6 +225,9 @@ function foldStageEvent(state: RunFoldState, env: Envelope): RunFoldState {
         endedSeq: status === "skipped" ? env.seq : undefined,
         startedAt: env.timestamp,
         endedAt: status === "skipped" ? env.timestamp : undefined,
+        ...(payload.resumed ? { resumed: true } : {}),
+        ...(payload.rerun ? { rerun: true } : {}),
+        ...(payload.resume_error ? { resumeError: payload.resume_error } : {}),
       },
     ];
     if (env.type === "stage.started") currentStage = stage;
@@ -237,6 +331,8 @@ export function foldReducer(state: RunFoldState, env: Envelope): RunFoldState {
     case "stage.skipped":
     case "stage.retried":
       return foldStageEvent(state, env);
+    case "stage.picked_up":
+      return foldPickedUp(state, env);
     case "file.changed":
       return foldFileChanged(state, env);
     default:

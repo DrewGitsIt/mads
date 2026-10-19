@@ -45,6 +45,7 @@ import type {
   Note,
   NoteType,
   PermissionRequest,
+  PipelinePickup,
   PipelineRun,
   PreflightCheck,
   Profile,
@@ -1869,6 +1870,10 @@ export class FakeRouterClient implements RouterClient {
 
   async cancelPipelineRun(): Promise<void> {
     throw new Error("not fixtured: cancelPipelineRun");
+  }
+
+  async pipelinePickup(): Promise<PipelinePickup> {
+    return { shared_directory: false, tasks: [] };
   }
 
   async retryTask(): Promise<Task> {

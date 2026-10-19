@@ -41,6 +41,7 @@ import type {
   Note,
   NoteType,
   PermissionRequest,
+  PipelinePickup,
   PipelineRun,
   PreflightCheck,
   Profile,
@@ -364,6 +365,8 @@ export interface RouterClient {
     excludeTaskIds?: string[],
   ): Promise<{ run_id: string }>;
   cancelPipelineRun(runId: string): Promise<void>;
+  /** The session's Interrupted tasks and where a run of `templateId` would pick each up. */
+  pipelinePickup(sessionId: string, templateId: string): Promise<PipelinePickup>;
   retryTask(taskId: string): Promise<Task>;
 
   // --- Registry (Library, flag-gated — W7.6) ---
@@ -1313,6 +1316,10 @@ export class FetchRouterClient implements RouterClient {
 
   async cancelPipelineRun(runId: string): Promise<void> {
     return routerPost(this.baseUrl, `/pipelines/${runId}/cancel`);
+  }
+
+  async pipelinePickup(sessionId: string, templateId: string): Promise<PipelinePickup> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/pipeline/pickup`, { template: templateId });
   }
 
   async retryTask(taskId: string): Promise<Task> {

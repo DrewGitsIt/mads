@@ -1435,6 +1435,31 @@ export type PipelineRunOutcome =
   | "running"
   | "interrupted";
 
+/**
+ * One Interrupted task and where a run of the chosen template picks it up
+ * (GET /sessions/{id}/pipeline/pickup; docs/PIPELINE-LEASES-DESIGN.md B2).
+ * Interrupted: in_progress, moved there by the pipeline, held by no live
+ * lease. A pipeline-only concept: never a task status.
+ */
+export interface PipelinePickupTask {
+  task_id: string;
+  /** resume: same template and version, continues at from_stage. restart: first stage, the worktree kept. */
+  mode: "resume" | "restart";
+  from_stage?: string;
+  /** The run that last worked on it; absent when it left no usable record. */
+  last_run_seq?: number;
+  last_run_id?: string;
+  /** The chosen template's current name and version. */
+  template_name: string;
+  template_version: number;
+}
+
+export interface PipelinePickup {
+  /** The session's runs share one directory (current-directory isolation): pickup is less isolated. */
+  shared_directory: boolean;
+  tasks: PipelinePickupTask[];
+}
+
 export interface PipelineRun {
   session_id: string;
   run_seq: number;
