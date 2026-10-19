@@ -260,3 +260,12 @@ surfaces.
 - Where "since you last looked" is stored (per user, per session, per file).
 - Line counts and moved-code detection: `git diff --numstat` against the
   shadow baseline covers repo roots; non-repo roots need blob-to-disk diffs.
+- Task scope for pipeline runs. The Tasks-tab pipeline lens
+  (`docs/mockups/tasks-pipeline.html`) lists each task's touched files, and
+  clicking one should open its diff in Changes scoped to that task. Today
+  `ChangesFocus` can only name a path, tier, or turn. Open: what baseline a
+  task's diff is taken against (its worktree's fork point while the task is in
+  flight, its merge commit once it has landed), whether "task" becomes another
+  Group by option or a filter like turn, and how a blocked task's
+  never-merged worktree is shown. This is the same component that replaces
+  `TaskFiles.tsx` (see Scope, above).
