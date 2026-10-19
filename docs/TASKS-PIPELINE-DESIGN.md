@@ -1,6 +1,6 @@
 # Pipeline runs inside the Tasks tab
 
-Status: **implemented (pending e2e)** (2026-10-19). Mockup: `docs/mockups/tasks-pipeline.html`
+Status: **shipped** (2026-10-19). Mockup: `docs/mockups/tasks-pipeline.html`
 (the source of truth for layout and behavior; open it in a browser).
 
 The Pipeline workspace tab goes away. The Tasks tab becomes the one place to
