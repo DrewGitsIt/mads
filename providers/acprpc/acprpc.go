@@ -33,8 +33,10 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/procreap"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -158,6 +160,19 @@ type Config struct {
 	// agent drops — goose 1.50.1 accepts "/compact <text>" but its summary
 	// ignores the text (same capture, turn 3).
 	CompactFocus bool
+	// OwnProcessTree starts the agent in a process group of its own and,
+	// when the session ends — Close, which every Start failure, OneShot
+	// return or cancel, and DiscoverModels pass through — SIGKILLs that
+	// group and every descendant that left it (pkg/procreap: snapshots
+	// taken while the agent lives, killed by pid + start-time identity).
+	// Needed where an agent's helpers outlive it: hermes runs its
+	// dependency bootstrap in children of its own group (pm/client.py:77,
+	// a `uv sync` that survived as ppid-1 orphans when only hermes-acp was
+	// killed) and detaches tool processes, MCP servers and kernels into
+	// sessions of their own (tools/process_registry.py:1246,
+	// tools/mcp_tool.py:594, tools/code_kernel.py:642). Off by default:
+	// goose and kiro-cli keep the plain stdin-EOF-then-kill shutdown.
+	OwnProcessTree bool
 }
 
 // ConfigOptionValue is one PreseedConfigOptions entry.
@@ -272,6 +287,27 @@ func (e *Engine) env(extra []string) []string {
 	env = append(env, e.cfg.Env...)
 	env = append(env, extra...)
 	return env
+}
+
+// closeTree is closeWait for an OwnProcessTree agent: grace for the
+// agent to exit on its own (its stdout ending), then the whole group is
+// killed while the agent is still unreaped — its pid, and so the group
+// id, can't have been reused yet — then the agent is waited and every
+// remembered descendant that left the group is reaped.
+func closeTree(cmd *exec.Cmd, grace time.Duration, readDone <-chan struct{}, reaper *procreap.Reaper) {
+	select {
+	case <-readDone:
+	case <-time.After(grace):
+	}
+	procreap.KillGroup(cmd.Process.Pid)
+	reaper.MarkExited()
+	_ = cmd.Wait()
+	reaper.Reap()
+}
+
+// ownGroup puts cmd in a process group of its own (OwnProcessTree).
+func ownGroup(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
 // closeWait shuts a process down gently: signal by closing its stdin, give

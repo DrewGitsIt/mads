@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/procreap"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -46,6 +47,9 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 	cmd := exec.Command(e.cfg.Bin, e.cfg.SpawnArgs...)
 	cmd.Dir = cwd
 	cmd.Env = e.env(opts.Env)
+	if e.cfg.OwnProcessTree {
+		ownGroup(cmd)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -65,6 +69,7 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 	s := &streamSession{
 		cfg:       &e.cfg,
 		cmd:       cmd,
+		readDone:  make(chan struct{}),
 		stdin:     stdin,
 		events:    make(chan provider.Event, 256),
 		pending:   make(map[int]chan rpcMessage),
@@ -72,6 +77,9 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 		toolCalls: make(map[string]toolCallInfo),
 		asker:     opts.Permissions,
 		asks:      make(map[string]*permAsk),
+	}
+	if e.cfg.OwnProcessTree {
+		s.reaper = procreap.New(cmd.Process.Pid)
 	}
 	go s.read(stdout)
 
@@ -358,6 +366,10 @@ type streamSession struct {
 	cfg    *Config
 	cmd    *exec.Cmd
 	events chan provider.Event
+	// readDone closes when the agent's stdout ends; reaper is set for an
+	// OwnProcessTree agent (closeTree).
+	readDone chan struct{}
+	reaper   *procreap.Reaper
 
 	mu      sync.Mutex
 	stdin   io.WriteCloser
@@ -426,6 +438,7 @@ type streamSession struct {
 // tell the difference from a real answer.
 func (s *streamSession) read(stdout io.Reader) {
 	defer func() {
+		defer close(s.readDone)
 		// The agent is gone: nobody is left to receive an answer, so
 		// every forwarded ask is withdrawn without a reply.
 		s.withdrawAsks(false)
@@ -920,6 +933,11 @@ func (s *streamSession) handleUpdate(raw json.RawMessage) {
 			return // live echoes of our own prompt aren't surfaced as events
 		}
 	case "tool_call":
+		// A tool may outlive the agent in a session of its own: remember
+		// it shortly after it has had time to start (OwnProcessTree).
+		if s.reaper != nil && !replaying {
+			s.reaper.SnapshotSoon(300 * time.Millisecond)
+		}
 		class, name := s.classify(&u)
 		if u.ToolCallID != "" {
 			s.mu.Lock()
@@ -1264,6 +1282,13 @@ func (s *streamSession) Close() error {
 	closeOK := s.closeOK
 	s.mu.Unlock()
 
+	// Remember the agent's current descendants before it is asked to go:
+	// once it exits they reparent to init (OwnProcessTree; the agent is
+	// unreaped here, so its tree is still its own).
+	if s.reaper != nil {
+		s.reaper.Snapshot()
+	}
+
 	// Nobody will answer an open ask once the session is going away; the
 	// agent learns of it through session/close (which cancels its run) or
 	// the process ending, so no reply is owed.
@@ -1283,6 +1308,10 @@ func (s *streamSession) Close() error {
 	s.closed = true
 	_ = s.stdin.Close()
 	s.mu.Unlock()
+	if s.reaper != nil {
+		closeTree(s.cmd, 3*time.Second, s.readDone, s.reaper)
+		return nil
+	}
 	closeWait(s.cmd, 3*time.Second)
 	return nil
 }
