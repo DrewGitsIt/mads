@@ -87,6 +87,14 @@ Three hermes facts corrected on the way through, no engine knobs:
 The wrapper does not offer the runner's live `Transcript()`: history comes
 from state.db, not the engine's in-memory buffer.
 
+**No live transcript mid-turn.** The adapter serves only state.db, and
+hermes writes an assistant row when a model call finishes (10–200 ms after
+its last chunk, always before the prompt response). So a transcript
+refetch during a turn shows the finished model calls only; the reply in
+progress reaches the UI on the live event stream and lands in the store
+by turn end. Deferred to the chat-stream redesign's unsettled tail (C1/C2,
+docs/CHAT-STREAM-DESIGN.md), which replays exactly that tail.
+
 ## Transcript (state.db)
 
 Read-only (`mode=ro`, WAL-aware; hermes-acp may be writing). Rows are
