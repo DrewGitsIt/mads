@@ -130,6 +130,9 @@ type session struct {
 	lastErr   *turnError
 
 	asks map[string]*pendingAsk
+	// forwards counts asker goroutines still running (forward), so a
+	// capture replay can let each ask be answered before codex's next line.
+	forwards sync.WaitGroup
 }
 
 func newSession(p *Provider, c *conn, opts provider.StartOptions) *session {
@@ -842,7 +845,9 @@ func (s *session) forward(id json.RawMessage, ask provider.PermissionAsk, asker 
 	}
 	s.asks[key] = &pendingAsk{id: id, reply: reply, cancel: cancel}
 	s.mu.Unlock()
+	s.forwards.Add(1)
 	go func() {
+		defer s.forwards.Done()
 		decision := asker(ctx, ask)
 		s.mu.Lock()
 		pa, ok := s.asks[key]

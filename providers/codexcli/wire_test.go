@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -73,9 +72,14 @@ func replay(t *testing.T, capture string, trust provider.Trust, asker provider.P
 	sc.Buffer(nil, 1<<20)
 	for sc.Scan() {
 		c.handle(sc.Bytes())
+		// codex waits for an approval's answer before its next line (the
+		// capture's serverRequest/resolved is that answer's echo), so the
+		// replay does too: a forwarded ask answers on its own goroutine.
+		var m rpcMessage
+		if json.Unmarshal(sc.Bytes(), &m) == nil && m.Method != "" && len(m.ID) > 0 {
+			s.forwards.Wait()
+		}
 	}
-	// Forwarded asks answer on goroutines of their own.
-	time.Sleep(100 * time.Millisecond)
 	s.onExit()
 	<-collected
 	return evs, w
