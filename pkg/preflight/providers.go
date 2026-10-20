@@ -2,8 +2,10 @@ package preflight
 
 import (
 	"context"
+	"os"
 
 	"github.com/drewkidwell/mads/pkg/binlocate"
+	"github.com/drewkidwell/mads/pkg/hermesinstall"
 )
 
 // providerBinary describes how to detect and version-probe one provider's
@@ -21,6 +23,14 @@ type providerBinary struct {
 	// own invention.
 	InstallURL     string
 	InstallCommand string
+	// Ready, when set, is asked before the version probe runs: a non-nil
+	// error means running the binary at all would do harm, so the check
+	// reports the provider not installed (with the error as detail) and
+	// never probes. hermes: running hermes-acp under a home with no
+	// dependency install starts a ~600 MB one (pkg/hermesinstall). Even
+	// `--version`, which hermes exempts from that today
+	// (venv_sync.py:363), isn't relied on.
+	Ready func(path string) error
 }
 
 // knownProviderBinaries is deliberately small and honest: one entry per
@@ -65,6 +75,9 @@ var knownProviderBinaries = map[string]providerBinary{
 		InstallHint:    "install Hermes Agent and ensure `hermes-acp` is on PATH (the installer puts it in ~/.local/bin)",
 		InstallURL:     "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
 		InstallCommand: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+		Ready: func(path string) error {
+			return hermesinstall.Check(path, os.Environ())
+		},
 	},
 	"codex": {
 		Bin:         "codex",
@@ -88,6 +101,15 @@ func checkProviderBinary(ctx context.Context, name string, spec providerBinary) 
 			Detail:     spec.Bin + " not found on PATH or in known install locations",
 			FixHint:    spec.InstallHint,
 			InstallURL: spec.InstallURL, InstallCommand: spec.InstallCommand,
+		}
+	}
+	if spec.Ready != nil {
+		if err := spec.Ready(path); err != nil {
+			return Check{
+				Name: checkName, Healthy: false, NotInstalled: true,
+				Detail:  "found at " + path + " but not usable here: " + err.Error(),
+				FixHint: spec.InstallHint, InstallURL: spec.InstallURL, InstallCommand: spec.InstallCommand,
+			}
 		}
 	}
 	out, err := runVersion(ctx, path, spec.VersionArgs...)

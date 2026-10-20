@@ -126,11 +126,59 @@ The resume guard reads the same store: hermes answers `session/load` of an
 unknown id with an empty success (and the next prompt with a refusal), so a
 ref without a `sessions` row fails Start loudly.
 
+## Never starts a hermes install; kills the whole tree
+
+A source-checkout hermes keeps its Python dependencies per data root
+(`<root>/installs/<sha256(checkout)[:16]>/`). Its launcher
+(`~/.local/bin/hermes-acp` → `<checkout>/.hermes/bin/hermes-acp`) imports
+`hermes_bootstrap` first (line 116), whose `prepare_launch`
+(`hermes_cli/venv_sync.py:338-386`) syncs that environment when the root
+the process runs under has none — including a root that only *borrows*
+the checkout, such as a temporary HOME or HERMES_HOME
+(`_prepare_borrowed_launch`, `venv_sync.py:452-484`). That is a ~600 MB
+`uv sync`, run by a PM worker in hermes-acp's own process group
+(`pm/client.py:77`, no new session); killing hermes-acp alone left it
+running as ppid-1 orphans. (`--version` is exempt, `venv_sync.py:363`,
+which is why a probe never showed it.) Two fixes:
+
+- **The guard** (`pkg/hermesinstall`): before every spawn — Start (and so
+  OneShot), Models, and preflight's version probe — mads checks the marker
+  the launcher itself relies on, `<dependency root>/installs/<key>/facts.json`
+  (`pm/environments.py:20-38,105-106`), for the exact environment the child
+  would get (HOME, HERMES_HOME, HERMES_DATA_DIR_SUFFIX resolved as
+  `get_default_hermes_root` does). Missing: fail fast with
+  `hermesinstall.ErrNotInstalled`, nothing spawned; preflight reports
+  hermes not installed instead of probing. It only reads files; it passes
+  where hermes can't bootstrap (a packaged install, no `.git`, an
+  `updateMechanism` other than `self`, `HERMES_DISABLE_LAZY_INSTALLS`).
+  Chosen over setting `HERMES_DISABLE_LAZY_INSTALLS=1` on every spawn,
+  which would also stop the bootstrap: hermes documents that variable as
+  internal ("Do not put it in `.env`"), and it overrides the user's
+  `security.allow_lazy_installs`, so real sessions would lose the tools
+  hermes installs on demand.
+- **The tree kill** (acprpc `OwnProcessTree`, `pkg/procreap`): hermes-acp
+  starts in a process group of its own; Close — which every Start
+  failure, OneShot return or cancel, and discovery go through — kills the
+  group while hermes-acp is still unreaped, then reaps descendants that
+  left the group (hermes's tools use `start_new_session=True`), remembered
+  by pid + start time when each tool starts and at Close.
+
+Tests: a stand-in checkout whose launcher would bootstrap and detach a
+helper — Start, OneShot and Models refuse, nothing runs, no `.hermes`
+appears; the stand-in agent's detached and grouped helpers die on Close,
+on a cancelled one-shot, and after the agent itself is killed; the Router
+boot test asserts its scratch HOME gets no `.hermes`.
+
+The smoke borrows an install from `MADS_HERMES_SMOKE_HOME`, a hermes home
+prepared beforehand by hermes itself (never `~/.hermes`: a borrowing
+launch rebuilds the owner's `pm-runtime` generation in place).
+
 ## Testing
 
 ```sh
 go test -race ./providers/hermescli/
-MADS_HERMES_SMOKE=1 go test -run Smoke ./providers/hermescli/ -v
+MADS_HERMES_SMOKE=1 MADS_HERMES_SMOKE_HOME=/path/to/prepared/hermes-home \
+  go test -run Smoke ./providers/hermescli/ -v
 ```
 
 The stand-in (`fakehermes_test.go`) serves the captured shapes and writes a
@@ -140,6 +188,8 @@ it. Reader fixtures come from the survey's real rows.
 
 The smoke spawns the real hermes-acp on GitHub Copilot `gpt-4.1` in a
 scratch `HERMES_HOME` whose `config.yaml` names only the provider and
-model; hermes resolves the Copilot credential from `gh auth token` itself
-(no secret copied). It never touches `~/.hermes`. About 35 s and six short
-turns, the last calling a throwaway stdio MCP server.
+model, borrowing the dependency install of `MADS_HERMES_SMOKE_HOME`
+through a symlinked `installs/`. hermes resolves the Copilot credential
+from `gh auth token` itself (no secret copied). It never touches
+`~/.hermes`. About a minute and six short turns, the last calling a
+throwaway stdio MCP server.

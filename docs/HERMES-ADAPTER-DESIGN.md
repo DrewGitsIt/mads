@@ -262,7 +262,8 @@ the rewrite is process state, so it doesn't survive a restart.
   a branch, structured content, tool errors, read-only open.
 - **Smoke** (`MADS_HERMES_SMOKE=1`): the real hermes-acp on Copilot
   `gpt-4.1` in a scratch `HERMES_HOME` whose `config.yaml` names only the
-  provider and model. hermes resolves the Copilot credential from
+  provider and model, borrowing the dependency install of a hermes home
+  prepared beforehand (`MADS_HERMES_SMOKE_HOME`). hermes resolves the Copilot credential from
   `gh auth token` itself (the survey's home3 recorded a `gh_cli` pool entry
   with a fingerprint, no secret), so nothing is copied. It covers
   discovery, set_model (config.yaml unchanged), a reply, an `ls` tool turn
@@ -290,6 +291,19 @@ only tool returns a marker; Copilot `gpt-4.1` called
 repeats it. hermes doesn't advertise `mcpCapabilities.http`, so http
 servers are dropped (engine rule); stdio is what mads's orchestrate
 capability uses.
+
+## Never start a hermes install (2026-10-20 integration fix)
+
+Integration found mads spawning hermes-acp under a HOME with no hermes
+dependency install — the Router's boot warm-up in tests, and every
+`make ui-smoke`, both with scratch HOMEs — and hermes installing ~600 MB
+into `$HOME/.hermes`, with the `uv sync` outliving everything as ppid-1
+orphans. Root cause and both fixes (an install guard before every spawn,
+mirroring the launcher's own `facts.json` marker; a process-group plus
+reaper tree kill on Close) are in `providers/hermescli/README.md`
+"Never starts a hermes install". The guard was chosen over exporting
+`HERMES_DISABLE_LAZY_INSTALLS`, which hermes documents as internal and
+which would also disable on-demand tool installs in real sessions.
 
 ## Open questions
 
