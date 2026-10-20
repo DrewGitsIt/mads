@@ -100,16 +100,9 @@ func DeliverSignal(sessionID string, sig Signal) Func {
 			return nil // e.g. the terminal task was deleted mid-flight
 		}
 
-		// Only a done task is plausibly "nothing to do"; every other
-		// terminal asks the leader for a decision, so offering NOOP there
-		// would invite the exact dismissal it exists to prevent.
-		closing := ""
-		if sig.Kind != SignalTaskTerminal || sig.ToStatus == string(contracts.StatusDone) {
-			closing = noopInstruction
-		}
-
 		delivered := 0
 		for _, l := range targets {
+			closing := signalClosing(sig, l.Implicit)
 			source := sess.Name
 			if l.Implicit {
 				// Granting == subject for an implicit hand-raiser, so the
@@ -127,6 +120,29 @@ func DeliverSignal(sessionID string, sig Signal) Func {
 		}
 		return nil
 	}
+}
+
+// signalClosing is the NOOP offer (or none) that ends sig's notice on one
+// link. For a leader's link only a done task is plausibly "nothing to do";
+// every other terminal asks the leader for a decision, so offering NOOP
+// there would invite the exact dismissal it exists to prevent. An implicit
+// hand-raiser is the pipeline-running session hearing about its own run's
+// tasks: review, won't-do and done mostly move along without it, so only a
+// blocked task, which stalls the run, withholds NOOP (2026-10-19).
+func signalClosing(sig Signal, implicit bool) string {
+	if sig.Kind != SignalTaskTerminal {
+		return noopInstruction
+	}
+	if implicit {
+		if sig.ToStatus == string(contracts.StatusBlocked) {
+			return ""
+		}
+		return noopInstruction
+	}
+	if sig.ToStatus == string(contracts.StatusDone) {
+		return noopInstruction
+	}
+	return ""
 }
 
 // warnUnheardTaskTerminal logs, loudly, a task terminal that reached no one

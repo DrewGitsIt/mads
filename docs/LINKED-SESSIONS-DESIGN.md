@@ -103,6 +103,13 @@ Links are directed edges; nothing is 1:1 by design:
    collapse trims MADS transcript/UI weight only; a stateful provider keeps
    its own NOOP turns in context, which is why not waking at all (the two
    cadences above) carries most of the value.
+
+   **Amendment (2026-10-19): NOOP is offered only where "nothing to do" is
+   plausible.** On a leader's or monitor's link, a task signal offers NOOP
+   only for done; blocked, wont_do and needs_review ask for a decision.
+   On an implicit hand-raiser (decision 6) every task signal offers NOOP
+   except blocked, the one status that stalls the session's own run.
+   Permission and crash signals keep it (`job.signalClosing`).
 5. **Pipeline runs are monitorable, not leadable.** §1.12's interactive-only
    restriction is relaxed for `read` (+`inject` where the subject is the
    pipeline's session — see 6). Pipeline runs keep their single orchestrator:

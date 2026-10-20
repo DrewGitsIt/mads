@@ -567,3 +567,51 @@ func TestDeliverSignalTaskTerminalNoopOnlyForDone(t *testing.T) {
 		})
 	}
 }
+
+// A pipeline-running session's implicit hand-raiser hears its own run's
+// tasks. Only a blocked task stalls the run, so every other terminal offers
+// NOOP there — unlike a leader's link, where only done does (2026-10-19).
+func TestDeliverSignalImplicitHandRaiserNoopExceptBlocked(t *testing.T) {
+	cases := []struct {
+		status   contracts.TaskStatus
+		wantNoop bool
+	}{
+		{contracts.StatusDone, true},
+		{contracts.StatusBlocked, false},
+		{contracts.StatusWontDo, true},
+		{contracts.StatusNeedsReview, true},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.status), func(t *testing.T) {
+			base := datatest.Start(t)
+			data := dataclient.New(base, "router")
+			enableLinkedSessions(t, data)
+
+			sess := mustCreateSession(t, data, contracts.Session{Name: "pipeline leader"})
+			if _, err := data.CreateHandRaiser(context.Background(), sess.ID); err != nil {
+				t.Fatalf("CreateHandRaiser: %v", err)
+			}
+			task := contracts.Task{SessionID: sess.ID, Title: "wire the adapter", Source: "test", Status: contracts.StatusInProgress}
+			if err := data.CreateTask(context.Background(), &task); err != nil {
+				t.Fatalf("CreateTask: %v", err)
+			}
+
+			server := newCaptureServer(t, http.StatusAccepted)
+			runner := job.New(data, fastmodel.NewWithBackend(&countingBackend{}, fastmodel.Config{}), registryclient.New(""))
+			runner.SetResolver(stubResolver{sess.ID: server.addr()})
+			runner.SetWaker(&stubWaker{})
+
+			runSignal(t, base, runner, sess.ID, job.Signal{
+				Kind: job.SignalTaskTerminal, TaskID: task.ID, ToStatus: string(tc.status),
+			})
+
+			if got := server.count(); got != 1 {
+				t.Fatalf("hand-raiser received %d deliveries, want 1", got)
+			}
+			text := server.requests()[0].Text
+			if got := strings.Contains(text, "NOOP"); got != tc.wantNoop {
+				t.Errorf("notice %q offers NOOP = %v, want %v", text, got, tc.wantNoop)
+			}
+		})
+	}
+}
