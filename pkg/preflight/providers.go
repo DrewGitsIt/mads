@@ -47,7 +47,7 @@ var knownProviderBinaries = map[string]providerBinary{
 		Bin:         "goose",
 		VersionArgs: []string{"--version"},
 		// `goose --version` prints the bare version with a leading space
-		// (" 1.46.0" / " 1.48.0" — docs/GOOSE-ADAPTER-DESIGN.md);
+		// (" 1.46.0" / " 1.48.0" / " 1.50.1" — docs/GOOSE-ADAPTER-DESIGN.md);
 		// parseSemverish tolerates that.
 		ParseVersion:   parseSemverish,
 		InstallHint:    "install goose Desktop, or the goose CLI with `goose` on PATH",

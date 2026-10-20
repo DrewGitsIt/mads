@@ -13,8 +13,9 @@ the source of truth closest to the code.
   official `agent-client-protocol-schema` crate): `wire.go`'s types derive
   from the spec schema, never from any one agent's output.
 - The committed captures are **evidence of individual agents' behavior
-  within the spec, never shapes to bake in**: goose 1.48.0 under
-  `providers/goosecli/testdata/captures/`, claude-agent-acp 0.75.1 /
+  within the spec, never shapes to bake in**: goose 1.50.1 (plus a kept
+  1.48.0 transcript) under `providers/goosecli/testdata/captures/`,
+  claude-agent-acp 0.75.1 /
   codex-acp 1.10.0 / hermes 0.21.1 under `testdata/captures/` here. Each
   directory has a provenance README with capture commands and
   sanitization notes.
@@ -38,8 +39,8 @@ of these:
   http MCP entries ride only when `mcpCapabilities.http` was advertised,
   sse never.
 - `mcpServers` is **always present** on both `session/new` and
-  `session/load`, even when empty — goose 1.48.0 rejects its absence on
-  load with `-32602 missing field mcpServers`
+  `session/load`, even when empty — goose (1.48.0, 1.50.1) rejects its
+  absence on load with `-32602 missing field mcpServers`
   (`providers/goosecli/testdata/captures/acp-load-replay.jsonl` lines 3-4).
 - One in-flight `session/prompt` per session, enforced at `Send`.
 - All five `stopReason`s handled; all twelve `sessionUpdate` variants
@@ -54,10 +55,11 @@ of these:
   codex's source pairs `optionId:"allow_for_session"` with
   `kind:"allow_always"` (`testdata/captures/README.md`, "codex permission
   options").
-- Interruption is tracked by the engine's own flag — **never trust
-  `stopReason:"cancelled"`**: goose resolved `end_turn` in 3/3 cancel
-  attempts (`acp-transcript.jsonl` lines 86-105), codex likewise, while
-  claude/hermes do resolve `cancelled`. Both wire styles are real.
+- Interruption is tracked by the engine's own flag — **never rely on
+  `stopReason:"cancelled"` alone**: goose 1.48.0 resolved `end_turn` in
+  3/3 cancel attempts (`acp-transcript-1.48.0.jsonl` lines 86-105), codex
+  likewise, while goose 1.50.1 (`acp-transcript.jsonl` lines 36-55) and
+  claude/hermes resolve `cancelled`. Both wire styles are real.
 - `session/load` replay updates are suppressed from the event stream
   (buffered as `ReplayMessages` for bindings' transcript use), so a resume
   never leaks history as live events.

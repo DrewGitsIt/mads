@@ -21,16 +21,19 @@ type compatRange struct {
 // is the whole key.
 var compatMatrix = map[string]compatRange{
 	"claude-code": {Min: "2.1.0", Max: "2.2.0", Note: "proven against providers/conformance"},
-	// goose: proven 1.46–1.48 — the early wire probes ran against the
-	// 1.46.0 binary, and every committed capture plus the full source
-	// re-verification is 1.48.0 (docs/GOOSE-ADAPTER-DESIGN.md,
-	// "Re-verified against source 1.48.0"). The version-sensitive
-	// surfaces are the _goose/unstable system-prompt method,
-	// --output-format stream-json, and the ACP configOptions shape; the
-	// 1.46→1.48 deltas (including the ≤1.46 mcpServers suppression) are
-	// listed in that re-verification note. Max is exclusive, so 1.48.x
-	// passes and 1.49+ warns as unproven.
-	"goose": {Min: "1.46.0", Max: "1.49.0", Note: "proven against goose 1.46.0 (binary probes) and 1.48.0 (captures + source re-verification) — docs/GOOSE-ADAPTER-DESIGN.md"},
+	// goose: proven 1.46–1.50 — the early wire probes ran against the
+	// 1.46.0 binary, the full source re-verification is 1.48.0
+	// (docs/GOOSE-ADAPTER-DESIGN.md, "Re-verified against source 1.48.0"),
+	// and the committed captures were re-taken against 1.50.1 on
+	// 2026-10-20 (the binary Goose Desktop ships and auto-updates, which
+	// binlocate resolves). The version-sensitive surfaces are the
+	// _goose/unstable system-prompt method, --output-format stream-json,
+	// and the ACP configOptions shape; the 1.46→1.48 deltas (including the
+	// ≤1.46 mcpServers suppression) and the one 1.48→1.50.1 wire change (a
+	// cancelled prompt now resolves stopReason "cancelled", not "end_turn")
+	// are listed in the design doc. Max is exclusive, so 1.50.x passes and
+	// 1.51+ warns as unproven.
+	"goose": {Min: "1.46.0", Max: "1.51.0", Note: "proven against goose 1.46.0 (binary probes), 1.48.0 (source re-verification) and 1.50.1 (captures re-verified 2026-10-20) — docs/GOOSE-ADAPTER-DESIGN.md"},
 }
 
 // evaluate reports whether version sits in the proven window. Below Min is

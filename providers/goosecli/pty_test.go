@@ -13,7 +13,7 @@ import (
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
-// bannerPath returns the committed goose 1.48.0 banner capture as an
+// bannerPath returns the committed goose 1.50.1 banner capture as an
 // absolute path — the child's cwd is a temp dir, so a relative testdata
 // path would dangle.
 func bannerPath(t *testing.T) string {
@@ -36,8 +36,8 @@ func TestBannerRefFromCapture(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref, ok := bannerRef(raw)
-	if !ok || ref != "20260829_20" {
-		t.Fatalf("bannerRef(capture) = (%q, %v), want (%q, true)", ref, ok, "20260829_20")
+	if !ok || ref != "20261020_4" {
+		t.Fatalf("bannerRef(capture) = (%q, %v), want (%q, true)", ref, ok, "20261020_4")
 	}
 
 	var firstBannerLine []byte
@@ -76,8 +76,8 @@ func TestPTYArgs(t *testing.T) {
 	// Bare spawn stays flag-free (the committed pty-banner.raw capture
 	// spawn; the fake's session argv assertion depends on it).
 	eq("bare", p.ptyArgs(provider.StartOptions{}), []string{"session"})
-	eq("resume", p.ptyArgs(provider.StartOptions{Resume: "20260829_20"}),
-		[]string{"session", "--resume", "--session-id", "20260829_20"})
+	eq("resume", p.ptyArgs(provider.StartOptions{Resume: "20261020_4"}),
+		[]string{"session", "--resume", "--session-id", "20261020_4"})
 
 	// A stdio ref: builtin flag first (the ≤1.46 config-suppression
 	// neutralization), then the name-prefixed env-joined spec.
@@ -199,14 +199,14 @@ func TestPTYRefAnnouncedFromBanner(t *testing.T) {
 
 	a := refAnnouncer(t, sess)
 	ref, ok := recvRef(t, a)
-	if !ok || ref != "20260829_20" {
-		t.Fatalf("announced (%q, %v), want (%q, true)", ref, ok, "20260829_20")
+	if !ok || ref != "20261020_4" {
+		t.Fatalf("announced (%q, %v), want (%q, true)", ref, ok, "20261020_4")
 	}
 	if got, ok := recvRef(t, a); ok {
 		t.Fatalf("second receive got %q, want closed channel", got)
 	}
-	if got := sess.Ref(); got != "20260829_20" {
-		t.Fatalf("Ref() = %q after announce, want %q", got, "20260829_20")
+	if got := sess.Ref(); got != "20261020_4" {
+		t.Fatalf("Ref() = %q after announce, want %q", got, "20261020_4")
 	}
 }
 
@@ -259,14 +259,14 @@ func TestPTYSendAndInterruptReachChild(t *testing.T) {
 // then closes (the pre-loaded channel).
 func TestPTYResume(t *testing.T) {
 	p := testProvider(t)
-	sess := startPTYSession(t, p, provider.StartOptions{Resume: "20260829_20"})
+	sess := startPTYSession(t, p, provider.StartOptions{Resume: "20261020_4"})
 	log := pumpTerminal(sess.Terminal())
 
-	if got := sess.Ref(); got != "20260829_20" {
+	if got := sess.Ref(); got != "20261020_4" {
 		t.Fatalf("Ref() = %q at Start-return, want the resumed ref", got)
 	}
 	a := refAnnouncer(t, sess)
-	if ref, ok := recvRef(t, a); !ok || ref != "20260829_20" {
+	if ref, ok := recvRef(t, a); !ok || ref != "20261020_4" {
 		t.Fatalf("announced (%q, %v), want the resumed ref", ref, ok)
 	}
 	if got, ok := recvRef(t, a); ok {
@@ -296,12 +296,12 @@ func TestSetRefPropagatesToRef(t *testing.T) {
 	if !ok {
 		t.Fatal("PTY session does not implement provider.RefSetter")
 	}
-	setter.SetRef("20260829_20")
-	if sess.Ref() != "20260829_20" {
+	setter.SetRef("20261020_4")
+	if sess.Ref() != "20261020_4" {
 		t.Fatalf("Ref = %q after SetRef, want the located ref", sess.Ref())
 	}
 	setter.SetRef("20260829_99")
-	if sess.Ref() != "20260829_20" {
+	if sess.Ref() != "20261020_4" {
 		t.Fatalf("Ref = %q, want SetRef to never overwrite a known ref", sess.Ref())
 	}
 }

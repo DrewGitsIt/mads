@@ -7,9 +7,11 @@ the trust tool-class table, the PTY transport (pty.go), the
 TranscriptReader (transcript.go), and the SessionLocator backstop
 (locate.go) — every wire behavior lives in the engine.
 
-**Every claim below is pinned by committed goose 1.48.0 captures
-(`testdata/captures/README.md` — full provenance and reproduction
-commands) and the goose v1.48.0 source tree** — the opposite evidentiary
+**Every claim below is pinned by committed goose captures — re-taken
+against 1.50.1 on 2026-10-20, with the original 1.48.0 ACP transcript kept
+as `acp-transcript-1.48.0.jsonl` (`testdata/captures/README.md` — full
+provenance, reproduction commands, and the 1.48.0→1.50.1 drift) — and the
+goose v1.48.0 source tree** — the opposite evidentiary
 posture from kirocli's docs-research README. Where a fact is a guess, the
 row says so.
 
@@ -17,15 +19,15 @@ row says so.
 
 | Behavior | Support | Why |
 |---|---|---|
-| Interactive | **Native** | `goose acp` is a first-class JSON-RPC agent; the full lifecycle — initialize, session/new, mode + model configOptions, tool-using turns, permission round-trips, close — is captured end-to-end (`acp-transcript.jsonl`, 107 lines). |
-| Interrupt | **Native** | `session/cancel` terminates the run promptly, **but the prompt response resolves `stopReason:"end_turn"`, not `"cancelled"`** — 3/3 cancel attempts at different timings (`acp-transcript.jsonl` lines 86-105; root cause in goose `server.rs`'s `was_cancelled`). The engine's own interrupted flag does the detection, so the row is safe despite the wire's lie. |
+| Interactive | **Native** | `goose acp` is a first-class JSON-RPC agent; the full lifecycle — initialize, session/new, mode + model configOptions, tool-using turns, permission round-trips, close — is captured end-to-end (`acp-transcript.jsonl`, 57 lines; `acp-transcript-1.48.0.jsonl`, 107 lines, adds a three-permission turn). |
+| Interrupt | **Native** | `session/cancel` terminates the run promptly and, at 1.50.1, the prompt response resolves `stopReason:"cancelled"` (`acp-transcript.jsonl` lines 36-55). goose 1.48.0 resolved `"end_turn"` instead — 3/3 cancel attempts at different timings (`acp-transcript-1.48.0.jsonl` lines 86-105; root cause in 1.48's `server.rs` `was_cancelled`). The engine's own interrupted flag does the detection, so the row holds on both versions. |
 | OneShot | **Emulated** | Over ACP, not `goose run` — see "The OneShot-over-ACP decision" below. |
 | OneShotStream | **Emulated** | Same path; `OnEvent` streams genuinely incrementally (per-chunk `agent_message_chunk`s). |
 | Resume | **Native** | `session/load` (`loadSession:true`, `acp-transcript.jsonl` line 2) replays history as coalesced `session/update` notifications before its response resolves (`acp-load-replay.jsonl`); the engine suppresses the replay from the live event stream. |
 | RefAnnounce | **Emulated** | The ACP ref is Native-strength — `session/new` returns `sessionId` synchronously, so `Ref()` is set at Start-return. The PTY ref rides a cosmetic banner parse (`pty-banner.raw`: the id sits in ANSI-dim art, matched ANSI-stripped as `(\d{8}_\d+)\s+·`) that a goose redesign could break. Emulated is the honest one-row summary across both transports. |
 | Transcript | **Native** | `goose session export --session-id <ref> --format json` (`oneshot-export.json`) — goose's own session store, no ACP spawn. Richer than kirocli's load-replay approach: unix `created` timestamps per entry, `userVisible:false` injected turn-context entries filterable, tool blocks with correlation ids. |
 | ModelDiscovery | **Native** | The live agent's `model` configOption carries `options[]` + `currentValue` (`acp-transcript.jsonl` lines 3-4, 10-12); the engine's DiscoverModels reads it — no LLM call, no static list. |
-| CostReporting | **Native** | The prompt result carries `usage{totalTokens,inputTokens,outputTokens}` (`acp-transcript.jsonl` line 85), and `usage_update` notifications carry `{used,size}` context occupancy. |
+| CostReporting | **Native** | The prompt result carries `usage{totalTokens,inputTokens,outputTokens}` (`acp-transcript.jsonl` line 35), and `usage_update` notifications carry `{used,size}` context occupancy. |
 | ACP | **Native** | `goose acp --with-builtin developer` — the captured spawn shape. |
 | PTY | **Native** | `goose session` under a pty (pty.go); banner ref discovery plus the SessionLocator backstop (locate.go: `session list` filtered by cwd + created_at, verified by first-message export — declines on any ambiguity). |
 | MCPServers | **Native** | See "MCPServers, both transports" below. |
@@ -57,9 +59,9 @@ path, not a purpose-built one-shot surface.
 
 - **ACP**: `StartOptions.MCPServers` → `session/new`/`session/load`
   `mcpServers[]` stdio entries (engine-owned, always present per spec —
-  goose 1.48.0 rejects the field's absence, `acp-load-replay.jsonl` lines
-  3-4). http refs ride only when the agent advertised
-  `mcpCapabilities.http` (goose 1.48.0 does; sse it refuses).
+  goose 1.48.0 and 1.50.1 reject the field's absence, `acp-load-replay.jsonl`
+  lines 3-4). http refs ride only when the agent advertised
+  `mcpCapabilities.http` (goose does; sse it refuses).
 - **PTY**: `--with-extension '[name:]ENV1=v1 ENV2=v2 command args...'`
   per stdio ref (pty.go `ptyArgs`; flag format goose v1.48.0
   `crates/goose-cli/src/cli.rs:174-210`, repeatable `ArgAction::Append`,
@@ -80,8 +82,8 @@ path, not a purpose-built one-shot surface.
 `gooseToolClassTable` (goosecli.go) classifies goose's `_meta` tool
 identities onto the ACP kind taxonomy for the engine's gate. ACP names are
 BARE (`"shell"`, not `developer__shell`): the extension identity rides the
-separate `extensionName` field (`acp-transcript.jsonl` line 43,
-`_meta.goose.toolCall`). Audited at tag v1.48.0 — the captures' exact
+separate `extensionName` field (`acp-transcript.jsonl` line 18,
+`_meta.goose.toolCall`). Audited at tag v1.48.0 — the original captures'
 version; rows are additive across goose versions (a name goose no longer
 emits is harmless; an unlisted one denies).
 
@@ -115,7 +117,7 @@ what the two asking modes actually do with a call that has no user grant
 in goose's own permission config:
 
 - `approve`: RequireApproval — always. The capture confirms it asks even
-  for `todo__todo_write` (`acp-transcript.jsonl` line 34).
+  for `todo__todo_write` (`acp-transcript-1.48.0.jsonl` line 34).
 - `smart_approve`: allow a tool annotated read-only; otherwise defer to
   `detect_read_only_requests` — **an extra LLM call** in which goose's own
   model judges whether the call is read-only — and ask only if it says no.
@@ -151,7 +153,7 @@ replies), but cannot see or override ones the user made.
 ## The unstable system-prompt dependency
 
 `StartOptions.SystemPrompt` is delivered via
-`_goose/unstable/session/system-prompt/set` — works at 1.48.0
+`_goose/unstable/session/system-prompt/set` — works at 1.48.0 and 1.50.1
 (`acp-transcript.jsonl` lines 13-14: `{sessionId, mode:"append", key,
 text}` → empty result) — with the engine's `-32601` fallback to
 first-send prefixing. This is a version-sensitive surface: the method is
@@ -194,7 +196,9 @@ mechanism than the `read_only` intent claims (goosecli.go `IntentMatrix`).
   initialize capability set, the session/new modes + configOptions body,
   `-32602` on missing `mcpServers` (new AND load), bare `_meta` tool
   names, optionIds that mirror kinds (goose's real coincidence), the
-  capture's usage numbers, end_turn-after-cancel, and the argv assertion
+  capture's usage numbers, 1.50.1's `cancelled`-after-cancel (with
+  `MADS_FAKE_GOOSE_CANCEL_STOP=end_turn` replaying 1.48.0's `end_turn`),
+  and the argv assertion
   `acp --with-builtin developer`.
 - `TestConformanceAgainstScriptedBinary` runs the full
   `providers/conformance` suite against that stand-in in CI — every

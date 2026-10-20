@@ -8,7 +8,7 @@
 //
 // The ACP v1 spec (agentclientprotocol.com, pinned by the official
 // agent-client-protocol-schema crate) is normative: wire.go's types derive
-// from the spec schema, and the committed captures — goose 1.48.0 under
+// from the spec schema, and the committed captures — goose 1.50.1 and 1.48.0 under
 // providers/goosecli/testdata/captures/, claude-agent-acp 0.75.1 /
 // codex-acp 1.10.0 / hermes 0.21.1 under testdata/captures/ here — are
 // evidence of individual agents' behavior within it, never shapes to bake
@@ -121,7 +121,7 @@ type Config struct {
 	// agent renames a tool is safe, under-enforcing is not). The need is
 	// capture-pinned: goose's tool_call updates carry only
 	// _meta.goose.toolCall names and no kind
-	// (providers/goosecli/testdata/captures/acp-transcript.jsonl line 33),
+	// (providers/goosecli/testdata/captures/acp-transcript.jsonl line 18),
 	// so classification must be supplied, not read off the wire.
 	ToolClassTable []ToolClassRule
 	// PermissionAsksEveryCall declares that the agent's limited-trust mode
@@ -130,7 +130,7 @@ type Config struct {
 	// that ("Ask before every tool call", goose_mode.rs; permission_
 	// inspector.rs sends every call without a user-config grant to
 	// RequireApproval — and the capture asks even for todo__todo_write,
-	// acp-transcript.jsonl line 34). Forwarding all of those to the user
+	// acp-transcript-1.48.0.jsonl line 34). Forwarding all of those to the user
 	// would make a card of every file read, so with this set and an asker
 	// wired (StartOptions.Permissions, limited trust only), the engine
 	// allows the read/search/think/fetch classes itself and forwards only

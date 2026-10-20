@@ -4,8 +4,8 @@
 // instantiation (docs/DECLARATIVE-PROVIDERS-DESIGN.md §"providers/acprpc"):
 // it supplies the capture-verified goose knob values — spawn args, the
 // trust→mode table, the tool-class table, the system-prompt extension
-// method — while every wire behavior stays in the engine. The goose 1.48.0
-// evidence base lives under testdata/captures/ (see its README for
+// method — while every wire behavior stays in the engine. The goose 1.50.1
+// evidence base (plus the kept 1.48.0 ACP transcript) lives under testdata/captures/ (see its README for
 // provenance) and also feeds the engine's replay tests.
 //
 // The PTY transport (`goose session` with banner ref discovery) lives in
@@ -97,7 +97,7 @@ func (p *Provider) bin() string {
 // name goose no longer emits is a harmless row, an unlisted one denies.
 // ACP names are BARE per _meta ("shell", not "developer__shell"): the
 // extension identity rides the separate extensionName field
-// (capture-pinned, testdata/captures/acp-transcript.jsonl line 43).
+// (capture-pinned, testdata/captures/acp-transcript.jsonl line 18).
 var gooseToolClassTable = []acprpc.ToolClassRule{
 	{Extension: "developer", Name: "shell", Class: "execute"},
 	// Pre-1.48 goose vocabulary: one text_editor tool whose rawInput
@@ -117,7 +117,7 @@ var gooseToolClassTable = []acprpc.ToolClassRule{
 	// tool are both named "analyze".
 	{Extension: "analyze", Name: "analyze", Class: "read"},
 	// COMPOSITE name: the bare-name rule holds for developer, but todo
-	// arrives as todo__todo_write (capture-pinned, acp-transcript.jsonl
+	// arrives as todo__todo_write (capture-pinned, acp-transcript-1.48.0.jsonl
 	// line 33; source: todo.rs TODO_WRITE_TOOL_NAME_COMPLETE).
 	{Extension: "todo", Name: "todo__todo_write", Class: "think"},
 	// Guess-grade: task-prescribed, but no fetch builtin exists at v1.48.0
@@ -186,7 +186,7 @@ func (p *Provider) engineConfig() acprpc.Config {
 		ToolIdentity:   acprpc.ToolIdentity{Mode: acprpc.ToolIdentityMetaNamespace, Namespace: "goose"},
 		ToolClassTable: gooseToolClassTable,
 		// approve mode asks before EVERY call, reads included (goose_mode.rs
-		// "Ask before every tool call"; acp-transcript.jsonl line 34 asks
+		// "Ask before every tool call"; acp-transcript-1.48.0.jsonl line 34 asks
 		// for todo__todo_write): the engine allows read/search/think/fetch
 		// itself so the user's cards are the edits, commands and unknowns.
 		PermissionAsksEveryCall: true,
@@ -229,7 +229,7 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorModelDiscovery: provider.Native,
 		// session/prompt results carry usage{totalTokens,inputTokens,
 		// outputTokens} (pinned: testdata/captures/acp-transcript.jsonl
-		// line 85) → Usage on EventTurnEnd and OneShot results.
+		// line 35) → Usage on EventTurnEnd and OneShot results.
 		provider.BehaviorCostReporting: provider.Native,
 		// approve mode + the engine's answer to each ask (design doc
 		// "Trust enforcement"): read_only class-gated, limited asking the

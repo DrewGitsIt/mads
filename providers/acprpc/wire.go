@@ -9,7 +9,7 @@ import (
 // The types in this file derive from the ACP v1 spec schema
 // (agentclientprotocol.com, pinned by the official
 // agent-client-protocol-schema crate) and are verified against committed
-// captures from four agents: goose 1.48.0
+// captures from four agents: goose 1.50.1 and 1.48.0
 // (providers/goosecli/testdata/captures/), claude-agent-acp 0.75.1,
 // codex-acp 1.10.0, and hermes 0.21.1 (testdata/captures/ here). The spec
 // is normative: each agent is one conforming implementation, and the
@@ -24,7 +24,7 @@ import (
 // because the two directions use different id types — our outgoing
 // requests use ints, while agent→client requests
 // (session/request_permission) may carry string UUIDs a reply must echo
-// verbatim (goose does: acp-transcript.jsonl line 34).
+// verbatim (goose does: acp-transcript.jsonl line 19).
 type rpcMessage struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
@@ -99,7 +99,7 @@ type mcpCapabilities struct {
 
 // stdioMCPServer / httpMCPServer are the two spec MCP server descriptor
 // shapes the engine sends. Stdio carries no type field and always includes
-// args/env — the shape goose 1.48.0 accepts (acp-transcript.jsonl line 3).
+// args/env — the shape goose 1.48.0 and 1.50.1 accept (acp-transcript.jsonl line 3).
 // The two are marshaled separately (mcpEntries) so stdio's always-present
 // arrays and http's url never contaminate each other.
 type stdioMCPServer struct {
@@ -121,7 +121,7 @@ type envVariable struct {
 }
 
 // newSessionParams — "session/new". MCPServers must be present even when
-// empty: goose 1.48.0 rejects its absence with -32602 (pinned:
+// empty: goose (1.48.0 and 1.50.1) rejects its absence with -32602 (pinned:
 // providers/goosecli/testdata/captures/acp-load-replay.jsonl lines 3-4
 // for the session/load twin of the same requirement).
 type newSessionParams struct {
@@ -194,7 +194,7 @@ type modeInfo struct {
 // (the mode-transport detection), the model option's CurrentValue and
 // Options are what DiscoverModels reads — shape pinned by
 // providers/goosecli/testdata/captures/acp-transcript.jsonl line 4
-// ({"id":"model","name":"Model","type":"select","currentValue":"qwen3.8",
+// ({"id":"model","name":"Model","type":"select","currentValue":"qwen3.8-coder-nothink",
 // "options":[{"value":…,"name":…},…]}). Additive decode: agents that omit
 // the fields simply leave them zero.
 type configOption struct {
@@ -265,7 +265,7 @@ type contentBlock struct {
 // max_tokens, max_turn_requests, refusal, cancelled — all handled (see
 // finishTurn; an unrecognized string is a plain turn end, never a decode
 // error). Usage is an extension riding the result (goose:
-// acp-transcript.jsonl line 85); agents without it just leave Usage nil.
+// acp-transcript.jsonl line 35); agents without it just leave Usage nil.
 type promptResult struct {
 	StopReason string     `json:"stopReason"`
 	Usage      *wireUsage `json:"usage,omitempty"`
@@ -316,14 +316,14 @@ type sessionUpdate struct {
 	Status        string          `json:"status,omitempty"`
 	RawInput      json.RawMessage `json:"rawInput,omitempty"`
 	// MessageID groups streamed *_chunk updates into one logical message —
-	// goose (acp-transcript.jsonl lines 72-82, acp-load-replay.jsonl line
-	// 8) carries it on agent_message_chunk/agent_thought_chunk/user_
+	// goose (acp-transcript.jsonl lines 23-32, acp-load-replay.jsonl line
+	// 9) carries it on agent_message_chunk/agent_thought_chunk/user_
 	// message_chunk. Used to coalesce one assistant turn's many small text
 	// fragments into a single Transcript() entry rather than one line per
 	// streamed word.
 	MessageID string          `json:"messageId,omitempty"`
 	Meta      json.RawMessage `json:"_meta,omitempty"`
-	// usage_update-variant fields (goose: acp-transcript.jsonl line 84):
+	// usage_update-variant fields (goose: acp-transcript.jsonl line 34):
 	// Used is the agent's absolute context-occupancy snapshot, Size the
 	// session's REAL context window (e.g. 128000 for a local model a static
 	// table would call 200000). Ridden onto the turn-end Usage as
@@ -402,7 +402,7 @@ func rawInputCommand(rawInput json.RawMessage) string {
 
 // requestPermissionParams — "session/request_permission" request params:
 // the tool call the agent wants to make, offered alongside options to
-// select from. goose's params carry no _meta (acp-transcript.jsonl lines
+// select from. goose's params carry no _meta (acp-transcript-1.48.0.jsonl lines
 // 34/44/66), so trust gating correlates ToolCall.ToolCallID with the
 // preceding tool_call update's recorded identity — see handlePermission.
 type requestPermissionParams struct {
