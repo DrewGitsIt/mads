@@ -76,6 +76,7 @@ export function TrustPill({
           <button
             key={t.value}
             type="button"
+            disabled={t.unavailable}
             className={[pillStyles.option, t.value === value ? pillStyles.optionSelected : ""]
               .filter(Boolean)
               .join(" ")}

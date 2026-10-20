@@ -257,6 +257,39 @@ describe("SessionDock", () => {
       expect(onChangeTrust).toHaveBeenCalledWith("auto_review");
     });
 
+    it("disables the restricted levels on a provider that runs at full trust only", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockImplementation((input: URL) => {
+          const url = input.toString();
+          if (url.endsWith("/providers")) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify([
+                  {
+                    name: "hermes",
+                    matrix: { trust_limited: "unsupported", trust_read_only: "unsupported", trust_auto_review: "unsupported" },
+                  },
+                ]),
+                { status: 200 },
+              ),
+            );
+          }
+          return Promise.resolve(new Response(JSON.stringify({ models: [] }), { status: 200 }));
+        }),
+      );
+      const onChangeTrust = vi.fn();
+      renderDock({ session: { ...fixtureSessions["session-active"], provider: "hermes", trust: "full" }, onChangeTrust });
+      fireEvent.click(screen.getByRole("button", { name: "Trust: Full access" }));
+      await waitFor(() => expect(screen.getByRole("option", { name: "Limited" }).getAttribute("aria-disabled")).toBe("true"));
+      for (const name of ["Auto-review", "Read-only"]) {
+        expect(screen.getByRole("option", { name }).getAttribute("aria-disabled")).toBe("true");
+      }
+      fireEvent.click(screen.getByRole("option", { name: "Limited" }));
+      expect(onChangeTrust).not.toHaveBeenCalled();
+      expect(screen.getByRole("option", { name: "Full access" }).getAttribute("aria-disabled")).toBeNull();
+    });
+
     it("renders trust as a static segment when no onChangeTrust handler is wired", () => {
       renderDock({ session: { ...fixtureSessions["session-active"], trust: "full" } });
       const seg = screen.getByLabelText("Trust: Full access");

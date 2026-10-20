@@ -67,17 +67,19 @@ function jsonResponse(body: unknown, status = 200) {
 
 let fastModelStatus: unknown;
 let credentialNames: string[];
+let providerList: ProviderInfo[];
 
 beforeEach(() => {
   fastModelStatus = { mode: "provider", provider_name: "claude-code", provider_completer: true };
   credentialNames = [];
+  providerList = providers;
   vi.stubGlobal(
     "fetch",
     vi.fn().mockImplementation((input: URL | string) => {
       const url = input.toString();
       if (url.includes("/fast-model/status")) return Promise.resolve(jsonResponse(fastModelStatus));
       if (url.includes("/providers/behaviors")) return Promise.resolve(jsonResponse(behaviors));
-      if (url.includes("/providers")) return Promise.resolve(jsonResponse(providers));
+      if (url.includes("/providers")) return Promise.resolve(jsonResponse(providerList));
       if (url.includes("/credentials/env-candidates"))
         return Promise.resolve(jsonResponse({ candidates: [], looked_for: [] }));
       if (url.includes("/credentials")) return Promise.resolve(jsonResponse(credentialNames));
@@ -102,6 +104,37 @@ describe("ModelsSection", () => {
       await waitFor(() => expect(screen.getByRole("option", { name: "goose" })).toBeTruthy());
       fireEvent.click(screen.getByRole("option", { name: "goose" }));
       expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ default_provider: "goose" }));
+    });
+
+    it("says a full-trust-only provider runs at full trust only, in one tag and a note", async () => {
+      providerList = [
+        ...providers,
+        {
+          name: "hermes",
+          matrix: {
+            interrupt: "native",
+            resume: "native",
+            branching: "unsupported",
+            delegate_lifecycle: "unsupported",
+            trust_read_only: "unsupported",
+            trust_limited: "unsupported",
+            trust_auto_review: "unsupported",
+          },
+        },
+      ];
+      render(<ModelsSection config={withProvider("hermes")} />);
+      const tags = await screen.findByTestId("provider-capability-tags");
+      expect(within(tags).getByText("Full trust only").className).toMatch(/bad/);
+      expect(within(tags).queryByText(/No read-only trust/)).toBeNull();
+      expect(screen.getByTestId("provider-trust-note").textContent).toBe(
+        "Hermes Agent runs at full trust only: it edits files and runs commands without asking you. Sessions set to Limited, Read-only or Auto-review won't start on it.",
+      );
+    });
+
+    it("shows no trust note for a provider that enforces restricted levels", async () => {
+      render(<ModelsSection config={withProvider("goose")} />);
+      await screen.findByTestId("provider-capability-tags");
+      expect(screen.queryByTestId("provider-trust-note")).toBeNull();
     });
 
     it("tags what the provider doesn't do natively: unsupported as bad, emulated as warn", async () => {

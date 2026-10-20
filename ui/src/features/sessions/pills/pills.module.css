@@ -88,8 +88,14 @@
   color: var(--text3);
 }
 
-.option:hover {
+.option:hover:not(:disabled) {
   background: var(--bg3);
+}
+
+/* A level the selected provider can't run (trustLevels' unavailable). */
+.option:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .optionSelected {

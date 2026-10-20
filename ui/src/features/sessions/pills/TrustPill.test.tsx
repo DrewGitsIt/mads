@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { TrustPill } from "./TrustPill";
-import { trustLevels } from "./trustLevels";
+import { trustFallback, trustLevels } from "./trustLevels";
 
 describe("TrustPill", () => {
   it("shows the resolved default trust level when unset", () => {
@@ -58,6 +58,27 @@ describe("TrustPill", () => {
     fireEvent.click(screen.getByText(/Limited \(default\)/));
 
     expect(screen.getAllByText(/not enforced by the selected provider/)).toHaveLength(2);
+  });
+
+  it("disables every restricted level on a full-access-only provider, and says why", () => {
+    const onChange = vi.fn();
+    render(
+      <TrustPill
+        value="full"
+        provider="hermes"
+        matrix={{ trust_limited: "unsupported", trust_read_only: "unsupported", trust_auto_review: "unsupported" }}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.click(screen.getByText("Full access"));
+    expect(screen.getAllByText(/not available on hermes, which runs at Full access only\.$/)).toHaveLength(3);
+    const limited = screen.getByText("Limited").closest("button");
+    expect(limited?.disabled).toBe(true);
+    fireEvent.click(limited!);
+    expect(onChange).not.toHaveBeenCalled();
+    // Auto-review is not relabelled as falling back to Limited: Limited isn't available either.
+    expect(screen.getByText("Auto-review")).toBeTruthy();
+    expect(trustFallback("auto_review", { trust_limited: "unsupported", trust_read_only: "unsupported", trust_auto_review: "unsupported" })).toBeUndefined();
   });
 
   it("lists the levels in picker order, Auto-review second", () => {

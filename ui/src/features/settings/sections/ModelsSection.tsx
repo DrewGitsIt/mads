@@ -9,6 +9,7 @@ import {
   behaviorLabel,
   capabilityTags,
   differingBehaviors,
+  fullTrustOnlyNote,
   topCapabilityTags,
 } from "../providerBehaviors";
 import { optionsWith } from "../settingHelpers";
@@ -88,6 +89,7 @@ export function ModelsSection({ config }: ModelsSectionProps) {
   const providerName = draft.default_provider ?? "";
   const provider = matrix.providers.find((p) => p.name === providerName);
   const tags = topCapabilityTags(provider ? capabilityTags(provider, matrix.behaviors) : []);
+  const trustNote = provider ? fullTrustOnlyNote(provider) : undefined;
   const fastModelMode = effectiveFastModelMode(draft);
   const status = fastModelStatusLine(fastModelMode, draft, fastModelStatus.status, fastModelStatus.loading);
 
@@ -134,6 +136,11 @@ export function ModelsSection({ config }: ModelsSectionProps) {
                 )}
                 <InlineLink onClick={showAllCapabilities}>All capabilities →</InlineLink>
               </div>
+            )}
+            {trustNote && (
+              <StatusLine tone="warn" testId="provider-trust-note">
+                {trustNote}
+              </StatusLine>
             )}
           </div>
         </SettingRow>

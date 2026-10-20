@@ -11,6 +11,11 @@ export interface TrustLevel {
    * the value.
    */
   fallback?: SessionTrust;
+  /**
+   * Set when the selected provider can't run this level at all and refuses
+   * a session asking for it (fullAccessOnly) — pickers show it disabled.
+   */
+  unavailable?: boolean;
 }
 
 /** Display names, in picker order (pkg/contracts SessionTrusts). */
@@ -58,6 +63,19 @@ function enforcementNote(support: ProviderSupport): string {
   }
 }
 
+const RESTRICTED: ProviderBehavior[] = ["trust_limited", "trust_read_only", "trust_auto_review"];
+
+/**
+ * True when the provider's matrix explicitly declares every restricted level
+ * unsupported: it runs at Full access only and refuses a session asking for
+ * anything else (hermes — it asks before only the edits and commands its own
+ * reviewer flags, so no lower level can be enforced). An omitted row is not
+ * a declaration, and no matrix says nothing either way.
+ */
+export function fullAccessOnly(matrix?: Record<ProviderBehavior, ProviderSupport>): boolean {
+  return !!matrix && RESTRICTED.every((b) => matrix[b] === "unsupported");
+}
+
 /**
  * The level a session asking for `trust` runs at on a provider declaring
  * `matrix` — the UI twin of provider.EffectiveTrust (providers/provider):
@@ -70,7 +88,7 @@ export function trustFallback(
   trust: SessionTrust,
   matrix?: Record<ProviderBehavior, ProviderSupport>,
 ): SessionTrust | undefined {
-  if (trust !== "auto_review" || !matrix) return undefined;
+  if (trust !== "auto_review" || !matrix || fullAccessOnly(matrix)) return undefined;
   const support = matrix.trust_auto_review ?? "unsupported";
   return support === "unsupported" ? "limited" : undefined;
 }
@@ -108,6 +126,15 @@ export function trustLevels(
 ): TrustLevel[] {
   const autoFallback = trustFallback("auto_review", matrix);
   const where = provider ?? "this provider";
+  if (fullAccessOnly(matrix)) {
+    const note = `not available on ${where}, which runs at Full access only.`;
+    return [
+      { value: "full", label: TRUST_LABELS.full, description: "Agent edits files and runs any command without asking." },
+      { value: "auto_review", label: TRUST_LABELS.auto_review, description: `A reviewer model approves routine actions — ${note}`, unavailable: true },
+      { value: "limited", label: TRUST_LABELS.limited, description: `Agent asks you before risky actions — ${note}`, unavailable: true },
+      { value: "read_only", label: TRUST_LABELS.read_only, description: `Blocks edits and commands entirely — ${note}`, unavailable: true },
+    ];
+  }
   return [
     {
       value: "full",
