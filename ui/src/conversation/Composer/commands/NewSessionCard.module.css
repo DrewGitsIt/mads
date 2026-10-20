@@ -41,6 +41,50 @@
   color: var(--accent);
 }
 
+/* The new node is a name field: dashed outline, pencil, text cursor. */
+.nameField {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  cursor: text;
+  /* The input caps and ellipsizes the name, so the pencil never clips. */
+  max-width: none;
+}
+
+/* Focus is the field's state, drawn on the dashed box — as the rail's search
+   field does — so the inner input's global ring doesn't double it. */
+.nameField:focus-within {
+  border-style: solid;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.nameInput:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.nameInput {
+  min-width: 0;
+  max-width: 22ch;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-overflow: ellipsis;
+  outline: none;
+}
+
+.nameInput::placeholder {
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+.pencil {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
 .thisTag {
   display: inline-block;
   font: 600 var(--fs-chip) var(--sans);

@@ -815,6 +815,34 @@ describe("ConversationTab", () => {
     expect(screen.getByText("kick off the payments refactor")).toBeTruthy();
   });
 
+  it("a led session with no conversation yet says it's waiting for its leader", async () => {
+    FLAGS.linkedSessions = true;
+    const link: Link = {
+      id: "lnk_1",
+      granting_session_id: "leader-session",
+      subject_session_id: "session-active",
+      grants: ["read", "inject", "orchestrate"],
+      cadence: "on_signal",
+      created_at: "2026-07-01T00:00:00Z",
+      updated_at: "2026-07-01T00:00:00Z",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify([link]), { status: 200 })),
+    );
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getTranscript").mockResolvedValue([]);
+    const getSession = client.getSession.bind(client);
+    vi.spyOn(client, "getSession").mockImplementation(async (id: string) =>
+      id === "leader-session" ? { ...(await getSession("session-active")), id, name: "dns lead" } : getSession(id),
+    );
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() =>
+      expect(screen.getByText("Waiting for dns lead to send the first message")).toBeTruthy(),
+    );
+  });
+
   // Chat replies stream live with a working indicator — the stream rides
   // the same eventSource SessionTerminalBridge uses for terminal mode;
   // FakeRouterClient.sessionEventSources tracks each instance streamSession

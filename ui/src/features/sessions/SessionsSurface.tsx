@@ -116,7 +116,8 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelin
     setInitialTab(undefined);
     setOpenRun(undefined);
     setProvisioningSessionId(session.id);
-    setPendingFirstMessage({ sessionId: session.id, text: goalText });
+    // A /new-follower created without a goal has nothing to send.
+    setPendingFirstMessage(goalText ? { sessionId: session.id, text: goalText } : undefined);
   }
 
   // The composer's /new card (⌘↵) opens what it created the same way.

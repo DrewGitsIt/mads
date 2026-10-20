@@ -32,7 +32,8 @@ export function leaderBlock(ctx: CommandContext): NewSessionBlock | undefined {
  * Starts the session. `open` (⌘↵) hands it to the Sessions surface the way
  * the Launchpad does — selected, provisioning shown, the goal auto-sent from
  * its composer. Otherwise (↵) the user stays here: the goal goes out from
- * here and a toast offers to open it.
+ * here and a toast offers to open it. An empty goal (a /new-follower its
+ * leader will brief) sends nothing.
  */
 export async function startNewSession(
   api: CommandApi,
@@ -43,6 +44,14 @@ export async function startNewSession(
   const { session } = await api.ctx.routerClient.createSession(payload);
   if (open) {
     requestOpenCreatedSession(session, goal);
+    return;
+  }
+  // A follower created without a goal waits for its leader's first message.
+  if (!goal) {
+    api.notify(`Created ${session.name}`, {
+      label: "Open",
+      onClick: () => requestOpenSession(session.id),
+    });
     return;
   }
   try {

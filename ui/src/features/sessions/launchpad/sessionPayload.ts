@@ -19,6 +19,8 @@ export interface CreateSessionExtras {
   links?: LinkRequest[];
   /** The draft whose staged attachments move to the new session. */
   attachmentDraft?: string;
+  /** A chosen name — kept as is (name_source "user"), never auto-retitled. Else derived from the goal. */
+  name?: string;
 }
 
 /**
@@ -32,9 +34,11 @@ export function buildCreateSessionPayload(
   extras: CreateSessionExtras = {},
 ): CreateSessionPayload {
   const trimmed = goal.trim();
+  const name = extras.name?.trim();
   return {
-    name: deriveSessionName(trimmed),
-    name_source: "derived",
+    ...(name
+      ? { name, name_source: "user" as const }
+      : { name: deriveSessionName(trimmed), name_source: "derived" as const }),
     dir: staged.dir,
     workspace: staged.workspace,
     agent: staged.agent,
