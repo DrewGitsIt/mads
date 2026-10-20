@@ -165,9 +165,16 @@ recalls the marker, a fork, and a one-shot — and the user's
 
 ## Open seams
 
-- Item ids ride `ToolUse.ID` only; text and thinking events have no id
-  field today, and the opaque conversation keys are deliberately not wired
-  yet (docs/CHAT-STREAM-DESIGN.md is being revised).
+- **Kept for C1 (chat-stream keys), not yet wired.** codex item ids ride
+  `ToolUse.ID` live and on transcript tool rows — the only id field the
+  current event and message types have; text, thinking and user rows have
+  none, so their item ids are not carried, and no fields were added. Every
+  send's `clientUserMessageId` is recorded (`session.SentClientIDs`), and
+  codex stores it as the user item's `clientId`.
+- **Live text merges agent messages.** Consecutive agentMessage items
+  (commentary, then the final answer) stream as one text run joined by
+  `"\n\n"`, while the transcript keeps them as separate agent rows. C1's
+  per-item keys will replace that join.
 - auto_review: capture what codex's reviewer does with a rejected call.
 - `turn/plan/updated` (codex's checklist) and `turn/diff/updated` are not
   mapped; `account/rateLimits/updated` could feed `EventAccount`.

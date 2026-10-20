@@ -699,3 +699,32 @@ func TestRingKeepsTheTail(t *testing.T) {
 		t.Fatalf("tail = %q", got)
 	}
 }
+
+// Every send's clientUserMessageId is kept, and it is the clientId codex
+// stored on the user's item.
+func TestClientIDsKeptAndStored(t *testing.T) {
+	p := fakeProvider(t)
+	s := startSession(t, p, provider.StartOptions{})
+	sendTurn(t, s, "echo mk-a")
+	sendTurn(t, s, "echo mk-b")
+	ids := s.SentClientIDs()
+	if len(ids) != 2 || ids[0] == ids[1] {
+		t.Fatalf("SentClientIDs = %v", ids)
+	}
+	var stored []string
+	err := p.withServer(context.Background(), func(c *conn) error {
+		entries, err := listItems(context.Background(), c, s.Ref())
+		for _, e := range entries {
+			if e.Item.Type == "userMessage" {
+				stored = append(stored, e.Item.ClientID)
+			}
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(stored, ",") != strings.Join(ids, ",") {
+		t.Fatalf("stored clientIds %v, sent %v", stored, ids)
+	}
+}

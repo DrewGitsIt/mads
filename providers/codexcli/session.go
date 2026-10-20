@@ -186,6 +186,8 @@ type session struct {
 	lastFinal string
 	lastErr   *turnError
 
+	sentIDs []string // clientUserMessageId per accepted Send (SentClientIDs)
+
 	asks map[string]*pendingAsk
 	// forwards counts asker goroutines still running (forward), so a
 	// capture replay can let each ask be answered before codex's next line.
@@ -283,6 +285,10 @@ func (s *session) Send(ctx context.Context, text string) error {
 	open, compacting, ref := s.turnOpen, s.compacting, s.ref
 	s.mu.Unlock()
 	input := []map[string]any{{"type": "text", "text": text}}
+	// One id per message, kept: codex persists it on the userMessage item
+	// (clientId) live and in thread/items/list, so it is how a mads send
+	// and codex's record of it will be matched (C1, chat-stream keys).
+	cid := newClientID()
 
 	if open {
 		if compacting {
@@ -294,9 +300,10 @@ func (s *session) Send(ctx context.Context, text string) error {
 			return fmt.Errorf("turn started but its id never arrived: %w", provider.ErrTurnInFlight)
 		}
 		_, err := s.c.request(ctx, "turn/steer", map[string]any{
-			"threadId": ref, "expectedTurnId": turnID, "input": input, "clientUserMessageId": newClientID(),
+			"threadId": ref, "expectedTurnId": turnID, "input": input, "clientUserMessageId": cid,
 		})
 		if err == nil {
+			s.recordSent(cid)
 			return nil
 		}
 		s.mu.Lock()
@@ -312,7 +319,7 @@ func (s *session) Send(ctx context.Context, text string) error {
 	s.turnOpen = true
 	s.interrupted = false
 	s.mu.Unlock()
-	params := map[string]any{"threadId": ref, "input": input, "clientUserMessageId": newClientID()}
+	params := map[string]any{"threadId": ref, "input": input, "clientUserMessageId": cid}
 	if s.effort != "" {
 		params["effort"] = s.effort
 	}
@@ -324,7 +331,24 @@ func (s *session) Send(ctx context.Context, text string) error {
 		s.mu.Unlock()
 		return fmt.Errorf("turn/start: %w", err)
 	}
+	s.recordSent(cid)
 	return nil
+}
+
+// recordSent keeps the clientUserMessageId of a message codex accepted.
+func (s *session) recordSent(cid string) {
+	s.mu.Lock()
+	s.sentIDs = append(s.sentIDs, cid)
+	s.mu.Unlock()
+}
+
+// SentClientIDs returns the clientUserMessageId of every message this
+// session sent (turn/start or turn/steer), in order. Nothing above the
+// provider reads it yet — it is kept for C1 rather than thrown away.
+func (s *session) SentClientIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.sentIDs...)
 }
 
 // awaitTurnID returns the open turn's id, waiting up to d for turn/started
