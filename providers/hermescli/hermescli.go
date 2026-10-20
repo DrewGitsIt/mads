@@ -81,16 +81,12 @@ func New(cfg Config) *Provider { return &Provider{cfg: cfg} }
 func (p *Provider) Name() string { return "hermes" }
 
 // bin is the executable every spawn runs: Config.Bin if set, else
-// binlocate's answer, else the bare name so exec's "not found" reads as
-// usual.
+// binlocate.Resolve's answer (which honours $MADS_AGENT_BIN_DIR).
 func (p *Provider) bin() string {
 	if p.cfg.Bin != "" {
 		return p.cfg.Bin
 	}
-	if path, err := binlocate.Find("hermes-acp"); err == nil {
-		return path
-	}
-	return "hermes-acp"
+	return binlocate.Resolve("hermes-acp")
 }
 
 // env is the mads-side additions every spawn gets: Config.Env, then

@@ -378,14 +378,13 @@ func TestDigestwatchSubscribesAtBootAndDeliversDigest(t *testing.T) {
 	bins.assertHermetic(t)
 }
 
-// agentBinNames are the harness binaries the boot guard traps: every
-// adapter the router registers, plus the ones that live on other branches
-// (codex, hermes-acp) so they're trapped the moment they're integrated.
+// agentBinNames are the harness binaries the boot guard traps and waits
+// for: one per adapter the router registers.
 var agentBinNames = []string{"claude", "goose", "kiro-cli", "codex", "hermes-acp"}
 
 // bootAgentBins is the hermetic-harness regression guard. The router's boot
 // model discovery spawns every registered harness, so a booted router is
-// exactly where a leak to a real claude/goose/kiro-cli shows up.
+// exactly where a leak to a real harness binary shows up.
 // $MADS_AGENT_BIN_DIR points at stand-ins that log to standinLog and exit 1;
 // trap stand-ins of the same names go first on PATH and log to leakLog. A
 // lookup that honours the knob reaches the first set; one that falls back
@@ -440,7 +439,7 @@ func (b bootAgentBins) assertHermetic(t *testing.T) {
 		}
 		got := read(b.standinLog)
 		missing = missing[:0]
-		for _, name := range []string{"claude", "goose", "kiro-cli"} {
+		for _, name := range agentBinNames {
 			if !strings.Contains(got, name+" ") {
 				missing = append(missing, name)
 			}

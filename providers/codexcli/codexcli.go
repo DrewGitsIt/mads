@@ -74,14 +74,13 @@ func New(cfg Config) *Provider {
 
 func (p *Provider) Name() string { return Name }
 
+// bin is the executable every spawn runs: Config.Bin if set, else
+// binlocate.Resolve's answer (which honours $MADS_AGENT_BIN_DIR).
 func (p *Provider) bin() string {
 	if p.cfg.Bin != "" {
 		return p.cfg.Bin
 	}
-	if path, err := binlocate.Find("codex"); err == nil {
-		return path
-	}
-	return "codex"
+	return binlocate.Resolve("codex")
 }
 
 func (p *Provider) env(extra []string) []string {
