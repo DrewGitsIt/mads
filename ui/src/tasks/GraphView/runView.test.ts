@@ -206,7 +206,7 @@ describe("edgeRunKindOf", () => {
     const c = task({ id: "c", status: "done", dependencies: ["a"] });
     const d = task({ id: "d", dependencies: ["b"] });
     const tasks = [a, b, c, d];
-    const views = nodeRunViews(tasks, ctxFor(tasks));
+    const views = nodeRunViews(tasks, ctxFor(tasks, { taskRunState: { b: { taskId: "b", attempts: [], touchedFiles: [] } } }));
     const kinds = Object.fromEntries(buildEdges(tasks).map((edge) => [edge.id, edgeRunKindOf(edge, "live", views, new Set())]));
     expect(kinds).toEqual({ "a->b": "hot", "a->c": "done", "b->d": undefined });
   });

@@ -27,10 +27,15 @@ describe("runStatusOf", () => {
     }
   });
 
-  it("live: ready and dependency-waiting tasks are queued; in_progress is running", () => {
+  it("live: ready and dependency-waiting tasks are queued; in_progress the run claimed is running", () => {
     expect(runStatusOf(b, ctx("live"))).toBe("queued");
     expect(runStatusOf(c, ctx("live"))).toBe("queued");
-    expect(runStatusOf(task("r", "in_progress"), ctx("live"))).toBe("running");
+    const claimed: Record<string, TaskRunState> = { r: { taskId: "r", attempts: [], touchedFiles: [] } };
+    expect(runStatusOf(task("r", "in_progress"), { ...ctx("live"), taskRunState: claimed })).toBe("running");
+  });
+
+  it("live: someone else's in-progress task (not claimed, not Interrupted) is not in this run", () => {
+    expect(runStatusOf(task("p", "in_progress"), ctx("live"))).toBe("skipped");
   });
 
   it("live: a dependent of a task the run left out is not in this run, not queued", () => {

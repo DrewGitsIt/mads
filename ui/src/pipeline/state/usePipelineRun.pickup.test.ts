@@ -78,3 +78,41 @@ describe("foldReducer picking an Interrupted task up", () => {
     expect(state.taskRunState.t1.pickup).toBeUndefined();
   });
 });
+
+// A live run's claim is the pipeline's own move to in_progress; any other
+// actor's is someone else's work, which the run must not read as its own.
+describe("foldReducer recording the run's claims", () => {
+  const RUN = 30;
+  function moved(seq: number, task: string, actor: string, to = "in_progress"): Envelope {
+    return {
+      seq,
+      timestamp: "2026-10-19T10:00:00Z",
+      type: "task.status_changed",
+      session_id: "ses_1",
+      task_id: task,
+      actor,
+      payload: { from: "ready", to },
+    };
+  }
+  const start: Envelope = {
+    seq: RUN,
+    timestamp: "2026-10-19T10:00:00Z",
+    type: "pipeline.started",
+    session_id: "ses_1",
+    actor: "pipeline",
+    payload: { run_id: "r3" },
+  };
+
+  it("a task the pipeline moved to in_progress is the run's, before any stage starts", () => {
+    const state = [start, moved(31, "t1", "pipeline")].reduce(foldReducer, initialRunFoldState);
+    expect(state.taskRunState.t1).toEqual({ taskId: "t1", attempts: [], touchedFiles: [] });
+  });
+
+  it("ignores a person's move, other statuses, and moves from before the run", () => {
+    const state = [moved(29, "t0", "pipeline"), start, moved(31, "t1", "user"), moved(32, "t2", "pipeline", "done")].reduce(
+      foldReducer,
+      initialRunFoldState,
+    );
+    expect(state.taskRunState).toEqual({});
+  });
+});

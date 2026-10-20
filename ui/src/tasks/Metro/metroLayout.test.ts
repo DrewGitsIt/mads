@@ -81,7 +81,7 @@ describe("metroLayout placement", () => {
   });
 
   it("puts a running task with no stage yet on the first station", () => {
-    const l = layoutOf([task("r", { status: "in_progress" })]);
+    const l = layoutOf([task("r", { status: "in_progress" })], { rs: { r: runState("r", []) } });
     expect(l.above[0].key).toBe("stage:architect");
   });
 

@@ -49,7 +49,7 @@ export interface RunStatusContext {
   tasksById: Record<string, Task>;
   /** Plan: the include boxes left unticked. Live/past: the run's excluded_task_ids. */
   excluded: ReadonlySet<string>;
-  /** Live/past: the shown run's fold. A task in it is one the run worked on. */
+  /** Live/past: the shown run's fold. A task in it is one the run claimed or worked on. */
   taskRunState?: Record<string, TaskRunState>;
   /** Plan and live: the session's Interrupted tasks (GET .../pipeline/pickup). */
   interrupted?: ReadonlySet<string>;
@@ -70,9 +70,11 @@ function inProgressStatus(task: Task, ctx: RunStatusContext): RunStatus {
       if (!interrupted) return "skipped";
       return leftOutBy(task, ctx.tasksById, ctx.excluded, ctx.interrupted) ? "skipped" : "interrupted";
     case "live":
-      // The run is on it, or will pick it up once it gets there.
+      // The run is on it (it claimed or picked it up), or will pick it up
+      // once it gets there. Otherwise it's someone's own work in progress
+      // (a person's, a session's): not this run's.
       if (worked) return "running";
-      return interrupted ? "interrupted" : "running";
+      return interrupted ? "interrupted" : "skipped";
     case "past":
       // In flight when that run ended; a run that never touched it has nothing to say.
       return worked ? "interrupted" : "skipped";

@@ -25,6 +25,9 @@ export const FOLD_EVENT_TYPES = [
   "stage.retried",
   "stage.picked_up",
   "file.changed",
+  // Only the pipeline's own moves to in_progress (foldClaimed): the run took
+  // the task, before any stage event says so.
+  "task.status_changed",
 ];
 
 export type RunPhase = "idle" | "running" | "finished";
@@ -182,6 +185,22 @@ function foldPickedUp(state: RunFoldState, env: Envelope): RunFoldState {
   };
 }
 
+// The run claimed a ready task (the engine, actor "pipeline", moved it to
+// in_progress): it is this run's from now on, so a live run reads it Running
+// even before its first stage starts. Any other move to in_progress (a
+// person's, a session's) leaves the fold alone: that task is not the run's.
+function foldClaimed(state: RunFoldState, env: Envelope): RunFoldState {
+  if (state.phase !== "running" || state.runStartSeq === undefined || env.seq < state.runStartSeq) {
+    return state;
+  }
+  const taskId = env.task_id;
+  const payload = env.payload as { to?: string } | undefined;
+  if (!taskId || env.actor !== "pipeline" || payload?.to !== "in_progress" || state.taskRunState[taskId]) {
+    return state;
+  }
+  return { ...state, taskRunState: { ...state.taskRunState, [taskId]: taskRunStateOf(state, taskId) } };
+}
+
 function foldStageEvent(state: RunFoldState, env: Envelope): RunFoldState {
   if (state.phase !== "running" || state.runStartSeq === undefined || env.seq < state.runStartSeq) {
     return state;
@@ -335,6 +354,8 @@ export function foldReducer(state: RunFoldState, env: Envelope): RunFoldState {
       return foldPickedUp(state, env);
     case "file.changed":
       return foldFileChanged(state, env);
+    case "task.status_changed":
+      return foldClaimed(state, env);
     default:
       return state;
   }
