@@ -858,7 +858,7 @@ func (c *checker) transcript(structured bool) error {
 // tool; the turn must still end (a refusal, not a hang or crash). An
 // EventToolUse alone is fine: the announcement is the attempt, not the
 // effect. Real goose announces the tool_call update before
-// session/request_permission (goosecli/testdata/captures/acp-transcript.jsonl
+// session/request_permission (goosecli/testdata/captures/acp-transcript-1.48.0.jsonl
 // — request lines 34/44/66, each immediately preceded by its tool_call at
 // 33/43/65), and the acprpc engine emits EventToolUse at the announcement —
 // so a correctly denied call under goose still shows an EventToolUse

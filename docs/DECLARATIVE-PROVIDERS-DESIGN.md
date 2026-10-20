@@ -123,7 +123,7 @@ binary: goose                # resolved via exec.LookPath
 install_hint: "https://block.github.io/goose/docs/getting-started/installation"
 version:
   probe_args: ["--version"]  # output " 1.48.0" — parseSemverish tolerates it
-  compat: { min: "1.46.0", max: "1.49.0" }   # max exclusive; empty = warn-never
+  compat: { min: "1.46.0", max: "1.51.0" }   # max exclusive; empty = warn-never
 spawn:
   acp_args: ["acp", "--with-builtin", "developer"]
   pty_args: ["session"]      # optional; enables the PTY transport too

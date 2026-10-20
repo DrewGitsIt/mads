@@ -52,8 +52,10 @@ agents — not services themselves.
   trust tool-class table), OneShot emulated over ACP (the `goose run` plan
   superseded — its stream announces no session id), `goose session` PTY
   with banner ref discovery and a SessionLocator backstop, and `session
-  export` transcripts. Every claim is capture/source-pinned against goose
-  1.48.0 (`goosecli/testdata/captures/`); CI runs the full conformance
+  export` transcripts. Every claim is capture/source-pinned — source at
+  goose 1.48.0, captures re-taken at 1.50.1 on 2026-10-20 (the only wire
+  change: cancel now resolves `stopReason:"cancelled"`; the 1.48.0
+  `end_turn` transcript is kept) (`goosecli/testdata/captures/`); CI runs the full conformance
   suite against a scripted stand-in, no goose binary needed.
 
 ## Test it

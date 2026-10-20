@@ -508,10 +508,12 @@ func (s *streamSession) handleLine(raw []byte) {
 // EventError then turn end, max_tokens / max_turn_requests / anything
 // unrecognized → plain turn end. The `interrupted` flag is load-bearing,
 // not belt-and-braces: cancel stop-reasons genuinely diverge across
-// agents — claude/hermes resolve "cancelled" but goose and codex resolve
-// "end_turn" (goose's cancel token usually kills the stream before the
-// stop reason can observe it; pinned in both capture sets) — so the
-// engine's own flag is what actually detects interruption.
+// agents and versions — claude/hermes and goose 1.50.1 resolve
+// "cancelled" (goosecli acp-transcript.jsonl lines 36-55), but codex and
+// goose 1.48.0 resolve "end_turn" (1.48's cancel token usually killed the
+// stream before the stop reason could observe it;
+// acp-transcript-1.48.0.jsonl lines 86-105) — so the engine's own flag is
+// what reliably detects interruption.
 func (s *streamSession) finishTurn(resp rpcMessage, interrupted bool, ctxUsed, ctxSize int) {
 	if resp.Error != nil {
 		// auth_required (-32000), credits_exhausted, "session already has
@@ -1007,8 +1009,8 @@ func (s *streamSession) appendReplay(msg provider.Message) {
 // a session/update variant's "messageId" field (see sessionUpdate.MessageID)
 // is a logical message id an agent stamps on every streamed fragment of one
 // reply (goose's agent_message_chunk updates in
-// providers/goosecli/testdata/captures/acp-transcript.jsonl lines 72-82 all
-// share messageId "chatcmpl-773"), so chunks that agree on one are coalesced
+// providers/goosecli/testdata/captures/acp-transcript.jsonl lines 23-32 all
+// share messageId "chatcmpl-885"), so chunks that agree on one are coalesced
 // into the entry started by the first one rather than appended as separate
 // lines. Chunks with no/empty messageId (or a changing one) open a fresh
 // entry, same as appendReplay below. Guarded by s.mu like appendReplay.

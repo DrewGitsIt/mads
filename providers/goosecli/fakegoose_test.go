@@ -6,7 +6,7 @@ package goosecli
 // original fakegoose). Where acprpc's fake profiles are deliberately
 // adversarial (optionIds that never mirror kinds, withheld capabilities),
 // this fake's job is GOOSE SHAPE FIDELITY: it serves the captured goose
-// 1.48.0 wire shapes (testdata/captures/acp-transcript.jsonl) — the
+// wire shapes (testdata/captures/acp-transcript.jsonl, 1.50.1, and acp-transcript-1.48.0.jsonl) — the
 // initialize capability set, the session/new modes + configOptions body
 // (including the category-"mode" option, so mode changes ride
 // session/set_config_option), -32602 on a missing mcpServers field,
@@ -59,7 +59,7 @@ func fgMain() {
 // asserting the spawn shape (bare `session`, or exactly the resume triple).
 // Knobs ride env vars since the real argv is fixed: MADS_FAKE_PTY_BANNER
 // names a file whose bytes are replayed verbatim as the startup banner —
-// tests point it at the committed goose 1.48.0 capture, spinner redraws,
+// tests point it at the committed goose 1.50.1 capture, spinner redraws,
 // OSC title and all — and MADS_FAKE_PTY_EXIT=1 prints one plain no-banner
 // line and exits immediately (the stream-ends-without-a-banner path). Then
 // a tiny REPL on raw stdin bytes (the tty is put in raw mode so Interrupt's
@@ -282,7 +282,7 @@ func fgServe() {
 	toolCall := func(callID string, a fgAttempt) {
 		notifyUpdate(map[string]any{
 			"sessionUpdate": "tool_call", "toolCallId": callID, "title": a.title, "rawInput": a.input,
-			// The capture's _meta shape (acp-transcript.jsonl line 43): bare
+			// The capture's _meta shape (acp-transcript.jsonl line 18): bare
 			// toolName, extension in extensionName, vendor noise alongside.
 			"_meta": map[string]any{"goose": map[string]any{
 				"toolCall":  map[string]any{"toolName": a.name, "extensionName": a.ext},
@@ -385,7 +385,7 @@ func fgServe() {
 	for m := range msgs {
 		switch m.Method {
 		case "initialize":
-			// The captured goose 1.48.0 capability set (acp-transcript.jsonl
+			// The captured goose capability set, unchanged 1.48.0→1.50.1 (acp-transcript.jsonl
 			// line 2): loadSession, presence-keyed sessionCapabilities
 			// including close, http-but-not-sse MCP.
 			respond(m.ID, map[string]any{
@@ -419,8 +419,8 @@ func fgServe() {
 			})
 
 		case "session/load":
-			// 1.48.0 rejects a missing mcpServers field on load exactly as on
-			// session/new (acp-load-replay.jsonl lines 3-4).
+			// 1.48.0 and 1.50.1 reject a missing mcpServers field on load
+			// exactly as on session/new (acp-load-replay.jsonl lines 3-4).
 			if !hasMCPServers(m.Params) {
 				respondErr(m.ID, -32602, "Invalid params", map[string]any{"error": "missing field `mcpServers`"})
 				continue
@@ -518,40 +518,45 @@ func fgServe() {
 				prompt += b.Text
 			}
 
-			// The capture's usage shape and numbers (acp-transcript.jsonl
-			// line 85) ride every prompt result.
-			endTurn := func() {
+			// The 1.48.0 capture's usage shape and numbers
+			// (acp-transcript-1.48.0.jsonl line 85) ride every prompt result.
+			result := func(stopReason string) {
 				raw, _ := json.Marshal(map[string]any{
-					"stopReason": "end_turn",
+					"stopReason": stopReason,
 					"usage":      map[string]any{"totalTokens": 8436, "inputTokens": 8415, "outputTokens": 21},
 				})
 				fgSend(fgMessage{JSONRPC: "2.0", ID: m.ID, Result: raw})
 			}
+			endTurn := func() { result("end_turn") }
 
 			if prompt == "slow" {
-				// kirocli's bounded loop shape (a mid-turn session/cancel
-				// breaks it, so it never swallows a later request) — but the
-				// result is end_turn EVEN WHEN CANCELLED. Capture-pinned
-				// deviation from fakekiro's "cancelled": real goose resolved
-				// end_turn in 3/3 cancel attempts (acp-transcript.jsonl lines
-				// 86-105 + captures README "Turn 2 + cancel"); the engine's
-				// own interrupted flag does the detection. This deviation is
-				// the fake's whole reason to differ here.
-				for i := 0; i < 400; i++ {
+				// kirocli's bounded loop shape: a mid-turn session/cancel
+				// breaks it, so it never swallows a later request. A
+				// cancelled turn resolves "cancelled", as goose 1.50.1 does
+				// (acp-transcript.jsonl lines 36-55).
+				// MADS_FAKE_GOOSE_CANCEL_STOP=end_turn reproduces 1.48.0,
+				// which resolved end_turn in 3/3 cancel attempts
+				// (acp-transcript-1.48.0.jsonl lines 86-105); there the
+				// engine's own interrupted flag is the only signal.
+				cancelled := false
+				for i := 0; i < 400 && !cancelled; i++ {
 					chunk(fmt.Sprintf("tick %d ", i))
-					stop := false
 					select {
 					case mm, ok := <-msgs:
 						if !ok || mm.Method == "session/cancel" {
-							stop = true
+							cancelled = true
 						}
 					case <-time.After(5 * time.Millisecond):
 					}
-					if stop {
-						break
+				}
+				stop := "end_turn"
+				if cancelled {
+					stop = "cancelled"
+					if v := os.Getenv("MADS_FAKE_GOOSE_CANCEL_STOP"); v != "" {
+						stop = v
 					}
 				}
-				endTurn()
+				result(stop)
 				continue
 			}
 

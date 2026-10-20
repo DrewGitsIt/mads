@@ -8,8 +8,8 @@ package acprpc
 // optionId spellings per kind, mode ids and transport, cancel stop-reason,
 // tool-identity emission style), selected by MADS_FAKE_ACP_PROFILE; the
 // prompt-suffix scenario dispatch is shared across profiles. A third mode
-// (MADS_FAKE_ACP_REPLAY=<capture path>) serves the committed goose 1.48.0
-// captures byte-for-byte — see replay_test.go.
+// (MADS_FAKE_ACP_REPLAY=<capture path>) serves the committed goose 1.50.1
+// and 1.48.0 captures byte-for-byte — see replay_test.go.
 //
 // Deliberate adversarial choices that sharpen the tests:
 //   - permission optionIds NEVER mirror the kind names (opt-o/syn-yes/…):
@@ -99,7 +99,7 @@ var faProfiles = map[string]faProfile{
 		metaNS:         "goose",
 		availableModes: []string{"auto", "approve"}, askMode: "approve",
 		sysPromptMethod: "_goose/unstable/session/system-prompt/set",
-		cancelStop:      "end_turn", requireMCP: true, requireAbsCwd: true,
+		cancelStop:      "cancelled", requireMCP: true, requireAbsCwd: true,
 		optionID: map[string]string{
 			"allow_once": "opt-o", "allow_always": "opt-a",
 			"reject_once": "opt-r", "reject_always": "opt-x",
@@ -136,6 +136,15 @@ var faProfiles = map[string]faProfile{
 		availableModes: []string{"auto", "approve"}, askMode: "approve",
 		cancelStop: "end_turn",
 	},
+}
+
+// goose-1.48 is the goose profile as goose 1.48.0 behaved: a cancelled
+// prompt resolved stopReason "end_turn" (acp-transcript-1.48.0.jsonl lines
+// 86-105). 1.50.1 answers "cancelled" (acp-transcript.jsonl lines 36-55).
+func init() {
+	p := faProfiles["goose"]
+	p.cancelStop = "end_turn"
+	faProfiles["goose-1.48"] = p
 }
 
 // faAttempt is one gated-tool scenario: identity for both emission styles
@@ -675,9 +684,10 @@ func faServe(pr faProfile) {
 					case <-time.After(5 * time.Millisecond):
 					}
 				}
-				// Cancel stop-reasons genuinely diverge: goose resolves
-				// end_turn (the client's own flag must carry the signal),
-				// claude/hermes resolve cancelled — the profile picks.
+				// Cancel stop-reasons genuinely diverge: goose 1.48 and
+				// codex resolve end_turn (the client's own flag must carry
+				// the signal), goose 1.50, claude and hermes resolve
+				// cancelled — the profile picks.
 				raw, _ := json.Marshal(promptResult{StopReason: pr.cancelStop, Usage: usage})
 				faSend(rpcMessage{JSONRPC: "2.0", ID: m.ID, Result: raw})
 				continue

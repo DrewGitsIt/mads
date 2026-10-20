@@ -136,10 +136,10 @@ func TestCheckProviderBinary_InstalledButBroken(t *testing.T) {
 	}
 }
 
-// TestGooseCompatRange pins the proven 1.46–1.48 window: versions inside it
-// pass, versions on either side get guidance (Max is exclusive at 1.49.0 so
-// the whole proven 1.48.x line passes), and only the newer side is a mere
-// warning — too-old is a known incompatibility.
+// TestGooseCompatRange pins the proven 1.46–1.50 window: versions inside it
+// pass, versions on either side get guidance (Max is exclusive at 1.51.0 so
+// the whole re-verified 1.50.x line passes), and only the newer side is a
+// mere warning — too-old is a known incompatibility.
 func TestGooseCompatRange(t *testing.T) {
 	r, known := compatMatrix["goose"]
 	if !known {
@@ -150,8 +150,11 @@ func TestGooseCompatRange(t *testing.T) {
 		"1.46.0": {true, false},
 		"1.48.0": {true, false},
 		"1.48.5": {true, false},
-		"1.49.0": {false, true},
-		"1.50.1": {false, true},
+		"1.49.0": {true, false},
+		"1.50.1": {true, false},
+		"1.50.9": {true, false},
+		"1.51.0": {false, true},
+		"1.52.3": {false, true},
 	} {
 		ok, unproven, guidance := r.evaluate(version)
 		if ok != want.ok || unproven != want.unproven {

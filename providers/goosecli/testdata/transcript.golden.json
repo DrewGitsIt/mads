@@ -2,51 +2,71 @@
   {
     "role": "user",
     "text": "Use the shell tool to create a file /tmp/mads-goose-capture-oneshot/x.txt containing the word hello, then tell me you did.",
-    "timestamp": "2026-08-29T19:39:42Z"
+    "timestamp": "2026-10-20T17:18:25Z"
   },
   {
     "role": "tool",
     "tool": {
-      "id": "call_78zkbeyg",
+      "id": "call_ocrbmvgk",
       "name": "todo__todo_write",
       "input": {
-        "content": "- [ ] Create /tmp/mads-goose-capture-oneshot/x.txt containing \"hello\" using shell\n- [x] Verify file contents\n- [x] Confirm completion to user"
+        "content": "- [x] Create /tmp/mads-goose-capture-oneshot/x.txt containing \"hello\"\n- [ ] Confirm completion to user"
       }
     },
-    "timestamp": "2026-08-29T19:39:58Z"
+    "timestamp": "2026-10-20T17:18:29Z"
   },
   {
     "role": "tool_result",
-    "text": "Updated (141 chars)",
+    "text": "Updated (102 chars)",
     "tool": {
-      "id": "call_78zkbeyg",
+      "id": "call_ocrbmvgk",
       "name": ""
     },
-    "timestamp": "2026-08-29T19:39:58Z"
+    "timestamp": "2026-10-20T17:18:29Z"
   },
   {
     "role": "tool",
     "tool": {
-      "id": "call_f25kllwy",
+      "id": "call_wo26aqor",
       "name": "shell",
       "input": {
-        "command": "mkdir -p /tmp/mads-goose-capture-oneshot \u0026\u0026 echo hello \u003e /tmp/mads-goose-capture-oneshot/x.txt \u0026\u0026 cat /tmp/mads-goose-capture-oneshot/x.txt"
+        "command": "mkdir -p /tmp/mads-goose-capture-oneshot \u0026\u0026 echo -n hello \u003e /tmp/mads-goose-capture-oneshot/x.txt \u0026\u0026 cat /tmp/mads-goose-capture-oneshot/x.txt"
       }
     },
-    "timestamp": "2026-08-29T19:39:58Z"
+    "timestamp": "2026-10-20T17:18:32Z"
   },
   {
     "role": "tool_result",
     "text": "hello",
     "tool": {
-      "id": "call_f25kllwy",
+      "id": "call_wo26aqor",
       "name": ""
     },
-    "timestamp": "2026-08-29T19:39:58Z"
+    "timestamp": "2026-10-20T17:18:32Z"
+  },
+  {
+    "role": "tool",
+    "tool": {
+      "id": "call_bi65iiph",
+      "name": "todo__todo_write",
+      "input": {
+        "content": "- [x] Create /tmp/mads-goose-capture-oneshot/x.txt containing \"hello\"\n- [x] Confirm completion to user"
+      }
+    },
+    "timestamp": "2026-10-20T17:18:34Z"
+  },
+  {
+    "role": "tool_result",
+    "text": "Updated (102 chars)",
+    "tool": {
+      "id": "call_bi65iiph",
+      "name": ""
+    },
+    "timestamp": "2026-10-20T17:18:34Z"
   },
   {
     "role": "agent",
-    "text": "Done! I created `/tmp/mads-goose-capture-oneshot/x.txt` containing the word \"hello\" using the shell tool, and verified the contents by reading it back.",
-    "timestamp": "2026-08-29T19:40:01Z"
+    "text": "Done.",
+    "timestamp": "2026-10-20T17:18:34Z"
   }
 ]
