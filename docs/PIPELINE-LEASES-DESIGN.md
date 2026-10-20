@@ -1,8 +1,8 @@
 # Pipeline leases and resumable runs
 
-Status: **agreed** (2026-10-19). Part A replaces the "every engine is
-`pipeline`" lease shortcut (spec §15, reap-on-launch). Part B lets any run
-pick an interrupted task up where it stopped.
+Status: **implemented** (2026-10-19). Part A replaces the "every engine
+is `pipeline`" lease shortcut (spec §15, reap-on-launch). Part B lets any
+run pick an interrupted task up where it stopped.
 
 ## Problem
 
@@ -256,9 +256,10 @@ worktrees) shares one directory, so its pickup is less isolated.
   - Blocked tasks are never picked up.
   - Router: Stop → cancelled, crash → failed, and a Router restart finds
     a lost run and marks it failed/"lost", once.
-- **e2e:** start, Stop mid-run, check the run bar shows interrupted and
-  Plan shows "resumes at …", then start a new run: the task finishes, and
-  the lens shows the earlier stages done plus the pickup marker.
+- **e2e** (`ui/e2e/tasks-stop-pickup.spec.ts`): start, Stop mid-run, check
+  the run bar shows interrupted and Plan shows "resumes at …", then start
+  a new run: the task finishes, and the lens shows the earlier stages done
+  plus the pickup marker.
 
 ## Work breakdown
 

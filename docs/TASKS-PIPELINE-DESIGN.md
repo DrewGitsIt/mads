@@ -34,10 +34,15 @@ shape tasks, pick a template, run it, watch it, and zoom into any task.
   "Interrupted · resumes at <stage>" or "Interrupted · restarts under
   <template>, keeps its work" (plus "· shared directory" in
   current-directory mode), from `GET /sessions/{id}/pipeline/pickup`. A task
-  someone else set in progress stays Not in this run.
+  someone else set in progress stays Not in this run, in Plan and in a live
+  run: a live run reads a task as its own only once it has claimed it (the
+  pipeline's own move to in_progress) or picked it up.
 - **Metro**: no per-task stage tracks in the list. A station stack shows at
   most 3 tokens; past that, 2 tokens + `+N more`, which opens a filterable
-  list. Blocked tokens sit under the stage that blocked them.
+  list. Blocked tokens sit under the stage that blocked them. An Interrupted
+  token sits at the stage a run will resume it at (Plan, and a live run that
+  hasn't picked it up yet) or where it stopped (past runs); one that will
+  restart waits at the start.
 - **Esc** closes one layer at a time: detail sheet → popover/stack list →
   lens/focus.
 - **Leaving tasks out**: Plan has an include checkbox per task. Drafts can't
@@ -71,7 +76,8 @@ shape tasks, pick a template, run it, watch it, and zoom into any task.
    excluded, 400 "session has no ready or interrupted tasks".
 2. `pipeline.started` payload gains `run_id` (the Router's run id, the one
    `POST /pipelines/{id}/cancel` takes) and `excluded_task_ids`. The UI's run
-   fold reads `run_id` so Cancel works after a reload.
+   fold reads `run_id` so Stop works after a reload. (Stop calls that cancel
+   endpoint; the run ends `cancelled`, shown as `stopped`.)
 3. `GET /sessions/{id}/pipeline/tasks/{taskId}/output` and `.../turns` accept
    optional query params `run` (run_seq), `stage`, `attempt`. Omitted → today's
    behavior (latest run, follow the newest log). With `run` only → that run's
@@ -86,10 +92,13 @@ shape tasks, pick a template, run it, watch it, and zoom into any task.
 |---|------|-----------|
 | B1 | Exclude tasks from a run (router body, engine, `excluded_task_ids` + `run_id` on `pipeline.started`) | — |
 | B2 | Output/turns by run, stage, attempt | — |
-| U1 | UI client + run fold: start with excludes, stream by run/stage/attempt, `runId` from the fold, Cancel after reload; pure plan-scope helpers (left-out closure, waves); template list + workspace default | contracts |
+| U1 | UI client + run fold: start with excludes, stream by run/stage/attempt, `runId` from the fold, Stop after reload; pure plan-scope helpers (left-out closure, waves); template list + workspace default | contracts |
 | U2 | Run bar component | U1 |
 | U3 | Task lens component (+ attempt dropdown, Task details / Edit & retry wiring, read-only sheet while running) | U1 |
 | U4 | Metro map + grouped task list (List view) | U1 |
 | U5 | Graph view: plan waves / critical path / include box; Overview·Cards·Focus; focus lens | U1, U3 |
 | U6 | Integration: Tasks tab composes it all; remove Pipeline tab, its dead components, and every route to it (palette, dashboard run history, workspace badge); MADS-UX.md | U2–U5 |
-| U7 | E2E: migrate pipeline specs; new journey spec (plan → run → zoom → attempt → Esc → past run) | U6, B1, B2 |
+| U7 | E2E: migrate pipeline specs; new journey spec (plan → run → zoom → attempt → Esc → past run → Stop after reload) | U6, B1, B2 |
+
+Stop and Interrupted pickup (PIPELINE-LEASES-DESIGN.md Part B) have their
+own journey: `ui/e2e/tasks-stop-pickup.spec.ts`.

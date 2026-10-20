@@ -164,8 +164,9 @@ that recovery quick on macOS.
 ### F4. Process identity (`pkg/procid`) is unimplemented. **Degraded recovery.**
 
 On darwin every method errors, so pipeline leases carry no identity and
-reap-on-launch never reclaims anything. A crashed `mads run` leaves its tasks stuck
-`in_progress` until the lease TTL expires. That is correct but slow.
+reap-on-launch never reclaims anything. A crashed `mads run` leaves its tasks held
+until the lease TTL expires, and only then are they Interrupted and picked up by
+the next run (docs/PIPELINE-LEASES-DESIGN.md). That is correct but slow.
 
 **Decision:** add `procid_darwin.go`, using syscall-level facts with no cgo:
 

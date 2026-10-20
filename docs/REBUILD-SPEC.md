@@ -1473,11 +1473,17 @@ The Data Service maintains an append-only `events` table. Every state mutation a
 
 Tasks are the shared data problem — both sessions and pipeline stages mutate them. The lease model prevents contention:
 
+A lease means "this process is working on this task right now". It is not the task's progress, and losing one never changes the task's status (docs/PIPELINE-LEASES-DESIGN.md).
+
 - When a session or pipeline stage claims a task (status → in_progress), it acquires a write lease from the Data Service
-- Only the lease holder can mutate that task's fields (notes, handoffs, status, file changes)
+- **Holders are per process.** A pipeline run holds its leases as `pipeline:<runID>`, so two runs never share a holder; the claim's holder must be the caller's actor or start with `<actor>:`. Attribution is unchanged: events and notes still read `pipeline`
+- **Tokens prove possession.** A claim returns a random token, kept only in the claiming process's memory (the store keeps its hash). Renewing, releasing and writing a leased task need the token; a write without it is refused, which is why a task's details are read-only while a run works on it. Renewal never creates a lease, so a holder that lost its lease can't silently take it back
 - The lease is released when the task transitions to a terminal or handoff state (done, blocked, needs_review)
-- Leases carry a **TTL** (e.g., 60s) that renews implicitly on every write, plus a cheap renewal call when the holder is idle. If a holder dies, its leases expire and the Data Service releases them, marking the tasks blocked
-- **Primary liveness is supervision, not polling**: the Router spawns sessions and pipelines as child processes and receives process-exit from the OS. On exit it releases the dead process's leases immediately — the TTL expiry is only the backstop for the case where the Router itself missed the exit. §1's "no liveness polling" holds: nothing ever asks "are you alive?"; a lease simply expires like a parking meter
+- Leases carry a **TTL** (e.g., 60s) that renews on every write, plus a cheap renewal call when the holder is idle. If a holder dies, its leases expire and the Data Service deletes them
+- **Primary liveness is supervision, not polling**: the Router spawns sessions and pipelines as child processes and receives process-exit from the OS. On exit it releases the dead process's leases immediately (a pipeline run's by its `pipeline:<runID>` holder) — the TTL expiry is only the backstop for the case where the Router itself missed the exit. §1's "no liveness polling" holds: nothing ever asks "are you alive?"; a lease simply expires like a parking meter
+- **Reap-on-launch**: a starting pipeline lists every pipeline lease (`GET /leases?kind=pipeline`) and deletes those whose holder process it can prove dead (machine, boot id, pid and start time), so a crash or reboot doesn't wait out the TTL
+- **Lease loss changes no status.** The TTL reaper, the Router's exit cleanup and reap-on-launch only delete leases. An `in_progress` task the pipeline started that has no live lease is **Interrupted**: work started and nobody is doing it now. Interrupted is derived (never stored) and shows only in the Tasks tab's run views
+- **Any new run picks Interrupted tasks up** where they stopped, alongside Ready ones: it keeps the task's worktree and branch (committing stray work first), skips the stages already completed, and resumes the agent session of an interrupted agent stage where the provider can (command stages rerun). Under a different or since-edited template it restarts from the first stage and keeps the work. Stop (formerly Cancel) ends a run this way on purpose: it keeps all state and returns the leases
 
 ### Communication Protocols
 
@@ -1516,7 +1522,7 @@ These jobs use the Fast Model and communicate exclusively via the Data Service A
 
 - Agent crash → Session detects, reports to Router, UI shows disconnected state. Other sessions unaffected.
 - Session crash → Router detects (process exit), releases any task leases via Data Service, UI shows "needs attention." Other sessions unaffected.
-- Pipeline crash → Router detects, releases task leases, marks affected tasks as blocked. Planning sessions unaffected.
+- Pipeline crash → Router detects, releases the run's task leases and ends the run as interrupted. Its in-flight tasks stay in_progress (Interrupted) with their work kept, and the next run picks them up. A run lost to a reboot is marked interrupted when the Router starts. Planning sessions unaffected.
 - Data Service crash → everything pauses (no reads or writes). Router holds requests until Data Service restarts. Each service keeps a small in-memory outbox and retries event appends in order, with backoff, until the log accepts them.
 - Router crash → UI loses connection. Sessions and pipelines continue running (they're independent processes). UI reconnects when Router restarts.
 
