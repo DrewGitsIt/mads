@@ -93,7 +93,7 @@ function RunCard({ data, run }: { data: TaskNodeData; run: NodeRunView }) {
             className={`nodrag ${styles.include}`}
             checked={run.include.checked}
             disabled={run.include.disabled}
-            title={run.include.disabled ? "Drafts can't run — confirm it first" : "Include in this run"}
+            title={run.include.reason ?? "Include in this run"}
             aria-label={`Include ${task.title} in this run`}
             onClick={stop}
             onChange={() => actions.onToggleInclude?.(task.id)}

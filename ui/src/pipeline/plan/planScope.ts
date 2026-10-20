@@ -18,6 +18,18 @@ export function launchable(task: Task, interrupted: ReadonlySet<string> = NONE):
   return task.status === "ready" || (task.status === "in_progress" && interrupted.has(task.id));
 }
 
+/**
+ * Plan: why a task's include box reads off and can't be ticked, or undefined
+ * when the box is the person's to set. A draft can't run until confirmed; an
+ * in-progress task that isn't Interrupted is someone's own work, which no run
+ * picks up (docs/PIPELINE-LEASES-DESIGN.md), so a tick would promise nothing.
+ */
+export function includeLockedReason(task: Task, interrupted: ReadonlySet<string> = NONE): string | undefined {
+  if (task.draft) return "Drafts can't run until confirmed";
+  if (task.status === "in_progress" && !interrupted.has(task.id)) return "Already in progress: a run won't pick it up";
+  return undefined;
+}
+
 // A dependency that can't become done in this run, on its own account: left
 // out by the user, a draft, or not launchable and not already done (blocked,
 // needs review, won't do, someone else's in-progress work).

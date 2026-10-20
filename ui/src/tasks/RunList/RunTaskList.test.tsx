@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { Task } from "../../router/types";
+import type { PickupInfo } from "../../pipeline/plan/runStatus";
 import { RunTaskList, type RunTaskListProps } from "./RunTaskList";
 import { attempt, byId, runState, task } from "../Metro/testTasks";
 
@@ -165,6 +166,28 @@ describe("RunTaskList (plan)", () => {
     fireEvent.click(within(row("Draft e2e")).getByRole("button", { name: "Confirm" }));
     expect(onConfirmDraft).toHaveBeenCalledWith("d");
     expect(onSelectTask).not.toHaveBeenCalled();
+  });
+
+  it("gives someone's own in-progress task an unchecked, disabled box; an Interrupted one stays tickable", () => {
+    const tasks = [
+      task("own", { title: "Hand work", status: "in_progress" }),
+      task("int", { title: "Stopped run work", status: "in_progress" }),
+    ];
+    const pickup: PickupInfo = {
+      tasks: { int: { task_id: "int", mode: "resume", from_stage: "executor", template_name: "default", template_version: 1 } },
+      sharedDirectory: false,
+    };
+    const { onToggleInclude } = renderList({ mode: "plan", taskRunState: {}, pickup }, tasks);
+    const own = screen.getByRole("checkbox", { name: "Include Hand work" });
+    expect(own.getAttribute("aria-checked")).toBe("false");
+    expect(own.getAttribute("aria-disabled")).toBe("true");
+    expect(own.getAttribute("title")).toBe("Already in progress: a run won't pick it up");
+    expect(within(row("Hand work")).getByText("won't run: already in progress")).toBeTruthy();
+    fireEvent.click(own);
+    expect(onToggleInclude).not.toHaveBeenCalled();
+    const int = screen.getByRole("checkbox", { name: "Include Stopped run work" });
+    expect(int.getAttribute("aria-checked")).toBe("true");
+    expect(int.getAttribute("aria-disabled")).toBeNull();
   });
 
   it("shows no status chips in Plan", () => {

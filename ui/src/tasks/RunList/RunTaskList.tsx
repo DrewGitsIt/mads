@@ -10,7 +10,7 @@ import {
   type RunMode,
   type RunStatus,
 } from "../../pipeline/plan/runStatus";
-import { leftOutBy } from "../../pipeline/plan/planScope";
+import { includeLockedReason, leftOutBy } from "../../pipeline/plan/planScope";
 import type { TaskRunState } from "../../pipeline/state/usePipelineRun";
 import { Button } from "../../components/Button/Button";
 import { Chip, type ChipTone } from "../../components/Chip/Chip";
@@ -156,11 +156,13 @@ export function RunTaskList(props: RunTaskListProps) {
 }
 
 function Row({ task, status, ...props }: RunTaskListProps & { task: Task; status: RunStatus }) {
-  const { mode, excluded, focusTaskId, onSelectTask, onToggleInclude, onConfirmDraft, onRetry, onEditTask } = props;
+  const { mode, excluded, pickup, focusTaskId, onSelectTask, onToggleInclude, onConfirmDraft, onRetry, onEditTask } = props;
   const plan = mode === "plan";
   const sub = subLine(task, status, props);
   const leftOut = status === "excluded" || status === "draft" || status === "skipped";
-  const included = !task.draft && !excluded.has(task.id);
+  // A task that can't run whatever the box says reads off and can't be ticked.
+  const locked = plan ? includeLockedReason(task, interruptedIds(pickup)) : undefined;
+  const included = !locked && !excluded.has(task.id);
 
   return (
     <li
@@ -177,14 +179,14 @@ function Row({ task, status, ...props }: RunTaskListProps & { task: Task; status
       onClick={() => onSelectTask(task.id)}
     >
       {plan &&
-        (task.draft ? (
+        (locked ? (
           <span
             role="checkbox"
             aria-checked={false}
             aria-disabled={true}
             aria-label={`Include ${task.title}`}
             className={[styles.include, styles.na].join(" ")}
-            title="Drafts can't run until confirmed"
+            title={locked}
             onClick={stop}
           />
         ) : (

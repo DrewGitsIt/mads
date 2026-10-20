@@ -138,7 +138,16 @@ describe("nodeRunViews — plan", () => {
     const views = nodeRunViews(tasks, ctxFor(tasks, { mode: "plan", excluded: new Set(["b"]) }));
     expect(views.a.include).toEqual({ checked: true, disabled: false });
     expect(views.b.include).toEqual({ checked: false, disabled: false });
-    expect(views.d.include).toEqual({ checked: false, disabled: true });
+    expect(views.d.include).toEqual({ checked: false, disabled: true, reason: "Drafts can't run until confirmed" });
+  });
+
+  it("gives someone's own in-progress task an unchecked, disabled box; an Interrupted one stays tickable", () => {
+    const own = task({ id: "own", status: "in_progress" });
+    const int = task({ id: "int", status: "in_progress" });
+    const all = [own, int];
+    const views = nodeRunViews(all, ctxFor(all, { mode: "plan", interrupted: new Set(["int"]) }));
+    expect(views.own.include).toEqual({ checked: false, disabled: true, reason: "Already in progress: a run won't pick it up" });
+    expect(views.int.include).toEqual({ checked: true, disabled: false });
   });
 
   it("names why a task won't run", () => {

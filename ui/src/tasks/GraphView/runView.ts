@@ -1,5 +1,5 @@
 import type { ChipTone } from "../../components/Chip/Chip";
-import { leftOutBy, waveOf } from "../../pipeline/plan/planScope";
+import { includeLockedReason, leftOutBy, waveOf } from "../../pipeline/plan/planScope";
 import type { RunStage } from "../../pipeline/plan/runStages";
 import { pickupLine, runStatusOf, type PickupInfo, type RunMode, type RunStatus } from "../../pipeline/plan/runStatus";
 import type { StageAttempt, TaskRunState } from "../../pipeline/state/usePipelineRun";
@@ -68,8 +68,11 @@ export interface NodeRunView {
   wave?: number;
   /** Plan only: stages a label-gated `when:` will skip for this task. */
   skips: string[];
-  /** Plan only: the include box. Drafts can't be included. */
-  include?: { checked: boolean; disabled: boolean };
+  /**
+   * Plan only: the include box. A task that can't run (a draft, someone's
+   * own in-progress work) reads unchecked and disabled, with the reason.
+   */
+  include?: { checked: boolean; disabled: boolean; reason?: string };
 }
 
 export interface RunViewContext {
@@ -208,6 +211,12 @@ function statusLineOf(task: Task, status: RunStatus, ctx: RunViewContext): Statu
   }
 }
 
+function includeBoxOf(task: Task, ctx: RunViewContext): NonNullable<NodeRunView["include"]> {
+  const reason = includeLockedReason(task, ctx.interrupted);
+  if (reason) return { checked: false, disabled: true, reason };
+  return { checked: !ctx.excluded.has(task.id), disabled: false };
+}
+
 /** Everything a node draws for a run, for every task at once (waves share one memo). */
 export function nodeRunViews(tasks: Task[], ctx: RunViewContext): Record<string, NodeRunView> {
   const waves = new Map<string, number>();
@@ -223,7 +232,7 @@ export function nodeRunViews(tasks: Task[], ctx: RunViewContext): Record<string,
       retryable: !plan && status === "blocked",
       wave: plan && status === "ready" ? waveOf(task, ctx.tasksById, waves) : undefined,
       skips: plan && status === "ready" ? ctx.stages.filter((s) => skipsByLabel(task, s)).map((s) => s.name) : [],
-      include: plan ? { checked: !task.draft && !ctx.excluded.has(task.id), disabled: !!task.draft } : undefined,
+      include: plan ? includeBoxOf(task, ctx) : undefined,
     };
   }
   return out;
