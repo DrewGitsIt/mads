@@ -77,13 +77,31 @@ only…") for limited, read_only and auto_review, before spawning. The
 runner hands an auto_review session over as limited
 (`provider.EffectiveTrust`), which is refused the same way. **Refuse, not
 clamp**: silently running a limited session at full would loosen the
-user's choice. The UI follows the matrix: when a provider declares all
-three restricted rows unsupported, the trust pickers disable them with
-"not available on hermes, which runs at Full access only", Settings shows
-one "Full trust only" tag instead of three "No … trust" tags, and a line
-under the default-provider picker: "Hermes Agent runs at full trust only:
-it edits files and runs commands without asking you. Sessions set to
-Limited, Read-only or Auto-review won't start on it."
+user's choice.
+
+A session that never chose a level must still start, though, and the
+configured default is `limited`. So "full trust only" is derived from the
+matrix (`provider.FullTrustOnly`: every restricted row not working — no
+name check anywhere), and wherever a session's trust is defaulted it
+becomes Full on such a provider:
+
+- the Router's `resolveSessionDefaults` (every create path — POST
+  /sessions, /sessions/validate, retros — and the GET /sessions/defaults
+  preview, which now also takes the staged `provider`) fills an empty
+  trust with `full`, source `provider_default`, before Config's default;
+  Config itself is never changed, and an explicit level is left for Start
+  to refuse rather than quietly raised;
+- the Launchpad and the composer's `/new` card send `trust: "full"` when
+  the chosen provider is full-trust-only, whatever was staged or copied
+  from the current session (`buildCreateSessionPayload`'s
+  `fullTrustOnly`);
+- the trust pill preselects Full access there, disables the other levels
+  ("not available on hermes, which runs at Full access only"), and shows
+  one line beside it: "Hermes can't enforce approvals; it runs at full
+  trust". Settings repeats that line under the default-provider picker and
+  shows one "Full trust only" tag instead of three "No … trust" tags.
+
+Onboarding creates no session and sets no trust.
 
 Pipeline stages are one-shots, which always run at full trust, so `mads
 run -provider hermes` works.
@@ -239,7 +257,7 @@ the rewrite is process state, so it doesn't survive a restart.
 registries (isolated env mode passes `HERMES_HOME` and
 `HERMES_DATA_DIR_SUFFIX` through); preflight probes `hermes-acp
 --version` with the vendor's install command; the compat window is
-`0.22.0 ≤ v < 0.23.0`. The UI gets the "Hermes Agent" label, a
+`0.22.0 ≤ v < 0.23.0`. The UI gets the "Hermes" label, a
 caduceus mark, and the full-trust-only surfaces above.
 
 ## MCP servers (Native)
@@ -259,9 +277,6 @@ capability uses.
 - **Compaction**: `/compress` exists with focus text. A pass may rotate
   the internal session id (provenance), which the reader follows in
   principle but no capture proves. Unsupported until probed.
-- **Default trust**: the builtin default trust is `limited`, so a hermes
-  session started without picking Full access is refused at Start. The UI
-  marks the levels unavailable but doesn't move the default.
 - **Mid-turn transcript gap** (decision 3, above).
 - **The first-send prefix** lands in the first stored user row and so in
   the transcript.

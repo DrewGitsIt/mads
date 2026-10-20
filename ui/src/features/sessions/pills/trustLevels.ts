@@ -77,6 +77,14 @@ export function fullAccessOnly(matrix?: Record<ProviderBehavior, ProviderSupport
 }
 
 /**
+ * The one line a full-access-only provider shows beside its trust, given its
+ * display name (providerLabel).
+ */
+export function fullAccessReason(label: string): string {
+  return `${label} can't enforce approvals; it runs at full trust`;
+}
+
+/**
  * The level a session asking for `trust` runs at on a provider declaring
  * `matrix` — the UI twin of provider.EffectiveTrust (providers/provider):
  * auto_review falls back to limited when BehaviorTrustAutoReview isn't

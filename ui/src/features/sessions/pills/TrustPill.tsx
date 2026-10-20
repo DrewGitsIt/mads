@@ -10,7 +10,8 @@ import type {
   SessionTrust,
 } from "../../../router/types";
 import { agentIntentNotes } from "../../../permissions/intents";
-import { trustLevels } from "./trustLevels";
+import { providerLabel } from "../../settings/providerBehaviors";
+import { fullAccessOnly, fullAccessReason, trustLevels } from "./trustLevels";
 import { LockedPill, type PillLock } from "./LockedPill";
 import pillStyles from "./pills.module.css";
 
@@ -45,7 +46,14 @@ export function TrustPill({
 }: TrustPillProps) {
   const [open, setOpen] = useState(false);
   const levels = trustLevels(matrix, provider);
-  const selected = levels.find((t) => t.value === value);
+  // A provider that runs at full trust only has nothing else to offer, so
+  // Full is what's shown (and what the create payload sends —
+  // buildCreateSessionPayload's fullTrustOnly), whatever was staged or
+  // configured, with the one line that says why.
+  const fullOnly = fullAccessOnly(matrix);
+  const reason = fullOnly ? fullAccessReason(provider ? providerLabel(provider) : "This provider") : undefined;
+  const shown = fullOnly ? "full" : value;
+  const selected = levels.find((t) => t.value === shown);
   const resolvedLevel = levels.find((t) => t.value === resolved?.value);
   const intentNotes = agentIntentNotes(agentPermissions, intentMatrix);
 
@@ -55,52 +63,60 @@ export function TrustPill({
   if (locked) return <LockedPill name="trust" label={triggerLabel} lock={locked} />;
 
   return (
-    <Popover
-      open={open}
-      onClose={() => setOpen(false)}
-      anchor={
-        <button
-          type="button"
-          className={[pillStyles.trigger, (modified ?? value !== undefined) ? pillStyles.modified : ""]
-            .filter(Boolean)
-            .join(" ")}
-          onClick={() => setOpen((o) => !o)}
-        >
-          <span className={pillStyles.key}>trust</span> {triggerLabel}
-          <Caret />
-        </button>
-      }
-    >
-      <div className={pillStyles.menu}>
-        {levels.map((t) => (
+    <>
+      <Popover
+        open={open}
+        onClose={() => setOpen(false)}
+        anchor={
           <button
-            key={t.value}
             type="button"
-            disabled={t.unavailable}
-            className={[pillStyles.option, t.value === value ? pillStyles.optionSelected : ""]
+            className={[pillStyles.trigger, !fullOnly && (modified ?? value !== undefined) ? pillStyles.modified : ""]
               .filter(Boolean)
               .join(" ")}
-            onClick={() => {
-              onChange(t.value);
-              setOpen(false);
-            }}
+            title={reason}
+            onClick={() => setOpen((o) => !o)}
           >
-            <span className={pillStyles.optionLabel}>{t.label}</span>
-            <span className={pillStyles.optionDescription}>{t.description}</span>
+            <span className={pillStyles.key}>trust</span> {triggerLabel}
+            <Caret />
           </button>
-        ))}
-        {intentNotes.length > 0 && (
-          <div className={pillStyles.agentIntents}>
-            <span className={pillStyles.groupLabel}>This agent also declares</span>
-            {intentNotes.map((n) => (
-              <div key={n.intent} className={pillStyles.intentNote}>
-                <span className={pillStyles.optionLabel}>{n.label}</span>
-                <span className={pillStyles.optionDescription}>{n.note}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </Popover>
+        }
+      >
+        <div className={pillStyles.menu}>
+          {levels.map((t) => (
+            <button
+              key={t.value}
+              type="button"
+              disabled={t.unavailable}
+              className={[pillStyles.option, t.value === shown ? pillStyles.optionSelected : ""]
+                .filter(Boolean)
+                .join(" ")}
+              onClick={() => {
+                onChange(t.value);
+                setOpen(false);
+              }}
+            >
+              <span className={pillStyles.optionLabel}>{t.label}</span>
+              <span className={pillStyles.optionDescription}>{t.description}</span>
+            </button>
+          ))}
+          {intentNotes.length > 0 && (
+            <div className={pillStyles.agentIntents}>
+              <span className={pillStyles.groupLabel}>This agent also declares</span>
+              {intentNotes.map((n) => (
+                <div key={n.intent} className={pillStyles.intentNote}>
+                  <span className={pillStyles.optionLabel}>{n.label}</span>
+                  <span className={pillStyles.optionDescription}>{n.note}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </Popover>
+      {reason && (
+        <span className={pillStyles.trustReason} data-testid="trust-reason">
+          {reason}
+        </span>
+      )}
+    </>
   );
 }

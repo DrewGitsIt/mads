@@ -9,6 +9,7 @@ import { FolderPill } from "../../../features/sessions/pills/FolderPill";
 import { IsolationPill } from "../../../features/sessions/pills/IsolationPill";
 import { ModelPill } from "../../../features/sessions/pills/ModelPill";
 import { TrustPill } from "../../../features/sessions/pills/TrustPill";
+import { fullAccessOnly } from "../../../features/sessions/pills/trustLevels";
 import type { StagedConfig } from "../../../features/sessions/pills/stagedConfig";
 import { useProviderMatrix } from "../../../features/settings/state/useProviderMatrix";
 import { formatShortcut } from "../../../platform/shortcut";
@@ -129,7 +130,10 @@ export function NewSessionCard({
 
   function payloadFor(goalText: string): CreateSessionPayload {
     const link = stagedLinkFor(variant, sessionId, cadence);
-    return buildCreateSessionPayload(goalText, staged, { links: link ? [link] : [] });
+    return buildCreateSessionPayload(goalText, staged, {
+      links: link ? [link] : [],
+      fullTrustOnly: fullAccessOnly(providers.find((p) => p.name === staged.provider)?.matrix),
+    });
   }
 
   // Every variant is dry-run, not only the linked ones: it costs no model

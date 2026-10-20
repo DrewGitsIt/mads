@@ -1,11 +1,11 @@
 import type { BehaviorInfo, ProviderInfo, ProviderSupport } from "../../router/types";
-import { fullAccessOnly } from "../sessions/pills/trustLevels";
+import { fullAccessOnly, fullAccessReason } from "../sessions/pills/trustLevels";
 
 // Product names for provider ids where the id isn't already how people
 // say it (goose, kiro-cli read fine as they are).
 const PROVIDER_LABELS: Record<string, string> = {
   "claude-code": "Claude Code",
-  hermes: "Hermes Agent",
+  hermes: "Hermes",
 };
 
 /** A provider's display name: its product name if it has one, else its id. */
@@ -83,7 +83,7 @@ const FULL_TRUST_ONLY_TAG: CapabilityTag = { behavior: "trust_limited", tone: "b
  */
 export function fullTrustOnlyNote(provider: ProviderInfo): string | undefined {
   if (!fullAccessOnly(provider.matrix)) return undefined;
-  return `${providerLabel(provider.name)} runs at full trust only: it edits files and runs commands without asking you. Sessions set to Limited, Read-only or Auto-review won't start on it.`;
+  return `${fullAccessReason(providerLabel(provider.name))}.`;
 }
 
 /**

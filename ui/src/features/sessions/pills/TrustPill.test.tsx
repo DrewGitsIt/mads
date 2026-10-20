@@ -60,17 +60,15 @@ describe("TrustPill", () => {
     expect(screen.getAllByText(/not enforced by the selected provider/)).toHaveLength(2);
   });
 
-  it("disables every restricted level on a full-access-only provider, and says why", () => {
+  it("preselects Full on a full-access-only provider, disables the rest, and says why", () => {
     const onChange = vi.fn();
-    render(
-      <TrustPill
-        value="full"
-        provider="hermes"
-        matrix={{ trust_limited: "unsupported", trust_read_only: "unsupported", trust_auto_review: "unsupported" }}
-        onChange={onChange}
-      />,
-    );
-    fireEvent.click(screen.getByText("Full access"));
+    const hermes = { trust_limited: "unsupported", trust_read_only: "unsupported", trust_auto_review: "unsupported" } as const;
+    // Nothing staged and a configured default of Limited: still shows Full.
+    render(<TrustPill resolved={{ value: "limited", source: "config" }} provider="hermes" matrix={hermes} onChange={onChange} />);
+    expect(screen.getByTestId("trust-reason").textContent).toBe("Hermes can't enforce approvals; it runs at full trust");
+    const trigger = screen.getByRole("button", { name: /trust Full access/ });
+    expect(trigger.getAttribute("title")).toBe("Hermes can't enforce approvals; it runs at full trust");
+    fireEvent.click(trigger);
     expect(screen.getAllByText(/not available on hermes, which runs at Full access only\.$/)).toHaveLength(3);
     const limited = screen.getByText("Limited").closest("button");
     expect(limited?.disabled).toBe(true);
@@ -78,7 +76,13 @@ describe("TrustPill", () => {
     expect(onChange).not.toHaveBeenCalled();
     // Auto-review is not relabelled as falling back to Limited: Limited isn't available either.
     expect(screen.getByText("Auto-review")).toBeTruthy();
-    expect(trustFallback("auto_review", { trust_limited: "unsupported", trust_read_only: "unsupported", trust_auto_review: "unsupported" })).toBeUndefined();
+    expect(trustFallback("auto_review", hermes)).toBeUndefined();
+  });
+
+  it("shows no reason line on a provider that offers a choice", () => {
+    render(<TrustPill resolved={{ value: "limited", source: "config" }} matrix={{ trust_limited: "native" }} onChange={() => {}} />);
+    expect(screen.queryByTestId("trust-reason")).toBeNull();
+    expect(screen.getByText(/Limited \(default\)/)).toBeTruthy();
   });
 
   it("lists the levels in picker order, Auto-review second", () => {

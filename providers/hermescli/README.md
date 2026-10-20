@@ -48,6 +48,13 @@ before spawning anything. It refuses rather than clamps: running a limited
 session at full would loosen what the user chose without telling them. The
 UI disables those levels for hermes and Settings says so.
 
+A session that never chose a level is not refused: wherever trust is
+defaulted (the Router's session defaults, the Launchpad and `/new`
+payloads) a provider whose matrix declares every restricted level
+unsupported (`provider.FullTrustOnly`) gets Full, and the trust pill shows
+"Hermes can't enforce approvals; it runs at full trust". The configured
+default trust is left alone for every other provider.
+
 At full trust the engine sets hermes's `dont_ask` mode and allows whatever
 hermes still asks.
 

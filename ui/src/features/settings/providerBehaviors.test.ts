@@ -43,7 +43,7 @@ describe("behaviorLabel", () => {
 describe("providerLabel", () => {
   it("names products whose id isn't how people say it", () => {
     expect(providerLabel("claude-code")).toBe("Claude Code");
-    expect(providerLabel("hermes")).toBe("Hermes Agent");
+    expect(providerLabel("hermes")).toBe("Hermes");
     expect(providerLabel("goose")).toBe("goose");
   });
 });
@@ -68,7 +68,7 @@ describe("capabilityTags", () => {
       { behavior: "mcp_servers", tone: "bad", label: "No MCP servers" },
       { behavior: "trust_limited", tone: "bad", label: "Full trust only" },
     ]);
-    expect(fullTrustOnlyNote(hermes)).toMatch(/^Hermes Agent runs at full trust only/);
+    expect(fullTrustOnlyNote(hermes)).toBe("Hermes can't enforce approvals; it runs at full trust.");
     expect(fullTrustOnlyNote(goose)).toBeUndefined();
   });
 

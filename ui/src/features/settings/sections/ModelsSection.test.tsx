@@ -127,7 +127,7 @@ describe("ModelsSection", () => {
       expect(within(tags).getByText("Full trust only").className).toMatch(/bad/);
       expect(within(tags).queryByText(/No read-only trust/)).toBeNull();
       expect(screen.getByTestId("provider-trust-note").textContent).toBe(
-        "Hermes Agent runs at full trust only: it edits files and runs commands without asking you. Sessions set to Limited, Read-only or Auto-review won't start on it.",
+        "Hermes can't enforce approvals; it runs at full trust.",
       );
     });
 

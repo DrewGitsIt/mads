@@ -19,6 +19,12 @@ export interface CreateSessionExtras {
   links?: LinkRequest[];
   /** The draft whose staged attachments move to the new session. */
   attachmentDraft?: string;
+  /**
+   * The chosen provider runs at full trust only (fullAccessOnly): the
+   * session goes out at Full whatever trust was staged, since the provider
+   * would refuse anything else at Start.
+   */
+  fullTrustOnly?: boolean;
 }
 
 /**
@@ -40,7 +46,7 @@ export function buildCreateSessionPayload(
     agent: staged.agent,
     provider: staged.provider,
     model: staged.model,
-    trust: staged.trust,
+    trust: extras.fullTrustOnly ? "full" : staged.trust,
     isolation: staged.isolation,
     ...((staged.agent ?? extras.resolvedAgent) === "auto" ? { opening_prompt: trimmed } : {}),
     ...(extras.links && extras.links.length > 0 ? { links: extras.links } : {}),

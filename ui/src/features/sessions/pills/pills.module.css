@@ -157,3 +157,10 @@
 .pathInput:focus {
   border-color: var(--accent);
 }
+
+/* TrustPill's one-line reason beside a full-trust-only provider's pill. */
+.trustReason {
+  align-self: center;
+  font-size: var(--fs-chip);
+  color: var(--text3);
+}
