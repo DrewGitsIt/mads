@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -310,5 +311,54 @@ func TestUnknownServerRequestsAreAnswered(t *testing.T) {
 	}
 	if n := len(w.lines()); n != 5 {
 		t.Fatalf("%d replies to 5 requests: %s", n, w.buf.String())
+	}
+}
+
+// Interrupt while an ask is open: the ask's asker is cancelled and codex
+// gets the abort answer that request kind's response schema takes — not
+// one shape for all.
+func TestInterruptAbortsEachAskKind(t *testing.T) {
+	cases := []struct {
+		method string
+		params string
+		want   string
+	}{
+		{"item/commandExecution/requestApproval", `{"threadId":"th","itemId":"exec-1","command":"touch x"}`, `{"decision":"cancel"}`},
+		{"item/fileChange/requestApproval", `{"threadId":"th","itemId":"exec-2"}`, `{"decision":"cancel"}`},
+		{"item/permissions/requestApproval", `{"threadId":"th","itemId":"exec-3","permissions":{"network":{"enabled":true}}}`, `{"permissions":{},"scope":"turn"}`},
+		{"execCommandApproval", `{"conversationId":"th","callId":"call-4","command":["touch","x"]}`, `{"decision":"abort"}`},
+		{"applyPatchApproval", `{"conversationId":"th","callId":"call-5"}`, `{"decision":"abort"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.method, func(t *testing.T) {
+			w := &bufWC{}
+			c := &conn{stdin: w, pending: map[int64]chan rpcMessage{}, reaper: newReaper(0)}
+			cancelled := make(chan struct{})
+			asker := func(ctx context.Context, _ provider.PermissionAsk) provider.PermissionDecision {
+				<-ctx.Done()
+				close(cancelled)
+				return provider.PermissionDecision{Allow: true} // too late: must be discarded
+			}
+			s := newSession(New(Config{}), c, provider.StartOptions{Trust: provider.TrustLimited, Permissions: asker})
+			s.ref, s.turnOpen, s.turnID = "th", true, "turn-1"
+			s.handleRequest(json.RawMessage(`7`), tc.method, json.RawMessage(tc.params))
+
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			_ = s.Interrupt(ctx) // nothing answers turn/interrupt here; the abort is written first
+			<-cancelled
+			s.forwards.Wait()
+
+			var replies []string
+			for _, m := range w.lines() {
+				if m["id"] == float64(7) {
+					b, _ := json.Marshal(m["result"])
+					replies = append(replies, string(b))
+				}
+			}
+			if len(replies) != 1 || replies[0] != tc.want {
+				t.Fatalf("replies to the ask = %v, want exactly %s", replies, tc.want)
+			}
+		})
 	}
 }

@@ -69,9 +69,63 @@ func (e *turnError) rateLimited() bool {
 // asker's goroutine with a decision, or a withdrawal (serverRequest/resolved,
 // Interrupt, process exit, Close) — owns the request's single reply.
 type pendingAsk struct {
-	id     json.RawMessage
-	reply  func(allow bool) any
+	id    json.RawMessage
+	reply func(allow bool) any
+	// abort is the reply this request's kind takes when the turn is
+	// interrupted under it: each approval kind has its own response shape
+	// (schema/*ApprovalResponse.json).
+	abort  any
 	cancel context.CancelFunc
+}
+
+// approvalReplies is one approval kind's answer shapes: reply for a
+// decision, abort for an interrupt that withdrew the ask.
+type approvalReplies struct {
+	reply func(allow bool) any
+	abort any
+}
+
+var (
+	// item/commandExecution and item/fileChange: CommandExecutionApprovalDecision
+	// / FileChangeApprovalDecision — accept, decline, cancel. Never
+	// acceptForSession: mads asks per call, as on every harness.
+	itemApproval = approvalReplies{
+		reply: func(allow bool) any {
+			if allow {
+				return map[string]string{"decision": "accept"}
+			}
+			return map[string]string{"decision": "decline"}
+		},
+		abort: map[string]string{"decision": "cancel"},
+	}
+	// v1 execCommandApproval / applyPatchApproval: ReviewDecision —
+	// approved, denied, abort.
+	legacyApproval = approvalReplies{
+		reply: func(allow bool) any {
+			if allow {
+				return map[string]string{"decision": "approved"}
+			}
+			return map[string]string{"decision": "denied"}
+		},
+		abort: map[string]string{"decision": "abort"},
+	}
+)
+
+// permissionsApproval answers item/permissions/requestApproval
+// (PermissionsRequestApprovalResponse: {permissions, scope}): an allow
+// grants what was asked for this turn; a deny or an abort grants nothing —
+// the shape has no decline of its own.
+func permissionsApproval(requested json.RawMessage) approvalReplies {
+	none := map[string]any{"permissions": map[string]any{}, "scope": "turn"}
+	return approvalReplies{
+		reply: func(allow bool) any {
+			if allow && len(requested) > 0 {
+				return map[string]any{"permissions": requested, "scope": "turn"}
+			}
+			return none
+		},
+		abort: none,
+	}
 }
 
 // session is one `codex app-server` process hosting one thread. The read
@@ -284,7 +338,7 @@ func (s *session) awaitTurnID(d time.Duration) string {
 // turn/completed status "interrupted" — the turn end carries Interrupted —
 // and the thread serves the next Send. Whatever text the turn had streamed
 // is never stored by codex (survey finding 6). Asks still open are
-// answered "cancel".
+// answered with their kind's abort (cancel / abort / an empty grant).
 func (s *session) Interrupt(ctx context.Context) error {
 	s.sendMu.Lock() // a turn/start in flight lands first
 	s.mu.Lock()
@@ -747,26 +801,12 @@ func (s *session) handleRequest(id json.RawMessage, method string, params json.R
 	_ = json.Unmarshal(params, &p)
 	switch method {
 	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
-		ask := s.askFor(method, p)
-		s.decide(id, ask, func(allow bool) any {
-			// Never acceptForSession: mads asks per call, the way it does on
-			// every harness (goose's _once options, the same stance).
-			if allow {
-				return map[string]string{"decision": "accept"}
-			}
-			return map[string]string{"decision": "decline"}
-		})
+		s.decide(id, s.askFor(method, p), itemApproval)
 	case "item/permissions/requestApproval":
 		// The agent wants more than its sandbox gives it (network, a path
 		// outside the workspace) for this turn.
 		ask := provider.PermissionAsk{ToolUseID: p.ItemID, Tool: "request_permissions", Input: p.Permissions, Reason: p.Reason}
-		perms := p.Permissions
-		s.decide(id, ask, func(allow bool) any {
-			if allow && len(perms) > 0 {
-				return map[string]any{"permissions": perms, "scope": "turn"}
-			}
-			return map[string]any{"permissions": map[string]any{}, "scope": "turn"}
-		})
+		s.decide(id, ask, permissionsApproval(p.Permissions))
 	case "execCommandApproval", "applyPatchApproval":
 		// The v1 forms of the same two asks; app-server 0.154 sends the
 		// item/* ones, these only stay answered correctly.
@@ -775,12 +815,7 @@ func (s *session) handleRequest(id json.RawMessage, method string, params json.R
 			tool = "apply_patch"
 		}
 		ask := provider.PermissionAsk{ToolUseID: p.CallID, Tool: tool, Input: params, Reason: p.Reason}
-		s.decide(id, ask, func(allow bool) any {
-			if allow {
-				return map[string]string{"decision": "approved"}
-			}
-			return map[string]string{"decision": "denied"}
-		})
+		s.decide(id, ask, legacyApproval)
 	case "mcpServer/elicitation/request":
 		s.c.respond(id, map[string]string{"action": "decline"})
 	case "item/tool/requestUserInput":
@@ -817,24 +852,24 @@ func (s *session) askFor(method string, p approvalParams) provider.PermissionAsk
 	return ask
 }
 
-func (s *session) decide(id json.RawMessage, ask provider.PermissionAsk, reply func(allow bool) any) {
+func (s *session) decide(id json.RawMessage, ask provider.PermissionAsk, r approvalReplies) {
 	s.mu.Lock()
 	trust, asker := s.trust, s.asker
 	s.mu.Unlock()
 	switch {
 	case trust == provider.TrustFull:
-		s.c.respond(id, reply(true))
+		s.c.respond(id, r.reply(true))
 	case trust == provider.TrustReadOnly || asker == nil:
-		s.c.respond(id, reply(false))
+		s.c.respond(id, r.reply(false))
 	default:
-		s.forward(id, ask, asker, reply)
+		s.forward(id, ask, asker, r)
 	}
 }
 
 // forward hands one ask to the user on its own goroutine — never the read
 // loop, which must keep delivering notifications (and a later
 // serverRequest/resolved) while the user thinks.
-func (s *session) forward(id json.RawMessage, ask provider.PermissionAsk, asker provider.PermissionAsker, reply func(bool) any) {
+func (s *session) forward(id json.RawMessage, ask provider.PermissionAsk, asker provider.PermissionAsker, r approvalReplies) {
 	key := string(id)
 	ctx, cancel := context.WithCancel(context.Background())
 	s.mu.Lock()
@@ -843,7 +878,7 @@ func (s *session) forward(id json.RawMessage, ask provider.PermissionAsk, asker 
 		cancel()
 		return
 	}
-	s.asks[key] = &pendingAsk{id: id, reply: reply, cancel: cancel}
+	s.asks[key] = &pendingAsk{id: id, reply: r.reply, abort: r.abort, cancel: cancel}
 	s.mu.Unlock()
 	s.forwards.Add(1)
 	go func() {
@@ -873,9 +908,9 @@ func (s *session) withdrawAsk(key string) {
 	}
 }
 
-// withdrawAsks withdraws every forwarded ask. With cancel set (Interrupt)
-// each still gets codex's "cancel" decision; a dying or closing session
-// replies to nothing.
+// withdrawAsks withdraws every forwarded ask. With cancelReply set
+// (Interrupt) each still gets its kind's abort answer (pendingAsk.abort); a
+// dying or closing session replies to nothing.
 func (s *session) withdrawAsks(cancelReply bool) {
 	s.mu.Lock()
 	asks := make([]*pendingAsk, 0, len(s.asks))
@@ -887,7 +922,7 @@ func (s *session) withdrawAsks(cancelReply bool) {
 	for _, pa := range asks {
 		pa.cancel()
 		if cancelReply {
-			s.c.respond(pa.id, map[string]string{"decision": "cancel"})
+			s.c.respond(pa.id, pa.abort)
 		}
 	}
 }
