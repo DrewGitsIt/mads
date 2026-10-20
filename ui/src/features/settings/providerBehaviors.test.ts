@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { behaviorLabel, capabilityTags, differingBehaviors, topCapabilityTags } from "./providerBehaviors";
+import { behaviorLabel, capabilityTags, differingBehaviors, providerLabel, topCapabilityTags } from "./providerBehaviors";
 import type { BehaviorInfo, ProviderInfo } from "../../router/types";
 
 const behaviors: BehaviorInfo[] = [
@@ -20,6 +20,18 @@ const goose: ProviderInfo = {
     resume: "native",
   },
 };
+
+describe("providerLabel", () => {
+  it("names the Codex CLI so it reads as ChatGPT's too", () => {
+    expect(providerLabel("codex")).toBe("Codex (ChatGPT)");
+    expect(providerLabel("claude-code")).toBe("Claude Code");
+  });
+
+  it("keeps ids that already read as names", () => {
+    expect(providerLabel("goose")).toBe("goose");
+    expect(providerLabel("kiro-cli")).toBe("kiro-cli");
+  });
+});
 
 describe("behaviorLabel", () => {
   it("reads known keys as product names", () => {

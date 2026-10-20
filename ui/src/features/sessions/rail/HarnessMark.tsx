@@ -53,6 +53,28 @@ function ClaudeMark() {
   );
 }
 
+/**
+ * A terminal prompt in a window, for the Codex CLI (registry name "codex").
+ * Drawn rather than vendored: OpenAI's marks are trademarks, and what the
+ * glance needs is "the CLI one", which a prompt says at 10px.
+ */
+function CodexMark() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="2.5" y="4" width="19" height="16" rx="3" />
+      <path d="M7 9.5l3 2.5-3 2.5M12.5 15h4.5" />
+    </svg>
+  );
+}
+
 /** A plug, for an adapter that speaks ACP over RPC to something unnamed. */
 function AcpMark() {
   return (
@@ -77,6 +99,7 @@ function AcpMark() {
 const MARKS: Record<string, () => React.JSX.Element> = {
   "claude-code": ClaudeMark,
   goose: GooseMark,
+  codex: CodexMark,
   "acp-rpc": AcpMark,
 };
 

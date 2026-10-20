@@ -9,6 +9,7 @@ import {
   behaviorLabel,
   capabilityTags,
   differingBehaviors,
+  providerLabel,
   topCapabilityTags,
 } from "../providerBehaviors";
 import { optionsWith } from "../settingHelpers";
@@ -114,7 +115,7 @@ export function ModelsSection({ config }: ModelsSectionProps) {
               options={[
                 { value: "", label: "— none —" },
                 ...optionsWith(
-                  matrix.providers.map((p) => ({ value: p.name, label: p.name })),
+                  matrix.providers.map((p) => ({ value: p.name, label: providerLabel(p.name) })),
                   providerName,
                 ).filter((o) => o.value),
               ]}
@@ -250,7 +251,7 @@ function CapabilityMatrix({ matrix }: { matrix: UseProviderMatrix }) {
             <th scope="col">Behaviour</th>
             {providers.map((provider) => (
               <th key={provider.name} scope="col">
-                {provider.name}
+                {providerLabel(provider.name)}
               </th>
             ))}
           </tr>

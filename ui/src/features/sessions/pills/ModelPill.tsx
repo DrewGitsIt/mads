@@ -3,6 +3,7 @@ import { Caret } from "../../../components/Caret/Caret";
 import { Popover } from "../../../components/Popover/Popover";
 import { useProviderCatalogs } from "../../../router/useProviderModels";
 import { modelDisplayName } from "../../../router/modelDisplay";
+import { providerLabel } from "../../settings/providerBehaviors";
 import type { Model, ModelCatalog, ResolvedSessionField } from "../../../router/types";
 import { LockedPill, type PillLock } from "./LockedPill";
 import pillStyles from "./pills.module.css";
@@ -81,7 +82,7 @@ export function ModelPill({
       <div className={pillStyles.menu}>
         {Object.entries(catalogs).map(([providerName, catalog]) => (
           <div key={providerName}>
-            <div className={pillStyles.groupLabel}>{providerName}</div>
+            <div className={pillStyles.groupLabel}>{providerLabel(providerName)}</div>
             {catalog.models.length === 0 && (
               // An empty list means three different things and the old
               // menu collapsed all of them into a blank group.

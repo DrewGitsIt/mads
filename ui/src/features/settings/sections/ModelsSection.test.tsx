@@ -104,6 +104,15 @@ describe("ModelsSection", () => {
       expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ default_provider: "goose" }));
     });
 
+    it("names a provider by its product where it has one, and still saves the registry id", async () => {
+      const config = makeConfig();
+      render(<ModelsSection config={config} />);
+      fireEvent.click(screen.getByLabelText("Default provider"));
+      await waitFor(() => expect(screen.getByRole("option", { name: "Claude Code" })).toBeTruthy());
+      fireEvent.click(screen.getByRole("option", { name: "Claude Code" }));
+      expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ default_provider: "claude-code" }));
+    });
+
     it("tags what the provider doesn't do natively: unsupported as bad, emulated as warn", async () => {
       render(<ModelsSection config={withProvider("goose")} />);
       const tags = await screen.findByTestId("provider-capability-tags");

@@ -22,7 +22,8 @@ describe("ModelPill", () => {
     render(<ModelPill onChange={onChange} />);
     fireEvent.click(screen.getByText("Select model"));
 
-    await waitFor(() => expect(screen.getByText("claude-code")).toBeTruthy());
+    // The group header reads as the product, the value stays the registry id.
+    await waitFor(() => expect(screen.getByText("Claude Code")).toBeTruthy());
     fireEvent.click(screen.getByText("claude-opus-4.6"));
 
     expect(onChange).toHaveBeenCalledWith(
