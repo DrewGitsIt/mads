@@ -182,6 +182,13 @@ func (p *promptText) UnmarshalJSON(raw []byte) error {
 // claude records it only as this attachment, never as a user line, so
 // skipping it lost the message from the conversation. Empty for any other
 // attachment.
+//
+// TODO(task-notification dedupe): mid-turn task notifications
+// (commandMode "task-notification", 199 of the 222 queued_command lines in
+// the local corpus on 2026-10-20) are still skipped here. 14 of their 112
+// task ids were also delivered as a user line, which already renders as a
+// "notification" entry, so showing the attachment form needs a dedupe by
+// task id first.
 func queuedPrompt(a *transcriptAttachment) string {
 	if a == nil || a.Type != "queued_command" || a.CommandMode != "prompt" {
 		return ""

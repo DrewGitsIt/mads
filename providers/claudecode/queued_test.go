@@ -93,3 +93,64 @@ func TestQueuedPromptSkips(t *testing.T) {
 		}
 	}
 }
+
+// A linked-session inject (a leader's message_session), captured on 2.1.285
+// driven the way the runner writes it. Chat mode: the runner queues an inject
+// that arrives mid-turn (runner.Inject) and sends it after the turn's result,
+// so claude records an ordinary user line, attributed by its turn ordinal as
+// before. PTY mode: the runner has no turn signal and types the inject
+// straight into the terminal, so mid-turn claude records a queued_command —
+// string prompt, origin "human", the leader's raw text (mads adds no wrapper;
+// attribution travels beside the text). It now renders as the user row it
+// is, like the same inject typed while idle, instead of vanishing.
+func TestInjectTranscripts(t *testing.T) {
+	type row struct{ role, text string }
+	leader := "Leader here: when the sleep finishes, also say the word mango."
+	for _, tc := range []struct {
+		fixture string
+		want    []row
+	}{
+		{"transcript_inject_stream.jsonl", []row{
+			{"user", "Run the Bash command `sleep 5 && echo done`, then say 'finished'."},
+			{"tool", ""},
+			{"tool_result", "done"},
+			{"agent", "Finished."},
+			{"user", leader},
+			{"agent", "Mango."},
+		}},
+		{"transcript_inject_pty.jsonl", []row{
+			{"user", "Run the Bash command `sleep 8 && echo done`, then say 'finished'."},
+			{"tool", ""},
+			{"tool_result", "done"},
+			{"user", leader},
+			{"agent", "Finished. Mango."},
+		}},
+	} {
+		t.Run(tc.fixture, func(t *testing.T) {
+			f, err := os.Open(filepath.Join("testdata", tc.fixture))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = f.Close() }()
+			msgs, err := normalizeTranscript(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []row
+			for _, m := range msgs {
+				if m.Inbound != nil {
+					t.Errorf("%q read as inbound; an inject is the session's own user turn", m.Text)
+				}
+				got = append(got, row{m.Role, m.Text})
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("messages =\n%+v\nwant\n%+v", got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Errorf("message %d = %+v, want %+v", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
