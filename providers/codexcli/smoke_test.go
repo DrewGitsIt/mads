@@ -37,6 +37,10 @@ func skipUnlessRealCodexSmoke(t *testing.T) {
 // recalls the marker, a fork, and a one-shot. It also proves the user's
 // ~/.codex/config.toml is byte-for-byte unchanged afterwards (threadConfig).
 //
+// codex runs in a scratch CODEX_HOME under /tmp (sessions, caches and any
+// config it writes stay there) with the real login symlinked in, never
+// copied; MADS_CODEX_SMOKE_REAL_HOME=1 uses the real home instead.
+//
 // MADS_CODEX_SMOKE=1 go test -run Smoke ./providers/codexcli/ -v
 func TestRealCodexSmoke(t *testing.T) {
 	skipUnlessRealCodexSmoke(t)
@@ -67,7 +71,7 @@ func TestRealCodexSmoke(t *testing.T) {
 		t.Fatalf("git init: %v %s", err, out)
 	}
 
-	p := New(Config{Effort: "low"})
+	p := New(Config{Effort: "low", Env: smokeCodexHome(t, filepath.Dir(configPath))})
 
 	models, err := p.Models(ctx)
 	if err != nil || len(models) == 0 {
@@ -270,4 +274,33 @@ func countProcs(t *testing.T, command string) int {
 		}
 	}
 	return n
+}
+
+// smokeCodexHome returns the env pointing codex at a scratch CODEX_HOME
+// whose auth.json is a symlink to the real one (realHome) — or nothing,
+// when MADS_CODEX_SMOKE_REAL_HOME=1 asks for the real home. The login file
+// is linked, never read or copied: a token refresh writes through to the
+// real file, or replaces the link, which the cleanup reports.
+func smokeCodexHome(t *testing.T, realHome string) []string {
+	t.Helper()
+	if os.Getenv("MADS_CODEX_SMOKE_REAL_HOME") == "1" {
+		t.Logf("CODEX_HOME: the real one (%s)", realHome)
+		return nil
+	}
+	home, err := os.MkdirTemp("/tmp", "mads-codex-home-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, "auth.json")
+	if err := os.Symlink(filepath.Join(realHome, "auth.json"), link); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if fi, err := os.Lstat(link); err == nil && fi.Mode()&os.ModeSymlink == 0 {
+			t.Log("codex replaced the scratch home's auth.json link with a file (a token refresh); the real login was not updated by it")
+		}
+		_ = os.RemoveAll(home)
+	})
+	t.Logf("CODEX_HOME: scratch %s (login symlinked)", home)
+	return []string{"CODEX_HOME=" + home}
 }

@@ -155,7 +155,11 @@ rate-limit failure (`codexErrorInfo` `usageLimitExceeded` /
 MADS_CODEX_SMOKE=1 go test -run Smoke ./providers/codexcli/ -v
 ```
 
-Uses the logged-in codex account and a handful of short gpt-5.6-luna turns
+Runs codex in a scratch `CODEX_HOME` under `/tmp` with the real
+`auth.json` symlinked in (never copied or read), so the smoke's sessions
+and caches never land in the user's codex home;
+`MADS_CODEX_SMOKE_REAL_HOME=1` uses the real home instead. Uses the
+logged-in codex account and a handful of short gpt-5.6-luna turns
 at low effort, in a scratch git repo under `/tmp`, at limited trust
 (workspace-write sandbox) with every ask allowed: model list, a marker
 turn, an approved write, an interrupt, a mid-command Close that must reap a
