@@ -262,6 +262,11 @@ test.describe("session rail", () => {
 
     await cardFor(page, target).hover();
     await page.getByRole("button", { name: `Check off ${names[target]}` }).click();
+    // Checked off at once, struck through where it stands; it folds to Done
+    // only once the Router has accepted the change (useDoneMotion).
+    await expect(
+      activeList(page).locator('[data-rail-card][data-done-mark="strike"]').filter({ hasText: names[target] }),
+    ).toBeVisible();
 
     const done = doneList(page).locator("[data-rail-card]").filter({ hasText: names[target] });
     await expect(done).toBeVisible();

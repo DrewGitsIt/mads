@@ -65,9 +65,20 @@ export interface SessionSleepController {
   dismissSleep: () => void;
 }
 
+/**
+ * Where a ✓ or bring-back request is, for the rail's motion (rail/useDoneMotion):
+ * sent, accepted with the record the server answered with, or refused.
+ */
+export interface DoneRequestNotices {
+  sent: (session: Session, done: boolean) => void;
+  confirmed: (updated: Session, done: boolean) => void;
+  failed: (sessionId: string) => void;
+}
+
 export function useSessionSleep(
   routerClient: RouterClient,
   onError: (verb: SleepVerb, session: Session, err: unknown) => void,
+  notices?: DoneRequestNotices,
 ): SessionSleepController {
   const [landTarget, setLandTarget] = useState<Session>();
   // Whether the land question was asked on behalf of a ✓ rather than a ⏸:
@@ -88,12 +99,19 @@ export function useSessionSleep(
   function doneNow(session: Session) {
     setLandTarget(undefined);
     setLandForDone(false);
-    routerClient
-      .setSessionAside(session.id, true)
-      .then(() => routerClient.closeSession(session.id))
-      .catch((err: unknown) => {
+    notices?.sent(session, true);
+    routerClient.setSessionAside(session.id, true).then(
+      (updated) => {
+        notices?.confirmed(updated ?? session, true);
+        return routerClient.closeSession(session.id).catch((err: unknown) => {
+          onError("mark done", session, err);
+        });
+      },
+      (err: unknown) => {
+        notices?.failed(session.id);
         onError("mark done", session, err);
-      });
+      },
+    );
   }
 
   function needsLandQuestion(session: Session) {
@@ -126,9 +144,14 @@ export function useSessionSleep(
       proceedDone(session);
     },
     bringBack(session) {
-      routerClient.setSessionAside(session.id, false).catch((err: unknown) => {
-        onError("bring back", session, err);
-      });
+      notices?.sent(session, false);
+      routerClient.setSessionAside(session.id, false).then(
+        (updated) => notices?.confirmed(updated ?? session, false),
+        (err: unknown) => {
+          notices?.failed(session.id);
+          onError("bring back", session, err);
+        },
+      );
     },
     stopTarget,
     confirmStop() {

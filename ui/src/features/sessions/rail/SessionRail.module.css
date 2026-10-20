@@ -220,7 +220,20 @@
 }
 
 .sectionCount {
+  display: inline-block;
   opacity: 0.6;
+}
+
+/* A card folded into a closed Done list: the count it joined ticks. */
+.sectionCount[data-bump] {
+  animation: railCountBump var(--dur) var(--ease-out);
+}
+
+@keyframes railCountBump {
+  from {
+    opacity: 0.2;
+    transform: translateY(-3px);
+  }
 }
 
 /* Checked-off cards recede until the pointer or focus reaches one, or it is open. */
@@ -230,6 +243,25 @@
 .doneList .row:hover,
 .doneList .row:focus-visible,
 .doneList .row.selected {
+  opacity: 1;
+}
+
+/* The ✓ and bring-back on their way (useDoneMotion), before the card folds
+   across. Checking off draws a line through the name, left to right and on
+   through a second line, and dims the card to its Done look; bringing back
+   lifts it out of Done's dim. Neither mark travels: the copy that folds
+   into the other list is drawn plain. */
+.nameText {
+  background: linear-gradient(currentColor, currentColor) 0 58% / 0% 1.5px no-repeat;
+  transition: background-size var(--dur-slow) var(--ease-out);
+}
+.row[data-done-mark="strike"] .nameText {
+  background-size: 100% 1.5px;
+}
+.row[data-done-mark="strike"] {
+  opacity: 0.72;
+}
+.doneList .row[data-done-mark="lift"] {
   opacity: 1;
 }
 
@@ -332,7 +364,8 @@
   cursor: pointer;
   transition:
     background-color 0.4s ease,
-    box-shadow 0.4s ease;
+    box-shadow 0.4s ease,
+    opacity var(--dur) var(--ease-io);
 }
 
 .row:hover {
@@ -1000,17 +1033,71 @@
    It reads as a terminal: a ">_" prompt in front of the name, coloured by the
    status line's tone (the .status-* classes, which only set colour), the name
    and stamp in the mono face, and the rows below indented to sit under the
-   name (prompt 16px + the 6px gap). Nothing animates, and nothing here changes
-   a font size or line-height, so the card is exactly as tall as a plain one. */
+   name (prompt 16px + the 6px gap). The prompt's slot and the indent slide
+   open and shut; the face swaps at once (a font can't be interpolated).
+   Nothing here changes a font size or line-height, so the card is exactly as
+   tall as a plain one. */
 .prompt {
   flex: none;
-  width: 16px;
+  /* Closed on a plain card: no width, and the row's gap taken back. */
+  width: 0;
+  margin-right: calc(-1 * var(--space-2));
+  overflow: hidden;
+  white-space: nowrap;
   font: 700 11px/1.35 var(--mono);
   letter-spacing: -1px;
 }
 
-.shellCard .rowTop {
-  gap: 6px;
+/* Open: 16px, and a 6px gap to the name rather than the row's 8. */
+.shellCard .prompt {
+  width: 16px;
+  margin-right: -2px;
+}
+
+/* A shell starting or ending while the card is on screen (data-shell-motion;
+   one already running when the card appeared just shows): the slot slides
+   open, then ">" and "_" type in and the underscore blinks twice before it
+   rests. Ending erases them in reverse, then the slot closes. Nothing loops. */
+.row[data-shell-motion] .prompt {
+  transition:
+    width var(--dur-slow) var(--ease-io),
+    margin-right var(--dur-slow) var(--ease-io);
+}
+.row[data-shell-motion] .status,
+.row[data-shell-motion] .detail {
+  transition: padding-left var(--dur-slow) var(--ease-io);
+}
+.prompt[data-typing] > :first-child {
+  animation: railPromptType 200ms steps(1, end) both;
+}
+.prompt[data-typing] > :last-child {
+  animation:
+    railPromptType 270ms steps(1, end) both,
+    railPromptBlink 260ms steps(1, end) 270ms 4;
+}
+.prompt[data-erasing] > :last-child {
+  animation: railPromptErase 1ms steps(1, end) both;
+}
+.prompt[data-erasing] > :first-child {
+  animation: railPromptErase 70ms steps(1, end) both;
+}
+
+@keyframes railPromptType {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes railPromptBlink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes railPromptErase {
+  to {
+    opacity: 0;
+  }
 }
 
 .shellCard .name {

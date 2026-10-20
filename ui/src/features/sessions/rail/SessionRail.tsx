@@ -61,6 +61,8 @@ import {
 } from "../../../utils/relativeTime";
 import { router, type RouterClient } from "../../../router/client";
 import type { Agent, Delegate, Link, OrchestrateStatus, Session, Workspace } from "../../../router/types";
+import { Fold, usePresence } from "../../../components/Motion";
+import type { DoneMark, DoneMotion } from "./useDoneMotion";
 import styles from "./SessionRail.module.css";
 
 export interface SessionRailProps {
@@ -92,6 +94,12 @@ export interface SessionRailProps {
    * it (useSessionSleep.requestDone).
    */
   onSetDone?: (session: Session, done: boolean, working: boolean) => void;
+  /**
+   * The ✓ and bring-back's motion (useDoneMotion): where a card shows while
+   * its change is on the way, its mark, and the fold across. Absent, a card
+   * changes lists the moment the session list does.
+   */
+  doneMotion?: DoneMotion;
   /**
    * Persist a drag: the session's new rank in the active list
    * (Session.rail_rank). The rail shows the move at once and reverts it if
@@ -201,8 +209,13 @@ interface GripProps {
   onDragEnd: () => void;
 }
 
+/** How long the >_ takes to erase itself before its slot closes. */
+const SHELL_ERASE_MS = 140;
+/** A shell younger than this when the card first sees it has just started. */
+const SHELL_FRESH_MS = 2_000;
+
 export function SessionRail({
-  sessions,
+  sessions: listedSessions,
   openTaskCounts,
   agentStates = {},
   selectedId,
@@ -210,6 +223,7 @@ export function SessionRail({
   onSleep,
   onDelete,
   onSetDone,
+  doneMotion,
   onMove,
   links = [],
   workspaces = [],
@@ -225,6 +239,8 @@ export function SessionRail({
   linkEditor,
 }: SessionRailProps) {
   const linkedSessionsEnabled = FLAGS.linkedSessions;
+  const sessions = doneMotion ? doneMotion.apply(listedSessions) : listedSessions;
+  useEffect(() => doneMotion?.settle(listedSessions), [doneMotion, listedSessions]);
   // Subscribed once here, not per card: N cards must not each hold a listener
   // on the shell set. Keyed by session; there is at most one shell per session.
   const liveShells = useLiveShells();
@@ -338,7 +354,17 @@ export function SessionRail({
   // nothing.
   const active: RailRow[] = [];
   const done: RailRow[] = [];
+  // A card folding across (useDoneMotion) is drawn in both lists for the
+  // fold: closing in the one it leaves, opening in the other.
+  const leavingDone = new Map<string, boolean>();
   for (const row of visible) {
+    const crossing = searching ? undefined : doneMotion?.leavingDone(row.session.id);
+    if (crossing !== undefined) {
+      leavingDone.set(row.session.id, crossing);
+      active.push(row);
+      done.push(row);
+      continue;
+    }
     // The group-aware bucket, so a parked subject pulls its whole group back
     // out of Done — the same reason the filter chips count a holder by its
     // most urgent member.
@@ -346,6 +372,16 @@ export function SessionRail({
     if (isSetAside(row.session) && !asideDemandsAttention(bucket)) done.push(row);
     else active.push(row);
   }
+  /** How a row sits in one list while a card folds across: closing, opening, or neither. */
+  const crossingIn = (id: string, inDone: boolean): Crossing => {
+    const from = leavingDone.get(id);
+    if (from === undefined) return { leaving: false, arriving: false, mark: doneMotion?.markOf(id) };
+    const leaving = from === inDone;
+    // The mark belongs to the card it was drawn on — the one leaving.
+    return { leaving, arriving: !leaving, mark: leaving ? doneMotion?.markOf(id) : undefined };
+  };
+  const doneArriving = [...leavingDone.values()].some((fromDone) => !fromDone);
+  const doneLeaving = [...leavingDone.values()].filter((fromDone) => fromDone).length;
   // While a query is live there is one list: every hit is a result —
   // including the ones checked off, which is the whole point of going looking.
   const listRows = searching ? visible : active;
@@ -612,8 +648,9 @@ export function SessionRail({
                 dropOn(row.session.id, drag.side ?? "before");
               }}
             >
-              <RailRowGroup
+              <RailRowFold
                 row={row}
+                crossing={crossingIn(row.session.id, false)}
                 {...rowProps}
                 grip={{
                   dragging: drag?.id === row.session.id,
@@ -623,7 +660,12 @@ export function SessionRail({
               />
             </div>
           ) : (
-            <RailRowGroup key={row.session.id} row={row} {...rowProps} />
+            <RailRowFold
+              key={row.session.id}
+              row={row}
+              crossing={searching ? NOT_CROSSING : crossingIn(row.session.id, false)}
+              {...rowProps}
+            />
           ),
         )}
         {visible.length === 0 && (
@@ -647,10 +689,20 @@ export function SessionRail({
           >
             <span aria-hidden="true">{doneOpen ? "▾" : "▸"}</span>
             Done
-            <span className={styles.sectionCount}>· {doneRows.length}</span>
+            <span
+              // Remounted when the count changes, so a card folding into a
+              // closed Done list ticks the count it joined.
+              key={doneRows.length - doneLeaving}
+              className={styles.sectionCount}
+              data-bump={(doneArriving && !doneOpen) || undefined}
+            >
+              · {doneRows.length - doneLeaving}
+            </span>
           </button>
           {doneOpen &&
-            shownDone.map((row) => <RailRowGroup key={row.session.id} row={row} {...rowProps} />)}
+            shownDone.map((row) => (
+              <RailRowFold key={row.session.id} row={row} crossing={crossingIn(row.session.id, true)} {...rowProps} />
+            ))}
           {doneOpen && doneRows.length > DONE_PREVIEW && (
             <button
               type="button"
@@ -763,7 +815,35 @@ function linkPropsFor(ctx: RailRowContext, row: RailRow) {
   };
 }
 
-function RailRowGroup({ row, grip, ...ctx }: RailRowContext & { row: RailRow; grip?: GripProps }) {
+interface Crossing {
+  leaving: boolean;
+  arriving: boolean;
+  mark?: DoneMark;
+}
+const NOT_CROSSING: Crossing = { leaving: false, arriving: false };
+
+/**
+ * A card and everything that hangs off it, in a fold that is always there —
+ * so the ✓ and bring-back can fold a card out of one list and into the other
+ * without the card's element changing type mid-move.
+ */
+function RailRowFold({
+  crossing,
+  ...props
+}: RailRowContext & { row: RailRow; grip?: GripProps; crossing: Crossing }) {
+  return (
+    <Fold open={!crossing.leaving} appear={crossing.arriving} fade>
+      <RailRowGroup {...props} mark={crossing.mark} />
+    </Fold>
+  );
+}
+
+function RailRowGroup({
+  row,
+  grip,
+  mark,
+  ...ctx
+}: RailRowContext & { row: RailRow; grip?: GripProps; mark?: DoneMark }) {
   const children = hasLinkChildren(row, ctx);
   return (
     <>
@@ -780,6 +860,7 @@ function RailRowGroup({ row, grip, ...ctx }: RailRowContext & { row: RailRow; gr
         onSleep={ctx.onSleep}
         onSetDone={ctx.onSetDone}
         working={ctx.bucketOf(row.session) === "working"}
+        doneMark={mark}
         grip={grip}
         onDeleteRequest={ctx.onDeleteRequest}
         labelContext={ctx.labelContext}
@@ -950,6 +1031,7 @@ function SessionRow({
   onSleep,
   onSetDone,
   working = false,
+  doneMark,
   grip,
   onDeleteRequest,
   linkBadge,
@@ -979,6 +1061,8 @@ function SessionRow({
   onSetDone?: (session: Session, done: boolean, working: boolean) => void;
   /** Mid-turn, as the rail reads it: the ✓ asks before stopping a running turn. */
   working?: boolean;
+  /** A ✓ or bring-back on its way (useDoneMotion): the card shows it before it moves. */
+  doneMark?: DoneMark;
   /** Only on a holder card in a reorderable active list. */
   grip?: GripProps;
   onDeleteRequest: (id: string) => void;
@@ -1026,7 +1110,21 @@ function SessionRow({
     (session.last_turn_at
       ? `Last reply ${formatAbsoluteStamp(session.last_turn_at)}`
       : "No reply yet") + ` · Started ${formatAbsoluteStamp(session.created_at)}`;
-  const isDone = isSetAside(session);
+  // The ✓ answers the click at once: while the change is on its way, the
+  // button already shows where the card is going.
+  const isDone = doneMark ? doneMark === "strike" : isSetAside(session);
+  // The >_ types itself in when a shell starts while the card is on screen,
+  // and erases itself before its slot closes when the shell ends. A shell
+  // that was already running — found when the app opens, or when the card
+  // mounts — just shows, still.
+  const hasShell = shell !== undefined;
+  const shellShown = usePresence(hasShell, SHELL_ERASE_MS);
+  const [hadShell, setHadShell] = useState(hasShell);
+  const [shellMotion, setShellMotion] = useState(false);
+  if (hasShell !== hadShell) {
+    setHadShell(hasShell);
+    setShellMotion(!shell || Date.now() - shell.startedAt < SHELL_FRESH_MS);
+  }
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
   const labels = railLabelsFor(session, labelContext);
   // The rest of the record — model, provider, trust, isolation, context
@@ -1160,11 +1258,13 @@ function SessionRow({
       // RailStatusKind), but the e2e journeys still need to see which one the
       // rail's list believes.
       data-activity={session.activity}
+      data-done-mark={doneMark}
+      data-shell-motion={shellMotion || undefined}
       tabIndex={0}
       className={[
         styles.row,
         selected ? styles.selected : "",
-        shell ? styles.shellCard : "",
+        shellShown.present ? styles.shellCard : "",
         unseen ? styles.unseen : "",
         nested ? styles.nestedRow : "",
         linkEdit?.center ? styles.linkCenter : "",
@@ -1243,17 +1343,25 @@ function SessionRow({
         </span>
       )}
       <div className={styles.rowTop}>
-        {shell && (
-          <span
-            className={[styles.prompt, styles[`status-${status.tone}`]].join(" ")}
-            aria-hidden="true"
-            data-shell-prompt=""
-          >
-            &gt;_
-          </span>
-        )}
+        {/* Always there, zero-width without a shell, so its slot can open and close. */}
+        <span
+          className={[styles.prompt, styles[`status-${status.tone}`]].join(" ")}
+          aria-hidden="true"
+          data-shell-prompt={shellShown.present ? "" : undefined}
+          data-typing={(shellMotion && hasShell) || undefined}
+          data-erasing={(shellMotion && shellShown.leaving) || undefined}
+        >
+          {shellShown.present && (
+            <>
+              <span>&gt;</span>
+              <span>_</span>
+            </>
+          )}
+        </span>
         {linkEdit && <LinkEditTick edit={linkEdit} />}
-        <span className={styles.name}>{name}</span>
+        <span className={styles.name}>
+          <span className={styles.nameText}>{name}</span>
+        </span>
         {linkEdit?.blocked && <span className={styles.linkBlockedTag}>separate worktree</span>}
         {/* The tint is colour alone; this is the same fact for a screen reader. */}
         {unseen && <span className={styles.srOnly}>New session</span>}
