@@ -236,23 +236,23 @@ func writeMarkdownMessages(w io.Writer, msgs []contracts.TranscriptMessage, h st
 			if label == "" {
 				label = m.Tool.Name
 			}
-			fmt.Fprintf(w, "<details><summary>Tool: %s</summary>\n\n", htmlEscape(label))
+			_, _ = fmt.Fprintf(w, "<details><summary>Tool: %s</summary>\n\n", htmlEscape(label))
 			if len(m.Tool.Input) > 0 {
-				fmt.Fprintf(w, "%s\n\n", fence("json", prettyJSON(m.Tool.Input)))
+				_, _ = fmt.Fprintf(w, "%s\n\n", fence("json", prettyJSON(m.Tool.Input)))
 			}
-			fmt.Fprint(w, "</details>\n\n")
+			_, _ = fmt.Fprint(w, "</details>\n\n")
 		case m.Role == "tool_result":
 			label := "Result"
 			if m.IsError {
 				label = "Result (error)"
 			}
-			fmt.Fprintf(w, "<details><summary>%s</summary>\n\n%s\n\n</details>\n\n", label, fence("", m.Text))
+			_, _ = fmt.Fprintf(w, "<details><summary>%s</summary>\n\n%s\n\n</details>\n\n", label, fence("", m.Text))
 		case m.Role == "compact":
-			fmt.Fprintf(w, "%s Compaction%s\n\n", h, stamp)
+			_, _ = fmt.Fprintf(w, "%s Compaction%s\n\n", h, stamp)
 			if m.Compact != nil {
-				fmt.Fprintf(w, "_%s: %d → %d tokens_\n\n", m.Compact.Trigger, m.Compact.PreTokens, m.Compact.PostTokens)
+				_, _ = fmt.Fprintf(w, "_%s: %d → %d tokens_\n\n", m.Compact.Trigger, m.Compact.PreTokens, m.Compact.PostTokens)
 			}
-			fmt.Fprintf(w, "<details><summary>Summary carried forward</summary>\n\n%s\n\n</details>\n\n", m.Text)
+			_, _ = fmt.Fprintf(w, "<details><summary>Summary carried forward</summary>\n\n%s\n\n</details>\n\n", m.Text)
 		default:
 			title := map[string]string{"user": "User", "agent": "Agent", "notification": "System"}[m.Role]
 			if title == "" {
@@ -264,7 +264,7 @@ func writeMarkdownMessages(w io.Writer, msgs []contracts.TranscriptMessage, h st
 			if m.Attribution != nil {
 				title = "Message from " + m.Attribution.SourceName
 			}
-			fmt.Fprintf(w, "%s %s%s\n\n%s\n\n", h, title, stamp, m.Text)
+			_, _ = fmt.Fprintf(w, "%s %s%s\n\n%s\n\n", h, title, stamp, m.Text)
 		}
 	}
 }

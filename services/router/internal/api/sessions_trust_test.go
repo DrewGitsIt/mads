@@ -79,7 +79,7 @@ func TestSetSessionTrustLogsChange(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("set trust status = %d, want 200", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	want := contracts.TrustChange{From: contracts.TrustLimited, To: contracts.TrustFull, Restarted: true}
 	if got := trustChanges(t, data, id); len(got) != 1 || got[0] != want {
 		t.Fatalf("trust changes = %+v, want [%+v]", got, want)
@@ -89,7 +89,7 @@ func TestSetSessionTrustLogsChange(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("same-value set status = %d, want 200", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if got := trustChanges(t, data, id); len(got) != 1 {
 		t.Fatalf("after re-setting the same level: %d trust changes, want still 1: %+v", len(got), got)
 	}
@@ -99,12 +99,12 @@ func TestSetSessionTrustLogsChange(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("terminate status = %d, want 204", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	resp = postJSON(t, srv.URL+"/sessions/"+id+"/trust", map[string]string{"trust": "read_only"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("set trust (no child) status = %d, want 200", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	got := trustChanges(t, data, id)
 	want = contracts.TrustChange{From: contracts.TrustFull, To: contracts.TrustReadOnly}
 	if len(got) != 2 || got[1] != want {
@@ -135,7 +135,7 @@ func TestSetSessionTrustLogsFailedRestart(t *testing.T) {
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("set trust status = %d, want 502 (bounce failed)", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	got := trustChanges(t, data, id)
 	if len(got) != 1 {
 		t.Fatalf("trust changes = %+v, want exactly 1", got)

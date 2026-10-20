@@ -250,7 +250,7 @@ func BuildSessionReport(sess Session, in ReportInputs) SessionReport {
 		}
 		rep.Context = &ReportContext{Used: used, Window: u.ContextWindow, CanCompact: in.CanCompact}
 	}
-	if t := sess.UsageTotals; t != nil && (t.Turns > 0 || !t.TokenCounts.IsZero()) {
+	if t := sess.UsageTotals; t != nil && (t.Turns > 0 || !t.IsZero()) {
 		rep.Tokens = &ReportTokens{TokenCounts: t.TokenCounts, Turns: t.Turns}
 		if t.Delegates != nil && !t.Delegates.IsZero() {
 			d := *t.Delegates

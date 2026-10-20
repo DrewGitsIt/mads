@@ -269,7 +269,7 @@ func Check(ctx context.Context, p provider.Provider, s Script) []Result {
 	// structured session, plus the one cheap negative: instructions the
 	// harness can't take are refused, never silently dropped.
 	if structured {
-		compactErr, focusErr, focusNote := c.compactor()
+		focusNote, compactErr, focusErr := c.compactor()
 		c.add(provider.BehaviorCompaction, compactErr, "structural: the strategy, not a compaction pass")
 		c.add(provider.BehaviorCompactionFocus, focusErr, focusNote)
 	} else {
@@ -309,11 +309,11 @@ func (c *checker) delegateInspector() error {
 // compacting session needs Compact with instructions refused the same way;
 // working is held only by Validate (it needs compaction) — whether the
 // summary honors the text is the harness's model, not probed.
-func (c *checker) compactor() (compactErr, focusErr error, focusNote string) {
+func (c *checker) compactor() (focusNote string, compactErr, focusErr error) {
 	sess, err := c.p.Start(c.ctx, provider.StartOptions{Mode: provider.ModeACP})
 	if err != nil {
 		err = fmt.Errorf("Start(acp): %w", err)
-		return err, err, ""
+		return "", err, err
 	}
 	defer func() { _ = sess.Close() }()
 	comp, has := sess.(provider.Compactor)
@@ -336,7 +336,7 @@ func (c *checker) compactor() (compactErr, focusErr error, focusNote string) {
 	default:
 		focusNote = "declared unsupported along with compaction: nothing to refuse"
 	}
-	return compactErr, focusErr, focusNote
+	return focusNote, compactErr, focusErr
 }
 
 func (c *checker) add(b provider.Behavior, err error, note string) {

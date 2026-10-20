@@ -56,7 +56,7 @@ func (p *killableProvider) OneShot(ctx context.Context, req provider.OneShotRequ
 	select {
 	case <-ctx.Done():
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		<-waitErr
+		<-waitErr //nolint:errcheck // just SIGKILLed; the exit error is expected
 		return nil, ctx.Err()
 	case err := <-waitErr:
 		return nil, fmt.Errorf("orphan subprocess exited before it was killed: %w", err)

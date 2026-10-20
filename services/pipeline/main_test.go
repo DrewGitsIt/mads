@@ -306,8 +306,8 @@ func TestChildReleasesLeaseOnCancel(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			_ = cmd.Process.Kill()
-			<-exited
-			t.Fatalf("task never reached in_progress: status=%v err=%v", got.Status, err)
+			exitErr := <-exited
+			t.Fatalf("task never reached in_progress: status=%v err=%v (child exit: %v)", got.Status, err, exitErr)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -327,11 +327,11 @@ func TestChildReleasesLeaseOnCancel(t *testing.T) {
 	}
 
 	select {
-	case <-exited:
+	case <-exited: //nolint:errcheck // SIGTERM exit; the lease checks below are the assertion
 	case <-time.After(shutdownGrace + 5*time.Second):
 		_ = cmd.Process.Kill()
-		<-exited
-		t.Fatal("pipeline child did not exit within shutdownGrace of SIGTERM")
+		exitErr := <-exited
+		t.Fatalf("pipeline child did not exit within shutdownGrace of SIGTERM (exit after kill: %v)", exitErr)
 	}
 
 	// Listing every pipeline-kind lease proves the child released the

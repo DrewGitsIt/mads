@@ -73,7 +73,7 @@ func TestUsageTotalsCountUsagelessTurns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cur.UsageTotals == nil || cur.UsageTotals.Turns != 2 || !cur.UsageTotals.TokenCounts.IsZero() {
+	if cur.UsageTotals == nil || cur.UsageTotals.Turns != 2 || !cur.UsageTotals.IsZero() {
 		t.Errorf("totals = %+v, want 2 turns and no tokens", cur.UsageTotals)
 	}
 }

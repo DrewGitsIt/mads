@@ -107,8 +107,8 @@ func (r *Runner) countTurn(u *provider.Usage) {
 	t.mu.Lock()
 	compact := t.compactTurn
 	t.compactTurn = false
-	switch {
-	case u == nil:
+	switch u {
+	case nil:
 		if !compact {
 			t.pending.Turns++
 		}
