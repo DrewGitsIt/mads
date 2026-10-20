@@ -159,7 +159,7 @@ func TestSessionSetup(t *testing.T) {
 		t.Fatal("Ref empty at Start-return")
 	}
 	got := turnText(sendTurn(t, sess, "whoami"))
-	for _, want := range []string{"model copilot:gpt-4o", "mode dont_ask", `first "You are a careful reviewer.\n\nwhoami"`} {
+	for _, want := range []string{"model copilot:gpt-4o", "mode dont_ask", `first "<mads-system-prompt bytes=\"27\">\nYou are a careful reviewer.\n</mads-system-prompt>\n\nwhoami"`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("whoami = %q, want it to contain %q", got, want)
 		}

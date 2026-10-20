@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/drewkidwell/mads/pkg/agentenv"
@@ -155,6 +156,9 @@ func (p *Provider) engineConfig() acprpc.Config {
 		ModelConfigOptionID: "",
 		// No system-prompt surface: hermes has no extension method, so the
 		// engine's default first-send prefix applies — never drop a persona.
+		// Start hands the engine the persona already wrapped
+		// (wrapSystemPrompt), so the reader can strip exactly what was
+		// prefixed from the stored user row.
 		SystemPrompt: acprpc.SystemPromptStrategy{Mode: acprpc.SystemPromptFirstSendPrefix},
 		// Tool calls carry the spec kind ("execute", "edit") and a
 		// "<tool>: <preview>" title, no _meta namespace (runc1 line 21,
@@ -261,11 +265,66 @@ func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provi
 			return nil, err
 		}
 	}
+	if opts.SystemPrompt != "" {
+		opts.SystemPrompt = wrapSystemPrompt(opts.SystemPrompt)
+	}
 	sess, err := p.engine().Start(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
 	return wrapSession(sess), nil
+}
+
+// The first-send prefix lands inside hermes's stored user row (hermes has
+// no other surface for it), so it is written in a wrapper the
+// TranscriptReader can recognise exactly and remove (stripSystemPrompt):
+//
+//	<mads-system-prompt bytes="N">\n<persona, N bytes>\n</mads-system-prompt>
+//
+// followed by the engine's "\n\n" and the user's text. The byte count makes
+// the match exact — no fuzzy pattern, and no persona content can end it
+// early. The engine prefixes the first prompt of every hermes-acp process,
+// so after a resume the wrapper opens that process's first user row too.
+const (
+	sysPromptOpen  = `<mads-system-prompt bytes="`
+	sysPromptClose = "\n</mads-system-prompt>"
+)
+
+func wrapSystemPrompt(persona string) string {
+	return fmt.Sprintf("%s%d\">\n%s%s", sysPromptOpen, len(persona), persona, sysPromptClose)
+}
+
+// stripSystemPrompt removes an exact wrapSystemPrompt prefix (and the
+// engine's "\n\n" separator) from a stored user row, returning what the
+// user typed. Anything that isn't exactly that shape — a wrong byte count,
+// a missing close, no separator — is returned unchanged: a message that
+// merely looks like the wrapper is the user's. hermes strips the row's
+// surrounding whitespace, so a prompt with no text of its own ends right
+// at the close tag and strips to "".
+func stripSystemPrompt(row string) string {
+	rest, ok := strings.CutPrefix(row, sysPromptOpen)
+	if !ok {
+		return row
+	}
+	digits, body, ok := strings.Cut(rest, "\">\n")
+	if !ok || digits == "" || len(digits) > 9 || strings.Trim(digits, "0123456789") != "" || (len(digits) > 1 && digits[0] == '0') {
+		return row
+	}
+	n, err := strconv.Atoi(digits)
+	if err != nil || n > len(body) {
+		return row
+	}
+	after, ok := strings.CutPrefix(body[n:], sysPromptClose)
+	if !ok {
+		return row
+	}
+	if after == "" {
+		return ""
+	}
+	if text, ok := strings.CutPrefix(after, "\n\n"); ok {
+		return text
+	}
+	return row
 }
 
 // OneShot is the engine's ACP emulation (spawn, session/new or guarded

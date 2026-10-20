@@ -53,7 +53,7 @@ adapted), and session/new returns the ref synchronously.
 | `TrustModes` | `full → dont_ask`, nothing else | modes default/accept_edits/dont_ask (runc1 line 4); `dont_ask` is the least-asking |
 | `SendModeAtSessionNew` | true | set dont_ask explicitly, as goose sets `auto` |
 | `ModelConfigOptionID` | "" | hermes ships the ACP `models` selector and no configOptions (runc1 line 4); the engine reads the selector |
-| `SystemPrompt` | first-send prefix | no system-prompt surface; never drop a persona |
+| `SystemPrompt` | first-send prefix, persona pre-wrapped by Start | no system-prompt surface; never drop a persona; nothing written to the repo or `~/.hermes` |
 | `ToolIdentity` | kind-based | `kind` + `"<tool>: <preview>"` title, no `_meta` namespace (runc1 line 21; tools.py:20-31,192-198) |
 | `PermissionAsksEveryCall` | false | hermes judges risk itself (run9 lines 13, 23-24) |
 | `CompactCommand` | "" | `compress` is advertised (runc1 line 8) but unprobed |
@@ -209,8 +209,27 @@ Presentation:
 | reasoning columns | skipped (no thinking role, as in every adapter) |
 | `\x00json:` content | its text parts |
 
-Timestamps are hermes's REAL unix seconds, in UTC. A first-send system
-prompt is stored inside the first user row (hermes has no other surface).
+Timestamps are hermes's REAL unix seconds, in UTC.
+
+**The persona.** hermes has no system-prompt surface, and writing
+AGENTS.md/SOUL.md into the user's repo or `~/.hermes` is off the table, so
+the engine's first-send prefix stays — and lands inside hermes's stored
+user row. Start therefore hands the engine the persona pre-wrapped:
+
+    <mads-system-prompt bytes="N">\n<persona, exactly N bytes>\n</mads-system-prompt>
+
+which the engine joins to the prompt with "\n\n". The reader removes
+exactly that from a user row: the open tag, a canonical decimal count,
+that many bytes, the close tag, then "\n\n" and the user's text (or the
+row's end, when the prompt had no text and hermes stripped the
+separator). The byte count, not a pattern, ends the persona, so persona
+text containing the close tag can't confuse it, and anything that isn't
+exactly that shape — a wrong count, no count, no separator — is left as
+the user typed it (golden: `testdata/golden/system-prompt-transcript.txt`).
+The runner passes the persona on every (re)start and the engine prefixes
+the first prompt of each hermes-acp process, so the wrapper opens the
+first user row after every resume too, not only the session's first; the
+strip applies to any user row for that reason.
 
 ## Resume and interrupt
 
@@ -278,8 +297,6 @@ capability uses.
   the internal session id (provenance), which the reader follows in
   principle but no capture proves. Unsupported until probed.
 - **Mid-turn transcript gap** (decision 3, above).
-- **The first-send prefix** lands in the first stored user row and so in
-  the transcript.
 - **Compaction carriers that embed a live user ask** are shown as one
   compact marker; hermes's display splits the ask out
   (`project_compaction_message_for_display`). Not captured yet.

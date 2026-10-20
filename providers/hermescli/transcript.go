@@ -312,6 +312,9 @@ func normalizeRows(rows []storedRow) []provider.Message {
 		}
 		switch r.role {
 		case "user":
+			// The persona the adapter prefixed to a process's first prompt
+			// (wrapSystemPrompt) is not the user's message.
+			text = stripSystemPrompt(text)
 			if i := strings.LastIndex(text, correctionMarker); i >= 0 {
 				text = text[i+len(correctionMarker):]
 			}

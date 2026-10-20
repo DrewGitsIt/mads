@@ -109,6 +109,10 @@ active or compacted rows minus `model_only`; generations collapsed by
   envelope's `error` is a non-empty string).
 - **compaction summaries** (`_compressed_summary`) → a `compact` marker.
 - **reasoning columns** are skipped, as every adapter skips thinking.
+- **the persona**: the first-send prefix is written as
+  `<mads-system-prompt bytes="N">\n…\n</mads-system-prompt>` and removed
+  exactly (byte count, not a pattern) from the user row it opens; a message
+  that only looks like it is left alone.
 
 The resume guard reads the same store: hermes answers `session/load` of an
 unknown id with an empty success (and the next prompt with a refusal), so a
