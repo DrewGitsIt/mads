@@ -251,8 +251,8 @@ type endingLine struct {
 	// Attachment is an "attachment" line's: a notification that arrived
 	// mid-turn is attached to the turn as a queued command.
 	Attachment *struct {
-		CommandMode string `json:"commandMode"`
-		Prompt      string `json:"prompt"`
+		CommandMode string     `json:"commandMode"`
+		Prompt      promptText `json:"prompt"`
 	} `json:"attachment"`
 	ToolUseResult json.RawMessage `json:"toolUseResult"`
 }
@@ -322,7 +322,7 @@ func (p *Provider) delegateEndings(ref string) map[string]delegateEnding {
 				notice(queued, text, at)
 			}
 		case l.Type == "attachment" && l.Attachment != nil && l.Attachment.CommandMode == "task-notification":
-			notice(delivered, l.Attachment.Prompt, at)
+			notice(delivered, string(l.Attachment.Prompt), at)
 		case l.Type == "user" && l.Origin != nil && l.Origin.Kind == "task-notification" && l.Message != nil:
 			var raw string
 			for _, b := range l.Message.blocks() {
