@@ -78,16 +78,12 @@ func New(cfg Config) *Provider {
 func (p *Provider) Name() string { return "goose" }
 
 // bin is the executable every invocation runs: Config.Bin if set, else
-// binlocate's answer, else the bare name so exec's "not found" error reads
-// as it always has.
+// binlocate.Resolve's answer (which honours $MADS_AGENT_BIN_DIR).
 func (p *Provider) bin() string {
 	if p.cfg.Bin != "" {
 		return p.cfg.Bin
 	}
-	if path, err := binlocate.Find("goose"); err == nil {
-		return path
-	}
-	return "goose"
+	return binlocate.Resolve("goose")
 }
 
 // gooseToolClassTable classifies goose's _meta tool identities onto the

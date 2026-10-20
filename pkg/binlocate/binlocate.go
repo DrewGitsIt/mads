@@ -6,9 +6,14 @@
 // macOS ships the full goose CLI inside its app bundle
 // (Goose.app/Contents/Resources/bin/goose, per goose's own
 // remote-goose-server docs) and never links it onto PATH.
+//
+// $MADS_AGENT_BIN_DIR (EnvAgentBinDir) confines every agent-binary lookup
+// to one directory, so hermetic tests and smoke harnesses can never start a
+// real harness: see Find and Resolve.
 package binlocate
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,11 +40,48 @@ var knownLocations = map[string][]string{
 	},
 }
 
+// EnvAgentBinDir names the environment variable that, when non-empty,
+// confines agent-binary lookups to that one directory: Find answers only
+// $MADS_AGENT_BIN_DIR/<name>, and only if it is an executable file — never a
+// PATH hit, never a known install location. Hermetic test and smoke
+// harnesses (ui/e2e/lib/topology.ts, scripts/e2esmoke, the router boot test)
+// point it at a stand-in directory, empty unless a test drops a script in,
+// so a service they boot can't reach a real claude, goose or kiro-cli
+// through model discovery, preflight or a session spawn. It is
+// pkg/mergedriver's $MADS_MERGIRAF idea applied to every agent harness.
+//
+// Scope: it governs every name except the ones in notAgent (today just
+// mergiraf, which has its own $MADS_MERGIRAF override and isn't a harness).
+// Governing by exclusion rather than an allowlist of harness names means a
+// newly added adapter is hermetic by default — forgetting to register its
+// binary name can't open a leak.
+const EnvAgentBinDir = "MADS_AGENT_BIN_DIR"
+
+// notAgent lists the binlocate names that are not agent harnesses and so
+// are untouched by $MADS_AGENT_BIN_DIR.
+var notAgent = map[string]bool{"mergiraf": true}
+
+// agentBinDir returns $MADS_AGENT_BIN_DIR when it governs name, else "".
+func agentBinDir(name string) string {
+	if notAgent[name] {
+		return ""
+	}
+	return os.Getenv(EnvAgentBinDir)
+}
+
 // Find returns an absolute path to name: exec.LookPath's answer if it has
 // one, else the first known location holding an executable regular file.
 // When neither resolves it returns LookPath's error, so callers' "not found
-// on PATH" reporting is unchanged.
+// on PATH" reporting is unchanged. With $MADS_AGENT_BIN_DIR set it answers
+// only from that directory (see EnvAgentBinDir).
 func Find(name string) (string, error) {
+	if dir := agentBinDir(name); dir != "" {
+		p := filepath.Join(dir, name)
+		if isExecutable(p) {
+			return p, nil
+		}
+		return "", &exec.Error{Name: name, Err: fmt.Errorf("not in $%s (%s)", EnvAgentBinDir, dir)}
+	}
 	path, lookErr := exec.LookPath(name)
 	if lookErr == nil {
 		return path, nil
@@ -57,6 +99,26 @@ func Find(name string) (string, error) {
 		}
 	}
 	return "", lookErr
+}
+
+// Resolve returns the path an adapter should exec for name: Find's answer
+// when it has one; else, with $MADS_AGENT_BIN_DIR set, $MADS_AGENT_BIN_DIR/
+// <name> anyway (it doesn't exist, so exec fails fast with "no such file"
+// and never consults PATH); else the bare name, so exec's PATH lookup and
+// its "not found" error read as they always have.
+//
+// Every provider adapter must default its binary through Resolve rather
+// than a bare name or Find-then-bare-name: a bare name is resolved by exec
+// against PATH, which would walk straight past $MADS_AGENT_BIN_DIR to a real
+// harness in a hermetic test.
+func Resolve(name string) string {
+	if p, err := Find(name); err == nil {
+		return p
+	}
+	if dir := agentBinDir(name); dir != "" {
+		return filepath.Join(dir, name)
+	}
+	return name
 }
 
 func isExecutable(path string) bool {
