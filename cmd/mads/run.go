@@ -32,6 +32,7 @@ func cmdRun(args []string, out io.Writer) error {
 	session := fs.String("session", "", "session ID (required)")
 	workspace := fs.String("workspace", ".", "workspace repo the run works in")
 	tplName := fs.String("template", "default-implementation", "pipeline template (registry name)")
+	exclude := fs.String("exclude", "", "comma-separated task IDs to leave out of the run (dependents stranded only by them are left out too; neither makes the run incomplete)")
 	providerName := fs.String("provider", "claude-code", "agent provider: claude-code, kiro-cli, goose, or fake")
 	model := fs.String("model", "", "model override for agent stages")
 	concurrency := fs.Int("concurrency", 5, "simultaneous tasks — agent stages run in parallel up to "+
@@ -130,7 +131,8 @@ func cmdRun(args []string, out io.Writer) error {
 	runID := newRunID()
 	sum, err := pipelinerun.Run(ctx, pipelinerun.Options{
 		Data: client, Provider: prov, SessionID: *session, RunID: runID,
-		Template: tpl, TemplateVersion: tplVersion, Cwd: ws, Concurrency: *concurrency,
+		Template: tpl, TemplateVersion: tplVersion, ExcludeTaskIDs: pipelinerun.SplitTaskIDs(*exclude),
+		Cwd: ws, Concurrency: *concurrency,
 		Model: *model, StageTimeout: *stageTimeout,
 		DisableSleepInhibit: pipelinerun.SleepInhibitDisabled(cfg),
 		Isolated:            *isolated, WorktreeRoot: root, DataURL: *data,
@@ -155,7 +157,11 @@ func cmdRun(args []string, out io.Writer) error {
 		return err
 	}
 
-	_, _ = fmt.Fprintf(out, "\ndone %d · blocked %d · skipped %d\n", len(sum.Done), len(sum.Blocked), len(sum.Skipped))
+	_, _ = fmt.Fprintf(out, "\ndone %d · blocked %d · skipped %d", len(sum.Done), len(sum.Blocked), len(sum.Skipped))
+	if len(sum.LeftOut) > 0 { // never makes the run incomplete (see engine.Summary)
+		_, _ = fmt.Fprintf(out, " · left out %d", len(sum.LeftOut))
+	}
+	_, _ = fmt.Fprintln(out)
 	for _, id := range sum.Blocked {
 		t, err := client.Task(ctx, id)
 		if err != nil {
@@ -257,6 +263,10 @@ func eventLine(env contracts.Envelope) string {
 
 // newRunID mints a run id in the Router's format (services/router's
 // supervisor.NewRunID), so CLI runs pair with their end events by id too.
+// It also makes the run's lease holder "pipeline:<runID>", like a Router
+// run's. No Router watches this process, so there is no ReleaseAll on
+// exit: the engine releases its own leases on Ctrl-C, and a crash's
+// leases go to the TTL sweep or the next launch's reap-on-launch.
 func newRunID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])

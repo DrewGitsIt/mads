@@ -10,6 +10,8 @@ export interface AgentFeedViewProps {
   task: Task;
   attempts: StageAttempt[];
   turns: TranscriptMessage[];
+  /** The task/stage/started line. Off when the host already shows which attempt this is. */
+  showHeader?: boolean;
 }
 
 /**
@@ -19,7 +21,7 @@ export interface AgentFeedViewProps {
  * ticking liveness indicator on the in-flight tool call, and auto-follow
  * that disengages once the viewer scrolls back through history.
  */
-export function AgentFeedView({ task, attempts, turns }: AgentFeedViewProps) {
+export function AgentFeedView({ task, attempts, turns, showHeader = true }: AgentFeedViewProps) {
   // Auto-follow that lets go on scrollback (DESIGN point 4).
   const stick = useStickToBottom();
   const rows = useMemo(() => buildFeedRows(turns), [turns]);
@@ -29,15 +31,17 @@ export function AgentFeedView({ task, attempts, turns }: AgentFeedViewProps) {
 
   return (
     <div className={styles.feed} data-testid="agent-feed">
-      <div className={styles.meta} data-testid="feed-header">
-        <span className={styles.metaTask}>{task.title}</span>
-        {currentAttempt && (
-          <span className={styles.metaStage}>
-            {currentAttempt.stage} · attempt {currentAttempt.attempt}
-          </span>
-        )}
-        {started && <span className={styles.metaStarted}>started {formatClock(started)}</span>}
-      </div>
+      {showHeader && (
+        <div className={styles.meta} data-testid="feed-header">
+          <span className={styles.metaTask}>{task.title}</span>
+          {currentAttempt && (
+            <span className={styles.metaStage}>
+              {currentAttempt.stage} · attempt {currentAttempt.attempt}
+            </span>
+          )}
+          {started && <span className={styles.metaStarted}>started {formatClock(started)}</span>}
+        </div>
+      )}
       <div className={styles.rows} ref={stick.ref} onScroll={stick.onScroll} data-testid="feed-rows">
         {rows.map((row, i) => (
           <FeedRow key={i} row={row} />

@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — link modal: one place to create and manage links</title>
+<link rel="stylesheet" href="../../ui/src/tokens/tokens.css" />
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg0); color: var(--text); font: 14px/1.5 var(--sans); padding: 22px 24px 80px; }
+  .frame { max-width: 1320px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .lede { color: var(--text2); max-width: 96ch; margin: 0 0 14px; }
+  .lede b { color: var(--text); }
+  button { font: inherit; color: inherit; }
+
+  /* ── mock controls ─────────────────────────────────────── */
+  .controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin: 0 0 14px; padding: 10px 12px; background: var(--bg1); border: 1px solid var(--line-soft); border-radius: 10px; font-size: 12.5px; color: var(--text2); }
+  .controls .grp { display: flex; gap: 4px; align-items: center; }
+  .controls .lbl { color: var(--text3); text-transform: uppercase; letter-spacing: .08em; font-size: 10.5px; margin-right: 4px; }
+  .controls button, .controls select { background: var(--bg2); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; cursor: pointer; font: 12px var(--sans); }
+  .controls button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .controls .sep { width: 1px; align-self: stretch; background: var(--line-soft); }
+
+  /* ── app shell ─────────────────────────────────────────── */
+  .app { display: grid; grid-template-columns: 300px 1fr; height: 640px; border: 1px solid var(--line-soft); border-radius: 12px; overflow: hidden; background: var(--bg0); }
+  .rail { position: relative; padding: 10px; overflow-y: auto; border-right: 1px solid var(--line-soft); transition: box-shadow var(--dur) var(--ease-out); }
+  .rail.live { box-shadow: inset -2px 0 0 var(--accent); }
+  .search { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; padding: 5px 9px; border: 1px solid var(--line-soft); border-radius: var(--r-sm); color: var(--text3); font-size: 12.5px; background: var(--bg1); }
+  .railhint { display: none; margin: -4px 0 10px; padding: 5px 9px; border-radius: var(--r-sm); background: var(--accent-soft); color: var(--text); font-size: 12px; }
+  .rail.live .railhint { display: block; }
+
+  .card { position: relative; display: flex; gap: 8px; padding: 8px 10px 8px 12px; margin-bottom: 3px; background: var(--bg1); border: 1px solid var(--line-soft); border-radius: var(--r-sm); font: 500 var(--fs-sm) var(--sans); cursor: pointer; transition: border-color var(--dur-fast), background var(--dur-fast), opacity var(--dur-fast); }
+  .card:hover { border-color: var(--line); }
+  .card.open { background: var(--bg2); border-color: var(--line); }
+  .card .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .card .name { font-size: 13px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .status { color: var(--text3); font-size: 12px; font-weight: 400; display: flex; align-items: center; gap: 5px; }
+  .card .status.warn { color: var(--warn-fg); }
+  .card .folder { color: var(--text3); font-size: 11.5px; font-weight: 400; display: flex; gap: 6px; align-items: center; }
+  .card .side { color: var(--text3); font: 11px var(--mono); white-space: nowrap; }
+  .spin { width: 9px; height: 9px; border: 1.5px solid var(--accent); border-right-color: transparent; border-radius: 50%; display: inline-block; animation: rot 0.9s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .mutemark { display: inline-flex; align-items: center; gap: 3px; color: var(--text3); font-size: 11px; }
+
+  /* action cluster: the chain is the ONLY link verb, same glyph everywhere */
+  .cluster { position: absolute; right: 6px; bottom: 6px; display: flex; gap: 3px; opacity: 0; transition: opacity var(--dur-fast); }
+  .card:hover .cluster, .card .cluster.pinned { opacity: 1; }
+  .ab { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; background: var(--bg3); border: 1px solid var(--line); color: var(--text2); cursor: pointer; position: relative; padding: 0; }
+  .ab:hover { color: var(--text); border-color: var(--text3); }
+  .ab svg { width: 14px; height: 14px; }
+  .ab.linked { color: var(--accent); }
+  .ab .cnt { position: absolute; top: -5px; right: -5px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: var(--accent); color: var(--accent-ink); font: 700 9px/14px var(--sans); text-align: center; }
+
+  /* nesting */
+  .subjects { position: relative; margin: 0 0 4px 22px; padding-left: 12px; }
+  .subjects::before { content: ""; position: absolute; left: 0; top: -3px; bottom: 16px; border-left: 2px solid var(--text3); opacity: .55; border-bottom-left-radius: 6px; }
+  .subjects .card::before { content: ""; position: absolute; left: -12px; top: 50%; width: 10px; border-top: 2px solid var(--text3); opacity: .55; }
+  .subjects .card.muted { opacity: .62; }
+
+  /* link mode on the rail */
+  .card .tick { display: none; flex: none; width: 16px; height: 16px; margin-top: 1px; border-radius: 4px; border: 1.5px solid var(--text3); align-items: center; justify-content: center; font-size: 11px; color: var(--accent-ink); }
+  .rail.live .card .tick { display: inline-flex; }
+  .rail.live .card.sel .tick { background: var(--accent); border-color: var(--accent); }
+  .rail.live .card.sel { border-color: var(--accent); background: var(--accent-soft); }
+  .rail.live .card.anchor { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .rail.live .card.anchor .tick { border: 0; width: auto; padding: 0 5px; background: var(--accent); color: var(--accent-ink); font: 700 9px/16px var(--sans); letter-spacing: .06em; text-transform: uppercase; }
+  .rail.live .card.off { opacity: .4; cursor: not-allowed; }
+  .rail.live .card.off .tick { visibility: hidden; }
+  .tag { font: 500 10px var(--sans); padding: 0 5px; border-radius: 4px; background: var(--bg3); color: var(--text3); }
+  .card.flash { animation: flash .5s; }
+  @keyframes flash { 30% { background: var(--accent-soft); border-color: var(--accent); } }
+  .card.nope { animation: nope .35s; }
+  @keyframes nope { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+
+  /* ── conversation pane ─────────────────────────────────── */
+  .pane { position: relative; overflow: hidden; display: flex; flex-direction: column; }
+  .pane .content { flex: 1; display: flex; flex-direction: column; transition: filter var(--dur-slow) var(--ease-out), opacity var(--dur-slow); }
+  .pane.blurred .content { filter: blur(5px) saturate(.75); opacity: .55; pointer-events: none; }
+  .pane .hdr { padding: 12px 20px; border-bottom: 1px solid var(--line-soft); display: flex; align-items: center; gap: 10px; }
+  .pane .hdr .t { font-weight: 600; }
+  .pane .hdr .s { color: var(--text3); font-size: 12px; }
+  .chat { flex: 1; padding: 18px 28px; display: flex; flex-direction: column; gap: 14px; overflow: hidden; }
+  .msg { max-width: 64ch; color: var(--text2); font-size: 14px; }
+  .msg.user { align-self: flex-end; background: var(--bg2); border: 1px solid var(--line-soft); padding: 8px 12px; border-radius: 10px; color: var(--text); }
+  .msg .tool { margin-top: 6px; padding: 6px 10px; border: 1px solid var(--line-soft); border-radius: 8px; font: 12px var(--mono); color: var(--text3); background: var(--bg1); }
+  .composer { margin: 0 20px 16px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--text3); background: var(--bg1); font-size: 13px; }
+  .scrim { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; padding: 20px; }
+  .pane.blurred .scrim { display: flex; }
+
+  /* ── modal: shared ─────────────────────────────────────── */
+  .modal { width: 560px; max-height: 100%; overflow: auto; border-radius: 14px; box-shadow: 0 24px 60px rgba(0,0,0,.45); animation: pop var(--dur-slow) var(--ease-out); }
+  @keyframes pop { from { transform: translateY(8px) scale(.985); opacity: 0; } }
+  .mh { padding: 16px 18px 10px; display: flex; gap: 10px; align-items: flex-start; }
+  .mh .ttl { font-size: 16px; font-weight: 600; }
+  .mh .sub { color: var(--text3); font-size: 12.5px; margin-top: 1px; }
+  .mh .x { margin-left: auto; background: none; border: 0; color: var(--text3); font-size: 18px; cursor: pointer; line-height: 1; }
+  .from { display: inline-flex; gap: 5px; align-items: center; margin-top: 6px; padding: 1px 8px; border-radius: 999px; background: var(--bg3); color: var(--text2); font-size: 11.5px; }
+  .sect { padding: 6px 18px 12px; }
+  .sect > .k { color: var(--text3); font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; margin: 0 0 6px; display: flex; gap: 8px; align-items: baseline; }
+  .sect > .k .hint { text-transform: none; letter-spacing: 0; font-size: 11.5px; }
+  .mf { padding: 12px 18px 16px; display: flex; gap: 8px; align-items: center; border-top: 1px solid var(--line-soft); }
+  .mf .sp { flex: 1; }
+  .btn { padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg2); cursor: pointer; font-size: 13px; }
+  .btn:hover { border-color: var(--text3); }
+  .btn.pri { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  .btn.pri:disabled { opacity: .4; cursor: default; }
+  .btn.danger { border-color: transparent; background: none; color: var(--bad-fg); padding-left: 4px; }
+  .empty { padding: 18px; border: 1.5px dashed var(--line); border-radius: 10px; color: var(--text3); text-align: center; font-size: 13px; }
+  .empty b { color: var(--text2); }
+  .warnline { color: var(--warn-fg); font-size: 11.5px; }
+  .anchorbox { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px; background: var(--bg2); border: 1px solid var(--line-soft); }
+  .anchorbox .n { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .anchorbox .role { font-size: 11px; color: var(--text3); }
+  .ico { width: 14px; height: 14px; display: inline-block; vertical-align: -2px; }
+  .iconbtn { background: none; border: 0; color: var(--text3); cursor: pointer; padding: 2px 4px; border-radius: 5px; font-size: 13px; }
+  .iconbtn:hover { color: var(--text); background: var(--bg3); }
+  .hl { animation: hl 1.6s var(--ease-out); }
+  @keyframes hl { 0%, 40% { box-shadow: 0 0 0 2px var(--accent); } }
+
+  /* ── A · Panel: the plain, honest form ─────────────────── */
+  .vA { background: var(--bg1); border: 1px solid var(--line); }
+  .vA .roles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .vA .rc { text-align: left; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg2); cursor: pointer; }
+  .vA .rc .rt { font-weight: 600; display: flex; gap: 6px; align-items: center; }
+  .vA .rc .rd { color: var(--text3); font-size: 12px; margin-top: 2px; }
+  .vA .rc.on { border-color: var(--accent); background: var(--accent-soft); }
+  .vA .rc:disabled { opacity: .45; cursor: not-allowed; }
+  .vA .drawer { margin-top: 8px; padding: 8px; border-radius: 10px; background: var(--bg2); border: 1px solid var(--line-soft); animation: pop var(--dur) var(--ease-out); }
+  .vA .drawer .k2 { color: var(--text3); font-size: 11.5px; padding: 0 4px 4px; }
+  .vA .opt { display: flex; gap: 9px; align-items: flex-start; padding: 6px 8px; border-radius: 7px; cursor: pointer; }
+  .vA .opt:hover { background: var(--bg3); }
+  .vA .opt .dot { flex: none; width: 14px; height: 14px; margin-top: 3px; border-radius: 50%; border: 1.5px solid var(--text3); }
+  .vA .opt.on .dot { border: 4px solid var(--accent); }
+  .vA .opt .ot { font-weight: 500; font-size: 13px; }
+  .vA .opt .od { color: var(--text3); font-size: 12px; }
+  .vA .rows { display: flex; flex-direction: column; gap: 4px; }
+  .vA .row { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; border-radius: 9px; border: 1px solid var(--line-soft); background: var(--bg2); }
+  .vA .row.isMuted .rn { color: var(--text3); }
+  .vA .rn { flex: 1; min-width: 0; font-size: 13px; }
+  .vA .rn .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .vA .rn .st { color: var(--text3); font-size: 11.5px; }
+  .vA .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; flex: none; }
+  .vA .seg button { border: 0; background: none; padding: 3px 8px; font-size: 11.5px; color: var(--text2); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+  .vA .seg button + button { border-left: 1px solid var(--line); }
+  .vA .seg button.on { background: var(--accent); color: var(--accent-ink); }
+  .vA .seg button.on.mute { background: var(--bg4); color: var(--text); }
+
+  /* ── B · Switchboard: links as mixer channels ──────────── */
+  .vB { background: var(--bg0); border: 1px solid var(--line); font-family: var(--sans); }
+  .vB .mh .ttl { font-family: var(--mono); font-size: 14px; letter-spacing: .04em; text-transform: uppercase; }
+  .vB .mono { font-family: var(--mono); }
+  .vB .rocker { display: inline-grid; grid-template-columns: 1fr 1fr; padding: 3px; border-radius: 10px; background: var(--bg2); border: 1px solid var(--line); width: 100%; }
+  .vB .rocker button { border: 0; background: none; padding: 8px 10px; border-radius: 7px; cursor: pointer; font: 600 12px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--text3); }
+  .vB .rocker button.on { background: var(--bg4); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+  .vB .rocker button:disabled { opacity: .4; cursor: not-allowed; }
+  .vB .rdesc { color: var(--text3); font-size: 12px; margin: 6px 2px 0; }
+  .vB .master { display: flex; gap: 6px; margin-top: 10px; align-items: center; animation: pop var(--dur) var(--ease-out); }
+  .vB .master .ml { font: 10.5px var(--mono); color: var(--text3); text-transform: uppercase; letter-spacing: .1em; margin-right: 4px; }
+  .vB .pad { flex: 1; padding: 7px 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg1); cursor: pointer; text-align: center; font: 600 11px var(--mono); letter-spacing: .06em; color: var(--text2); }
+  .vB .pad.on { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
+  .vB .strips { display: flex; flex-direction: column; gap: 6px; }
+  .vB .strip { display: grid; grid-template-columns: 26px 1fr 150px 34px 22px; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 10px; background: var(--bg1); border: 1px solid var(--line-soft); }
+  .vB .meter { display: flex; flex-direction: column-reverse; gap: 3px; align-items: center; }
+  .vB .led { width: 8px; height: 5px; border-radius: 2px; background: var(--bg4); }
+  .vB .led.lit { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .vB .led.lit.hot { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+  .vB .sn { min-width: 0; }
+  .vB .sn .nm { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .vB .sn .st { font: 10.5px var(--mono); color: var(--text3); text-transform: uppercase; letter-spacing: .06em; }
+  .vB .fader { display: flex; flex-direction: column; gap: 2px; }
+  .vB .fader input { width: 100%; accent-color: var(--accent); margin: 0; }
+  .vB .fader .ticks { display: flex; justify-content: space-between; font: 9.5px var(--mono); color: var(--text3); text-transform: uppercase; letter-spacing: .05em; }
+  .vB .fader .ticks span.on { color: var(--text); }
+  .vB .mbtn { width: 34px; height: 30px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg2); cursor: pointer; font: 700 12px var(--mono); color: var(--text3); }
+  .vB .mbtn.on { background: var(--bad); border-color: var(--bad); color: #1a1206; box-shadow: 0 0 10px color-mix(in srgb, var(--bad) 60%, transparent); }
+  .vB .strip.isMuted .sn .nm { color: var(--text3); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text3) 50%, transparent); }
+  .vB .strip.isMuted input { opacity: .35; }
+
+  /* ── C · Constellation: the link graph, drawn ──────────── */
+  .vC { background: color-mix(in srgb, var(--bg1) 78%, transparent); border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2); }
+  .vC .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .vC .chip { padding: 5px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg2); cursor: pointer; font-size: 12.5px; color: var(--text2); display: inline-flex; gap: 6px; align-items: center; }
+  .vC .chip.on { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
+  .vC .chip:disabled { opacity: .45; cursor: not-allowed; }
+  .vC .chip.small { padding: 3px 10px; font-size: 12px; }
+  .vC .defaults { margin-top: 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; animation: pop var(--dur) var(--ease-out); }
+  .vC .defaults .ml { color: var(--text3); font-size: 11.5px; margin-right: 2px; }
+  .vC .sky { position: relative; height: 270px; margin: 4px 0 0; border-radius: 12px; background:
+      radial-gradient(circle at 50% 18%, var(--accent-soft), transparent 55%),
+      repeating-radial-gradient(circle at 50% 18%, transparent 0 38px, color-mix(in srgb, var(--line-soft) 55%, transparent) 38px 39px);
+      border: 1px solid var(--line-soft); overflow: hidden; }
+  .vC svg.wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .vC .wire { fill: none; stroke: var(--accent); stroke-width: 2.4; stroke-linecap: round; }
+  .vC .wire.per_turn { stroke-dasharray: 6 7; animation: flow .9s linear infinite; }
+  .vC .wire.on_signal { stroke-dasharray: 2 10; stroke-width: 2.6; animation: flow 3.2s linear infinite; opacity: .85; }
+  .vC .wire.manual_only { stroke: var(--text3); stroke-dasharray: 1 6; opacity: .45; }
+  .vC .wire.ghost { stroke: var(--text3); stroke-dasharray: 4 6; opacity: .5; }
+  @keyframes flow { to { stroke-dashoffset: -26; } }
+  .vC .node { position: absolute; transform: translate(-50%, -50%); padding: 6px 10px; border-radius: 12px; background: var(--bg2); border: 1px solid var(--line); font-size: 12px; max-width: 150px; text-align: center; cursor: pointer; box-shadow: 0 6px 16px rgba(0,0,0,.25); transition: border-color var(--dur-fast); }
+  .vC .node:hover { border-color: var(--text3); }
+  .vC .node .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .vC .node .cad { color: var(--text3); font-size: 10.5px; display: flex; gap: 4px; justify-content: center; align-items: center; }
+  .vC .node.holder { padding: 9px 14px; border-color: var(--accent); background: var(--bg3); font-weight: 600; font-size: 13px; max-width: 220px; }
+  .vC .node.holder .cad { font-weight: 400; color: var(--accent); text-transform: uppercase; letter-spacing: .08em; font-size: 10px; }
+  .vC .node.isMuted { opacity: .6; border-style: dashed; }
+  .vC .node.picked { border-color: var(--accent); z-index: 2; }
+  .vC .node.ghost { border-style: dashed; color: var(--text3); background: transparent; box-shadow: none; cursor: default; }
+  .vC .bell { position: absolute; transform: translate(-50%, -50%); font-size: 12px; background: var(--bg2); border: 1px solid var(--line); border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; color: var(--text3); }
+  .vC .pop { position: absolute; transform: translate(-50%, 0); z-index: 5; width: 210px; padding: 6px; border-radius: 10px; background: var(--bg2); border: 1px solid var(--line); box-shadow: 0 14px 30px rgba(0,0,0,.4); animation: pop var(--dur-fast) var(--ease-out); }
+  .vC .pop .o { display: flex; gap: 8px; align-items: center; padding: 5px 8px; border-radius: 7px; cursor: pointer; font-size: 12.5px; }
+  .vC .pop .o:hover { background: var(--bg3); }
+  .vC .pop .o.on { color: var(--accent); }
+  .vC .pop .o.bad { color: var(--bad-fg); }
+  .vC .pop hr { border: 0; border-top: 1px solid var(--line-soft); margin: 4px 0; }
+  .vC .legend { display: flex; gap: 14px; justify-content: center; margin-top: 8px; color: var(--text3); font-size: 11px; }
+  .vC .legend svg { width: 26px; height: 6px; vertical-align: middle; margin-right: 4px; }
+
+  /* ── notes ─────────────────────────────────────────────── */
+  .notes { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 22px; }
+  .notes h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: var(--text3); margin: 0 0 8px; }
+  .notes ol, .notes ul { margin: 0; padding-left: 20px; color: var(--text2); }
+  .notes li { margin: 5px 0; }
+  .notes b { color: var(--text); }
+  .notes code { background: var(--bg2); border: 1px solid var(--line-soft); border-radius: 4px; padding: 0 4px; font-size: .9em; }
+  .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border-radius: 9px; background: var(--bg3); border: 1px solid var(--line); box-shadow: var(--shadow, 0 10px 30px rgba(0,0,0,.4)); font-size: 13px; display: none; }
+  .toast.show { display: block; animation: pop var(--dur) var(--ease-out); }
+</style>
+</head>
+<body>
+<div class="frame">
+  <h1>One modal for linking: create, inspect, re-tune, mute</h1>
+  <p class="lede">Every card shows the same <b>chain-link</b> button, linked or not. Clicking it blurs the conversation pane and opens one modal over it.
+  <b>The rail stays live while the modal is open</b>: click cards to add or remove them, and the modal updates as you go. If the card is already linked, the modal opens with its whole group loaded.
+  Cadence is <b>Follow</b>, <b>Signals</b>, or <b>Muted</b> (<code>manual_only</code>), set per subordinate.
+  <br/>Try it: hover a card, click 🔗. Start with <i>Fix deploy…</i> (a leader with one muted subordinate) or <i>Profile startup time</i> (not linked).</p>
+
+  <div class="controls">
+    <div class="grp"><span class="lbl">Style</span>
+      <button data-v="A" class="on">A · Panel</button>
+      <button data-v="B">B · Switchboard</button>
+      <button data-v="C">C · Constellation</button>
+    </div>
+    <div class="sep"></div>
+    <div class="grp"><span class="lbl">Theme</span>
+      <button id="theme">Dark / light</button>
+      <select id="palette"></select>
+    </div>
+    <div class="sep"></div>
+    <div class="grp"><span class="lbl">Rail</span>
+      <button id="railMute" class="on">Mute mark on card</button>
+      <button id="reset">Reset data</button>
+    </div>
+  </div>
+
+  <div class="app">
+    <aside class="rail" id="rail"></aside>
+    <section class="pane" id="pane">
+      <div class="content">
+        <div class="hdr"><span class="t" id="paneTitle">Fix deploy on Ubuntu runners</span><span class="s">mads · main</span></div>
+        <div class="chat">
+          <div class="msg user">The arm64 runner still fails at the docker login step — can you look at the cache key too?</div>
+          <div class="msg">Looking at the workflow now. The login step reads <code>REGISTRY_TOKEN</code> from an environment that only exists on the x86 pool.
+            <div class="tool">Read .github/workflows/deploy.yml · 214 lines</div>
+            <div class="tool">Bash  gh run view 18822931 --log-failed</div></div>
+          <div class="msg">Two problems: the secret scope and a cache key that ignores <code>runner.arch</code>. I'll fix both and ask the rail pass session to keep its CSS changes off this branch.</div>
+          <div class="msg user">Sounds right. Go.</div>
+        </div>
+        <div class="composer">Message Fix deploy on Ubuntu runners…</div>
+      </div>
+      <div class="scrim" id="scrim"></div>
+    </section>
+  </div>
+
+  <div class="notes">
+    <div>
+      <h2>What each piece is doing</h2>
+      <ol>
+        <li><b>One button, one meaning.</b> The ⇲/⇱ pair and the "Choose mode / Cancel" bar are gone. The chain button sits on every card. When the card is in a link group it turns accent-colored and shows a count.</li>
+        <li><b>Rail stays interactive; the conversation pane is blurred.</b> The modal never covers the rail, so you choose sessions the same way as today. Checkboxes and the accent edge on the rail show that clicking adds a session. Sessions from a different workspace are dimmed and shake if clicked.</li>
+        <li><b>Role first, then cadence.</b> Picking Leader or Monitor opens the default-cadence choice. Each subordinate can then override it, which is how you mute one without touching the others.</li>
+        <li><b>Re-opening loads the group.</b> On a leader, you get its group. On a subordinate, you get its leader's group with that row highlighted, plus a "from …" chip saying where you came from.</li>
+        <li><b>Swap direction</b> (⇅ on a row). If you started from the session that should be the subordinate, promote another session to leader without starting over.</li>
+        <li><b>Save is a diff.</b> In edit mode the button reads "Save 2 changes" and stays disabled until something changes. Removing a row unlinks it. "Unlink all" removes the whole group.</li>
+      </ol>
+    </div>
+    <div>
+      <h2>Open questions to align on</h2>
+      <ol>
+        <li><b>A subordinate with two holders</b> (watched by two monitors, say). The mock opens the first holder's group. Options: holder tabs at the top of the modal, or a one-step "which group?" picker.</li>
+        <li><b>A session that is both a leader and a subordinate.</b> The mock shows its own group (it as leader). Should the "led by …" relationship also appear as a read-only line?</li>
+        <li><b>One role per group.</b> The modal forces a single role per leader: all Leader or all Monitor. The data model allows a mix. Fine to drop that in the UI?</li>
+        <li><b>Mute mark on the rail card</b> (toggle above). Is muted state worth showing in the rail, or only in the modal?</li>
+        <li><b>Esc / click on the blurred pane</b>: discard edits silently, or confirm when there are unsaved changes?</li>
+        <li><b>Vocabulary</b>: "Follow / Signals / Muted" replaces "Follow intently / Wake on signals / Catch up on request". The longer descriptions stay in the drawer.</li>
+      </ol>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const ICON_LINK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
+const ICON_MUTE = '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.7 21a2 2 0 0 1-3.4 0"/><path d="M18.6 13A17.9 17.9 0 0 1 18 8"/><path d="M6.3 6.3A5.9 5.9 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.3-5"/><path d="m2 2 20 20"/></svg>';
+
+const CAD = {
+  per_turn:    { short: 'Follow',  long: 'Follow intently', desc: 'Digest after each burst of activity.', leds: 3 },
+  on_signal:   { short: 'Signals', long: 'Wake on signals', desc: 'Only when it needs attention: a permission request, a crash, a task done or blocked.', leds: 1 },
+  manual_only: { short: 'Muted',   long: 'Muted', desc: 'Total silence. The agent can still ask for a summary.', leds: 0 },
+};
+const CAD_ORDER = ['manual_only', 'on_signal', 'per_turn'];
+const ROLE = {
+  leader:  { t: 'Leader',  d: 'Can message and direct the others. Reach is capped by each session\'s own trust level.', g: '♛' },
+  monitor: { t: 'Monitor', d: 'Follows along, never speaks into them.', g: '◉' },
+};
+
+const SESSIONS = [
+  { id: 'a', name: 'Fix deploy on Ubuntu runners', st: 'working', ws: 'mads', t: '17:48' },
+  { id: 'b', name: 'Session rail readability pass', st: 'idle', ws: 'mads', t: '17:20' },
+  { id: 'c', name: 'Mergiraf land-queue driver', st: 'working', ws: 'mads', t: '16:55' },
+  { id: 'd', name: 'Twin calibration uncertainty', st: 'idle', ws: 'mads', t: '15:07' },
+  { id: 'e', name: 'Release notes draft', st: 'waiting', ws: 'mads', t: '14:31' },
+  { id: 'f', name: 'Profile startup time', st: 'idle', ws: 'mads', t: 'Fri' },
+  { id: 'h', name: 'Settings save-bar polish', st: 'idle', ws: 'mads', t: 'Fri' },
+  { id: 'g', name: 'twinctl: fix flaky CI', st: 'idle', ws: 'twinctl', t: 'Thu' },
+];
+const SEED = () => [
+  { h: 'a', s: 'b', role: 'leader', cad: 'on_signal' },
+  { h: 'a', s: 'c', role: 'leader', cad: 'manual_only' },
+  { h: 'd', s: 'e', role: 'monitor', cad: 'per_turn' },
+];
+let links = SEED();
+let variant = 'A';
+let railMute = true;
+let openId = 'a';
+let M = null; // modal state
+
+const byId = (id) => SESSIONS.find((s) => s.id === id);
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const holdersOf = (id) => links.filter((l) => l.s === id);
+const subjectsOf = (id) => links.filter((l) => l.h === id);
+const statusHtml = (s) => s.st === 'working' ? '<span class="spin"></span> Working'
+  : s.st === 'waiting' ? '⚠ Needs permission' : '◷ Idle';
+const statusText = (s) => s.st === 'working' ? 'Working' : s.st === 'waiting' ? 'Needs permission' : 'Idle';
+const otherLeader = (subjectId, holderId) => links.find((l) => l.s === subjectId && l.role === 'leader' && l.h !== holderId);
+
+/* ── rail ──────────────────────────────────────────────── */
+function cardHtml(s, nestedLink) {
+  const live = !!M;
+  const inGroup = subjectsOf(s.id).length > 0 || holdersOf(s.id).length > 0;
+  const count = subjectsOf(s.id).length;
+  const cls = ['card'];
+  if (s.id === openId) cls.push('open');
+  if (live) {
+    if (M.anchor === s.id) cls.push('anchor');
+    else if (M.rows.some((r) => r.id === s.id)) cls.push('sel');
+    if (s.ws !== byId(M.anchor).ws) cls.push('off');
+  }
+  const muted = nestedLink && nestedLink.cad === 'manual_only';
+  if (muted && railMute) cls.push('muted');
+  const tick = live ? (M.anchor === s.id ? (M.role === 'monitor' ? 'Monitor' : M.role === 'leader' ? 'Leader' : 'Anchor') : '✓') : '';
+  return `<div class="${cls.join(' ')}" data-card="${s.id}">
+    <span class="tick">${tick}</span>
+    <div class="body">
+      <div class="name">${esc(s.name)}</div>
+      <div class="status ${s.st === 'waiting' ? 'warn' : ''}">${statusHtml(s)}</div>
+      <div class="folder">${s.ws}${live && s.ws !== byId(M.anchor).ws ? ' <span class="tag">different workspace</span>' : ''}
+        ${muted && railMute ? `<span class="mutemark" title="Muted: sends nothing to its ${nestedLink.role}">${ICON_MUTE} muted</span>` : ''}</div>
+    </div>
+    <div class="side">${s.t}</div>
+    <div class="cluster ${inGroup ? 'pinned' : ''}">
+      <button class="ab ${inGroup ? 'linked' : ''}" data-link="${s.id}" title="${inGroup ? 'Linked sessions' : 'Link…'}" aria-label="Links for ${esc(s.name)}">${ICON_LINK}${count ? `<span class="cnt">${count}</span>` : ''}</button>
+    </div>
+  </div>`;
+}
+function renderRail() {
+  const nested = new Set(links.map((l) => l.s));
+  let html = '<div class="search">⌕ <span>Search sessions</span></div>';
+  html += '<div class="railhint">Click sessions to add or remove them. The modal updates as you go.</div>';
+  for (const s of SESSIONS) {
+    if (nested.has(s.id)) continue;
+    html += cardHtml(s);
+    const subs = subjectsOf(s.id);
+    if (subs.length) {
+      html += '<div class="subjects">' + subs.map((l) => cardHtml(byId(l.s), l)).join('') + '</div>';
+    }
+  }
+  const rail = document.getElementById('rail');
+  rail.innerHTML = html;
+  rail.classList.toggle('live', !!M);
+}
+
+/* ── modal state ───────────────────────────────────────── */
+function openModal(id) {
+  const own = subjectsOf(id);
+  const held = holdersOf(id);
+  let anchor = id, from = null;
+  if (!own.length && held.length) { anchor = held[0].h; from = id; }
+  const group = subjectsOf(anchor);
+  const role = group.length ? group[0].role : null;
+  const rows = group.map((l) => ({ id: l.s, cad: l.cad, prev: l.cad === 'manual_only' ? 'on_signal' : null }));
+  const def = rows.length ? mostCommon(rows.filter((r) => r.cad !== 'manual_only').map((r) => r.cad)) || 'on_signal' : 'on_signal';
+  M = { anchor, from, role, def, rows, edit: group.length > 0, pick: null, flash: from };
+  M.orig = snapshot();
+  render();
+}
+function mostCommon(a) { const c = {}; a.forEach((x) => c[x] = (c[x] || 0) + 1); return Object.keys(c).sort((x, y) => c[y] - c[x])[0]; }
+function snapshot() { return JSON.stringify({ a: M.anchor, r: M.role, rows: M.rows.map((r) => [r.id, r.cad]).sort() }); }
+function changes() {
+  if (!M.edit) return M.rows.length;
+  const before = subjectsOf(M.anchor);
+  let n = 0;
+  const b = new Map(before.map((l) => [l.s, l]));
+  for (const r of M.rows) { const o = b.get(r.id); if (!o) n++; else { if (o.cad !== r.cad) n++; if (o.role !== M.role) n++; } }
+  for (const l of before) if (!M.rows.some((r) => r.id === l.s)) n++;
+  return n;
+}
+function closeModal() { M = null; render(); }
+function toggleRow(id) {
+  const s = byId(id);
+  if (id === M.anchor) return;
+  if (s.ws !== byId(M.anchor).ws) { nope(id); return; }
+  const i = M.rows.findIndex((r) => r.id === id);
+  if (i >= 0) M.rows.splice(i, 1);
+  else { M.rows.push({ id, cad: M.def, prev: null }); M.flash = id; }
+  render();
+}
+function setRole(r) {
+  M.role = r;
+  render();
+}
+function setDefault(c) {
+  const old = M.def;
+  M.def = c;
+  for (const r of M.rows) if (r.cad === old) r.cad = c;
+  render();
+}
+function setCad(id, c) {
+  const r = M.rows.find((x) => x.id === id);
+  if (c === 'manual_only' && r.cad !== 'manual_only') r.prev = r.cad;
+  r.cad = c;
+  render();
+}
+function toggleMute(id) {
+  const r = M.rows.find((x) => x.id === id);
+  if (r.cad === 'manual_only') r.cad = r.prev || M.def;
+  else { r.prev = r.cad; r.cad = 'manual_only'; }
+  render();
+}
+function swap(id) {
+  const old = M.anchor;
+  const r = M.rows.find((x) => x.id === id);
+  M.anchor = id;
+  r.id = old;
+  M.from = null; M.flash = old;
+  render();
+}
+function removeRow(id) { M.rows = M.rows.filter((r) => r.id !== id); M.pick = null; render(); }
+function leaderBlocked() { return M.rows.some((r) => otherLeader(r.id, M.anchor)); }
+function submit() {
+  const prevAnchor = JSON.parse(M.orig).a;
+  links = links.filter((l) => l.h !== M.anchor && l.h !== prevAnchor);
+  for (const r of M.rows) links.push({ h: M.anchor, s: r.id, role: M.role, cad: r.cad });
+  const n = M.rows.length;
+  toast(M.edit ? 'Links updated' : `Linked ${n} session${n === 1 ? '' : 's'} to ${byId(M.anchor).name}`);
+  closeModal();
+}
+function unlinkAll() {
+  links = links.filter((l) => l.h !== M.anchor);
+  toast('Unlinked all');
+  closeModal();
+}
+function canSubmit() {
+  if (!M.role || !M.rows.length) return M.edit && !M.rows.length && changes() > 0 ? 'unlink' : false;
+  if (M.role === 'leader' && leaderBlocked()) return false;
+  return changes() > 0;
+}
+function primaryLabel() {
+  if (M.edit) { const n = changes(); return n ? `Save ${n} change${n === 1 ? '' : 's'}` : 'No changes'; }
+  const n = M.rows.length;
+  return n ? `Link ${n} session${n === 1 ? '' : 's'}` : 'Link';
+}
+
+/* ── modal: shared fragments ───────────────────────────── */
+function header() {
+  const a = byId(M.anchor);
+  const title = M.edit ? `Links · ${esc(a.name)}` : 'Link sessions';
+  const sub = M.edit
+    ? (M.role === 'leader' ? `Leading ${M.rows.length}` : `Monitoring ${M.rows.length}`) + '. Click sessions in the rail to add more.'
+    : `Starting from ${esc(a.name)}. Click sessions in the rail to add them.`;
+  const from = M.from ? `<div class="from">opened from <b>${esc(byId(M.from).name)}</b></div>` : '';
+  return `<div class="mh"><div><div class="ttl">${title}</div><div class="sub">${sub}</div>${from}</div><button class="x" data-act="close" aria-label="Close">×</button></div>`;
+}
+function footer() {
+  const ok = canSubmit();
+  const label = ok === 'unlink' ? 'Unlink all' : primaryLabel();
+  return `<div class="mf">
+    ${M.edit ? '<button class="btn danger" data-act="unlinkAll">Unlink all</button>' : ''}
+    <span class="sp"></span>
+    <button class="btn" data-act="close">Cancel</button>
+    <button class="btn pri" data-act="${ok === 'unlink' ? 'unlinkAll' : 'submit'}" ${ok ? '' : 'disabled'}>${label}</button>
+  </div>`;
+}
+function emptyRows() {
+  return `<div class="empty">← <b>Click sessions in the rail</b> to add them here.<br/>Same workspace only. One leader per session.</div>`;
+}
+function conflictLine(id) {
+  const o = M.role === 'leader' && otherLeader(id, M.anchor);
+  return o ? `<div class="warnline">Already led by ${esc(byId(o.h).name)}. Pick Monitor or remove this session.</div>` : '';
+}
+
+/* ── A · Panel ─────────────────────────────────────────── */
+function modalA() {
+  const blocked = leaderBlocked();
+  const roleCards = ['leader', 'monitor'].map((r) => `
+    <button class="rc ${M.role === r ? 'on' : ''}" data-role="${r}" ${r === 'leader' && blocked && M.role !== 'leader' ? 'disabled' : ''}>
+      <div class="rt">${ROLE[r].g} ${ROLE[r].t}</div><div class="rd">${ROLE[r].d}</div></button>`).join('');
+  const drawer = M.role ? `<div class="drawer"><div class="k2">Default for new subordinates. Override per row below.</div>
+    ${['per_turn', 'on_signal', 'manual_only'].map((c) => `
+      <div class="opt ${M.def === c ? 'on' : ''}" data-def="${c}"><span class="dot"></span><div><div class="ot">${c === 'manual_only' ? ICON_MUTE + ' ' : ''}${CAD[c].long}</div><div class="od">${CAD[c].desc}</div></div></div>`).join('')}
+  </div>` : '';
+  const rows = M.rows.length ? `<div class="rows">${M.rows.map((r) => {
+    const s = byId(r.id);
+    return `<div class="row ${r.cad === 'manual_only' ? 'isMuted' : ''} ${M.flash === r.id ? 'hl' : ''}">
+      <div class="rn"><div class="nm">${esc(s.name)}</div><div class="st">${statusText(s)}</div>${conflictLine(r.id)}</div>
+      <div class="seg">${['per_turn', 'on_signal', 'manual_only'].map((c) =>
+        `<button class="${r.cad === c ? 'on' : ''} ${c === 'manual_only' ? 'mute' : ''}" data-cad="${r.id}:${c}" title="${CAD[c].desc}">${c === 'manual_only' ? ICON_MUTE : CAD[c].short}</button>`).join('')}</div>
+      ${!M.edit ? `<button class="iconbtn" data-swap="${r.id}" title="Make this the ${M.role || 'holder'}">⇅</button>` : ''}
+      <button class="iconbtn" data-rm="${r.id}" title="Remove">×</button>
+    </div>`;
+  }).join('')}</div>` : emptyRows();
+  return `<div class="modal vA">${header()}
+    <div class="sect"><div class="k">${esc(byId(M.anchor).name)} is the…</div><div class="roles">${roleCards}</div>${drawer}</div>
+    <div class="sect"><div class="k">${M.role === 'monitor' ? 'Watching' : M.role === 'leader' ? 'Leading' : 'Subordinates'} <span class="hint">${M.rows.length}</span></div>${rows}</div>
+    ${footer()}</div>`;
+}
+
+/* ── B · Switchboard ───────────────────────────────────── */
+function modalB() {
+  const blocked = leaderBlocked();
+  const rocker = `<div class="rocker">${['leader', 'monitor'].map((r) =>
+    `<button class="${M.role === r ? 'on' : ''}" data-role="${r}" ${r === 'leader' && blocked && M.role !== 'leader' ? 'disabled' : ''}>${ROLE[r].g} ${ROLE[r].t}</button>`).join('')}</div>
+    ${M.role ? `<div class="rdesc">${ROLE[M.role].d}</div>` : ''}`;
+  const master = M.role ? `<div class="master"><span class="ml">Master</span>${['per_turn', 'on_signal', 'manual_only'].map((c) =>
+    `<button class="pad ${M.def === c ? 'on' : ''}" data-def="${c}" title="${CAD[c].desc}">${c === 'manual_only' ? 'MUTE' : CAD[c].short.toUpperCase()}</button>`).join('')}</div>` : '';
+  const strips = M.rows.length ? `<div class="strips">${M.rows.map((r) => {
+    const s = byId(r.id);
+    const lv = CAD[r.cad].leds;
+    const pos = CAD_ORDER.indexOf(r.cad === 'manual_only' ? (r.prev || 'on_signal') : r.cad);
+    return `<div class="strip ${r.cad === 'manual_only' ? 'isMuted' : ''} ${M.flash === r.id ? 'hl' : ''}">
+      <div class="meter" title="${CAD[r.cad].long}">${[1, 2, 3].map((i) => `<span class="led ${i <= lv ? 'lit' : ''} ${i === 3 && lv === 3 ? 'hot' : ''}"></span>`).join('')}</div>
+      <div class="sn"><div class="nm">${esc(s.name)}</div><div class="st">${statusText(s)} · ${CAD[r.cad].short}</div>${conflictLine(r.id)}</div>
+      <div class="fader"><input type="range" min="1" max="2" step="1" value="${Math.max(1, pos)}" data-fader="${r.id}" ${r.cad === 'manual_only' ? 'disabled' : ''}/>
+        <div class="ticks"><span class="${r.cad === 'on_signal' ? 'on' : ''}">signals</span><span class="${r.cad === 'per_turn' ? 'on' : ''}">follow</span></div></div>
+      <button class="mbtn ${r.cad === 'manual_only' ? 'on' : ''}" data-mute="${r.id}" title="Mute: send nothing to the ${M.role || 'holder'}">M</button>
+      <button class="iconbtn" data-rm="${r.id}" title="Remove">×</button>
+    </div>`;
+  }).join('')}</div>` : emptyRows();
+  return `<div class="modal vB">${header()}
+    <div class="sect"><div class="k mono">Holder · ${esc(byId(M.anchor).name)} ${!M.edit && M.rows.length ? '<span class="hint">· ⇅ on a channel swaps direction</span>' : ''}</div>${rocker}${master}</div>
+    <div class="sect"><div class="k mono">Channels <span class="hint">${M.rows.length}</span></div>${strips}</div>
+    ${footer()}</div>`;
+}
+
+/* ── C · Constellation ─────────────────────────────────── */
+function modalC() {
+  const blocked = leaderBlocked();
+  const chips = `<div class="chips">${['leader', 'monitor'].map((r) =>
+    `<button class="chip ${M.role === r ? 'on' : ''}" data-role="${r}" ${r === 'leader' && blocked && M.role !== 'leader' ? 'disabled' : ''}>${ROLE[r].g} ${ROLE[r].t}</button>`).join('')}</div>`;
+  const defaults = M.role ? `<div class="defaults"><span class="ml">New links start at</span>${['per_turn', 'on_signal', 'manual_only'].map((c) =>
+    `<button class="chip small ${M.def === c ? 'on' : ''}" data-def="${c}" title="${CAD[c].desc}">${c === 'manual_only' ? ICON_MUTE : ''}${CAD[c].short}</button>`).join('')}</div>` : '';
+
+  const W = 522, H = 270, hx = W / 2, hy = 52;
+  const n = M.rows.length;
+  const pts = M.rows.map((r, i) => {
+    const t = n === 1 ? 0.5 : i / (n - 1);
+    const x = n === 1 ? hx : 92 + t * (W - 184);
+    const y = 200 + (n > 2 ? Math.sin(t * Math.PI) * 26 : 0);
+    return { r, x, y };
+  });
+  const wires = pts.map(({ r, x, y }) => {
+    const d = `M ${hx} ${hy + 16} C ${hx} ${(hy + y) / 2 + 10}, ${x} ${(hy + y) / 2 - 10}, ${x} ${y - 18}`;
+    return `<path class="wire ${r.cad}" d="${d}"/>`;
+  }).join('') || `<path class="wire ghost" d="M ${hx} ${hy + 16} L ${hx} 178"/>`;
+  const bells = pts.filter((p) => p.r.cad === 'manual_only').map(({ x, y }) => {
+    const bx = (hx + x) / 2, by = (hy + y) / 2 + 4;
+    return `<span class="bell" style="left:${bx}px;top:${by}px">${ICON_MUTE}</span>`;
+  }).join('');
+  const nodes = pts.map(({ r, x, y }) => {
+    const s = byId(r.id);
+    return `<div class="node ${r.cad === 'manual_only' ? 'isMuted' : ''} ${M.pick === r.id ? 'picked' : ''} ${M.flash === r.id ? 'hl' : ''}" style="left:${x}px;top:${y}px" data-pick="${r.id}">
+      <div class="nm">${esc(s.name)}</div><div class="cad">${r.cad === 'manual_only' ? ICON_MUTE : ''}${CAD[r.cad].short}${otherLeader(r.id, M.anchor) && M.role === 'leader' ? ' · <span class="warnline">led elsewhere</span>' : ''}</div></div>`;
+  }).join('') || `<div class="node ghost" style="left:${hx}px;top:200px">← click sessions in the rail</div>`;
+  const p = pts.find((q) => q.r.id === M.pick);
+  const pop = p ? `<div class="pop" style="left:${Math.min(Math.max(p.x, 110), W - 110)}px;top:${Math.min(p.y + 24, H - 150)}px">
+      ${['per_turn', 'on_signal', 'manual_only'].map((c) => `<div class="o ${p.r.cad === c ? 'on' : ''}" data-cad="${p.r.id}:${c}">${c === 'manual_only' ? ICON_MUTE : (p.r.cad === c ? '●' : '○')} ${CAD[c].long}</div>`).join('')}
+      <hr/>${!M.edit ? `<div class="o" data-swap="${p.r.id}">⇅ Make this the ${M.role || 'holder'}</div>` : ''}
+      <div class="o bad" data-rm="${p.r.id}">× Remove from group</div></div>` : '';
+  const holder = `<div class="node holder" style="left:${hx}px;top:${hy}px"><div class="nm">${esc(byId(M.anchor).name)}</div><div class="cad">${M.role ? ROLE[M.role].t : 'pick a role'}</div></div>`;
+  const sw = (cls) => `<svg viewBox="0 0 26 6"><path class="wire ${cls}" d="M1 3 L25 3"/></svg>`;
+  return `<div class="modal vC">${header()}
+    <div class="sect">${chips}${defaults}</div>
+    <div class="sect"><div class="sky" data-sky style="width:${W}px"><svg class="wires" viewBox="0 0 ${W} ${H}">${wires}</svg>${bells}${holder}${nodes}${pop}</div>
+      <div class="legend"><span>${sw('per_turn')}Follow</span><span>${sw('on_signal')}Signals</span><span>${sw('manual_only')}Muted</span><span>Click a session to tune it</span></div></div>
+    ${footer()}</div>`;
+}
+
+/* ── render + events ───────────────────────────────────── */
+function render() {
+  renderRail();
+  const pane = document.getElementById('pane');
+  pane.classList.toggle('blurred', !!M);
+  const scrim = document.getElementById('scrim');
+  scrim.innerHTML = M ? ({ A: modalA, B: modalB, C: modalC })[variant]() : '';
+  document.getElementById('paneTitle').textContent = byId(openId).name;
+  if (M) M.flash = null;
+}
+document.getElementById('rail').addEventListener('click', (e) => {
+  const lb = e.target.closest('[data-link]');
+  if (lb) { e.stopPropagation(); if (M && M.anchor !== lb.dataset.link) { toggleRow(lb.dataset.link); return; } if (!M) openModal(lb.dataset.link); return; }
+  const card = e.target.closest('[data-card]');
+  if (!card) return;
+  if (M) toggleRow(card.dataset.card);
+  else { openId = card.dataset.card; render(); }
+});
+document.getElementById('scrim').addEventListener('click', (e) => {
+  const t = e.target;
+  if (t.id === 'scrim') { closeModal(); return; }
+  const g = (a) => t.closest(`[${a}]`)?.getAttribute(a);
+  let v;
+  if ((v = g('data-act'))) { ({ close: closeModal, submit, unlinkAll })[v](); return; }
+  if ((v = g('data-role'))) return setRole(v);
+  if ((v = g('data-def'))) return setDefault(v);
+  if ((v = g('data-cad'))) { const [id, c] = v.split(':'); M.pick = null; return setCad(id, c); }
+  if ((v = g('data-mute'))) return toggleMute(v);
+  if ((v = g('data-swap'))) { M.pick = null; return swap(v); }
+  if ((v = g('data-rm'))) return removeRow(v);
+  if ((v = g('data-pick'))) { M.pick = M.pick === v ? null : v; return render(); }
+  if (t.closest('[data-sky]') && M.pick) { M.pick = null; render(); }
+});
+document.getElementById('scrim').addEventListener('input', (e) => {
+  const id = e.target.dataset.fader;
+  if (id) setCad(id, CAD_ORDER[+e.target.value]);
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && M) closeModal(); });
+function nope(id) { const el = document.querySelector(`[data-card="${id}"]`); el?.classList.remove('nope'); void el?.offsetWidth; el?.classList.add('nope'); toast('Links never cross workspaces'); }
+let tt;
+function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => t.classList.remove('show'), 1800); }
+
+document.querySelectorAll('[data-v]').forEach((b) => b.addEventListener('click', () => {
+  variant = b.dataset.v;
+  document.querySelectorAll('[data-v]').forEach((x) => x.classList.toggle('on', x === b));
+  if (!M) openModal('a'); else render();
+}));
+document.getElementById('theme').onclick = () => { const r = document.documentElement; r.dataset.theme = r.dataset.theme === 'dark' ? 'light' : 'dark'; };
+const pal = document.getElementById('palette');
+['clay', 'aubergine', 'citrus', 'dune', 'ember', 'glacier', 'graphite', 'harbor', 'ink', 'lagoon', 'moss', 'rosewood', 'sakura', 'space', 'synthwave']
+  .forEach((p) => pal.insertAdjacentHTML('beforeend', `<option>${p}</option>`));
+pal.onchange = () => { document.documentElement.dataset.palette = pal.value; };
+document.getElementById('railMute').onclick = (e) => { railMute = !railMute; e.target.classList.toggle('on', railMute); render(); };
+document.getElementById('reset').onclick = () => { links = SEED(); M = null; render(); };
+
+render();
+</script>
+</body>
+</html>

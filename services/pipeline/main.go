@@ -72,7 +72,11 @@ func defaultMadsHome() string {
 // it can SEE). Last hand-registration site of its kind: W7.9's
 // providers/load collapses these blocks into descriptor loading — new
 // providers go there, not here.
-func buildProviderRegistry(madsHome string, mode agentenv.Mode, passthrough, credEnv []string) (*provider.Registry, error) {
+//
+// fakeScenario, when set, scripts the fake provider (the same YAML `mads run
+// -fake-scenario` takes): rehearsal and e2e runs launched through the Router
+// need scripted, observable stage timing too, not only CLI-launched ones.
+func buildProviderRegistry(madsHome string, mode agentenv.Mode, passthrough, credEnv []string, fakeScenario string) (*provider.Registry, error) {
 	reg := provider.NewRegistry()
 	if err := reg.Register(claudecode.New(claudecode.Config{
 		ExtraArgs:      []string{"--dangerously-skip-permissions"},
@@ -105,7 +109,18 @@ func buildProviderRegistry(madsHome string, mode agentenv.Mode, passthrough, cre
 	})); err != nil {
 		return nil, fmt.Errorf("register goose provider: %w", err)
 	}
-	if err := reg.Register(fake.New(fake.WithTranscriptDir(filepath.Join(madsHome, "fake-transcripts")))); err != nil {
+	fakeOpt := fake.WithTranscriptDir(filepath.Join(madsHome, "fake-transcripts"))
+	fakeProv := fake.New(fakeOpt)
+	if fakeScenario != "" {
+		sc, err := fake.LoadScenario(fakeScenario)
+		if err != nil {
+			return nil, fmt.Errorf("fake scenario: %w", err)
+		}
+		if fakeProv, err = fake.NewWithScenario(sc, fakeOpt); err != nil {
+			return nil, fmt.Errorf("fake scenario: %w", err)
+		}
+	}
+	if err := reg.Register(fakeProv); err != nil {
 		return nil, fmt.Errorf("register fake provider: %w", err)
 	}
 	return reg, nil
@@ -252,7 +267,7 @@ func implicitDir(dir string) bool { return dir == "" || dir == "." || dir == "./
 // provider, and concurrency,
 // then hands off to pipelinerun.Run — the child-mode equivalent of
 // cmd/mads/run.go's own resolution chain.
-func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome string) error {
+func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome, fakeScenario string, excludeTaskIDs []string) error {
 	client := dataclient.New(dataURL, "pipeline")
 
 	sess, err := client.Session(ctx, sessionID)
@@ -282,7 +297,7 @@ func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome strin
 		providerName = "claude-code"
 	}
 	mode, passthrough, credEnv := resolveAgentEnv(cfg, os.Environ())
-	providers, err := buildProviderRegistry(madsHome, mode, passthrough, credEnv)
+	providers, err := buildProviderRegistry(madsHome, mode, passthrough, credEnv, fakeScenario)
 	if err != nil {
 		return err
 	}
@@ -304,8 +319,8 @@ func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome strin
 
 	_, err = pipelinerun.Run(ctx, pipelinerun.Options{
 		Data: client, Provider: prov, SessionID: sessionID, RunID: runID,
-		Template: tpl, TemplateVersion: tplVersion, Cwd: where.cwd, Concurrency: cfg.ConcurrencyLimit,
-		Model: sess.Model, StageTimeout: stageTimeout,
+		Template: tpl, TemplateVersion: tplVersion, ExcludeTaskIDs: excludeTaskIDs,
+		Cwd: where.cwd, Concurrency: cfg.ConcurrencyLimit, Model: sess.Model, StageTimeout: stageTimeout,
 		DisableSleepInhibit: pipelinerun.SleepInhibitDisabled(cfg),
 		Isolated:            isolated, WorktreeRoot: worktreeRoot, Session: where.session,
 		DataURL: dataURL, MadsHome: madsHome,
@@ -323,8 +338,10 @@ func main() {
 	runID := flag.String("run-id", "", "pipeline run ID (required)")
 	sessionID := flag.String("session-id", "", "session ID (required)")
 	tplName := flag.String("template", "", "pipeline template (registry name, required)")
+	exclude := flag.String("exclude-task-ids", "", "comma-separated task IDs the run leaves out")
 	dataURL := flag.String("data-url", "http://localhost:17374", "Data Service base URL")
 	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root (env MADS_HOME)")
+	fakeScenario := flag.String("fake-scenario", "", "scenario YAML for the fake provider (rehearsal and e2e runs; same format as `mads run -fake-scenario`)")
 	flag.Parse()
 
 	// The listener opens and logs before resolution/run starts, so
@@ -350,7 +367,9 @@ func main() {
 	}
 
 	runErr := make(chan error, 1)
-	go func() { runErr <- run(ctx, *runID, *sessionID, *tplName, *dataURL, *madsHome) }()
+	go func() {
+		runErr <- run(ctx, *runID, *sessionID, *tplName, *dataURL, *madsHome, *fakeScenario, pipelinerun.SplitTaskIDs(*exclude))
+	}()
 
 	select {
 	case err := <-runErr:

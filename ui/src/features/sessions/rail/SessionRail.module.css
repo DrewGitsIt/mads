@@ -223,12 +223,13 @@
   opacity: 0.6;
 }
 
-/* Checked-off cards recede until the pointer or focus reaches one. */
+/* Checked-off cards recede until the pointer or focus reaches one, or it is open. */
 .doneList .row {
   opacity: 0.72;
 }
 .doneList .row:hover,
-.doneList .row:focus-visible {
+.doneList .row:focus-visible,
+.doneList .row.selected {
   opacity: 1;
 }
 
@@ -338,9 +339,17 @@
   background: var(--bg2);
 }
 
+/* The open card. A lightness step alone (bg1 → bg3, ~1.1:1) vanished in glare
+   and sat one step from :hover, so it wears an accent outline: an edge, not
+   the unseen card's wash and leading bar. In the link editor the outline is
+   the editor's own vocabulary (.linkCenter, .linkPicked), so it steps aside. */
 .selected {
   background: var(--bg3);
   border-color: var(--line);
+}
+.selected:not([data-link-edit]) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 /* A card the user hasn't met yet — freshly imported, or created by something
@@ -601,9 +610,8 @@
    It cannot be position:absolute: the rail scrolls (SessionsSurface's
    aside.rail is the overflow-y:auto box, marked data-rail-scroll) and a scroll
    container clips both axes, so top/left are computed from the row's rect and
-   handed in as inline style, the way LinkOptionsMenu already places its
-   flyout. Until they are (data-anchored absent) the cluster stays hidden —
-   fixed with auto offsets would paint it at the card's flow position.
+   handed in as inline style. Until they are (data-anchored absent) the
+   cluster stays hidden — fixed with auto offsets would paint it at the card's flow position.
 
    padding-left is a transparent bridge across the gap to the card, not a
    margin: the pointer must never cross dead space or :hover drops mid-travel
@@ -641,8 +649,11 @@
     transform 0.14s ease-out;
 }
 
+/* Hover, or keyboard focus. Not :focus-within: clicking a card focuses it,
+   and that left the cluster pinned open after the pointer had gone. */
 .row:hover .actionCluster[data-anchored],
-.row:focus-within .actionCluster[data-anchored] {
+.row:focus-visible .actionCluster[data-anchored],
+.row:has(:focus-visible) .actionCluster[data-anchored] {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(-50%) translateX(0);
@@ -688,39 +699,6 @@
   color: var(--bad-fg);
   background: var(--bad-soft);
   border-color: var(--bad);
-}
-
-.linkBadge {
-  flex: none;
-  font: 600 var(--fs-chip) var(--sans);
-  letter-spacing: 0.04em;
-  border-radius: var(--r-sm);
-  padding: 1px 7px;
-  background: var(--bg3);
-  color: var(--text2);
-}
-
-.linkBadgeLead {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
-.orchestrateBadge {
-  flex: none;
-  font: 600 var(--fs-chip) var(--sans);
-  letter-spacing: 0.04em;
-  border-radius: var(--r-sm);
-  padding: 1px 7px;
-}
-
-.orchestrateBadgePending {
-  background: var(--warn-soft);
-  color: var(--warn-fg);
-}
-
-.orchestrateBadgeUnsupported {
-  background: var(--bad-soft);
-  color: var(--bad-fg);
 }
 
 .nestedRow {
@@ -815,90 +793,135 @@
   pointer-events: none;
 }
 
-.linkBar {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0 var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  background: var(--accent-soft);
-  border-radius: var(--r-sm);
-}
-
-.linkBarCount {
-  color: var(--accent);
-  font: 600 var(--fs-sm) var(--sans);
-}
-
-.linkBarAction {
-  background: transparent;
-  border: none;
-  color: var(--accent);
-  font: 600 var(--fs-sm) var(--sans);
-  cursor: pointer;
-  padding: 0;
-}
-
-.linkBarAction:disabled {
-  color: var(--text3);
-  cursor: not-allowed;
-}
-
-.linkBarCancel {
-  background: transparent;
-  border: none;
-  color: var(--text2);
-  font: 500 var(--fs-sm) var(--sans);
-  cursor: pointer;
-  padding: 0;
-  margin-left: auto;
-}
-
-.linkAnchor {
-  border-color: var(--accent);
-  border-width: 2px;
-}
-
-.linkModeIndicator {
-  position: absolute;
-  top: 0;
-  right: 0;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding-right: var(--space-3);
-}
-
-.linkAnchorBadge {
-  font: 600 var(--fs-chip) var(--sans);
-  color: var(--accent);
-  letter-spacing: 0.04em;
-}
-
-.linkCheckbox {
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-
-/* Pending re-settle: the order changed while the rail was busy, so it waits
-   here as one clickable line instead of moving rows under the pointer. */
-/* Link options: the nested row's role badge doubles as the flyout trigger. */
-/* The link menus are cluster buttons now, so .actionButton carries all the
-   chrome and this only has to make room for the alert mark. The disclosure
-   caret that used to hang off here went with the pill: in a column of 24px
-   squares it was noise, and none of the cluster's other buttons claim to be
-   anything but a button. */
-.linkOptionsTrigger {
+/* ── shortcut rows ─────────────────────────────────────────────────────────
+   A holder also leads or watches a session whose card lives somewhere else
+   (under its leader, or its earliest monitor — railLinks.ts). Each session is
+   one card in one place, so this holder gets a one-line pointer instead: the
+   role glyph, the name, ↗. Dashed, because it is a reference and not a card;
+   no status and no actions, because it is not a session row. It hangs off the
+   same trunk as the cards above it, sits in its own .subject box so the
+   continuation rule runs past it to any shortcut below, and has a dashed
+   stub where a card has the connector's elbow and head. */
+.shortcut {
   position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 26px;
+  padding: 0 var(--space-2);
+  margin-bottom: 2px;
+  background: none;
+  border: 1px dashed var(--line);
+  border-radius: var(--r-sm);
+  color: var(--text2);
+  font: 500 var(--fs-chip) var(--sans);
+  text-align: left;
+  cursor: pointer;
 }
 
-/* The one thing a nested row still says out loud about its link: something
-   is wrong with the orchestrate grant. A mark, not a word — the sentence is
-   in the flyout this trigger opens (LinkOptionsMenu's note). */
+.shortcut:hover {
+  border-color: var(--text3);
+  color: var(--text);
+}
+
+.shortcut:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The trunk down to this row's middle: same x and weight as
+   .subject:not(:last-child)::after (-25 from the .subject box, which is -26
+   from this row's padding box), starting 7px above the row as the
+   connector's own SVG does. */
+.shortcut::before {
+  content: "";
+  position: absolute;
+  left: -26px;
+  top: -8px;
+  height: 21px;
+  border-left: 2.6px solid var(--text3);
+  pointer-events: none;
+}
+
+/* The stub across to the row: dashed, like the row's own border. */
+.shortcut::after {
+  content: "";
+  position: absolute;
+  left: -24px;
+  width: 20px;
+  top: 11px;
+  border-top: 2px dashed var(--text3);
+  pointer-events: none;
+}
+
+.shortcutGlyph {
+  flex: none;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.shortcutLead {
+  color: var(--accent);
+}
+
+.shortcutWatch {
+  color: var(--info);
+}
+
+.shortcutName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shortcutJump {
+  flex: none;
+  color: var(--text3);
+  font-size: 11px;
+}
+
+/* Where a shortcut's jump lands: a brief accent ring on the real card. */
+.flash {
+  animation: railFlash 1.2s var(--ease-out);
+}
+
+@keyframes railFlash {
+  0%,
+  40% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+}
+
+/* The chain glyph on every card's link button (LinkTrigger). Tinted and
+   counted once the session has a Leader or Monitor link. */
+.chainGlyph {
+  width: 14px;
+  height: 14px;
+}
+
+.linkTriggerLinked,
+.linkTriggerLinked:hover {
+  color: var(--accent);
+}
+
+.linkCount {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: 700 9px/14px var(--sans);
+  text-align: center;
+  pointer-events: none;
+}
+
 /* A set-aside card's own control, held lit so the toggle's state is legible
    without opening anything — the card itself is in a fold that already says
    so, but the button is what you press to undo it. */
@@ -908,38 +931,23 @@
   background: var(--accent-soft);
 }
 
+/* The chain button carries the alert mark (and the count), so it anchors them. */
+.linkTrigger {
+  position: relative;
+}
+
+/* The one thing a card still says out loud about its link: something is
+   wrong with the orchestrate grant. A mark, not a word — the sentence is the
+   chain button's tooltip and the link editor's note. */
 .linkBadgeAlert {
   position: absolute;
+  /* Top-left: the top-right corner is the chain glyph's count badge. */
   top: 2px;
-  right: 2px;
+  left: 2px;
   width: 5px;
   height: 5px;
   border-radius: 50%;
   background: var(--warn-fg);
-}
-
-/* Sized to fit inside the rail from a nested row's meta line (the rail
-   scrolls, so anything wider would be clipped or scroll it sideways). */
-.linkOptions {
-  min-width: 0;
-  width: 224px;
-}
-
-.linkOptionsNote {
-  margin: 0;
-  padding: var(--space-1) var(--space-2);
-  color: var(--warn-fg);
-  font-size: var(--fs-chip);
-}
-
-.linkOptionsDivider {
-  height: 1px;
-  margin: var(--space-1) 0;
-  background: var(--line-soft);
-}
-
-.linkOptionsDanger {
-  color: var(--bad-fg);
 }
 
 /* Context labels: location · branch. One line, never wrapped, and a steady
@@ -1017,4 +1025,79 @@
 .shellCard .status,
 .shellCard .detail {
   padding-left: 22px;
+}
+
+/* ── the rail as the link editor's picker (links/LinkModal.tsx) ──────────
+   While the editor is open the rail stays live: a click links a session to
+   the centred one. The centred card wears a "Center" tag, cards linked to it
+   are checked, and cards that can't be linked to it are dimmed and shake. */
+.linkCenter {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.linkPicked {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.linkBlocked {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.linkCenterTag {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: 700 9px/16px var(--sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.linkTick {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: 1.5px solid var(--text3);
+  color: var(--accent-ink);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.linkTickOn {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.linkBlocked .linkTick {
+  visibility: hidden;
+}
+
+.linkBlockedTag {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--bg3);
+  color: var(--text3);
+  font: 500 10px var(--sans);
+}
+
+.nope {
+  animation: railNope 0.35s;
+}
+
+@keyframes railNope {
+  25% {
+    transform: translateX(-4px);
+  }
+  75% {
+    transform: translateX(4px);
+  }
 }

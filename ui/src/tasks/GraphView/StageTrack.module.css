@@ -1,0 +1,31 @@
+.track {
+  display: flex;
+  gap: 2px;
+}
+
+.seg {
+  flex: 1;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--bg3);
+}
+
+.seg_done {
+  background: color-mix(in srgb, var(--ok) 55%, var(--bg2));
+}
+.seg_now {
+  background: var(--accent);
+}
+.seg_stopped {
+  background: var(--warn);
+}
+.seg_failed {
+  background: var(--bad);
+}
+.seg_skipped {
+  background: repeating-linear-gradient(135deg, var(--bg2) 0 3px, var(--bg3) 3px 6px);
+}
+.seg_waiting,
+.seg_off {
+  background: var(--bg3);
+}

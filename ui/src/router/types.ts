@@ -1301,6 +1301,79 @@ export interface FileDiff {
   modified: string;
 }
 
+// --- Changes tab (docs/CHANGES-DESIGN.md) ---
+// mirrors pkg/contracts/changes.go — GET /sessions/{id}/changeset?vs=…
+
+export type ChangeBaselineId = "start" | "base" | "main";
+export type ChangeTier = "source" | "tests" | "config" | "generated" | "scratch";
+/** Tier display order. */
+export const CHANGE_TIERS: ChangeTier[] = ["source", "tests", "config", "generated", "scratch"];
+
+export interface ChangeBaseline {
+  id: ChangeBaselineId;
+  label: string;
+  available: boolean;
+  reason?: string;
+}
+
+export interface ChangedFile {
+  /** Absolute — the key for diff, delete and open-in-editor. */
+  path: string;
+  /** Relative to the session folder, or absolute when outside it. */
+  display: string;
+  outside?: boolean;
+  change: "added" | "modified" | "deleted";
+  added: number;
+  deleted: number;
+  binary?: boolean;
+  counts_unknown?: boolean;
+  tier: ChangeTier;
+  scratch_rule?: string;
+  attributed: boolean;
+  /** 1-based ChangeTurn.n values, ascending. */
+  turns: number[];
+  /** Session commit hashes containing the file, newest first. */
+  commits: string[];
+  uncommitted: boolean;
+  last_changed: string;
+}
+
+/**
+ * One user turn: the window from its prompt to the next. Only user prompts
+ * open a turn; harness-started work after a background task finishes is
+ * credited to the user turn that was running.
+ */
+export interface ChangeTurn {
+  n: number;
+  prompt: string;
+  at: string;
+  files: number;
+}
+
+export interface ChangeCommit {
+  hash: string;
+  message: string;
+  timestamp: string;
+  paths: string[];
+}
+
+export interface ChangeSet {
+  baseline: ChangeBaselineId;
+  baselines: ChangeBaseline[];
+  git: boolean;
+  files: ChangedFile[];
+  turns: ChangeTurn[];
+  commits: ChangeCommit[];
+  totals: { files: number; added: number; deleted: number };
+  notes?: string[];
+  computed_at: string;
+}
+
+export interface DeleteScratchResult {
+  deleted: string[];
+  skipped: { path: string; reason: string }[];
+}
+
 // mirrors services/router/internal/api/tool_diff.go toolDiff — one mutating
 // tool call's historically-accurate before/after content from the shadow
 // store (GET /sessions/{id}/tool-diff?tool_use_id=…). A 404 on that route
@@ -1387,6 +1460,31 @@ export type PipelineRunOutcome =
   | "running"
   | "interrupted";
 
+/**
+ * One Interrupted task and where a run of the chosen template picks it up
+ * (GET /sessions/{id}/pipeline/pickup; docs/PIPELINE-LEASES-DESIGN.md B2).
+ * Interrupted: in_progress, moved there by the pipeline, held by no live
+ * lease. A pipeline-only concept: never a task status.
+ */
+export interface PipelinePickupTask {
+  task_id: string;
+  /** resume: same template and version, continues at from_stage. restart: first stage, the worktree kept. */
+  mode: "resume" | "restart";
+  from_stage?: string;
+  /** The run that last worked on it; absent when it left no usable record. */
+  last_run_seq?: number;
+  last_run_id?: string;
+  /** The chosen template's current name and version. */
+  template_name: string;
+  template_version: number;
+}
+
+export interface PipelinePickup {
+  /** The session's runs share one directory (current-directory isolation): pickup is less isolated. */
+  shared_directory: boolean;
+  tasks: PipelinePickupTask[];
+}
+
 export interface PipelineRun {
   session_id: string;
   run_seq: number;
@@ -1397,6 +1495,8 @@ export interface PipelineRun {
   tasks_done: number;
   tasks_blocked: number;
   tasks_skipped: number;
+  /** Excluded from the run, or stranded only by an exclusion; never makes it incomplete. */
+  tasks_left_out?: number;
   cost_usd: number;
   agents?: string[];
 }

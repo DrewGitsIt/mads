@@ -1,0 +1,418 @@
+<!doctype html>
+<!--
+  mads — Changes tab: diff real estate on a 13" laptop
+  =====================================================
+
+  Drew's gripe #1 (2026-10-14): on a 13" laptop, fullscreen, the diff pane is
+  ~640px — long lines scroll sideways, the Side by side toggle can't take
+  effect (Monaco forces inline under 900px), and vs-dark paints every added
+  line solid green.
+
+  Frames are drawn at the real 13" viewport (1466 × 880 CSS px) so the
+  legibility judgement is honest. Everything is clickable.
+
+  Shared by every option (the "A" fixes):
+  - long lines wrap; one line-number gutter; no overview ruler
+  - soft palette tints instead of vs-dark's solid green/red
+  - new and deleted files render as plain code with a thin edge bar
+  - the toggle is honoured at any width (decided: #3 option A)
+
+  B  — collapsible list (\ key), draggable width, strip folds to one line
+       while a file is open.
+  C  — stacked: list above, diff below at full width; prev/next file in the
+       diff header, since the list is short.
+  Focus — Drew's idea: the Changes tab extends left over the session
+       sidebar. Works with B or C. Toggle it in either frame.
+
+  Tokens: clay / dark (same as changes-v2.html).
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — Changes: diff real estate</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+    --ok:#7cb389; --ok-soft:rgba(124,179,137,.14);
+    --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+    --info:#96afc7; --info-soft:rgba(150,175,199,.13);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px; --fs-sm:12px; --fs-body:13px; --fs-ui:14px;
+    /* soft diff tints (the proposed theme) */
+    --ins-line: color-mix(in srgb, var(--ok) 9%, transparent);
+    --ins-text: color-mix(in srgb, var(--ok) 26%, transparent);
+    --del-line: color-mix(in srgb, var(--bad) 10%, transparent);
+    --del-text: color-mix(in srgb, var(--bad) 28%, transparent);
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#0a0805; color:var(--text); font:var(--fs-body)/1.5 var(--sans); }
+  button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+  code { font:var(--fs-sm) var(--mono); background:var(--bg2); border-radius:3px; padding:1px 4px; }
+
+  .intro { max-width:1000px; padding:28px 24px 8px; }
+  .intro h1 { font-size:20px; font-weight:650; }
+  .intro p, .intro li { color:var(--text2); margin-top:8px; }
+  .intro li { margin-left:18px; margin-top:3px; }
+  .intro b { color:var(--text); }
+  section.opt { padding:24px 0 8px; }
+  section.opt > h2 { font-size:16px; font-weight:650; padding:0 24px; }
+  section.opt > h2 .sub { color:var(--text3); font-weight:500; font-size:var(--fs-sm); margin-left:8px; }
+  .notes { max-width:1000px; padding:10px 24px 0; color:var(--text2); font-size:var(--fs-sm); }
+  .notes li { margin-left:18px; margin-top:3px; } .notes b { color:var(--text); }
+  .scaler { padding:12px 24px; overflow-x:auto; }
+
+  /* ---- the 13" frame ---- */
+  .frame { width:1466px; height:880px; display:flex; background:var(--bg0); border:1px solid var(--line); border-radius:10px; overflow:hidden; position:relative; }
+  .icons { width:44px; flex-shrink:0; background:var(--bg1); border-right:1px solid var(--line-soft); display:flex; flex-direction:column; align-items:center; gap:18px; padding-top:14px; color:var(--text3); font-size:12px; }
+  .icons .on { color:var(--text); background:var(--accent-soft); border-radius:6px; padding:3px 7px; }
+  .sessions { width:311px; flex-shrink:0; background:var(--bg1); border-right:1px solid var(--line-soft); padding:12px 10px; display:flex; flex-direction:column; gap:8px; transition:opacity .2s; }
+  .sessions .card { border:1px solid var(--line-soft); border-radius:var(--r); padding:8px 10px; background:var(--bg0); }
+  .sessions .card.on { background:var(--bg2); border-color:var(--line); }
+  .sessions .t { font-size:var(--fs-sm); font-weight:600; } .sessions .s { font-size:11px; color:var(--text3); }
+  .sessions .newb { border:1px solid var(--line); border-radius:var(--r); text-align:center; padding:6px; font-size:var(--fs-sm); }
+  .main { flex:1; min-width:0; display:flex; flex-direction:column; background:var(--bg0); transition:margin-left .22s ease; position:relative; z-index:2; }
+  /* Focus: the tab slides over the sessions sidebar; the icon rail stays. */
+  .frame[data-focus=true] .main { margin-left:-311px; box-shadow:-12px 0 24px rgba(0,0,0,.45); }
+  .frame[data-focus=true] .sessions { opacity:.35; }
+
+  .tabs { display:flex; align-items:center; gap:2px; padding:0 12px; border-bottom:1px solid var(--line-soft); background:var(--bg1); height:40px; flex-shrink:0; }
+  .tabs .title { font-weight:650; margin-right:18px; }
+  .tabs span.tab { padding:10px 12px; color:var(--text3); font-size:var(--fs-sm); }
+  .tabs span.tab.on { color:var(--text); box-shadow:inset 0 -2px var(--accent); }
+  .toolbar { display:flex; align-items:center; gap:10px; padding:6px 12px; border-bottom:1px solid var(--line-soft); flex-shrink:0; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:var(--r-sm); overflow:hidden; }
+  .seg button { padding:2px 9px; font-size:var(--fs-sm); color:var(--text2); border-right:1px solid var(--line); }
+  .seg button:last-child { border-right:0; }
+  .seg button[aria-pressed=true] { background:var(--bg3); color:var(--text); }
+  .lbl { color:var(--text3); font-size:var(--fs-sm); }
+  .totals { font:var(--fs-sm) var(--mono); color:var(--text2); }
+  .add { color:var(--ok); } .del { color:var(--bad-fg); }
+  .spacer { flex:1; }
+  .ibtn { border:1px solid var(--line); border-radius:var(--r-sm); padding:2px 8px; font-size:var(--fs-sm); color:var(--text2); background:var(--bg1); white-space:nowrap; }
+  .ibtn:hover { color:var(--text); background:var(--bg2); }
+  .ibtn[aria-pressed=true] { background:var(--accent-soft); color:var(--text); border-color:color-mix(in srgb,var(--accent) 55%,var(--line)); }
+  kbd { font:10px var(--mono); color:var(--text3); border:1px solid var(--line); border-radius:3px; padding:0 3px; margin-left:4px; }
+
+  /* turn strip: full and folded */
+  .strip { border-bottom:1px solid var(--line-soft); padding:4px 8px 0; flex-shrink:0; }
+  .strip .bars { display:flex; align-items:stretch; gap:2px; }
+  .arrow { width:24px; color:var(--text2); font-size:15px; border-radius:var(--r-sm); }
+  .col { width:32px; height:52px; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; gap:3px; border-radius:4px; padding-bottom:3px; }
+  .col .bar { width:18px; background:var(--bg4); border-radius:2px 2px 0 0; }
+  .col span { font:10px var(--mono); color:var(--text3); }
+  .col.sel { background:var(--accent-soft); } .col.sel .bar { background:var(--accent); } .col.sel span { color:var(--text); }
+  .ctx { display:flex; gap:8px; align-items:baseline; padding:3px 4px 6px; font-size:var(--fs-sm); }
+  .ctx .tn { font:600 11px var(--mono); color:var(--text3); white-space:nowrap; }
+  .ctx .prompt { color:var(--text2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fold { display:flex; align-items:center; gap:8px; height:30px; padding:0 8px; border-bottom:1px solid var(--line-soft); font-size:var(--fs-sm); flex-shrink:0; }
+  .fold .mini { display:flex; align-items:flex-end; gap:2px; height:16px; cursor:pointer; padding:0 4px; border-radius:4px; }
+  .fold .mini:hover { background:var(--bg2); }
+  .fold .mini i { width:5px; background:var(--bg4); border-radius:1px; }
+  .fold .mini i.sel { background:var(--accent); }
+  .fold .tn { font:600 11px var(--mono); color:var(--text); white-space:nowrap; }
+  .fold .prompt { color:var(--text2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+
+  .body { display:flex; flex:1; min-height:0; }
+  .body.stacked { flex-direction:column; }
+  .list { width:340px; flex-shrink:0; border-right:1px solid var(--line-soft); overflow:auto; position:relative; }
+  .list.hidden { display:none; }
+  .stacked .list { width:auto; border-right:0; border-bottom:1px solid var(--line-soft); flex-shrink:0; }
+  .grip { width:5px; margin-left:-3px; cursor:col-resize; flex-shrink:0; position:relative; z-index:3; }
+  .grip:hover, .grip.drag { background:color-mix(in srgb,var(--accent) 45%,transparent); }
+  .hgrip { height:5px; margin-top:-3px; cursor:row-resize; flex-shrink:0; position:relative; z-index:3; }
+  .hgrip:hover, .hgrip.drag { background:color-mix(in srgb,var(--accent) 45%,transparent); }
+  .filter { display:flex; gap:6px; padding:6px 10px; border-bottom:1px solid var(--line-soft); position:sticky; top:0; background:var(--bg0); z-index:2; align-items:center; }
+  .filter input { flex:1; min-width:0; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm); color:var(--text); padding:2px 8px; font:var(--fs-sm) var(--sans); }
+  .gh { display:flex; align-items:center; gap:8px; padding:5px 10px; background:var(--bg1); font-size:var(--fs-sm); position:sticky; top:35px; z-index:1; border-bottom:1px solid var(--line-soft); }
+  .gh .name { font-weight:600; } .gh .n { color:var(--text3); } .gh .totals { margin-left:auto; font-size:11px; }
+  .row { display:grid; grid-template-columns:8px 18px 1fr auto; gap:6px; align-items:center; width:100%; padding:3px 10px 3px 12px; text-align:left; }
+  .row:hover { background:var(--bg2); }
+  .row[data-sel=true] { background:var(--accent-soft); box-shadow:inset 2px 0 var(--accent); }
+  .new { width:6px; height:6px; border-radius:50%; background:var(--info); display:inline-block; }
+  .k { font:600 10px var(--mono); border-radius:3px; text-align:center; padding:1px 0; }
+  .k.A { background:var(--ok-soft); color:var(--ok); } .k.M { background:var(--info-soft); color:var(--info); } .k.D { background:var(--bad-soft); color:var(--bad-fg); }
+  .p { min-width:0; display:flex; flex-direction:column; line-height:1.3; }
+  .p .fn { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:var(--fs-sm); }
+  .p .dir { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:11px; color:var(--text3); }
+  .num { font:10.5px var(--mono); color:var(--text3); text-align:right; white-space:nowrap; }
+  /* stacked list: one line per row, several columns of rows */
+  .stacked .rows { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); }
+  .stacked .row { grid-template-columns:8px 18px minmax(0,1fr) auto; }
+  .stacked .p { flex-direction:row; gap:8px; align-items:baseline; }
+  .stacked .p .dir { flex:1; min-width:0; }
+  .stacked .gh { top:35px; }
+
+  /* diff pane */
+  .detail { flex:1; min-width:0; display:flex; flex-direction:column; min-height:0; }
+  .dhead { display:flex; align-items:center; gap:8px; padding:6px 12px; border-bottom:1px solid var(--line-soft); flex-shrink:0; font-size:var(--fs-sm); white-space:nowrap; }
+  .dhead .path { font:var(--fs-sm) var(--mono); min-width:0; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:left; flex:0 1 auto; }
+  .dhead .path bdi { direction:ltr; unicode-bidi:isolate; }
+  .chip { font:10.5px var(--mono); color:var(--text2); border:1px solid var(--line); border-radius:4px; padding:0 5px; }
+  .nav { display:inline-flex; align-items:center; gap:2px; }
+  .nav button { color:var(--text2); padding:0 6px; border-radius:4px; font-size:14px; }
+  .nav button:hover { background:var(--bg2); color:var(--text); }
+  .nav .pos { font:11px var(--mono); color:var(--text3); }
+  .banner { padding:4px 12px; font-size:11.5px; color:var(--text3); border-bottom:1px solid var(--line-soft); flex-shrink:0; background:var(--bg1); }
+  .code { flex:1; overflow:auto; font:12px/1.55 var(--mono); padding:4px 0 40px; }
+  .code .ln { display:grid; grid-template-columns:3px 34px 14px 1fr; }
+  .code .edge { }
+  .code .ln.ins .edge { background:var(--ok); } .code .ln.del .edge { background:var(--bad); }
+  .code .ln.ins { background:var(--ins-line); } .code .ln.del { background:var(--del-line); }
+  .code .no { color:var(--text3); text-align:right; padding-right:8px; user-select:none; opacity:.8; }
+  .code .mk { color:var(--text3); user-select:none; }
+  .code .tx { white-space:pre-wrap; word-break:break-word; padding-right:16px; color:#d9d3c5; }
+  .code.nowrap .tx { white-space:pre; }
+  .code mark.i { background:var(--ins-text); color:inherit; border-radius:2px; }
+  .code mark.d { background:var(--del-text); color:inherit; border-radius:2px; }
+  .code .fold-h { padding:2px 0 2px 51px; color:var(--text3); font-size:11px; background:var(--bg1); border-block:1px solid var(--line-soft); }
+  .code .new-file .ln { background:none; }
+  .code.plain .ln .edge { background:color-mix(in srgb,var(--ok) 55%,transparent); }
+  .code.plain .ln { background:none; }
+  .sbs { flex:1; display:grid; grid-template-columns:1fr 1fr; min-height:0; }
+  .sbs .code:first-child { border-right:1px solid var(--line-soft); }
+  .kw { color:#c9a26b; } .st { color:#9fbf8a; } .cm { color:#8e8674; font-style:italic; } .fnc { color:#9cb6cf; }
+
+  /* "today" comparison frame */
+  .today-note { position:absolute; right:10px; bottom:10px; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r); padding:6px 10px; font-size:11.5px; color:var(--text2); max-width:330px; z-index:5; }
+  .measure { position:absolute; top:0; height:100%; pointer-events:none; z-index:6; }
+  .measure span { position:absolute; bottom:12px; left:50%; transform:translateX(-50%); background:var(--accent); color:var(--accent-ink); font:600 11px var(--mono); padding:1px 6px; border-radius:4px; white-space:nowrap; }
+</style>
+</head>
+<body>
+
+<div class="intro">
+  <h1>Changes tab — diff real estate on a 13" laptop</h1>
+  <p>Each frame is drawn at the real fullscreen viewport of Drew's 13" (1466 × 880 CSS px; scroll sideways if your window is narrower). The orange tag on each frame shows the diff pane's live width. Monaco's side-by-side view needs more than 900px.</p>
+  <ul>
+    <li><b>In every option:</b> long lines wrap, one line-number gutter, soft palette tints, new and deleted files shown as plain code with a thin edge bar, and the Inline / Side by side toggle always works.</li>
+    <li><b>B</b>: hide the list with <kbd>\</kbd> or the ⇤ button, drag its edge to resize, and the turn strip folds to one line while a file is open (click the mini bars to unfold it).</li>
+    <li><b>C</b>: the list sits above the diff in three columns of one-line rows, the diff gets the full width, and ‹ › in the diff header steps through files.</li>
+    <li><b>Focus</b> (Drew's idea): the ⤢ button slides the Changes tab left over the session sidebar; the icon rail stays. Try it in either frame. <kbd>Esc</kbd> or ⤡ brings the sidebar back.</li>
+  </ul>
+</div>
+
+<section class="opt">
+  <h2>Today <span class="sub">for reference: list 440px, unwrapped, solid vs-dark tints, toggle forced to inline</span></h2>
+  <div class="scaler"><div class="frame" id="f-today"></div></div>
+</section>
+
+<section class="opt">
+  <h2>B — collapsible list + folded strip <span class="sub">recommended base</span></h2>
+  <div class="scaler"><div class="frame" id="f-b"></div></div>
+  <ul class="notes">
+    <li><b>List open, sidebar shown:</b> the list defaults to 340px (the old Files tab's width), so the diff gets ~770px. Lines wrap, so Inline reads well. Side by side works but is tight.</li>
+    <li><b>List hidden (<kbd>\</kbd>):</b> the diff gets ~1110px, enough for Side by side. <kbd>j</kbd>/<kbd>k</kbd> or ‹ › in the diff header still step through files, so hiding the list doesn't strand you.</li>
+    <li><b>Focus on:</b> the list and diff both fit, with ~1080px for the diff. On your laptop this is the most comfortable state.</li>
+    <li>The list width and hidden state are remembered (a view preference, so localStorage, like the rail's Done list). The folded strip unfolds on click and refolds once you pick a file.</li>
+  </ul>
+</section>
+
+<section class="opt">
+  <h2>C — stacked <span class="sub">list above, diff below at full width</span></h2>
+  <div class="scaler"><div class="frame" id="f-c"></div></div>
+  <ul class="notes">
+    <li>The diff is always full width, ~1110px with the sidebar shown or ~1420px with Focus on, so Side by side always fits.</li>
+    <li><b>Cost:</b> height. On an 880px screen the list gets ~8–10 rows of three columns before the diff has too little room. Three columns of names don't read as a ranked list, and the Folder tree and Turn grouping, the core of the gold mockup, get cramped. Drag the divider to trade list rows for diff lines.</li>
+    <li>It breaks from the gold layout and from the rail, which both read as a ranked list. I'd only use it as an automatic fallback below some width, not as the default.</li>
+  </ul>
+</section>
+
+<div class="intro">
+  <h1>Recommendation</h1>
+  <ul>
+    <li><b>B with Focus</b>, and only B: one layout, no breakpoint switching. Focus covers small screens; hiding the list covers reading one big file.</li>
+    <li><b>When Focus applies:</b> I'd make it automatic whenever the window is narrower than ~1600px while the Changes tab has a file open, plus a ⤢ button anywhere. Leaving the Changes tab, or <kbd>Esc</kbd> with nothing else open, brings the sidebar back. The alternative is manual only. Automatic sliding could feel jumpy when you tab in, so the slide is short (220ms) and the icon rail stays put to keep you oriented.</li>
+    <li><b>Risk:</b> the sidebar shows other sessions turning Attn. While Focus is on, the icon rail's <code>S</code> gets a dot when any session needs attention, so nothing is hidden silently.</li>
+  </ul>
+</div>
+
+<script>
+const files = [
+  ["build.go","pkg/changes","A",807,0,1],["ChangesTab.tsx","ui/src/files","A",550,0,1],["gitops.go","pkg/changes","A",544,0,0],
+  ["changes-v2.html","docs/mockups","A",516,0,0],["changes-options.html","docs/mockups","A",494,0,1],["ChangesList.tsx","ui/src/files","A",249,0,1],
+  ["ChangesList.module.css","ui/src/files","A",244,0,1],["CHANGES-DESIGN.md","docs","A",234,0,1],["changesModel.ts","ui/src/files","A",220,0,1],
+  ["RailChangesList.tsx","ui/src/context-rail","M",163,54,0],["changeset.go","services/router/internal/api","A",215,0,0],["FilesTab.tsx","ui/src/files","D",0,206,1],
+  ["commit_diff.go","services/router/internal/api","M",88,12,0],["DiffViewer.tsx","ui/src/files/DiffViewer","M",46,19,1],["working_diff.go","services/router/internal/api","M",31,9,0],
+  ["classify.go","pkg/changes","A",188,0,0],["turns.go","pkg/changes","A",141,0,0],["delete.go","pkg/changes","A",97,0,0],
+];
+const turns=[2,1,1,1,5,6,28,5,1,1,30,14];
+
+const goLines = [
+  ["c","// Package changes computes a session's ChangeSet (pkg/contracts/changes.go, docs/CHANGES-DESIGN.md): what differs on disk from a chosen baseline, with line counts, tiers, turn membership and commit membership."],
+  ["c","//"],
+  ["c","// It is the reader half of the Changes architecture: the session service writes the shadow store (services/session/shadow) and the data service owns the touch ledger; this package only reads them, plus the user's repos."],
+  ["k","package changes"],["",""],["k","import ("],
+  ["s",'\t"context"'],["s",'\t"errors"'],["s",'\t"fmt"'],["s",'\t"os"'],["s",'\t"path/filepath"'],["k",")"],["",""],
+  ["c","// Inputs is everything Build needs, gathered by the caller (the Router) from the session record, the data service's ledger, the session's commits and the transcript, so this package never talks to a service itself."],
+  ["k","type Inputs struct {"],
+  ["","\tSession   contracts.Session       // the session record: Dir, WorktreeDir, WorktreeBase and the shadow store location"],
+  ["","\tLedger    []contracts.FileChange  // every touch the session recorded, for attribution and turn membership only"],
+  ["","\tCommits   []contracts.Commit      // commits the session made, newest first, in whichever repo they were recorded"],
+  ["","\tTurns     []TurnWindow            // user prompts with timestamps; only user prompts open a turn"],
+  ["k","}"],["",""],
+  ["f","func Build(ctx context.Context, in Inputs, vs string) (contracts.ChangeSet, error) {"],
+  ["","\tif vs == \"\" { vs = contracts.BaselineSessionStart }"],
+  ["","\tb := newBuilder(in)"],
+  ["","\tswitch vs {"],
+  ["","\tcase contracts.BaselineSessionStart:"],
+  ["","\t\tif err := b.buildFromStart(ctx); err != nil { return contracts.ChangeSet{}, fmt.Errorf(\"changes: session start for %s: %w\", in.Session.ID, err) }"],
+  ["","\tcase contracts.BaselineBase, contracts.BaselineMain:"],
+  ["","\t\tif err := b.buildFromMergeBase(ctx, vs); err != nil { return contracts.ChangeSet{}, fmt.Errorf(\"changes: merge base (%s) for %s: %w\", vs, in.Session.ID, err) }"],
+  ["","\t}"],
+  ["","\treturn b.finish(), nil"],
+  ["","}"],
+];
+const modLines = [
+  ["=",'export function filterFiles(files: ChangedFile[], opts: { query?: string; turns?: number[] | null }): ChangedFile[] {'],
+  ["-",'  const q = opts.query?.trim().toLowerCase();',['toLowerCase()']],
+  ["+",'  const q = normalizeQuery(opts.query);',['normalizeQuery(opts.query)']],
+  ["=",'  const turns = opts.turns && opts.turns.length ? opts.turns : null;'],
+  ["-",'  return files.filter((f) => {',[]],
+  ["+",'  const inTurns = files.filter((f) => !turns || f.turns.some((t) => turns.includes(t)));',[]],
+  ["+",'  if (!q) return { files: inTurns, partial: 0 };',[]],
+  ["+",'  // Whole-token matches win: ".ts" matches foo.ts but not foo.tsx. Only when nothing matches that way does a plain substring match apply, and the rest are counted for the "+N partial matches" line.',[]],
+  ["+",'  const exact = inTurns.filter((f) => tokenMatch(f.display, q));',['tokenMatch']],
+  ["=",'  ...'],
+];
+
+function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;");}
+function hl(kind, t){
+  t = esc(t).replace(/\t/g,"    ");
+  if(kind==="c") return `<span class="cm">${t}</span>`;
+  if(kind==="s") return t.replace(/(".*?")/g,'<span class="st">$1</span>');
+  if(kind==="k") return t.replace(/^(\w+)/,'<span class="kw">$1</span>').replace(/(".*?")/g,'<span class="st">$1</span>');
+  if(kind==="f") return t.replace(/^func (\w+)/,'<span class="kw">func</span> <span class="fnc">$1</span>');
+  return t.replace(/\b(if|return|switch|case|err|nil)\b/g,'<span class="kw">$1</span>').replace(/(".*?")/g,'<span class="st">$1</span>');
+}
+
+/* Code renderers. mode: "plain" (new file, soft), "today" (vs-dark-ish, solid, unwrapped, double gutter) */
+function newFileCode(mode){
+  if(mode==="today"){
+    return `<div class="code nowrap" style="font-size:12.5px">`+goLines.map((l,i)=>
+      `<div class="ln" style="grid-template-columns:30px 30px 14px 1fr;background:#3b4a1f"><span class="no">${i?"":"1"}</span><span class="no">${i+1}</span><span class="mk">+</span><span class="tx">${hl(l[0],l[1])}</span></div>`).join("")+`</div>`;
+  }
+  return `<div class="code plain">`+goLines.map((l,i)=>
+    `<div class="ln"><span class="edge"></span><span class="no">${i+1}</span><span class="mk"></span><span class="tx">${hl(l[0],l[1])}</span></div>`).join("")+`</div>`;
+}
+function inlineMod(){
+  let o=0,m=0;
+  return `<div class="code"><div class="fold-h">⋯ 96 unchanged lines</div>`+modLines.map(([t,s,marks])=>{
+    let tx=esc(s); (marks||[]).forEach(mk=>{tx=tx.replace(esc(mk),`<mark class="${t==="+"?"i":"d"}">${esc(mk)}</mark>`)});
+    const cls=t==="+"?"ins":t==="-"?"del":""; const no=t==="-"?++o+96:(t==="+"?++m+96:(++o,++m)+96);
+    return `<div class="ln ${cls}"><span class="edge"></span><span class="no">${no}</span><span class="mk">${t==="="?"":t}</span><span class="tx">${tx}</span></div>`;
+  }).join("")+`<div class="fold-h">⋯ 54 unchanged lines</div></div>`;
+}
+function sbsMod(){
+  const side=(keep)=>{let n=96;return `<div class="code"><div class="fold-h">⋯ 96 unchanged lines</div>`+modLines.map(([t,s,marks])=>{
+    if(t!=="=" && t!==keep) return `<div class="ln" style="background:repeating-linear-gradient(45deg,transparent 0 4px,var(--bg1) 4px 8px)"><span></span><span class="no"></span><span></span><span class="tx"> </span></div>`;
+    let tx=esc(s); (marks||[]).forEach(mk=>{tx=tx.replace(esc(mk),`<mark class="${t==="+"?"i":"d"}">${esc(mk)}</mark>`)});
+    const cls=t==="+"?"ins":t==="-"?"del":"";
+    return `<div class="ln ${cls}"><span class="edge"></span><span class="no">${++n}</span><span class="mk"></span><span class="tx">${tx}</span></div>`;}).join("")+`</div>`;};
+  return `<div class="sbs">${side("-")}${side("+")}</div>`;
+}
+
+function chrome(){
+  return `<div class="icons"><span class="on">S</span><span>R</span><span>L</span><span>⚙</span><span>D</span></div>
+  <div class="sessions"><div class="newb">+ New session</div>
+   <div class="card on"><div class="t">Review Files at Scale</div><div class="s">Idle · uncommitted changes</div></div>
+   <div class="card"><div class="t">MADS chat UI bugs</div><div class="s">Idle · uncommitted changes</div></div>
+   <div class="card"><div class="t">mads Task Synthesis Redesign</div><div class="s">Idle</div></div>
+   <div class="card"><div class="t">LoRA model specialization</div><div class="s">Idle</div></div>
+   <div class="card"><div class="t">Session Rail Mockup</div><div class="s">Idle</div></div></div>`;
+}
+function tabs(){return `<div class="tabs"><span class="title">Review Files at Scale</span><span class="tab">Conversation</span><span class="tab">Tasks</span><span class="tab on">Changes</span><span class="tab">Pipeline</span></div>`;}
+function toolbar(st){
+  return `<div class="toolbar">${st.focusable?`<button class="ibtn" data-act="focus" aria-pressed="${st.focus}" title="Cover the session sidebar (Esc to restore)">${st.focus?"⤡ Sidebar":"⤢ Focus"}</button>`:""}
+   <span class="lbl">Compare to</span><span class="seg"><button aria-pressed="true">Session start</button><button>main</button></span>
+   <span class="totals">84 files · <span class="add">+9,240</span> <span class="del">−1,602</span></span></div>`;
+}
+function fullStrip(){
+  const max=30;
+  return `<div class="strip"><div class="bars"><button class="arrow">‹</button>${turns.map((v,i)=>`<button class="col${i===6?" sel":""}"><div class="bar" style="height:${Math.max(2,v/max*36)}px"></div><span>${i+1}</span></button>`).join("")}<button class="arrow">›</button></div>
+   <div class="ctx"><span class="tn">TURN 7</span><span class="prompt">"yes pls" — relaunch the backend and UI agents for pkg/changes and the Changes tab</span></div></div>`;
+}
+function foldedStrip(){
+  const max=30;
+  return `<div class="fold"><button class="arrow">‹</button><span class="mini" data-act="unfold" title="Show the turn strip">${turns.map((v,i)=>`<i class="${i===6?"sel":""}" style="height:${Math.max(2,v/max*16)}px"></i>`).join("")}</span><button class="arrow">›</button><span class="tn">TURN 7</span><span class="prompt">"yes pls" — relaunch the backend and UI agents for pkg/changes and the Changes tab</span></div>`;
+}
+function listHTML(st, sel){
+  const rows=files.map((f,i)=>`<button class="row" data-act="pick" data-i="${i}" data-sel="${i===sel}"><span>${f[5]?'<span class="new"></span>':""}</span><span class="k ${f[2]}">${f[2]}</span><span class="p"><span class="fn">${f[0]}</span><span class="dir">${f[1]}</span></span><span class="num"><span class="add">+${f[3]}</span> <span class="del">−${f[4]}</span></span></button>`).join("");
+  return `<div class="filter">${st.collapsible?`<button class="ibtn" data-act="list" title="Hide the list (\\)">⇤</button>`:""}<input placeholder="Filter files…" /><span class="seg"><button aria-pressed="true">Tier</button><button>Folder</button><button>Turn</button><button>Commit</button></span></div>
+   <div class="gh"><span class="name">Source</span><span class="n">57</span><span class="totals"><span class="add">+6,900</span> <span class="del">−836</span></span></div><div class="rows">${rows}</div>`;
+}
+function detailHTML(st, sel){
+  const f=files[sel]; const isNew=f[2]==="A";
+  const nav=`<span class="nav"><button data-act="prev" title="Previous file (k)">‹</button><span class="pos">${sel+1}/84</span><button data-act="next" title="Next file (j)">›</button></span>`;
+  const showList = st.collapsible && st.listHidden ? `<button class="ibtn" data-act="list" title="Show the list (\\)">⇥ Files</button>`:"";
+  const head=`<div class="dhead">${showList}${(st.listHidden||st.stacked)?nav:""}<span class="k ${f[2]}" style="padding:1px 4px">${f[2]}</span><span class="path"><bdi>${f[1]}/${f[0]}</bdi></span><span class="num"><span class="add">+${f[3]}</span> <span class="del">−${f[4]}</span></span><span class="chip">uncommitted</span><span class="chip">turn 7</span><span class="spacer"></span>
+    ${isNew?"":`<span class="seg"><button data-act="inline" aria-pressed="${!st.sbs}">Inline</button><button data-act="sbs" aria-pressed="${st.sbs}">Side by side</button></span>`}
+    <button class="ibtn">Open in editor</button></div>`;
+  const banner = isNew?`<div class="banner">New file · ${f[3]} lines · shown as plain code (nothing to compare against)</div>`:"";
+  const body = isNew? newFileCode() : (st.sbs? sbsMod(): inlineMod());
+  return `<div class="detail">${head}${banner}${body}</div>`;
+}
+
+function mount(id, st){
+  const el=document.getElementById(id);
+  function render(){
+    if(st.today){
+      el.innerHTML=chrome()+`<div class="main">${tabs()}${toolbar({})}${fullStrip()}<div class="body"><div class="list" style="width:440px">${listHTML({},0)}</div>
+       <div class="detail"><div class="dhead"><span class="k A" style="padding:1px 4px">A</span><span class="path"><bdi>pkg/changes/build.go</bdi></span><span class="num"><span class="add">+807</span> <span class="del">−0</span></span><span class="chip">UNCOMMITTED</span><span class="spacer"></span><span class="seg"><button aria-pressed="true">Side by side</button><button>Inline</button></span></div>${newFileCode("today")}</div></div></div>
+       <div class="today-note">Side by side is pressed, but Monaco forces inline under 900px. Two gutters, solid green, and long lines run off the right edge.</div>`;
+    } else {
+      el.dataset.focus = st.focus;
+      const sel=st.sel;
+      const strip = (st.folded && sel!=null) ? foldedStrip() : fullStrip();
+      let body;
+      if(st.stacked){
+        body=`<div class="body stacked"><div class="list" style="height:${st.listH}px">${listHTML(st,sel)}</div><div class="hgrip" data-drag="h"></div>${detailHTML(st,sel)}</div>`;
+      } else {
+        body=`<div class="body"><div class="list${st.listHidden?" hidden":""}" style="width:${st.listW}px">${listHTML(st,sel)}</div>${st.listHidden?"":`<div class="grip" data-drag="w"></div>`}${detailHTML(st,sel)}</div>`;
+      }
+      el.innerHTML=chrome()+`<div class="main">${tabs()}${toolbar(st)}${strip}${body}</div>`;
+    }
+    const d=el.querySelector(".detail"); if(d){const m=document.createElement("div");m.className="measure";el.appendChild(m);
+      requestAnimationFrame(()=>{const fr=el.getBoundingClientRect(),r=d.getBoundingClientRect();m.style.left=(r.left-fr.left)+"px";m.style.width=r.width+"px";
+        const w=Math.round(r.width); m.innerHTML=`<span>diff ${w}px${w>900?" · side by side fits":""}</span>`;});}
+  }
+  el.addEventListener("click",e=>{
+    const b=e.target.closest("[data-act]"); if(!b||st.today) return;
+    const a=b.dataset.act;
+    if(a==="focus") st.focus=!st.focus;
+    if(a==="list") st.listHidden=!st.listHidden;
+    if(a==="unfold") st.folded=false;
+    if(a==="pick"){st.sel=+b.dataset.i; st.folded=true;}
+    if(a==="prev") st.sel=Math.max(0,st.sel-1);
+    if(a==="next") st.sel=Math.min(files.length-1,st.sel+1);
+    if(a==="inline") st.sbs=false;
+    if(a==="sbs") st.sbs=true;
+    render(); if(a==="focus") setTimeout(render,240);
+  });
+  el.addEventListener("mousedown",e=>{
+    const g=e.target.closest("[data-drag]"); if(!g) return; e.preventDefault(); g.classList.add("drag");
+    const sx=e.clientX, sy=e.clientY, w0=st.listW, h0=st.listH;
+    const mv=ev=>{ if(g.dataset.drag==="w") st.listW=Math.max(260,Math.min(620,w0+ev.clientX-sx)); else st.listH=Math.max(120,Math.min(560,h0+ev.clientY-sy)); render(); };
+    const up=()=>{removeEventListener("mousemove",mv);removeEventListener("mouseup",up);};
+    addEventListener("mousemove",mv); addEventListener("mouseup",up);
+  });
+  el.tabIndex=0;
+  el.addEventListener("keydown",e=>{
+    if(st.today) return;
+    if(e.key==="\\" && !st.stacked){st.listHidden=!st.listHidden;render();}
+    if(e.key==="Escape" && st.focus){st.focus=false;render();setTimeout(render,240);}
+    if(e.key==="j"){st.sel=Math.min(files.length-1,st.sel+1);render();}
+    if(e.key==="k"){st.sel=Math.max(0,st.sel-1);render();}
+  });
+  render();
+}
+mount("f-today",{today:true});
+mount("f-b",{focusable:true,focus:false,collapsible:true,listHidden:false,listW:340,folded:true,sel:9,sbs:false});
+mount("f-c",{focusable:true,focus:false,stacked:true,listH:230,folded:true,sel:9,sbs:true});
+</script>
+</body>
+</html>

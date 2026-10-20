@@ -1,0 +1,81 @@
+.panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2) var(--space-3) var(--space-2) 0;
+  animation: panelIn var(--dur-slow) var(--ease-out);
+}
+
+@keyframes panelIn {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel {
+    animation: none;
+  }
+}
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 var(--space-2);
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  min-width: 0;
+}
+
+.crumbLink {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.crumbTask {
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.escHint {
+  white-space: nowrap;
+}
+
+.kbd {
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg2);
+  color: var(--text2);
+  font: 10.5px var(--mono);
+}
+
+.lens {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.neighbours {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-2) 0;
+  color: var(--text3);
+  font-size: var(--fs-chip);
+}

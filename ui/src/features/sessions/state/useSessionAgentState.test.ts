@@ -117,6 +117,34 @@ describe("useSessionAgentState", () => {
     expect(result.current.s1?.workingSince).toBe("2026-09-28T10:00:00Z");
   });
 
+  // The stall check's clock (railGroups' WORKING_STALE_AFTER_MS): silence,
+  // not turn length. Every event from the session counts as hearing from it.
+  it("tracks when the session was last heard from inside the turn", async () => {
+    const { result } = renderHook(() => useSessionAgentState());
+    working("s1", "Working…", "2026-09-28T10:00:00Z");
+    await waitFor(() => expect(result.current.s1?.workingSince).toBe("2026-09-28T10:00:00Z"));
+    // Nothing heard after the turn's own start yet: the turn start stands in.
+    expect(result.current.s1?.lastHeardAt).toBeUndefined();
+
+    working("s1", "Running bash · make check", "2026-09-28T10:00:00Z", "2026-09-28T11:40:00.1Z");
+    await waitFor(() => expect(result.current.s1?.lastHeardAt).toBe("2026-09-28T11:40:00.1Z"));
+    // A delegate update is word from the session too — and the stamps compare
+    // as times: RFC3339Nano drops trailing zeros, so the later ".12Z" sorts
+    // before ".1Z" as a string.
+    delegate("s1", "agent-1", "running", {}, "2026-09-28T11:40:00.12Z");
+    await waitFor(() => expect(result.current.s1?.lastHeardAt).toBe("2026-09-28T11:40:00.12Z"));
+    expect(result.current.s1?.workingSince).toBe("2026-09-28T10:00:00Z");
+  });
+
+  it("never carries a previous turn's last word into the next turn", async () => {
+    const { result } = renderHook(() => useSessionAgentState());
+    working("s1", "Working…", "2026-09-28T10:00:00Z", "2026-09-28T10:05:00Z");
+    idle("s1", "2026-09-28T10:06:00Z");
+    working("s1", "Working…", "2026-09-28T12:00:00Z");
+    await waitFor(() => expect(result.current.s1?.workingSince).toBe("2026-09-28T12:00:00Z"));
+    expect(result.current.s1?.lastHeardAt).toBeUndefined();
+  });
+
   it("falls back to the envelope stamp when a transition carries no since", async () => {
     const { result } = renderHook(() => useSessionAgentState());
     emit("session.agent_state", "s1", { state: "working", label: "Thinking…" }, "2026-09-28T10:00:03Z");

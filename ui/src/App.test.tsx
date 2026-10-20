@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
+import { requestOpenSession } from "./appNavigation";
 import { fixtureConfig, fixtureSessions } from "./router/fixtures";
 import { FakeEventSource } from "./router/testFakeEventSource";
 
@@ -98,7 +99,7 @@ describe("App", () => {
 
   it("shows the failure screen when the config fetch rejects, and Retry refetches", async () => {
     let allowConfig = false;
-    const fetchMock = vi.fn().mockImplementation((input: URL | string, init?: RequestInit) => {
+    const fetchMock = vi.fn().mockImplementation((input: URL | string) => {
       const path = new URL(input.toString()).pathname;
       if (path === "/config") {
         if (!allowConfig) return Promise.reject(new TypeError("Failed to fetch"));
@@ -136,12 +137,9 @@ describe("App", () => {
 
 const sessions = [fixtureSessions["session-active"], fixtureSessions["session-inactive"]];
 
-function stubRouterFetch(pipelineResponse?: () => Response) {
+function stubRouterFetch() {
   const fetchMock = vi.fn().mockImplementation((input: URL | string) => {
     const url = input.toString();
-    if (pipelineResponse && url.endsWith("/pipelines")) {
-      return Promise.resolve(pipelineResponse());
-    }
     if (url.includes("/sessions") && !url.includes("/pipelines")) {
       return Promise.resolve(new Response(JSON.stringify(sessions), { status: 200 }));
     }
@@ -205,47 +203,35 @@ describe("App command palette (W6.11)", () => {
     );
   });
 
-  it("dispatching a start-pipeline command posts to the pipelines endpoint", async () => {
+  it("Run pipeline… opens that session's Tasks tab in Plan, starting nothing", async () => {
     const fetchMock = stubRouterFetch();
     render(<App />);
     await waitFor(() => expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy());
 
     fireEvent.keyDown(document, { key: "P", metaKey: true, shiftKey: true });
-    fireEvent.click(screen.getByTestId("start-pipeline:session-active"));
+    fireEvent.click(screen.getByTestId("run-pipeline:session-active"));
 
-    await waitFor(() => {
-      const call = fetchMock.mock.calls.find((c) => (c[0] as URL | string).toString().includes("/pipelines"));
-      expect(call).toBeTruthy();
-      expect(call?.[1]?.body).toContain("session-active");
-      expect(call?.[1]?.body).toContain("default-implementation");
-    });
-
-    // "start a pipeline" lands on that session's Pipeline tab, not Conversation.
     await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "Pipeline" }).getAttribute("aria-selected")).toBe(
-        "true",
-      ),
+      expect(screen.getByRole("tab", { name: "Tasks" }).getAttribute("aria-selected")).toBe("true"),
     );
+    expect(await screen.findByRole("button", { name: /Run \d+ tasks?/ })).toBeTruthy();
+    expect(
+      fetchMock.mock.calls.some(
+        (c) => (c[0] as URL | string).toString().endsWith("/pipelines") && c[1]?.method === "POST",
+      ),
+    ).toBe(false);
   });
 
-  // The palette's launch used to fire-and-forget: a refused start did
-  // nothing at all, with no hint why.
-  it("a refused palette launch says why and stays put", async () => {
-    stubRouterFetch(
-      () => new Response(JSON.stringify({ error: "a pipeline run is already in progress" }), { status: 409 }),
-    );
+  it("the open-session signal with a run lands on that session's Tasks tab", async () => {
+    stubRouterFetch();
     render(<App />);
     await waitFor(() => expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy());
 
-    fireEvent.keyDown(document, { key: "P", metaKey: true, shiftKey: true });
-    fireEvent.click(screen.getByTestId("start-pipeline:session-active"));
+    act(() => requestOpenSession("session-active", { run: "new" }));
 
-    const toast = await screen.findByText(/Couldn't start the pipeline for/);
-    expect(toast.closest('[role="status"]')?.textContent).toMatch(/already in progress/);
-    expect(screen.queryByRole("tab", { name: "Pipeline", selected: true })).toBeNull();
-
-    fireEvent.click(screen.getByLabelText("Dismiss"));
-    expect(screen.queryByText(/Couldn't start the pipeline for/)).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Tasks" }).getAttribute("aria-selected")).toBe("true"),
+    );
   });
 
   it("Ctrl+` toggles the Shell dock while a session workspace is open", async () => {

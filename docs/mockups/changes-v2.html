@@ -1,0 +1,516 @@
+<!doctype html>
+<!--
+  mads — Changes tab + rail, v2 (option A refined)
+  ================================================
+
+  Follows changes-options.html, where option A (tier list + turn strip) was
+  chosen. Drew's notes, applied:
+
+  - Turn strip: the whole column is the hit target (not the bar), ‹ › arrows
+    step turns, and a context line under the strip shows the first ~120
+    chars of the turn's prompt — previewed on hover, pinned on select.
+  - Risk pills removed. The commit hash pill is gone from rows; commits are a
+    grouping instead (Group by: Commit), and the diff header links to it.
+  - Folder grouping is a real tree: compact folders, per-folder rollups,
+    alphabetical (a stable position), all-generated/scratch folders collapsed.
+  - Turn grouping drives the strip: scrolling lights up the turn in view and
+    shows its prompt; clicking the strip scrolls to that turn. Prompts are
+    always there; the digest line only appears with a plug-in.
+  - Rail redesigned per Drew's sketch: Changes (n files) → tier dropdown →
+    ‹ turn › selector → files → link to the Changes tab (formerly "Files").
+
+  Tokens: clay / dark (tokens.css via chat-search.html).
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — Changes v2</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+    --ok:#7cb389; --ok-soft:rgba(124,179,137,.14);
+    --warn:#d3af5e;
+    --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+    --info:#96afc7; --info-soft:rgba(150,175,199,.13);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px; --fs-sm:12px; --fs-body:13px; --fs-ui:14px;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.5 var(--sans); }
+  button, select { font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+  code { font:var(--fs-sm) var(--mono); background:var(--bg2); border-radius:3px; padding:1px 4px; }
+
+  .page { max-width:1440px; margin:0 auto; padding:28px 24px 120px; display:flex; flex-direction:column; gap:28px; }
+  header.intro h1 { font-size:20px; font-weight:650; }
+  header.intro p { color:var(--text2); max-width:100ch; margin-top:8px; }
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); overflow:hidden; }
+  .block > h2 { font-size:var(--fs-ui); font-weight:650; padding:12px 16px; border-bottom:1px solid var(--line-soft); }
+  .block > h2 .sub { font-weight:500; color:var(--text3); font-size:var(--fs-sm); margin-left:8px; }
+  .note { padding:12px 16px; color:var(--text2); border-top:1px solid var(--line-soft); font-size:var(--fs-sm); }
+  .note li { margin-left:18px; margin-top:3px; } .note b { color:var(--text); }
+
+  .app { display:flex; flex-direction:column; height:820px; background:var(--bg0); }
+  .tabs { display:flex; gap:2px; padding:0 12px; border-bottom:1px solid var(--line-soft); background:var(--bg1); }
+  .tabs span { padding:9px 12px; color:var(--text3); font-size:var(--fs-sm); }
+  .tabs span.on { color:var(--text); box-shadow:inset 0 -2px var(--accent); }
+  .tabs .count { background:var(--bg3); border-radius:999px; padding:0 6px; margin-left:4px; font-size:10.5px; color:var(--text2); }
+  .toolbar { display:flex; align-items:center; gap:12px; padding:8px 12px; border-bottom:1px solid var(--line-soft); flex-wrap:wrap; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:var(--r-sm); overflow:hidden; }
+  .seg button { padding:3px 10px; font-size:var(--fs-sm); color:var(--text2); border-right:1px solid var(--line); }
+  .seg button:last-child { border-right:0; }
+  .seg button[aria-pressed=true] { background:var(--bg3); color:var(--text); }
+  .seg button:disabled { color:var(--text3); opacity:.55; cursor:not-allowed; }
+  .lbl { color:var(--text3); font-size:var(--fs-sm); }
+  .totals { font:var(--fs-sm) var(--mono); color:var(--text2); }
+  .add { color:var(--ok); } .del { color:var(--bad-fg); }
+  .spacer { flex:1; }
+  .plugin { display:inline-flex; align-items:center; gap:8px; border:1px solid var(--line); border-radius:var(--r-sm); padding:3px 4px 3px 10px; font-size:var(--fs-sm); color:var(--text2); }
+  .plugin .dot { width:7px; height:7px; border-radius:50%; }
+  .btn { border:1px solid var(--line); border-radius:var(--r-sm); padding:3px 10px; font-size:var(--fs-sm); color:var(--text); background:var(--bg2); }
+  .btn.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+  .btn.danger { color:var(--bad-fg); border-color:color-mix(in srgb,var(--bad) 50%,var(--line)); }
+  .link { color:var(--accent); cursor:pointer; }
+  .link:hover { text-decoration:underline; }
+
+  /* ---- turn strip ---- */
+  .stripwrap { border-bottom:1px solid var(--line-soft); padding:6px 8px 0; }
+  .strip { display:flex; align-items:stretch; gap:2px; }
+  .arrow { width:26px; color:var(--text2); font-size:16px; border-radius:var(--r-sm); }
+  .arrow:hover { background:var(--bg2); color:var(--text); }
+  .arrow:disabled { opacity:.3; cursor:default; background:none; }
+  .col { width:32px; height:56px; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; gap:3px; border-radius:4px; padding-bottom:3px; }
+  .col:hover { background:var(--bg2); }
+  .col .bar { width:18px; background:var(--bg4); border-radius:2px 2px 0 0; }
+  .col .bar.zero { height:2px !important; background:var(--line); }
+  .col span { font:10px var(--mono); color:var(--text3); }
+  .col.bg .bar { background:repeating-linear-gradient(45deg,var(--bg4) 0 3px,var(--bg3) 3px 6px); }
+  .col.sel { background:var(--accent-soft); } .col.sel .bar { background:var(--accent); } .col.sel span { color:var(--text); }
+  .col.spy { box-shadow:inset 0 -2px var(--info); } .col.spy .bar { background:var(--info); } .col.spy span { color:var(--text); }
+  .ctx { display:flex; gap:8px; align-items:baseline; padding:5px 4px 7px; min-height:30px; font-size:var(--fs-sm); }
+  .ctx .tn { font:600 11px var(--mono); color:var(--text3); white-space:nowrap; }
+  .ctx .prompt { color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ctx .prompt.none { color:var(--text3); font-style:italic; }
+  .ctx.preview .prompt { color:var(--text2); }
+
+  .body { display:flex; flex:1; min-height:0; }
+  .list { width:440px; border-right:1px solid var(--line-soft); overflow:auto; flex-shrink:0; position:relative; }
+  .filter { display:flex; gap:6px; padding:8px 10px; border-bottom:1px solid var(--line-soft); position:sticky; top:0; background:var(--bg0); z-index:2; }
+  .filter input { flex:1; min-width:0; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm); color:var(--text); padding:3px 8px; font:var(--fs-sm) var(--sans); }
+
+  .grp { border-bottom:1px solid var(--line-soft); }
+  .gh { display:flex; align-items:center; gap:8px; width:100%; padding:7px 10px; text-align:left; background:var(--bg1); position:sticky; top:41px; z-index:1; }
+  .gh .caret { width:10px; color:var(--text3); font-size:10px; flex-shrink:0; }
+  .gh .name { font-weight:600; font-size:var(--fs-sm); white-space:nowrap; }
+  .gh .gp { color:var(--text2); font-size:var(--fs-sm); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .gh .n { color:var(--text3); font-size:var(--fs-sm); }
+  .gh .hash { font:11px var(--mono); color:var(--text3); }
+  .gdesc { padding:3px 10px 7px 28px; color:var(--text3); font-size:11.5px; background:var(--bg1); }
+  .gdesc .llm { color:var(--text2); }
+
+  .row { display:grid; grid-template-columns:8px 18px 1fr auto; gap:6px; align-items:center; width:100%; padding:4px 10px 4px 12px; text-align:left; }
+  .row:hover, .dirrow:hover { background:var(--bg2); }
+  .row[data-sel=true] { background:var(--accent-soft); box-shadow:inset 2px 0 var(--accent); }
+  .dim { opacity:.6; }
+  .new { width:6px; height:6px; border-radius:50%; background:var(--info); display:inline-block; }
+  .k { font:600 10px var(--mono); border-radius:3px; text-align:center; padding:1px 0; }
+  .k.A { background:var(--ok-soft); color:var(--ok); } .k.M { background:var(--info-soft); color:var(--info); } .k.D { background:var(--bad-soft); color:var(--bad-fg); }
+  .p { min-width:0; display:flex; flex-direction:column; }
+  .p .fn { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:var(--fs-sm); }
+  .p .dir { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:11px; color:var(--text3); direction:rtl; text-align:left; }
+  .p .dir bdi { direction:ltr; unicode-bidi:isolate; }
+  .meta { display:flex; align-items:center; gap:6px; }
+  .size { display:flex; height:5px; border-radius:2px; overflow:hidden; background:var(--bg3); }
+  .size i { display:block; height:100%; } .size .a { background:var(--ok); } .size .d { background:var(--bad); }
+  .num { font:10.5px var(--mono); color:var(--text3); min-width:58px; text-align:right; }
+
+  /* tree */
+  .tree { padding:4px 0; }
+  .dirrow, .trow { display:grid; grid-template-columns:auto 1fr auto; gap:6px; align-items:center; width:100%; text-align:left; padding:2px 10px 2px 0; font-size:var(--fs-sm); }
+  .dirrow .nm { color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .dirrow .nm .cnt { color:var(--text3); margin-left:6px; }
+  .trow:hover { background:var(--bg2); }
+  .trow[data-sel=true] { background:var(--accent-soft); box-shadow:inset 2px 0 var(--accent); }
+  .ind { display:flex; align-items:center; gap:5px; }
+  .guide { width:14px; align-self:stretch; border-left:1px solid var(--line-soft); margin-left:9px; }
+  .ind .caret { width:12px; text-align:center; color:var(--text3); font-size:10px; }
+  .trow .fname { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .trow .k { width:16px; }
+
+  /* detail */
+  .detail { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .dh { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--line-soft); flex-wrap:wrap; }
+  .dh .path { font:var(--fs-sm) var(--mono); }
+  .chip { font-size:10.5px; border-radius:999px; padding:1px 8px; background:var(--bg3); color:var(--text2); white-space:nowrap; }
+  .chip.tchip { font-family:var(--mono); cursor:pointer; }
+  .chip.tchip:hover { background:var(--accent-soft); color:var(--text); }
+  .summary { margin:10px 12px 0; border:1px solid var(--line-soft); border-left:3px solid var(--info); border-radius:var(--r-sm); padding:8px 10px; background:var(--bg1); font-size:var(--fs-sm); color:var(--text2); }
+  .summary .src { color:var(--text3); font-size:11px; margin-bottom:3px; }
+  .diff { margin:10px 12px 12px; border:1px solid var(--line-soft); border-radius:var(--r-sm); overflow:auto; font:12px/1.55 var(--mono); flex:1; background:var(--bg1); }
+  .diff div { padding:0 10px; white-space:pre; }
+  .diff .h { color:var(--text3); background:var(--bg2); }
+  .diff .a { background:color-mix(in srgb,var(--ok) 13%,transparent); }
+  .diff .d { background:color-mix(in srgb,var(--bad) 13%,transparent); }
+
+  /* rail */
+  .railrow { display:flex; gap:28px; padding:16px; flex-wrap:wrap; align-items:flex-start; }
+  .rail { width:300px; height:560px; border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); display:flex; flex-direction:column; overflow:hidden; }
+  .rail .rh { display:flex; align-items:baseline; gap:6px; padding:10px 12px 6px; }
+  .rail .rh .t { font-weight:650; }
+  .rail .rh .c { color:var(--text3); font-size:var(--fs-sm); }
+  .rail .ctl { padding:0 10px 8px; display:flex; flex-direction:column; gap:6px; border-bottom:1px solid var(--line-soft); }
+  .dd { position:relative; }
+  .dd select { width:100%; appearance:none; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm); padding:4px 26px 4px 8px; font-size:var(--fs-sm); }
+  .dd::after { content:"▾"; position:absolute; right:9px; top:5px; color:var(--text3); font-size:11px; pointer-events:none; }
+  .tsel { display:grid; grid-template-columns:24px 1fr 24px; align-items:center; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm); }
+  .tsel .arrow { width:24px; height:26px; font-size:14px; }
+  .tsel .mid { text-align:center; font-size:var(--fs-sm); }
+  .tsel .mid .tn { font:600 11px var(--mono); }
+  .tsel .mid .of { color:var(--text3); font-size:11px; }
+  .tprompt { font-size:11.5px; color:var(--text2); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-height:34px; }
+  .tprompt.none { color:var(--text3); font-style:italic; }
+  .rail .files { flex:1; overflow:auto; }
+  .rail .row { grid-template-columns:8px 18px 1fr auto; }
+  .rail .empty { padding:16px 12px; color:var(--text3); font-size:var(--fs-sm); }
+  .rail .foot { display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border-top:1px solid var(--line-soft); font-size:var(--fs-sm); }
+  .railnote { max-width:560px; color:var(--text2); font-size:var(--fs-sm); }
+  .railnote li { margin-left:18px; margin-top:4px; } .railnote b { color:var(--text); }
+
+  dialog { margin:auto; background:var(--bg2); color:var(--text); border:1px solid var(--line); border-radius:var(--r); padding:16px; width:460px; }
+  dialog::backdrop { background:rgba(0,0,0,.5); }
+  dialog h4 { font-size:var(--fs-ui); margin-bottom:6px; }
+  dialog p { color:var(--text2); font-size:var(--fs-sm); }
+  dialog ul { margin:10px 0; max-height:180px; overflow:auto; font:11.5px var(--mono); color:var(--text2); list-style:none; background:var(--bg1); border-radius:var(--r-sm); padding:6px 8px; }
+  dialog .acts { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="intro">
+    <h1>Changes v2: option A, refined</h1>
+    <p>Applies Drew's notes on <code>changes-options.html</code>. Same made-up session (OAuth device-flow login, 14 turns, 123 files). Things to try: hover and click the turn strip, use the arrows, and switch Group by to <b>Turn</b> and scroll the list. Then try <b>Folder</b> and <b>Commit</b>. Plug-ins are off by default; the button in the toolbar shows what they add.</p>
+  </header>
+
+  <section class="block">
+    <h2>Changes tab <span class="sub">formerly “Files”</span></h2>
+    <div class="app">
+      <div class="tabs"><span>Conversation</span><span>Tasks</span><span class="on">Changes<span class="count" id="tabcount"></span></span><span>Pipeline</span></div>
+      <div class="toolbar">
+        <span class="lbl">Compare to</span><div class="seg" id="baseline"></div>
+        <span class="totals" id="totals"></span><span class="spacer"></span><span class="plugin" id="plugin"></span>
+      </div>
+      <div class="stripwrap"><div class="strip" id="strip"></div><div class="ctx" id="ctx"></div></div>
+      <div class="body"><div class="list" id="list"></div><div class="detail" id="detail"></div></div>
+    </div>
+    <div class="note"><ul>
+      <li><b>Turn strip.</b> Each turn's whole column is the click target; a turn with no file changes keeps a flat stub, but its column is still clickable and still shows its prompt. Hovering previews a turn's prompt on the context line, and clicking pins it. Shift-click selects a range; the arrows step one turn at a time. In Tier, Folder and Commit grouping the strip <em>filters</em> the list. In Turn grouping it <em>navigates</em>: the turn in view lights up blue, and clicking scrolls to that turn.</li>
+      <li><b>Long sessions.</b> Past about 30 turns, the columns narrow down to an 8px minimum and the strip scrolls horizontally, keeping the selected turn in view. The arrows and the context line work the same at any length.</li>
+      <li><b>Rows</b> carry only the new-since-you-looked dot, the A/M/D badge, the name, +/− counts and a size bar. Committed state is shown by the Commit grouping and by the diff header's “committed in …” link.</li>
+      <li><b>Folder</b> is a standard tree: compact folders, alphabetical order, and a file count and +/− total on every folder. Folders holding only generated or scratch files start collapsed and dimmed. Files outside the session folder get their own root.</li>
+      <li><b>Inside every group</b> (a turn, a commit, an intent) files sort by tier first and size second, so source leads and generated and scratch sink and dim. Tier stays the backbone even when it is not the grouping.</li>
+      <li><b>Commit</b> grouping puts Uncommitted first, then commits newest first. A file that is in two commits appears under each one, and each entry shows that commit's diff, which is what today's CommitList already does.</li>
+    </ul></div>
+  </section>
+
+  <section class="block">
+    <h2>Context rail · Changes</h2>
+    <div class="railrow">
+      <div class="rail" id="rail"></div>
+      <ul class="railnote">
+        <li><b>Top to bottom, as you sketched:</b> a Changes header with the file count, the tier dropdown, the ‹ turn › selector, the files, and a link to the Changes tab.</li>
+        <li>The <b>dropdown</b> shows a count for each tier and has an “All files” entry. Its default is Source, because that's what you want at a glance.</li>
+        <li>The <b>turn selector</b> starts on “All turns”. The arrows <b>skip turns that changed nothing in the chosen tier</b>, so with Source selected, stepping goes 2 → 3 → 4 → 5 → 6… and never lands on an empty list. Below it, the turn's prompt is clamped to two lines, using the same text the tab's context line shows.</li>
+        <li><b>Files</b> are sorted by size, with the filename first and the folder underneath, as the rail has today. Clicking a file opens the Changes tab on that file with the same tier and turn applied.</li>
+        <li>The <b>footer link</b> carries the current tier and turn to the Changes tab. Scratch can be chosen here, but deleting happens only in the tab.</li>
+        <li><b>An idea to consider: “Latest” mode.</b> While the agent is working, an extra stop past the last turn would follow whichever turn is newest, so the rail streams files as they change. Arrowing back would leave follow mode. Try it with › on turn 14.</li>
+      </ul>
+    </div>
+  </section>
+</div>
+
+<dialog id="confirm"><h4 id="cTitle"></h4>
+  <p>These files were created during this session and match the scratch rules. They'll be deleted from disk. This can't be undone.</p>
+  <ul id="cList"></ul>
+  <div class="acts"><button class="btn" onclick="confirmDlg.close()">Cancel</button><button class="btn danger" onclick="confirmDlg.close()">Delete files</button></div>
+</dialog>
+
+<script>
+/* ---------------- data ---------------- */
+const F = [];
+function f(path, kind, add, del, turns, tier, intent, x = {}) { F.push({ path, kind, add, del, turns, tier, intent, ...x }); }
+// commits: hash, message, turn
+const COMMITS = [
+  ["c09e7b2","cli: login and logout commands",7],
+  ["3f1c2a9","auth: device-flow client with polling",5],
+  ["8be0d41","auth: store tokens in the OS keychain",4],
+];
+f("internal/auth/deviceflow.go","A",214,0,[2,3,5],"core","oauth",{commits:["3f1c2a9"],seen:true});
+f("internal/auth/poll.go","A",96,0,[3,5],"core","oauth",{commits:["3f1c2a9"]});
+f("internal/auth/token.go","M",58,21,[4,9],"core","store",{commits:["8be0d41"]});
+f("internal/auth/keychain_darwin.go","A",88,0,[4],"core","store",{commits:["8be0d41"]});
+f("internal/auth/keychain_linux.go","A",102,0,[4,9],"core","store",{commits:["8be0d41"]});
+f("internal/auth/keychain.go","A",41,0,[4],"core","store",{commits:["8be0d41"]});
+f("cmd/mycli/login.go","A",131,0,[6,7],"core","cmd",{commits:["c09e7b2"]});
+f("cmd/mycli/logout.go","A",44,0,[7],"core","cmd",{commits:["c09e7b2"]});
+f("cmd/mycli/root.go","M",9,2,[6],"core","cmd",{commits:["c09e7b2"],seen:true});
+f("internal/httpx/retry.go","M",187,142,[8,10],"core","retry");
+f("internal/httpx/client.go","M",63,38,[8],"core","retry");
+f("internal/httpx/backoff.go","D",0,77,[8],"core","retry");
+f("internal/api/session.go","M",22,6,[5,11],"core","oauth",{commits:["3f1c2a9"]});
+f("ui/src/settings/AccountPane.tsx","M",74,12,[12],"core","cmd");
+f("ui/src/settings/LoginButton.tsx","A",58,0,[12],"core","cmd");
+f("docs/auth.md","A",66,0,[13],"core","cmd");
+[["internal/auth/deviceflow_test.go","A",188,0,[3,5],"oauth","3f1c2a9"],["internal/auth/poll_test.go","A",92,0,[3],"oauth","3f1c2a9"],
+ ["internal/auth/token_test.go","M",41,8,[4,9],"store","8be0d41"],["internal/auth/keychain_test.go","A",77,0,[4,9],"store","8be0d41"],
+ ["cmd/mycli/login_test.go","A",120,0,[7],"cmd","c09e7b2"],["internal/httpx/retry_test.go","M",96,104,[8,10],"retry"],
+ ["internal/httpx/client_test.go","M",14,9,[8],"retry"],["ui/src/settings/AccountPane.test.tsx","M",38,4,[12],"cmd"],
+ ["ui/src/settings/LoginButton.test.tsx","A",44,0,[12],"cmd"],["internal/auth/testdata/device_code.json","A",12,0,[3],"oauth","3f1c2a9"],
+ ["internal/auth/testdata/token_ok.json","A",9,0,[3],"oauth","3f1c2a9"],["internal/auth/testdata/token_pending.json","A",6,0,[3],"oauth","3f1c2a9"],
+ ["internal/auth/testdata/token_slow_down.json","A",6,0,[5],"oauth","3f1c2a9"],["internal/auth/testdata/token_denied.json","A",6,0,[5],"oauth","3f1c2a9"],
+ ["e2e/login.spec.ts","A",71,0,[13],"cmd"],
+].forEach(([p,k,a,d,t,i,c]) => f(p,k,a,d,t,"tests",i,c?{commits:[c]}:{}));
+f("go.mod","M",3,0,[4],"config","deps",{commits:["8be0d41"]});
+f("go.sum","M",12,0,[4],"config","deps",{commits:["8be0d41"]});
+f("ui/package.json","M",1,0,[12],"config","deps");
+f(".github/workflows/ci.yml","M",8,2,[11],"config","deps");
+f("Makefile","M",4,1,[11],"config","deps");
+f(".env.example","M",2,0,[6],"config","deps",{commits:["c09e7b2"]});
+f("ui/package-lock.json","M",412,96,[12],"generated","deps");
+f("internal/api/openapi.gen.go","M",340,12,[11],"generated","oauth");
+for (let i = 0; i < 46; i++) f(`ui/src/settings/__snapshots__/Pane${String(i).padStart(2,"0")}.test.tsx.snap`,"M",6+(i*7)%30,3+(i*5)%11,[12],"generated","cmd");
+for (let i = 0; i < 26; i++) f(`internal/mocks/mock_${["store","client","clock","keychain","poller","http","signer","logger"][i%8]}${i>7?"_"+i:""}.go`,i<6?"A":"M",20+(i*13)%60,(i*3)%14,[i<6?4:8],"generated",i<6?"store":"retry",i<6?{commits:["8be0d41"]}:{});
+[["test_oauth.py",48,[3],"name pattern, repo root"],["debug_poll.go",31,[5],"name pattern"],["scratch/notes.md",22,[2],"scratch/ dir"],
+ ["out.json",310,[5],"never referenced"],["repro_keychain.sh",17,[9],"name pattern, shell-created"],["tmp_token.txt",1,[4],"name pattern"],
+ ["/tmp/devflow.log",880,[5],"outside session folder"],["/tmp/curl_device.sh",9,[3],"outside session folder"],
+ ["cmd/mycli/main_debug.go",26,[6],"name pattern"],["internal/auth/x_test_scratch.go",40,[9],"name pattern"],
+ ["coverage.out",1204,[10],"gitignored"],["internal/httpx/bench.txt",64,[10],"never referenced"],
+].forEach(([p,a,t,why]) => f(p,"A",a,0,t,"scratch",null,{why}));
+F.forEach(x => { x.commits ||= []; if (x.seen === undefined) x.seen = Math.max(...x.turns) <= 5 && x.tier !== "core"; });
+
+const TIERS = [["core","Source"],["tests","Tests & fixtures"],["config","Config & dependencies"],["generated","Generated"],["scratch","Scratch"]];
+const TIERDESC = { core:"Hand-written code and docs: read these first", generated:"Lockfiles, snapshots, mocks, *.gen.*: matched by linguist-generated and path rules", scratch:"Created this session and matched a scratch rule" };
+const INTENTS = {
+  oauth:{ title:"Device-flow OAuth client" }, store:{ title:"Token storage in the OS keychain" }, cmd:{ title:"login / logout commands and the Settings button" },
+  retry:{ title:"Rewrote HTTP retry", flag:true }, deps:{ title:"Dependencies, CI and build" },
+};
+// [n, prompt, digest (plug-in only), background]
+const TURNS = [
+  [1,"Add device-flow OAuth login to the CLI. Use the same client id as the web app; the token endpoint is in internal/api. Don't touch the existing API-key auth path.","Read the auth package and the API client; no changes."],
+  [2,"Sounds right. Go ahead and start with the client, keep it in internal/auth.","Sketched deviceflow.go; wrote scratch notes."],
+  [3,"Can you test it against staging? The device endpoint is https://staging.example.com/device","Implemented device code + polling; added fixtures; tested with a curl script."],
+  [4,"Store the token in the keychain, not a file. Mac and Linux both.","Keychain backends for macOS and Linux; added go-keyring."],
+  [5,"Handle slow_down properly — staging returned it twice and we hammered the endpoint.","Backoff on slow_down; more fixtures; a debug logger dumping to /tmp."],
+  [6,"Wire it into the CLI as `mycli login`.","login command; root registration; .env.example."],
+  [7,"And logout. Commit what you have when tests pass.","logout command and login tests; three commits."],
+  [8,"The retry test is flaky, fix it","Rewrote the HTTP retry instead of the test; deleted backoff.go; regenerated mocks."],
+  [9,"Linux keychain fails when there's no desktop session (CI, ssh). Fall back gracefully.","Fallback for no D-Bus session; repro script."],
+  [10,null,"Retry benchmarks and coverage run (subagent, after turn end).",true],
+  [11,"Run CI locally and fix whatever breaks.","CI Linux job; regenerated OpenAPI client."],
+  [12,"Add a Login button in Settings › Account that runs the same flow.","AccountPane + LoginButton; 46 snapshots updated."],
+  [13,"Document it in docs/ and add an e2e test.","docs/auth.md; e2e spec."],
+  [14,"Commit what's left.","Read-only: summarized remaining changes; no commit made."],
+];
+const PROMPT_CHARS = 120;
+const clip = s => s.length > PROMPT_CHARS ? s.slice(0, PROMPT_CHARS - 1) + "…" : s;
+const promptOf = n => TURNS[n-1][1];
+const BASELINES = [["start","Session start"],["base","Base branch · feat/cli-auth"],["main","main"]];
+
+/* ---------------- state ---------------- */
+const S = { baseline:"start", group:"tier", plugin:false, turns:null, hover:null, spy:null, sel:"internal/httpx/retry.go", q:"", open:{ "t:generated":false, "t:scratch":false } };
+const R = { tier:"core", turn:null }; // rail state; turn null = all, 15 = latest/follow
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" })[c]);
+const base = p => p.slice(p.lastIndexOf("/")+1);
+const dirOf = p => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+const sum = xs => xs.reduce((a,x) => [a[0]+x.add, a[1]+x.del], [0,0]);
+const isOpen = (k, dflt = true) => S.open[k] ?? dflt;
+const filterMode = () => S.group !== "turn";
+
+function visible() {
+  return F.filter(x => {
+    if (filterMode() && S.turns && !x.turns.some(t => S.turns.includes(t))) return false;
+    if (S.q && !x.path.toLowerCase().includes(S.q.toLowerCase())) return false;
+    return true;
+  });
+}
+function sizeBar(a, d) { const t = a + d, w = Math.max(4, Math.min(44, Math.round(Math.sqrt(t)*2.2))); return `<span class="size" style="width:${w}px"><i class="a" style="width:${t?100*a/t:0}%"></i><i class="d" style="width:${t?100*d/t:0}%"></i></span>`; }
+const nums = (a, d) => `<span class="num"><span class="add">+${a}</span> <span class="del">−${d}</span></span>`;
+const dot = x => x.seen ? "" : `<span class="new" title="new since you looked"></span>`;
+const lowTier = x => x.tier === "generated" || x.tier === "scratch";
+
+function rowHTML(x, key = x.path) {
+  return `<button class="row ${lowTier(x)?"dim":""}" data-sel="${S.sel===key}" onclick="pick('${x.path}','${key}')">
+    <span>${dot(x)}</span><span class="k ${x.kind}">${x.kind}</span>
+    <span class="p"><span class="fn">${esc(base(x.path))}</span><span class="dir"><bdi>${esc(dirOf(x.path))}</bdi></span></span>
+    <span class="meta">${nums(x.add,x.del)}${sizeBar(x.add,x.del)}</span></button>`;
+}
+function groupHTML(key, head, files, { desc = "", extra = "", dflt = true, attrs = "", rowKey } = {}) {
+  const open = isOpen(key, dflt), [a,d] = sum(files), unseen = files.some(x => !x.seen);
+  const rank = x => TIERS.findIndex(t => t[0] === x.tier); // tier order is the secondary sort in every grouping
+  const sorted = files.slice().sort((p,q) => rank(p) - rank(q) || (q.add+q.del) - (p.add+p.del));
+  return `<div class="grp" ${attrs}><button class="gh" onclick="toggle('${key}',${dflt})"><span class="caret">${open?"▾":"▸"}</span>${head}<span class="n">${files.length}</span>${unseen?`<span class="new"></span>`:""}<span class="spacer"></span>${extra}${nums(a,d)}</button>
+  ${open && desc ? `<div class="gdesc">${desc}</div>` : ""}${open ? sorted.map(x => rowHTML(x, rowKey ? rowKey(x) : x.path)).join("") : ""}</div>`;
+}
+
+/* ---------------- groupings ---------------- */
+function byTier(v) {
+  return TIERS.map(([k,n]) => { const fs = v.filter(x => x.tier === k); if (!fs.length) return "";
+    return groupHTML("t:"+k, `<span class="name">${n}</span>`, fs, { desc: TIERDESC[k] ? esc(TIERDESC[k]) : "", dflt: !(k==="generated"||k==="scratch"),
+      extra: k === "scratch" ? `<span class="btn danger" onclick="event.stopPropagation();askDelete()">Delete ${fs.length}…</span>` : "" }); }).join("");
+}
+function byTurn(v) {
+  return TURNS.map(([n,p,dg,bg]) => { const fs = v.filter(x => x.turns.includes(n));
+    const head = `<span class="name">Turn ${n}</span><span class="gp">${p ? "“"+esc(clip(p))+"”" : `<i>${bg?"no prompt: background work after turn 9":""}</i>`}</span>`;
+    const desc = S.plugin ? `<span class="llm">${esc(dg)}</span> <span style="opacity:.7">· mads default</span>` : "";
+    if (!fs.length) return `<div class="grp" data-turn="${n}"><div class="gh" style="cursor:default"><span class="caret"></span>${head}<span class="spacer"></span><span class="n">no file changes</span></div>${desc?`<div class="gdesc">${desc}</div>`:""}</div>`;
+    return groupHTML("u:"+n, head, fs, { desc, attrs:`data-turn="${n}"`, rowKey: x => `${n}:${x.path}` }); }).join("");
+}
+function byCommit(v) {
+  const unc = v.filter(x => x.commits.length === 0 || x.turns.some(t => t > 7));
+  let h = groupHTML("c:unc", `<span class="name">Uncommitted</span>`, unc, { desc:"Working tree vs. the last commit" });
+  for (const [hash,msg] of COMMITS) { const fs = v.filter(x => x.commits.includes(hash)); if (!fs.length) continue;
+    h += groupHTML("c:"+hash, `<span class="name" style="font-weight:500">${esc(msg)}</span><span class="hash">${hash}</span>`, fs, { rowKey: x => `${hash}:${x.path}` }); }
+  return h;
+}
+function byIntent(v) {
+  return Object.entries(INTENTS).map(([k,it]) => { const fs = v.filter(x => x.intent === k && !lowTier(x)); if (!fs.length) return "";
+    return groupHTML("i:"+k, `<span class="name">${it.flag?'<span style="color:var(--warn)">⚑ </span>':""}${esc(it.title)}</span>`, fs, { desc: it.flag ? `<span style="color:var(--warn)">Not in any prompt. Started in turn 8 (“The retry test is flaky, fix it”).</span>` : "" }); }).join("")
+    + byTier(v.filter(x => x.tier === "scratch"));
+}
+// folder tree: compact single-child chains, alphabetical, rollups
+function byFolder(v) {
+  const root = { name:"", dirs:{}, files:[] };
+  for (const x of v) {
+    const outside = x.path.startsWith("/");
+    const parts = (outside ? ["outside the session folder", ...x.path.slice(1).split("/")] : x.path.split("/"));
+    let n = root; for (const seg of parts.slice(0,-1)) n = (n.dirs[seg] ||= { name:seg, dirs:{}, files:[] }); n.files.push(x);
+  }
+  const all = n => [...n.files, ...Object.values(n.dirs).flatMap(all)];
+  const compact = n => { for (const k of Object.keys(n.dirs)) { let c = n.dirs[k];
+      while (!c.files.length && Object.keys(c.dirs).length === 1 && !c.name.startsWith("outside")) { const only = Object.values(c.dirs)[0]; c = { ...only, name: c.name + "/" + only.name }; }
+      delete n.dirs[k]; n.dirs[c.name] = c; compact(c); } };
+  compact(root);
+  const guides = d => Array.from({ length:d }, () => `<span class="guide"></span>`).join("");
+  const render = (n, depth, path) => {
+    const dirs = Object.values(n.dirs).sort((a,b) => (a.name.startsWith("outside")) - (b.name.startsWith("outside")) || a.name.localeCompare(b.name));
+    let h = "";
+    for (const d of dirs) { const key = "f:" + path + d.name, fs = all(d), [a,dl] = sum(fs), low = fs.every(lowTier), open = isOpen(key, !low);
+      h += `<button class="dirrow ${low?"dim":""}" onclick="toggle('${esc(key)}',${!low})"><span class="ind">${guides(depth)}<span class="caret">${open?"▾":"▸"}</span></span><span class="nm">${esc(d.name)}<span class="cnt">${fs.length}</span>${fs.some(x=>!x.seen)?' <span class="new"></span>':""}</span><span class="meta">${nums(a,dl)}${sizeBar(a,dl)}</span></button>`;
+      if (open) h += render(d, depth+1, path + d.name + "/"); }
+    for (const x of n.files.slice().sort((a,b) => base(a.path).localeCompare(base(b.path))))
+      h += `<button class="trow ${lowTier(x)?"dim":""}" data-sel="${S.sel===x.path}" onclick="pick('${x.path}')"><span class="ind">${guides(depth)}<span class="caret">${dot(x)}</span><span class="k ${x.kind}">${x.kind}</span></span><span class="fname">${esc(base(x.path))}</span><span class="meta">${nums(x.add,x.del)}${sizeBar(x.add,x.del)}</span></button>`;
+    return h;
+  };
+  return `<div class="tree">${render(root, 0, "")}</div>`;
+}
+
+/* ---------------- render ---------------- */
+function renderChrome() {
+  const v = visible(), [a,d] = sum(v);
+  $("tabcount").textContent = F.filter(x => x.tier !== "scratch").length;
+  $("baseline").innerHTML = BASELINES.map(([k,l]) => `<button aria-pressed="${S.baseline===k}" onclick="S.baseline='${k}';render()">${l}</button>`).join("");
+  $("totals").innerHTML = `${v.length} files · <span class="add">+${a.toLocaleString()}</span> <span class="del">−${d.toLocaleString()}</span>`;
+  $("plugin").innerHTML = S.plugin
+    ? `<span class="dot" style="background:var(--ok)"></span>mads default · ran after settling 2m ago<button class="btn" onclick="S.plugin=false;render()">Turn off</button>`
+    : `<span class="dot" style="background:var(--text3)"></span>No summaries · plug-ins are opt-in<button class="btn primary" onclick="S.plugin=true;render()">Run mads default</button>`;
+}
+function renderStrip() {
+  const counts = TURNS.map(([n]) => F.filter(x => x.turns.includes(n)).length), max = Math.max(...counts);
+  const cur = S.turns ? S.turns : (S.spy ? [S.spy] : null);
+  const lo = cur ? cur[0] : null, hi = cur ? cur[cur.length-1] : null;
+  $("strip").innerHTML = `<button class="arrow" ${lo===1?"disabled":""} onclick="step(-1)" title="previous turn">‹</button>`
+    + TURNS.map(([n,,,bg], i) => { const c = counts[i];
+      const cls = [bg?"bg":"", S.turns&&S.turns.includes(n)?"sel":"", !S.turns&&S.spy===n?"spy":""].join(" ");
+      return `<button class="col ${cls}" onmouseenter="hoverTurn(${n})" onmouseleave="hoverTurn(null)" onclick="turnClick(event,${n})"><span class="bar ${c?"":"zero"}" style="height:${c?6+36*c/max:2}px"></span><span>${n}</span></button>`; }).join("")
+    + `<button class="arrow" ${hi===TURNS.length?"disabled":""} onclick="step(1)" title="next turn">›</button>
+       <span class="spacer"></span><span class="lbl" style="align-self:center;max-width:280px;text-align:right">${filterMode() ? "Click to filter · shift-click for a range" : "Turn grouping: the strip follows your scroll"}</span>`;
+  renderCtx();
+}
+function renderCtx() {
+  const show = S.hover ?? (S.turns ? S.turns[0] : S.spy);
+  const el = $("ctx"); el.className = "ctx" + (S.hover && !(S.turns||[]).includes(S.hover) ? " preview" : "");
+  if (!show) { el.innerHTML = `<span class="tn">ALL TURNS</span><span class="prompt none">Hover a turn to see its prompt; click to filter to it.</span>`; return; }
+  const p = promptOf(show);
+  const range = S.turns && S.turns.length > 1 && !S.hover ? `TURNS ${S.turns[0]}–${S.turns[S.turns.length-1]}` : `TURN ${show}`;
+  const n = F.filter(x => x.turns.includes(show)).length;
+  el.innerHTML = `<span class="tn">${range}</span><span class="prompt ${p?"":"none"}" title="${p?esc(p):""}">${p ? "“"+esc(clip(p))+"”" : "No prompt: a backgrounded subagent wrote these files after turn 9 ended."}</span><span class="spacer"></span><span class="lbl" style="white-space:nowrap">${n} files${S.turns && !S.hover ? ` · <span class="link" onclick="S.turns=null;render()">clear</span>` : ""}</span>`;
+}
+function renderList() {
+  const v = visible(), host = $("list"), top = host.scrollTop;
+  const body = { tier:byTier, folder:byFolder, turn:byTurn, commit:byCommit, intent:byIntent }[S.group](v);
+  host.innerHTML = `<div class="filter"><input placeholder="Filter files…" value="${esc(S.q)}" oninput="S.q=this.value;renderKeepFocus()"><div class="seg">${[["tier","Tier"],["folder","Folder"],["turn","Turn"],["commit","Commit"],["intent","Intent"]].map(([k,l]) => `<button aria-pressed="${S.group===k}" ${k==="intent"&&!S.plugin?'disabled title="Needs a grouping plug-in"':""} onclick="setGroup('${k}')">${l}</button>`).join("")}</div></div>${body}`;
+  host.scrollTop = top;
+}
+function renderDetail() {
+  const x = F.find(y => y.path === S.selPath()); if (!x) { $("detail").innerHTML = ""; return; }
+  const summ = S.plugin ? `<div class="summary"><div class="src">mads default · summary. Written by a model; the diff below is what actually happened.</div>${x.path.endsWith("retry.go") ? "Rewrites retry from fixed backoff to full-jitter exponential with a 30 s cap. <b>Behavior change:</b> 409 and 425 are now retried, and 502 is no longer retried." : "Summary for " + esc(base(x.path)) + "."}</div>` : "";
+  const committed = x.commits.length ? `<span class="chip">committed in <span class="link" onclick="setGroup('commit')">${x.commits[0]}</span></span>` : `<span class="chip">uncommitted</span>`;
+  $("detail").innerHTML = `<div class="dh"><span class="k ${x.kind}">${x.kind}</span><span class="path">${esc(x.path)}</span>${nums(x.add,x.del)}${committed}
+    <span class="spacer"></span><span class="lbl">changed in</span>${x.turns.map(t => `<span class="chip tchip" title="${esc(promptOf(t) || "background")}" onclick="S.turns=[${t}];if(S.group==='turn')S.group='tier';render()">turn ${t}</span>`).join("")}<button class="btn">Open in editor</button></div>${summ}
+    <div class="diff"><div class="h">@@ func (c *Client) do(req *http.Request) (*http.Response, error) @@   (illustrative: every file shows this hunk)</div>
+<div class="d">-	for attempt := 0; attempt &lt; c.maxRetries; attempt++ {</div><div class="d">-		resp, err := c.http.Do(req)</div><div class="d">-		time.Sleep(backoff.Fixed(attempt))</div>
+<div class="a">+	return retry.Do(req.Context(), c.policy, func() (*http.Response, error) {</div><div class="a">+		resp, err := c.http.Do(req)</div><div class="a">+		switch resp.StatusCode {</div><div class="a">+		case 409, 425, 429, 503, 504:</div><div class="a">+			return nil, retry.After(resp.Header.Get("Retry-After"))</div><div class="a">+		}</div><div class="a">+		return resp, nil</div><div class="a">+	})</div></div>`;
+}
+S.selPath = () => S.sel.includes(":") ? S.sel.slice(S.sel.indexOf(":")+1) : S.sel;
+
+/* ---------------- rail ---------------- */
+const LATEST = TURNS.length + 1;
+function railFiles() {
+  return F.filter(x => (R.tier === "all" || x.tier === R.tier) && (R.turn === null || x.turns.includes(R.turn === LATEST ? TURNS.length : R.turn)));
+}
+function railStops() { // turns with files in this tier; null = all; LATEST = follow
+  const ts = TURNS.map(t => t[0]).filter(n => F.some(x => (R.tier === "all" || x.tier === R.tier) && x.turns.includes(n)));
+  return [null, ...ts, LATEST];
+}
+function railStep(d) { const st = railStops(); let i = st.indexOf(R.turn); if (i < 0) i = 0; R.turn = st[Math.max(0, Math.min(st.length-1, i+d))]; renderRail(); }
+function renderRail() {
+  const fs = railFiles().sort((a,b) => (b.add+b.del)-(a.add+a.del)), st = railStops(), i = st.indexOf(R.turn);
+  const opts = [["all","All files",F.length], ...TIERS.map(([k,n]) => [k,n,F.filter(x=>x.tier===k).length])];
+  const t = R.turn === LATEST ? TURNS.length : R.turn;
+  const mid = R.turn === null ? `<span class="tn">All turns</span>` : R.turn === LATEST ? `<span class="tn" style="color:var(--ok)">● Latest</span> <span class="of">following turn ${t}</span>` : `<span class="tn">Turn ${t}</span> <span class="of">of ${TURNS.length}</span>`;
+  const p = t ? promptOf(t) : null;
+  $("rail").innerHTML = `<div class="rh"><span class="t">Changes</span><span class="c">${F.filter(x=>x.tier!=="scratch").length} files</span></div>
+    <div class="ctl"><div class="dd"><select onchange="R.tier=this.value;if(!railStops().includes(R.turn))R.turn=null;renderRail()">${opts.map(([k,n,c]) => `<option value="${k}" ${R.tier===k?"selected":""}>${n} (${c})</option>`).join("")}</select></div>
+      <div class="tsel"><button class="arrow" ${i<=0?"disabled":""} onclick="railStep(-1)">‹</button><div class="mid">${mid}</div><button class="arrow" ${i>=st.length-1?"disabled":""} onclick="railStep(1)">›</button></div>
+      ${R.turn === null ? "" : `<div class="tprompt ${p?"":"none"}" title="${p?esc(p):""}">${p ? "“"+esc(clip(p))+"”" : "No prompt: background work after turn 9."}</div>`}</div>
+    <div class="files">${fs.length ? fs.map(x => `<button class="row ${lowTier(x)?"dim":""}" onclick="pick('${x.path}')"><span>${dot(x)}</span><span class="k ${x.kind}">${x.kind}</span><span class="p"><span class="fn">${esc(base(x.path))}</span><span class="dir"><bdi>${esc(dirOf(x.path))}</bdi></span></span><span class="meta">${nums(x.add,x.del)}</span></button>`).join("") : `<div class="empty">No ${R.tier === "all" ? "" : TIERS.find(z=>z[0]===R.tier)[1].toLowerCase()+" "}changes in this turn.</div>`}</div>
+    <div class="foot"><span class="lbl">${fs.length} shown${fs.some(x=>!x.seen)?` · <span class="new"></span> ${fs.filter(x=>!x.seen).length} new`:""}</span><span class="link">Open in Changes →</span></div>`;
+}
+
+/* ---------------- interactions ---------------- */
+function render() { if (S.group === "intent" && !S.plugin) S.group = "tier"; renderChrome(); renderStrip(); renderList(); renderDetail(); renderRail(); }
+function renderKeepFocus() { render(); const i = document.querySelector(".filter input"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }
+function setGroup(g) { S.group = g; S.spy = null; if (g === "turn") S.turns = null; $("list").scrollTop = 0; render(); if (g === "turn") spy(); }
+function pick(p, key = p) { S.sel = key; const x = F.find(y => y.path === p); if (x) x.seen = true; render(); }
+function toggle(k, dflt) { S.open[k] = !isOpen(k, dflt); renderList(); }
+function hoverTurn(n) { S.hover = n; renderCtx(); }
+function turnClick(e, n) {
+  if (!filterMode()) { scrollToTurn(n); return; }
+  if (e.shiftKey && S.turns) { const lo = Math.min(S.turns[0], n), hi = Math.max(S.turns[S.turns.length-1], n); S.turns = Array.from({ length:hi-lo+1 }, (_, i) => lo+i); }
+  else S.turns = S.turns && S.turns.length === 1 && S.turns[0] === n ? null : [n];
+  render();
+}
+function step(d) {
+  if (!filterMode()) { scrollToTurn(Math.max(1, Math.min(TURNS.length, (S.spy || 1) + d))); return; }
+  const cur = S.turns ? (d > 0 ? S.turns[S.turns.length-1] : S.turns[0]) : (d > 0 ? 0 : TURNS.length + 1);
+  S.turns = [Math.max(1, Math.min(TURNS.length, cur + d))]; render();
+}
+function scrollToTurn(n) { const el = $("list").querySelector(`[data-turn="${n}"]`); if (el) $("list").scrollTop = el.offsetTop - 41; S.spy = n; renderStrip(); }
+function spy() {
+  if (S.group !== "turn") return;
+  const host = $("list"), y = host.scrollTop + 41 + 4; let cur = 1;
+  host.querySelectorAll("[data-turn]").forEach(el => { if (el.offsetTop <= y) cur = +el.dataset.turn; });
+  if (cur !== S.spy) { S.spy = cur; renderStrip(); }
+}
+$("list").addEventListener("scroll", spy);
+const confirmDlg = $("confirm");
+function askDelete() { const fs = F.filter(x => x.tier === "scratch"); $("cTitle").textContent = `Delete ${fs.length} scratch files?`; $("cList").innerHTML = fs.map(x => `<li>${esc(x.path)}  <span style="color:var(--text3)">· ${esc(x.why)}</span></li>`).join(""); confirmDlg.showModal(); }
+render();
+</script>
+</body>
+</html>

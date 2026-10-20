@@ -26,9 +26,19 @@ import (
 // that ref all degrade to a connection that opens and closes having
 // delivered zero frames — the UI's signal to fall back to the raw prose log
 // (pipeline_output.go), not an error.
+//
+// Takes the same ?run=&stage=&attempt= selector as the output endpoint
+// (pipelineLogQuery); a pinned stage/attempt resolves that attempt's ref
+// instead of following the task to its next stage.
 func (s *server) handlePipelineTaskTurns(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 	taskID := r.PathValue("taskId")
+
+	sel, err := parsePipelineLogQuery(r.URL.Query())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -47,13 +57,9 @@ func (s *server) handlePipelineTaskTurns(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	runSeq, ok := latestRunSeq(s.runsDir, sessionID)
+	runSeq, taskDir, curPath, ok := s.resolvePipelineLog(sessionID, taskID, sel)
 	if !ok {
-		return
-	}
-	taskDir := filepath.Join(s.runsDir, sessionID, strconv.FormatInt(runSeq, 10), taskID)
-	curPath, ok := latestLogFile(taskDir)
-	if !ok {
+		sel.emptyEnd(w, flusher)
 		return
 	}
 
@@ -67,14 +73,18 @@ func (s *server) handlePipelineTaskTurns(w http.ResponseWriter, r *http.Request)
 	for {
 		// A newer *.log file means the task moved to its next stage —
 		// re-resolve the ref for the new attempt (pipeline_output.go's same
-		// re-glob-on-poll).
-		if next, found := latestLogFile(taskDir); found && next != curPath {
+		// re-glob-on-poll). A pinned attempt never switches.
+		if next, found := latestLogFile(taskDir); !sel.pinned && found && next != curPath {
 			curPath, haveRef, lastLen = next, false, -1
 		}
 
+		// Before the read, like pipeline_output.go: the last frame sent is
+		// taken after the attempt stopped being live.
+		finished := s.pipelineLogFinished(ctx, sessionID, taskID, runSeq, taskDir, curPath, sel)
+
 		if !haveRef {
 			if stage, attempt, ok := parseStageAttempt(curPath); ok {
-				if ref, found := s.findAttemptRef(ctx, sessionID, taskID, stage, attempt); found {
+				if ref, found := s.findAttemptRef(ctx, sessionID, taskID, runSeq, stage, attempt); found {
 					curRef, haveRef = ref, true
 				}
 			}
@@ -95,12 +105,13 @@ func (s *server) handlePipelineTaskTurns(w http.ResponseWriter, r *http.Request)
 			}
 		}
 
+		if finished {
+			writeEnd(w, flusher)
+			return
+		}
 		task, err := s.data.Task(ctx, taskID)
 		if err == nil && isTerminalTaskStatus(task.Status) {
-			if _, err := fmt.Fprint(w, "event: end\ndata:\n\n"); err != nil {
-				return
-			}
-			flusher.Flush()
+			writeEnd(w, flusher)
 			return
 		}
 
@@ -137,23 +148,42 @@ func (s *server) turnsFor(ctx context.Context, sess contracts.Session, ref strin
 // exact attribution this endpoint depends on — no path guessing. false if
 // no such stage.attempt_ref event has landed yet (the one-shot hasn't
 // announced a ref, or never will).
-func (s *server) findAttemptRef(ctx context.Context, sessionID, taskID, stage string, attempt int) (string, bool) {
-	evs, err := s.data.Events(ctx, 0, sessionID, []string{string(contracts.StageAttemptRef)})
+//
+// runSeq is the run's pipeline.started seq (engine.go). A ref payload's
+// run_seq names its run exactly; older engines wrote none, and their run's
+// refs are those after runSeq and before the session's next
+// pipeline.started — otherwise an earlier run's executor attempt 1 would
+// answer for a later run's, or vice versa.
+func (s *server) findAttemptRef(ctx context.Context, sessionID, taskID string, runSeq int64, stage string, attempt int) (string, bool) {
+	evs, err := s.data.Events(ctx, runSeq, sessionID, []string{string(contracts.StageAttemptRef), string(contracts.PipelineStarted)})
 	if err != nil {
 		return "", false
 	}
+	// Newer engines also stamp run_seq on the ref; one naming another run
+	// (two runs overlapping on the session) is never this run's. A
+	// resumed attempt (docs/PIPELINE-LEASES-DESIGN.md B2) re-records its
+	// ref under the run that resumed it, so it resolves the same way.
 	type refPayload struct {
 		Stage   string `json:"stage"`
 		Attempt int    `json:"attempt"`
 		Ref     string `json:"ref"`
+		RunSeq  int64  `json:"run_seq"`
 	}
 	var ref string
+	pastNextRun := false
 	for _, ev := range evs {
+		if ev.Type == contracts.PipelineStarted {
+			pastNextRun = true // only refs naming their run count from here
+			continue
+		}
 		if ev.TaskID != taskID {
 			continue
 		}
 		var p refPayload
 		if err := json.Unmarshal(ev.Payload, &p); err != nil {
+			continue
+		}
+		if p.RunSeq != 0 && p.RunSeq != runSeq || p.RunSeq == 0 && pastNextRun {
 			continue
 		}
 		if p.Stage == stage && p.Attempt == attempt && p.Ref != "" {

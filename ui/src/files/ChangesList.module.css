@@ -1,0 +1,244 @@
+/* Group sections (Tier, Turn, Commit) */
+.grp {
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.gh {
+  position: sticky;
+  top: var(--filter-h, 41px);
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 10px 0 0;
+  background: var(--bg1);
+  min-height: 33px;
+}
+
+.ghToggle,
+.ghStatic {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 7px 0 7px 10px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.ghToggle {
+  cursor: pointer;
+}
+.ghToggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.caret {
+  flex-shrink: 0;
+  width: 10px;
+  font-size: 10px;
+  color: var(--text3);
+}
+
+.name,
+.nameCommit {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text);
+}
+.nameCommit {
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gp {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  color: var(--text2);
+}
+
+.hash {
+  flex-shrink: 0;
+  font: 11px var(--mono);
+  color: var(--text3);
+}
+
+.n {
+  flex-shrink: 0;
+  font-size: var(--fs-sm);
+  color: var(--text3);
+  white-space: nowrap;
+}
+
+.ghDot {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.gdesc {
+  padding: 3px 10px 7px 28px;
+  background: var(--bg1);
+  font-size: 11.5px;
+  color: var(--text3);
+}
+
+.danger {
+  flex-shrink: 0;
+  color: var(--bad-fg);
+  border-color: color-mix(in srgb, var(--bad) 50%, var(--line));
+}
+
+/* File rows */
+.row {
+  display: grid;
+  grid-template-columns: 8px 18px minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+  padding: 4px 10px 4px 12px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.row:hover,
+.dirrow:hover,
+.trow:hover {
+  background: var(--bg2);
+}
+.row[data-selected="true"],
+.trow[data-selected="true"] {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 var(--accent);
+}
+.row:focus-visible,
+.dirrow:focus-visible,
+.trow:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+[data-dim] {
+  opacity: 0.6;
+}
+
+.p {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.fn {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+.dir {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font-size: 11px;
+  color: var(--text3);
+}
+.dir bdi {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* Folder tree */
+.tree {
+  padding: 4px 0;
+}
+
+.dirrow,
+.trow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+  padding: 2px 10px 2px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ind {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  gap: 5px;
+}
+
+.guide {
+  width: 14px;
+  align-self: stretch;
+  margin-left: 9px;
+  border-left: 1px solid var(--line-soft);
+}
+
+.tcaret {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  width: 12px;
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--text3);
+}
+
+.nm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text);
+}
+.nmText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dirrow[data-outside] .nmText {
+  font-style: italic;
+  color: var(--text2);
+}
+.cnt {
+  flex-shrink: 0;
+  color: var(--text3);
+}
+
+.fname {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}

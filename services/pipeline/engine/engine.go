@@ -28,6 +28,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/inhibit"
 	"github.com/drewkidwell/mads/pkg/mergedriver"
+	"github.com/drewkidwell/mads/pkg/pipelineprogress"
 	"github.com/drewkidwell/mads/pkg/procid"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/pkg/template"
@@ -50,6 +51,12 @@ type Config struct {
 	// same id the Router puts on the pipeline.cancelled/failed it emits for
 	// the run, so the run history pairs a run with its end by id rather than
 	// by order (two engines can overlap on one session). Empty omits it.
+	//
+	// It also names the run's task leases: every claim's holder is
+	// "<Actor>:<RunID>", i.e. "pipeline:run_…" (docs/PIPELINE-LEASES-DESIGN.md
+	// A1), which is what the Router's exit cleanup releases. With no RunID
+	// (some tests, embedded callers) the holder falls back to the bare
+	// Actor, which works the same apart from that cleanup.
 	RunID string
 	// Template is the frozen copy (spec §6: saves never disturb in-flight
 	// runs) — parse+validate before calling Run; Run re-checks structure.
@@ -66,6 +73,12 @@ type Config struct {
 	// (pre-versioning row, or a caller that bypassed LoadTemplate) and is
 	// omitted from the event payload rather than reported as a real version.
 	TemplateVersion int
+	// ExcludeTaskIDs are tasks this run leaves out: never launched, their
+	// statuses untouched. A ready task that (transitively) depends on one
+	// can never start; at quiescence it reports left out (Summary.LeftOut,
+	// pipeline.completed "left_out"), not skipped, unless something else
+	// on its chain is unsatisfiable too. Echoed on pipeline.started.
+	ExcludeTaskIDs []string
 	// Cwd is where command stages run and agent one-shots execute. W3.2
 	// replaces this with per-task worktrees.
 	Cwd string
@@ -80,7 +93,8 @@ type Config struct {
 	// conflicting file plus the trunk-side task that landed first), not a
 	// silent trunk break.
 	Concurrency int
-	// Actor is the run's lease identity (e.g. "pipeline"). Default "pipeline".
+	// Actor is the run's attribution (notes, events) and its lease holder's
+	// kind (see RunID). It must be Data's own actor. Default "pipeline".
 	Actor string
 	// Model overrides agent model preferences when set.
 	Model string
@@ -167,6 +181,14 @@ type Summary struct {
 	Done    []string // task IDs that completed every stage
 	Blocked []string // task IDs blocked by stage failure
 	Skipped []string // task IDs never eligible (unsatisfiable dependencies)
+	// LeftOut holds the run's explicit exclusions (Config.ExcludeTaskIDs
+	// still unfinished in the session) plus the tasks stranded only by
+	// them. They don't make the run incomplete — see leftOutOnly.
+	LeftOut []string
+	// Interrupted holds tasks this run was working on when it was stopped
+	// (ctx cancelled): left in_progress with their worktree and branch, for
+	// a later run to pick up (docs/PIPELINE-LEASES-DESIGN.md B1).
+	Interrupted []string
 }
 
 // Run executes the pipeline to quiescence: no runnable tasks remain. It
@@ -226,6 +248,7 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 	}
 
 	e := &engine{cfg: cfg, agents: agents, conds: conds, loops: map[string]int{}, attempts: map[string]int{}, clock: cfg.Clock}
+	e.holder = leaseHolder(cfg.Actor, cfg.RunID)
 	if own, ok := procid.Current(procid.Default); ok {
 		e.identity = own
 	}
@@ -312,6 +335,7 @@ type engine struct {
 	conds    []*template.Cond
 	wt       *worktrees              // nil unless Isolated
 	identity contracts.LeaseIdentity // this engine's own process identity (reap-on-launch); zero value if unavailable
+	holder   string                  // every claim's lease holder: "<Actor>:<RunID>", or Actor without a RunID
 	clock    Clock                   // wall-clock source; never nil after Run's defaulting
 
 	// mcpRegistry/credStore back session-time capability mounting (scoped
@@ -365,6 +389,14 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 	if e.cfg.TemplateVersion > 0 {
 		payload["template_version"] = e.cfg.TemplateVersion
 	}
+	if len(e.cfg.ExcludeTaskIDs) > 0 {
+		payload["excluded_task_ids"] = e.cfg.ExcludeTaskIDs
+	}
+	// The Router's lost-run sweep proves a run's engine dead by this
+	// (docs/PIPELINE-LEASES-DESIGN.md B1); omitted when it couldn't be read.
+	if e.identity != (contracts.LeaseIdentity{}) {
+		payload["identity"] = e.identity
+	}
 	e.runSeq = e.event(ctx, contracts.PipelineStarted, "", payload)
 
 	// The live work queue (spec §6): task.* events for this session poke the
@@ -380,12 +412,33 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 
 	summary := &Summary{}
 	type result struct {
-		id     string
-		status contracts.TaskStatus
+		id string
+		taskResult
 	}
 	results := make(chan result)
 	running := map[string]bool{}
 	excluded := map[string]bool{} // attempted but unclaimable (leased elsewhere): not ours this run
+	leftOut := map[string]bool{}  // cfg.ExcludeTaskIDs: never launched, never counted
+	for _, id := range e.cfg.ExcludeTaskIDs {
+		leftOut[id] = true
+	}
+	// Interrupted tasks (in_progress, no live lease) are picked up like
+	// ready ones (docs/PIPELINE-LEASES-DESIGN.md B2). An in_progress task
+	// another run is working on is not Interrupted: it is that run's, not
+	// skipped by this one. leased is refreshed each scan from the pipeline
+	// leases (any run's); a claim that still conflicts (a holder of another
+	// kind, or a lease taken since the scan) parks the task for
+	// heldBackoff, so a task held elsewhere costs no claim per scan.
+	// Only a task the pipeline moved to in_progress can be Interrupted
+	// (pipelineprogress.InProgressLog): one a person, a session or the synthesizer set in
+	// progress is never picked up, and not counted.
+	leased := map[string]bool{}
+	heldUntil := map[string]time.Time{}
+	var movedIn pipelineprogress.InProgressLog
+	interrupted := func(t contracts.Task) bool {
+		return t.Status == contracts.StatusInProgress && movedIn.MovedBy(t.ID, e.cfg.Actor) &&
+			!leased[t.ID] && !running[t.ID] && !time.Now().Before(heldUntil[t.ID])
+	}
 
 	// Continuous scheduler: fill free slots from the ready set, then wait
 	// for one completion and re-scan — a finishing task can unblock its
@@ -408,8 +461,23 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 			}
 		}
 		byID := map[string]contracts.Task{}
+		maybeInterrupted := false
 		for _, t := range tasks {
 			byID[t.ID] = t
+			if t.Status == contracts.StatusInProgress && !t.Draft && !running[t.ID] && !excluded[t.ID] && !leftOut[t.ID] {
+				maybeInterrupted = true
+			}
+		}
+		if maybeInterrupted {
+			// Only worth requests when some in_progress task could be
+			// Interrupted. A failed read keeps the last scan's view.
+			e.refreshInProgress(ctx, &movedIn)
+			if ls, err := e.cfg.Data.LeasesOfKind(ctx, e.cfg.Actor); err == nil {
+				clear(leased)
+				for _, l := range ls {
+					leased[l.TaskID] = true
+				}
+			}
 		}
 		// Mid-run inserts can introduce cycles the launch check never saw:
 		// re-check and reject the participants loudly (spec §6, §3.6).
@@ -429,8 +497,8 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 			}
 		}
 		if ctx.Err() == nil { // when cancelled, stop launching but keep draining
-			for _, t := range e.runnable(tasks, byID) {
-				if running[t.ID] || excluded[t.ID] || len(running) >= e.cfg.Concurrency {
+			for _, t := range e.runnable(tasks, byID, interrupted) {
+				if running[t.ID] || excluded[t.ID] || leftOut[t.ID] || len(running) >= e.cfg.Concurrency {
 					continue
 				}
 				running[t.ID] = true
@@ -439,9 +507,23 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 		}
 		if len(running) == 0 {
 			// Quiescent: nothing running, nothing can start. Anything
-			// still ready has unsatisfiable dependencies this run.
+			// still ready or Interrupted has unsatisfiable dependencies
+			// this run. Those stranded only by an explicit exclusion are
+			// left out, not skipped; everything else is skipped.
+			schedulable := func(t contracts.Task) bool {
+				return (t.Status == contracts.StatusReady || interrupted(t)) && !t.Draft && !excluded[t.ID]
+			}
+			memo := map[string]bool{}
 			for _, t := range tasks {
-				if t.Status == contracts.StatusReady && !t.Draft && !excluded[t.ID] {
+				switch {
+				case leftOut[t.ID]:
+					if t.Status != contracts.StatusDone {
+						summary.LeftOut = append(summary.LeftOut, t.ID)
+					}
+				case !schedulable(t):
+				case leftOutOnly(t.ID, byID, leftOut, schedulable, memo, map[string]bool{}):
+					summary.LeftOut = append(summary.LeftOut, t.ID)
+				default:
 					summary.Skipped = append(summary.Skipped, t.ID)
 				}
 			}
@@ -452,10 +534,16 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 		select {
 		case r := <-results:
 			delete(running, r.id)
-			switch r.status {
-			case contracts.StatusDone:
+			switch {
+			case r.heldElsewhere:
+				// An Interrupted task another run claimed first: theirs,
+				// not skipped by this run. Look again after the backoff.
+				heldUntil[r.id] = time.Now().Add(heldBackoff)
+			case r.interrupted:
+				summary.Interrupted = append(summary.Interrupted, r.id)
+			case r.status == contracts.StatusDone:
 				summary.Done = append(summary.Done, r.id)
-			case contracts.StatusBlocked:
+			case r.status == contracts.StatusBlocked:
 				summary.Blocked = append(summary.Blocked, r.id)
 			default:
 				excluded[r.id] = true
@@ -477,10 +565,11 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 		outcome = "incomplete"
 	}
 	completed := map[string]any{
-		"outcome": outcome,
-		"done":    len(summary.Done),
-		"blocked": len(summary.Blocked),
-		"skipped": len(summary.Skipped),
+		"outcome":  outcome,
+		"done":     len(summary.Done),
+		"blocked":  len(summary.Blocked),
+		"skipped":  len(summary.Skipped),
+		"left_out": len(summary.LeftOut),
 	}
 	if e.cfg.RunID != "" {
 		completed["run_id"] = e.cfg.RunID
@@ -489,11 +578,53 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 	return summary, nil
 }
 
-// runnable selects confirmed ready tasks whose dependencies are all done.
-func (e *engine) runnable(tasks []contracts.Task, byID map[string]contracts.Task) []contracts.Task {
+// leftOutOnly reports whether a stuck ready (or Interrupted) task can't run
+// only because of explicit exclusions (contract 1): every unfinished
+// dependency, at any depth, is either an excluded task or a schedulable
+// (ready or Interrupted, not draft, not unclaimable) task that is itself
+// stranded only by exclusions. One unsatisfiable dependency anywhere on the
+// chain — blocked, draft, wont_do, needs_review, unknown, claimed elsewhere,
+// or a cycle — makes it skipped instead, even if an exclusion also sits
+// upstream: the run genuinely couldn't finish it.
+func leftOutOnly(id string, byID map[string]contracts.Task, leftOut map[string]bool, schedulable func(contracts.Task) bool, memo, visiting map[string]bool) bool {
+	if v, ok := memo[id]; ok {
+		return v
+	}
+	if visiting[id] {
+		return false
+	}
+	visiting[id] = true
+	defer delete(visiting, id)
+	result, hitExclusion := true, false
+	for _, dep := range byID[id].Dependencies {
+		d, known := byID[dep]
+		switch {
+		case leftOut[dep]:
+			hitExclusion = true
+		case !known:
+			result = false
+		case d.Status == contracts.StatusDone:
+		case schedulable(d) && leftOutOnly(dep, byID, leftOut, schedulable, memo, visiting):
+			hitExclusion = true
+		default:
+			result = false
+		}
+		if !result {
+			break
+		}
+	}
+	result = result && hitExclusion
+	memo[id] = result
+	return result
+}
+
+// runnable selects confirmed ready or Interrupted tasks whose dependencies
+// are all done. Blocked and needs_review tasks need a person and are never
+// Interrupted.
+func (e *engine) runnable(tasks []contracts.Task, byID map[string]contracts.Task, interrupted func(contracts.Task) bool) []contracts.Task {
 	var out []contracts.Task
 	for _, t := range tasks {
-		if t.Status != contracts.StatusReady || t.Draft {
+		if (t.Status != contracts.StatusReady && !interrupted(t)) || t.Draft {
 			continue
 		}
 		ok := true
@@ -510,13 +641,45 @@ func (e *engine) runnable(tasks []contracts.Task, byID map[string]contracts.Task
 	return out
 }
 
+// taskResult is how runTask left one task.
+type taskResult struct {
+	status contracts.TaskStatus
+	// heldElsewhere: an Interrupted task whose claim conflicted (another
+	// run holds it), or that stopped being in_progress before its claim.
+	// It is not this run's to count.
+	heldElsewhere bool
+	// interrupted: the run was stopped mid-task. The task is left
+	// in_progress (Interrupted) with its worktree, branch and events.
+	interrupted bool
+}
+
+// heldBackoff is how long the scheduler leaves an Interrupted task alone
+// after another run turned out to hold it.
+const heldBackoff = 30 * time.Second
+
 // runTask drives one task through the stage machine and returns its terminal
-// status. The task is leased for the duration; every mutation renews the
-// meter.
-func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.TaskStatus {
+// status. The task is leased for the duration, under e.holder; every
+// mutation renews the meter. A ready task starts at the first stage in a
+// fresh worktree; an Interrupted one (in_progress, no live lease) continues
+// its progress record in its kept worktree (progress.go).
+func (e *engine) runTask(ctx context.Context, task contracts.Task) taskResult {
 	ttl := e.cfg.LeaseTTL
-	if err := e.cfg.Data.ClaimWithIdentity(ctx, task.ID, ttl, e.identity); err != nil {
-		return task.Status // someone else holds it; not ours this run
+	pickup := task.Status == contracts.StatusInProgress
+	if err := e.cfg.Data.ClaimWithIdentity(ctx, task.ID, e.holder, ttl, e.identity); err != nil {
+		if pickup && errors.Is(err, dataclient.ErrConflict) {
+			return taskResult{status: task.Status, heldElsewhere: true}
+		}
+		return taskResult{status: task.Status} // someone else holds it; not ours this run
+	}
+	if pickup {
+		// The scan's view may be stale: pick up only what is still
+		// Interrupted now that the claim makes it ours.
+		fresh, err := e.cfg.Data.Task(ctx, task.ID)
+		if err != nil || fresh.Status != contracts.StatusInProgress {
+			_ = e.cfg.Data.Release(context.WithoutCancel(ctx), task.ID)
+			return taskResult{status: fresh.Status, heldElsewhere: true}
+		}
+		task = fresh
 	}
 	// Writes renew the lease meter, but an agent stage can be silent for
 	// longer than any TTL (dogfooding lost a lease to the reaper inside a
@@ -526,15 +689,17 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 	// entire downtime, so every tick compares wall-clock time (e.clock,
 	// CLOCK_REALTIME) against the last successful renewal first — a gap
 	// past the TTL means the lease is gone even before attempting a
-	// renewal. Lease loss of any kind — a proactive wall-clock gap, a
-	// renewal rejected outright, or a renewal that succeeded by silently
-	// re-taking a lease the reaper already freed while the task's own
-	// status moved out from under the engine — aborts the task's in-flight
-	// stage the same way: kill it, snapshot the worktree, release, and
-	// stop writing; the task is not this engine's to finish anymore.
+	// renewal. Otherwise the tick renews with the lease's token, and a
+	// renewal can only extend a live lease this engine still holds: it
+	// never re-takes a freed one (docs/PIPELINE-LEASES-DESIGN.md A2), so a
+	// rejected renewal is the whole story. Lease loss of either kind — a
+	// wall-clock gap or a rejected renewal — aborts the task's in-flight
+	// stage the same way: kill it, snapshot the worktree if nobody else
+	// has taken the task (abortLeaseLoss), and stop writing; the task is
+	// not this engine's to finish anymore, and its status is left alone.
 	ctx, cancelTask := context.WithCancel(ctx)
 	defer cancelTask()
-	var lost, terminal atomic.Bool
+	var lost atomic.Bool
 	taskID, taskTitle := task.ID, task.Title // the goroutine must not touch task: UpdateTask rewrites it
 	var dirMu sync.Mutex
 	var snapshotDir string
@@ -554,11 +719,18 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 	// returns while that work is still in flight.
 	aborted := make(chan struct{})
 	go func() {
-		abort := func() {
+		// stillHeld: the loss was only noticed locally (a wall-clock gap),
+		// so this client still has the token and may still hold the lease
+		// server-side; drop it first. After a rejected renewal the client
+		// has already forgotten the token, and there is nothing to release.
+		abort := func(stillHeld bool) {
 			lost.Store(true)
 			cancelTask()
-			e.abortLeaseLoss(context.WithoutCancel(ctx), taskID, taskTitle, getSnapshotDir())
-			_ = e.cfg.Data.Release(context.WithoutCancel(ctx), taskID)
+			bg := context.WithoutCancel(ctx)
+			if stillHeld {
+				_ = e.cfg.Data.Release(bg, taskID)
+			}
+			e.abortLeaseLoss(bg, taskID, taskTitle, getSnapshotDir())
 			close(aborted)
 		}
 		tick := time.NewTicker(ttl / 3)
@@ -570,28 +742,18 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 				return
 			case <-tick.C:
 				if e.clock.Now().Sub(lastRenewal) > ttl {
-					abort()
+					abort(true)
 					return
 				}
-				err := e.cfg.Data.ClaimWithIdentity(ctx, taskID, ttl, e.identity)
-				if errors.Is(err, dataclient.ErrConflict) || errors.Is(err, dataclient.ErrNotFound) {
-					abort()
+				err := e.cfg.Data.Renew(ctx, taskID)
+				if errors.Is(err, dataclient.ErrLeaseLost) || errors.Is(err, dataclient.ErrConflict) || errors.Is(err, dataclient.ErrNotFound) {
+					abort(false)
 					return
 				}
-				if err != nil {
-					continue // transient; the meter has slack for a retry
+				if err == nil {
+					lastRenewal = e.clock.Now()
 				}
-				lastRenewal = e.clock.Now()
-				// terminal guards the engine's own legitimate block/done
-				// writes: only a status that moved to something other than
-				// in_progress WITHOUT the engine doing it (the reaper, on a
-				// suspend gap) means the lease this renewal just re-took is
-				// not actually ours to keep working under.
-				if cur, err := e.cfg.Data.Task(ctx, taskID); err == nil &&
-					cur.Status != contracts.StatusInProgress && !terminal.Load() {
-					abort()
-					return
-				}
+				// otherwise transient; the meter has slack for a retry
 			}
 		}
 	}()
@@ -601,22 +763,63 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 		}
 	}()
 
-	if !e.setStatus(ctx, &task, contracts.StatusInProgress) {
-		return task.Status
+	// stopped is the Stop path (docs/PIPELINE-LEASES-DESIGN.md B1): the run
+	// was cancelled while this task still held its lease. The agent is
+	// already stopped (its ctx is done); the task stays in_progress with
+	// no status write, so it is Interrupted once the deferred release
+	// lands. Its state is kept for the run that picks it up: stray work
+	// committed and the branch backed up, under the lease still held.
+	stopped := func() taskResult {
+		if lost.Load() {
+			<-aborted
+			return taskResult{status: task.Status} // lease gone; the task is not ours to write
+		}
+		if e.wt != nil {
+			bg := context.WithoutCancel(ctx)
+			if dir := getSnapshotDir(); dir != "" {
+				if err := e.wt.commitStrayMsg(bg, dir, "auto-commit: interrupted work\n\nTask: "+task.ID); err != nil {
+					log.Printf("engine: run stopped, snapshot task %s: %v", task.ID, err)
+				}
+			}
+			e.wt.backupBranch(bg, task.ID)
+		}
+		return taskResult{status: contracts.StatusInProgress, interrupted: true}
+	}
+
+	// A ready task becomes in_progress here; an Interrupted one already is,
+	// and continues the plan its progress record gives.
+	var plan pipelineprogress.Plan
+	if pickup {
+		plan = pipelineprogress.PlanPickup(e.loadProgress(ctx, task.ID), e.cfg.Template, e.cfg.TemplateVersion, e.wt != nil)
+	} else if !e.setStatus(ctx, &task, contracts.StatusInProgress) {
+		return taskResult{status: task.Status}
 	}
 
 	// Where stages run: the primary repo, or (isolated) the task's own
-	// worktree until the merge stage moves work back to the primary.
+	// worktree until the merge stage moves work back to the primary. A
+	// ready task gets a fresh worktree; an Interrupted one keeps its own.
 	run := taskRun{dir: e.cfg.Cwd}
 	if e.wt != nil {
-		dir, branch, err := e.wt.create(ctx, task)
+		open := e.wt.create
+		if pickup {
+			open = e.wt.reopen
+		}
+		dir, branch, err := open(ctx, task)
 		if err != nil {
-			terminal.Store(true)
+			if ctx.Err() != nil {
+				return stopped()
+			}
 			e.block(ctx, &task, "worktree", err.Error())
-			return contracts.StatusBlocked
+			return taskResult{status: contracts.StatusBlocked}
 		}
 		run.dir, run.worktree, run.branch = dir, dir, branch
 		setSnapshotDir(dir)
+		if plan.Merged {
+			// Picked up past the merge stage: the work is already in trunk
+			// and the remaining stages run there.
+			run.dir, run.merged = e.cfg.Cwd, true
+			setSnapshotDir("")
+		}
 	}
 	// A blocked task keeps its worktree for inspection; say where it is.
 	blockReason := func(reason string) string {
@@ -629,27 +832,29 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 	stages := e.cfg.Template.Stages
 	var feedback string // most recent failure, fed to the next agent attempt
 	var loopedInto bool // true for exactly the stage index just jumped to via loop_back
-	for i := 0; i < len(stages); {
+	inFlight := false   // the next stage entered is the one the pickup continues
+	priorWork := false  // the next agent stage is told about the kept work
+	if pickup {
+		e.pickUp(ctx, task.ID, plan)
+		feedback, loopedInto, inFlight = plan.Feedback, plan.OnLoop, plan.InFlight
+		priorWork = plan.Mode == pipelineprogress.ModeRestart
+	}
+	for i := plan.Start; i < len(stages); {
 		st := stages[i]
 		if ctx.Err() != nil {
-			if lost.Load() {
-				<-aborted
-				return task.Status // lease gone; the task is not ours to write
-			}
-			terminal.Store(true)
-			e.block(ctx, &task, st.Name, blockReason("run cancelled"))
-			return contracts.StatusBlocked
+			return stopped()
 		}
 		onLoop := loopedInto
 		loopedInto = false
-		if !e.conds[i].Eval(task.Labels, onLoop) {
+		cont := inFlight // continuing the interrupted stage: its guard already passed
+		inFlight = false
+		if !cont && !e.conds[i].Eval(task.Labels, onLoop) {
 			e.event(ctx, contracts.StageSkipped, task.ID, map[string]any{
 				"stage": st.Name, "when": st.When,
 			})
 			i++
 			continue
 		}
-		e.event(ctx, contracts.StageStarted, task.ID, map[string]any{"stage": st.Name})
 
 		// One counter bump per actual stage entry — including a fresh entry
 		// via loop_back into a stage the failure jumped to, which is exactly
@@ -657,12 +862,44 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 		// it's keyed on this stage regardless of which stage's on_fail sent
 		// execution here. Computed once here, not re-derived at the point of
 		// use, so a rate-limit retry of the same attempt (runStageRateLimited,
-		// below) never double-counts it.
+		// below) never double-counts it. A pickup restored the counters
+		// from the progress record, so a rerun is the next attempt number.
 		attemptKey := task.ID + "|" + st.Name
 		e.mu.Lock()
 		e.attempts[attemptKey]++
 		attempt := e.attempts[attemptKey]
 		e.mu.Unlock()
+
+		in := stageInput{feedback: feedback}
+		started := map[string]any{"stage": st.Name}
+		isAgent := st.Command == ""
+		switch {
+		case cont && isAgent && plan.Ref != "" && e.cfg.Provider.Matrix()[provider.BehaviorOneShotResume].Works():
+			// Resume the interrupted agent session in place: the same
+			// attempt, logged in this run with a note of where it came from.
+			attempt = plan.Attempt
+			e.mu.Lock()
+			e.attempts[attemptKey] = attempt
+			e.mu.Unlock()
+			in.resumeRef = plan.Ref
+			in.preface = fmt.Sprintf("=== resumes run %d attempt %d (stage %s), interrupted ===", plan.Rec.RunSeq, plan.Attempt, st.Name)
+			started["resumed"] = true
+		case cont && isAgent:
+			// No session to resume: a new attempt, told it is taking over.
+			in.resumeNote = resumingNote(plan.Attempt, e.interruptedTail(task.ID, plan.Rec, st.Name, plan.Attempt))
+			in.preface = fmt.Sprintf("=== rerun after interruption of run %d attempt %d ===", plan.Rec.RunSeq, plan.Attempt)
+			started["rerun"] = true
+		case cont:
+			// Command (and merge) stages rerun; templates are the user's,
+			// and a command may not be idempotent.
+			started["rerun"] = true
+		}
+		if isAgent && priorWork {
+			in.resumeNote = priorWorkNote
+			priorWork = false
+		}
+		started["attempt"] = attempt
+		e.event(ctx, contracts.StageStarted, task.ID, started)
 
 		var output string
 		var err error
@@ -680,13 +917,30 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 			// only around the write itself (mergeIntoSession) — never
 			// across the gate, which would stall the user's Commit for
 			// as long as the gate runs.
+			//
+			// An interrupted merge stage is checked before it reruns
+			// (mergeRecovery): a half-done merge of this branch is aborted,
+			// and a branch already in trunk completes the stage as is.
+			land := func() error {
+				if cont {
+					landed, rerr := e.wt.mergeRecovery(ctx, run.branch)
+					if rerr != nil {
+						return rerr
+					}
+					if landed {
+						run.dir, run.merged = e.cfg.Cwd, true
+						return nil
+					}
+				}
+				return e.landAttempt(ctx, st, stages, &run, task)
+			}
 			release := e.wt.land.acquire()
 			if e.cfg.Session != nil {
-				err = e.landAttempt(ctx, st, stages, &run, task)
+				err = land()
 			} else if wsRelease, wsErr := acquireWorkspaceLock(ctx, e.wt); wsErr != nil {
 				err = wsErr
 			} else {
-				err = e.landAttempt(ctx, st, stages, &run, task)
+				err = land()
 				wsRelease()
 			}
 			release()
@@ -705,14 +959,38 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 			// pkg/template.Validate rejects retry: on the merge stage
 			// outright, so st.Retry/Defaults.Retry resolving here would
 			// only ever apply to a genuine non-merge stage anyway).
-			output, err, blocked = e.runStageWithRetry(ctx, st, &task, feedback, run.dir, attempt, &lost, &terminal, blockReason)
+			if in.resumeRef != "" {
+				// One resume call; any error but the agent's own verdict
+				// falls back to a new attempt that is told it is resuming.
+				output, err = e.runStage(ctx, st, task, in, run.dir, attempt)
+				var verdict *stageVerdictError
+				if err != nil && !lost.Load() && ctx.Err() == nil && !errors.As(err, &verdict) {
+					log.Printf("engine: task %s stage %s: resuming session %s failed, starting a new attempt: %v", task.ID, st.Name, in.resumeRef, err)
+					attempt = e.nextAttempt(task.ID, st.Name)
+					e.event(ctx, contracts.StageStarted, task.ID, map[string]any{
+						"stage": st.Name, "attempt": attempt, "rerun": true, "resume_error": trim(err.Error(), 500),
+					})
+					in = stageInput{
+						feedback:   feedback,
+						resumeNote: resumingNote(plan.Attempt, e.interruptedTail(task.ID, plan.Rec, st.Name, plan.Attempt)),
+						preface:    fmt.Sprintf("=== rerun after interruption of run %d attempt %d (its session could not be resumed) ===", plan.Rec.RunSeq, plan.Attempt),
+					}
+					output, err, blocked = e.runStageWithRetry(ctx, st, &task, in, run.dir, attempt, &lost, blockReason)
+				}
+			} else {
+				output, err, blocked = e.runStageWithRetry(ctx, st, &task, in, run.dir, attempt, &lost, blockReason)
+			}
 			if blocked {
-				return contracts.StatusBlocked
+				return taskResult{status: contracts.StatusBlocked}
 			}
 		}
 		if lost.Load() {
 			<-aborted
-			return task.Status // lease gone mid-stage; whoever holds it now owns the outcome
+			return taskResult{status: task.Status} // lease gone mid-stage; whoever holds it now owns the outcome
+		}
+		if err != nil && ctx.Err() != nil {
+			// Stopped mid-stage: the stage didn't fail, it was interrupted.
+			return stopped()
 		}
 		if err == nil {
 			e.event(ctx, contracts.StageCompleted, task.ID, map[string]any{"stage": st.Name})
@@ -764,29 +1042,74 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 				continue
 			}
 		}
-		terminal.Store(true)
 		e.block(ctx, &task, failedStage.Name, blockReason(trim(output, 2000)))
-		return contracts.StatusBlocked
+		return taskResult{status: contracts.StatusBlocked}
 	}
 
 	if lost.Load() {
 		<-aborted
-		return task.Status
+		return taskResult{status: task.Status}
+	}
+	if ctx.Err() != nil {
+		return stopped() // every stage passed, but the done write would not land
 	}
 	if e.wt != nil && run.merged {
 		e.wt.remove(context.WithoutCancel(ctx), run.worktree, run.branch)
 	}
-	terminal.Store(true)
 	if !e.setStatus(ctx, &task, contracts.StatusDone) {
-		return contracts.StatusBlocked
+		return taskResult{status: contracts.StatusBlocked}
 	}
 	if e.wt != nil {
-		// Stale-backup hygiene: any backup/<id> left from an earlier block on
-		// this task is no longer the salvage-of-record now that real work has
-		// landed.
+		// Stale-backup hygiene: any backup/<id> left from an earlier block
+		// or stop on this task is no longer the salvage-of-record now that
+		// real work has landed.
 		e.wt.deleteBackupBranch(context.WithoutCancel(ctx), task.ID)
 	}
-	return contracts.StatusDone
+	return taskResult{status: contracts.StatusDone}
+}
+
+// pickUp records that this run picked an Interrupted task up
+// (contracts.StagePickedUp) and, for a resume, restores the task's loop and
+// attempt counters from its progress record.
+func (e *engine) pickUp(ctx context.Context, taskID string, plan pipelineprogress.Plan) {
+	stages := e.cfg.Template.Stages
+	payload := map[string]any{"mode": plan.Mode}
+	if plan.Start < len(stages) {
+		payload["from_stage"] = stages[plan.Start].Name
+	}
+	if rec := plan.Rec; rec != nil {
+		if rec.RunID != "" {
+			payload["resumed_from_run_id"] = rec.RunID
+		}
+		payload["resumed_from_run_seq"] = rec.RunSeq
+	}
+	if done := plan.CompletedBefore(stages); len(done) > 0 {
+		payload["completed_stages"] = done
+	}
+	if plan.Mode == pipelineprogress.ModeResume {
+		e.mu.Lock()
+		for st, n := range plan.Rec.Loops {
+			e.loops[taskID+"|"+st] = n
+		}
+		for st, n := range plan.Rec.Attempts {
+			e.attempts[taskID+"|"+st] = n
+		}
+		e.mu.Unlock()
+	}
+	e.event(ctx, contracts.StagePickedUp, taskID, payload)
+}
+
+// stageInput is what one stage run is told beyond the task itself.
+type stageInput struct {
+	feedback string // the most recent downstream failure (loop-back, retry)
+	// resumeRef continues this provider session instead of starting one
+	// (an interrupted agent attempt, resumed as the same attempt).
+	resumeRef string
+	// resumeNote tells a fresh agent attempt it takes over earlier work:
+	// an interrupted attempt's, or a restarted task's kept worktree.
+	resumeNote string
+	// preface is the attempt log's first line, before its header.
+	preface string
 }
 
 // runStageWithRetry runs st via runStageRateLimited, then — for an ordinary
@@ -821,11 +1144,11 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 // emitted downstream of the value threaded INTO runStage, so the caller has
 // nothing to do with it. runTask recomputes its own attempt from e.attempts
 // at the top of the next iteration.
-func (e *engine) runStageWithRetry(ctx context.Context, st template.Stage, task *contracts.Task, feedback, dir string, attempt int, lost, terminal *atomic.Bool, blockReason func(string) string) (output string, err error, blocked bool) {
+func (e *engine) runStageWithRetry(ctx context.Context, st template.Stage, task *contracts.Task, in stageInput, dir string, attempt int, lost *atomic.Bool, blockReason func(string) string) (output string, err error, blocked bool) {
 	maxRetries, when, backoff, hasPolicy := retryPolicy(e.cfg.Template, st)
 	finalAttempt := attempt
 	for retries := 0; ; retries++ {
-		output, err, blocked = e.runStageRateLimited(ctx, st, task, feedback, dir, finalAttempt, lost, terminal, blockReason)
+		output, err, blocked = e.runStageRateLimited(ctx, st, task, in, dir, finalAttempt, lost, blockReason)
 		if err == nil || blocked || lost.Load() {
 			return
 		}
@@ -859,7 +1182,8 @@ func (e *engine) runStageWithRetry(ctx context.Context, st template.Stage, task 
 		// Feed the failed attempt's output to the next try, the same way
 		// loop_back feedback reaches an agent today (taskPrompt) — a retry
 		// with no context about why the last try failed is a wasted call.
-		feedback = err.Error()
+		in.feedback = err.Error()
+		in.preface = "" // the preface names the attempt it opened, not its retries
 		finalAttempt = e.nextAttempt(task.ID, st.Name)
 	}
 }
@@ -935,10 +1259,10 @@ func (e *engine) nextAttempt(taskID, stage string) int {
 // rate limit retry re-runs the SAME attempt rather than starting a new one;
 // it is unrelated to this function's own local attempt counter, which counts
 // rate-limit retries instead.
-func (e *engine) runStageRateLimited(ctx context.Context, st template.Stage, task *contracts.Task, feedback, dir string, stageAttempt int, lost *atomic.Bool, terminal *atomic.Bool, blockReason func(string) string) (output string, err error, blocked bool) {
+func (e *engine) runStageRateLimited(ctx context.Context, st template.Stage, task *contracts.Task, in stageInput, dir string, stageAttempt int, lost *atomic.Bool, blockReason func(string) string) (output string, err error, blocked bool) {
 	var attempt int
 	for {
-		output, err = e.runStage(ctx, st, *task, feedback, dir, stageAttempt)
+		output, err = e.runStage(ctx, st, *task, in, dir, stageAttempt)
 		if lost.Load() {
 			return output, err, false
 		}
@@ -948,7 +1272,6 @@ func (e *engine) runStageRateLimited(ctx context.Context, st template.Stage, tas
 		}
 		attempt++
 		if attempt > e.cfg.RateLimitMaxRetries {
-			terminal.Store(true)
 			e.block(ctx, task, st.Name, blockReason(fmt.Sprintf(
 				"rate limited by the provider (%s) after %d attempt(s), giving up",
 				rle.Message, attempt)))
@@ -978,9 +1301,7 @@ type taskRun struct {
 
 // isMergeStage recognizes the template's merge directive; the engine
 // supplies the branch and serialization (spec §6).
-func isMergeStage(st template.Stage) bool {
-	return strings.HasPrefix(strings.TrimSpace(st.Command), "git merge")
-}
+var isMergeStage = pipelineprogress.IsMergeStage
 
 // buildStageCommand finds a stage literally named "build" with a non-empty
 // command, by convention — symmetric with how isMergeStage recognizes the
@@ -1008,14 +1329,7 @@ func buildStageCommand(stages []template.Stage) (string, bool) {
 // field on a verify stage means the same thing it says), and its own
 // on_fail (loop_back included) still governs what happens when its command
 // fails — see gateFailure and its handling in runTask.
-func gateStage(stages []template.Stage) (idx int, ok bool) {
-	for i, st := range stages {
-		if st.Name == "verify" && st.Command != "" {
-			return i, true
-		}
-	}
-	return 0, false
-}
+var gateStage = pipelineprogress.GateStage
 
 // gateFailure marks a post-rebase gate ("verify") command failure, distinct
 // from a rebase/merge conflict, so runTask's on_fail routing (above) can
@@ -1195,6 +1509,12 @@ func (e *engine) rebaseAndGate(ctx context.Context, stages []template.Stage, run
 			e.event(ctx, contracts.StageCompleted, task.ID, map[string]any{"stage": gname})
 			break
 		}
+		if ctx.Err() != nil {
+			// Killed by a stop or lease loss, not failed: no verdict, no
+			// stage.failed, so a pickup sees the merge stage in flight.
+			err = gerr
+			break
+		}
 
 		// Lint failures are deterministic and never flake-retried (a rerun of
 		// the same command sees the same source): a mechanical, whitelisted
@@ -1299,7 +1619,7 @@ func (e *engine) stageTimeout(st template.Stage) time.Duration {
 
 // runStage executes one stage in dir; a nil error is a pass. output carries
 // the failure detail for feedback notes.
-func (e *engine) runStage(ctx context.Context, st template.Stage, task contracts.Task, feedback, dir string, attempt int) (output string, err error) {
+func (e *engine) runStage(ctx context.Context, st template.Stage, task contracts.Task, in stageInput, dir string, attempt int) (output string, err error) {
 	timeout := e.stageTimeout(st)
 	sctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -1330,7 +1650,7 @@ func (e *engine) runStage(ctx context.Context, st template.Stage, task contracts
 	if st.Command != "" {
 		return e.runCommand(sctx, st.Command, dir)
 	}
-	return e.runAgent(sctx, st, task, feedback, dir, attempt)
+	return e.runAgent(sctx, st, task, in, dir, attempt)
 }
 
 func (e *engine) runCommand(ctx context.Context, command, dir string) (string, error) {
@@ -1538,7 +1858,7 @@ func (e *engine) mountCapabilities(ctx context.Context, task contracts.Task, sta
 	})
 }
 
-func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts.Task, feedback, dir string, attempt int) (string, error) {
+func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts.Task, in stageInput, dir string, attempt int) (string, error) {
 	name, agent, err := e.resolveStageAgent(ctx, st, task)
 	if err != nil {
 		return err.Error(), err
@@ -1561,10 +1881,21 @@ func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts
 	// struct) and would leave a looped-into stage's own attempt number stuck
 	// at 1 forever, silently appending its second run's log into the first's
 	// file instead of opening executor-attempt-2.log.
-	log := openOutputLog(e.cfg.MadsHome, e.cfg.SessionID, e.runSeq, task.ID, st.Name, attempt, model)
+	//
+	// A resumed attempt (in.resumeRef) logs into this run's directory under
+	// its original attempt number, its first line (in.preface) naming the
+	// run and attempt it continues.
+	log := openOutputLogNote(e.cfg.MadsHome, e.cfg.SessionID, e.runSeq, task.ID, st.Name, attempt, model, in.preface)
 
+	prompt := taskPrompt(st.Name, task, in.feedback, in.resumeNote)
+	if in.resumeRef != "" {
+		// The session already holds the brief; same cwd (claude only
+		// resumes a session from the directory it ran in).
+		prompt = resumePrompt
+	}
 	res, err := e.cfg.Provider.OneShot(ctx, provider.OneShotRequest{
-		Prompt: taskPrompt(st.Name, task, feedback),
+		Prompt: prompt,
+		Resume: in.resumeRef,
 		System: agent.Prompt,
 		Model:  model,
 		Cwd:    dir,
@@ -1601,8 +1932,10 @@ func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts
 }
 
 // taskPrompt is the agent stage's working brief: the task plus loop-back
-// feedback when a downstream stage sent work back.
-func taskPrompt(stage string, task contracts.Task, feedback string) string {
+// feedback when a downstream stage sent work back, and resumeNote when the
+// attempt takes over interrupted work (progress.go's resumingNote and
+// priorWorkNote).
+func taskPrompt(stage string, task contracts.Task, feedback, resumeNote string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Pipeline stage: %s\nTask: %s\n", stage, task.Title)
 	if task.Description != "" {
@@ -1610,6 +1943,9 @@ func taskPrompt(stage string, task contracts.Task, feedback string) string {
 	}
 	if task.AcceptanceCriteria != "" {
 		fmt.Fprintf(&b, "\nAcceptance criteria:\n%s\n", task.AcceptanceCriteria)
+	}
+	if resumeNote != "" {
+		fmt.Fprintf(&b, "\n%s", resumeNote)
 	}
 	if feedback != "" {
 		fmt.Fprintf(&b, "\nA previous attempt failed downstream. Address this feedback:\n%s\n", feedback)
@@ -1650,28 +1986,49 @@ func (e *engine) block(ctx context.Context, task *contracts.Task, stage, reason 
 }
 
 // abortLeaseLoss is the lease-loss counterpart to block: the engine no
-// longer owns this task — the lease was lost outright, or a renewal
-// succeeded by silently re-taking a lease the reaper already freed while
-// the task's status moved out from under the engine (spec: suspend gap) —
-// so unlike block, it must never write task status; the reaper or the user
-// who re-readied the task owns the outcome now. It still snapshots
-// whatever the in-flight stage left dirty, exactly like block's
-// backup-on-block, so lease loss never silently drops uncommitted work:
-// commit any stray worktree changes, then force-update backup/<id> from
-// mads/<id>. dir is empty for non-isolated runs or once the task's branch
-// has already merged into the primary, in which case there is nothing left
-// to snapshot. Best-effort throughout — a snapshot that fails just means a
-// worse salvage story, never a stuck abort.
+// longer owns this task, so unlike block it must never write task status
+// (an in_progress task with no lease is Interrupted, and whichever run
+// picks it up owns the outcome). It snapshots whatever the in-flight
+// stage left dirty, exactly like block's backup-on-block, so lease loss
+// never silently drops uncommitted work: commit any stray worktree
+// changes, then force-update backup/<id> from mads/<id>. dir is empty for
+// non-isolated runs or once the task's branch has already merged into the
+// primary, in which case there is only the backup left to update.
+//
+// The snapshot happens only if the task's lease is still free, and it is
+// taken under a fresh claim, released straight after: if another run
+// already holds the task, that run owns the worktree now and commits
+// stray work itself on pickup, so two processes never write one worktree
+// (docs/PIPELINE-LEASES-DESIGN.md A3). Holding the claim for the snapshot
+// also keeps a new run from taking the task mid-snapshot. Best-effort
+// throughout — a snapshot that fails or is skipped just means a worse
+// salvage story, never a stuck abort.
 func (e *engine) abortLeaseLoss(ctx context.Context, taskID, taskTitle, dir string) {
 	if e.wt == nil {
 		return
 	}
+	if err := e.cfg.Data.ClaimWithIdentity(ctx, taskID, e.holder, e.cfg.LeaseTTL, e.identity); err != nil {
+		if !errors.Is(err, dataclient.ErrConflict) {
+			log.Printf("engine: lease lost on task %s; skipping the worktree snapshot: %v", taskID, err)
+		}
+		return // held elsewhere (or unknowable): the worktree is not ours to write
+	}
+	defer func() { _ = e.cfg.Data.Release(ctx, taskID) }()
 	if dir != "" {
 		if err := e.wt.commitStray(ctx, dir, contracts.Task{ID: taskID, Title: taskTitle}); err != nil {
 			log.Printf("engine: lease lost, snapshot task %s: %v", taskID, err)
 		}
 	}
 	e.wt.backupBranch(ctx, taskID)
+}
+
+// leaseHolder is the holder this run claims under: "<actor>:<runID>"
+// (docs/PIPELINE-LEASES-DESIGN.md A1), or the bare actor without a run id.
+func leaseHolder(actor, runID string) string {
+	if runID == "" {
+		return actor
+	}
+	return actor + ":" + runID
 }
 
 func (e *engine) note(ctx context.Context, taskID string, kind contracts.NoteType, content string) {
@@ -1714,11 +2071,15 @@ func (e *engine) recordUsage(ctx context.Context, taskID, stage string, attempt 
 // before the one-shot completes so a live drill-in can tail the transcript.
 // Best-effort, like recordUsage: a post that fails never fails the stage.
 func (e *engine) recordRef(ctx context.Context, taskID, stage string, attempt int, ref string) {
-	raw, err := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"stage":   stage,
 		"attempt": attempt,
 		"ref":     ref,
-	})
+	}
+	if e.runSeq > 0 {
+		payload["run_seq"] = e.runSeq
+	}
+	raw, err := json.Marshal(payload)
 	if err != nil {
 		raw = []byte(`{}`)
 	}
@@ -1735,6 +2096,13 @@ func (e *engine) recordRef(ctx context.Context, taskID, stage string, attempt in
 // PipelineStarted's Seq as the run's stable identity; every other call site
 // discards it).
 func (e *engine) event(ctx context.Context, t contracts.EventType, taskID string, payload map[string]any) int64 {
+	// Every stage.* event about a task names its run, so a later run can
+	// attribute it exactly when it picks the task up (progress.go).
+	if taskID != "" && e.runSeq > 0 && strings.HasPrefix(string(t), "stage.") && payload != nil {
+		if _, ok := payload["run_seq"]; !ok {
+			payload["run_seq"] = e.runSeq
+		}
+	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		raw = []byte(`{}`)

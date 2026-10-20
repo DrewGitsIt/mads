@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { WORKSPACE_TABS } from "./tabRegistry";
+import { toWorkspaceTabId, WORKSPACE_TABS } from "./tabRegistry";
 import { FakeRouterClient } from "../../../router/fixtures";
 import { FakePipelineClient } from "../../../pipeline/client/fixtures";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
@@ -17,13 +17,19 @@ describe("WORKSPACE_TABS", () => {
     vi.unstubAllGlobals();
   });
 
-  it("has exactly 4 entries in the expected order with the expected labels", () => {
+  it("has exactly 3 entries in the expected order with the expected labels", () => {
     expect(WORKSPACE_TABS.map((t) => ({ id: t.id, label: t.label }))).toEqual([
       { id: "conversation", label: "Conversation" },
       { id: "tasks", label: "Tasks" },
-      { id: "files", label: "Files" },
-      { id: "pipeline", label: "Pipeline" },
+      { id: "files", label: "Changes" },
     ]);
+  });
+
+  it("sends the retired pipeline tab id to Tasks", () => {
+    expect(toWorkspaceTabId("pipeline")).toBe("tasks");
+    expect(toWorkspaceTabId("files")).toBe("files");
+    expect(toWorkspaceTabId("nope")).toBe("conversation");
+    expect(toWorkspaceTabId(undefined)).toBeUndefined();
   });
 
   it("ConversationTabView renders the real ConversationTab", async () => {
@@ -73,9 +79,11 @@ describe("WORKSPACE_TABS", () => {
     );
     await waitFor(() => expect(screen.getByText("List")).toBeTruthy());
     expect(screen.getByText("Graph")).toBeTruthy();
+    // No runs yet: Plan.
+    expect(screen.getByRole("button", { name: /Run \d+ tasks?/ })).toBeTruthy();
   });
 
-  it("FilesTabView renders the real FilesTab", async () => {
+  it("the files entry renders the real Changes tab", async () => {
     const routerClient = new FakeRouterClient();
     const def = WORKSPACE_TABS.find((t) => t.id === "files")!;
     render(
@@ -85,19 +93,7 @@ describe("WORKSPACE_TABS", () => {
         pipelineClient={new FakePipelineClient()}
       />,
     );
-    await waitFor(() => expect(screen.getByText(/Working changes \(\d+\)/)).toBeTruthy());
-  });
-
-  it("PipelineTabView renders the real PipelineTab", async () => {
-    const routerClient = new FakeRouterClient();
-    const def = WORKSPACE_TABS.find((t) => t.id === "pipeline")!;
-    render(
-      <def.component
-        sessionId={SESSION_ID}
-        routerClient={routerClient}
-        pipelineClient={new FakePipelineClient()}
-      />,
-    );
-    await waitFor(() => expect(screen.getByRole("button", { name: "Start" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("radiogroup", { name: "Group by" })).toBeTruthy());
+    expect(screen.getByText("Source")).toBeTruthy();
   });
 });

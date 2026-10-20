@@ -36,3 +36,9 @@
 .option:disabled {
   cursor: default;
 }
+
+/* A single disabled option (the group's own disabled dims the whole control). */
+.group:not([aria-disabled="true"]) .option:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

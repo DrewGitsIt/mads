@@ -161,6 +161,13 @@ export interface Topology {
 
 export interface BootTopologyOptions {
   fastModelURL: string;
+  /**
+   * Scenario YAML for the fake provider in Router-launched pipeline runs
+   * (POST /pipelines, the Tasks tab's Run button). Rules key on task titles,
+   * so one suite-wide scenario scripts every spec's runs; unmatched prompts
+   * get the fake's instant built-in reply.
+   */
+  pipelineScenario?: string;
 }
 
 /** Builds fresh mads/data/router/session binaries into a scratch dir and boots the full topology, mirroring scripts/e2esmoke/main_test.go. */
@@ -170,12 +177,14 @@ export async function bootTopology(opts: BootTopologyOptions): Promise<Topology>
   const dataBin = path.join(buildDir, "data");
   const routerBin = path.join(buildDir, "router");
   const sessionBin = path.join(buildDir, "session");
+  const pipelineBin = path.join(buildDir, "pipeline");
 
   for (const [out, pkg] of [
     [madsBin, "./cmd/mads"],
     [dataBin, "./services/data"],
     [routerBin, "./services/router"],
     [sessionBin, "./services/session"],
+    [pipelineBin, "./services/pipeline"],
   ] as const) {
     execFileSync("go", ["build", "-o", out, pkg], { cwd: repoRoot, stdio: "inherit" });
   }
@@ -194,6 +203,15 @@ export async function bootTopology(opts: BootTopologyOptions): Promise<Topology>
   const mergirafPath = path.join(tmpDir, "mergiraf-standin", "mergiraf");
   env.MADS_MERGIRAF = mergirafPath;
 
+  // The real Pipeline Engine child, so the Tasks tab's Run button (POST
+  // /pipelines) launches a real run like `mads run` does.
+  let pipelineCmd = pipelineBin;
+  if (opts.pipelineScenario) {
+    const scenarioPath = path.join(tmpDir, "pipeline-scenario.yaml");
+    writeFileSync(scenarioPath, opts.pipelineScenario);
+    pipelineCmd += ` -fake-scenario ${scenarioPath}`;
+  }
+
   const data = await spawnListening("data", [dataBin, "-addr", "127.0.0.1:0", "-data-dir", dataDir], env);
   const dataURL = `http://${data.addr}`;
   await waitHealth(dataURL);
@@ -209,7 +227,7 @@ export async function bootTopology(opts: BootTopologyOptions): Promise<Topology>
       "-session-cmd",
       `${sessionBin} -data-url ${dataURL}`,
       "-pipeline-cmd",
-      sessionBin,
+      pipelineCmd,
       "-fastmodel-base-url",
       opts.fastModelURL,
       "-mads-home",
@@ -226,6 +244,7 @@ export async function bootTopology(opts: BootTopologyOptions): Promise<Topology>
     await router.terminate();
     await data.terminate();
     verifyNoLeaks(sessionBin);
+    verifyNoLeaks(pipelineBin);
     rmSync(buildDir, { recursive: true, force: true });
     rmSync(tmpDir, { recursive: true, force: true });
   };

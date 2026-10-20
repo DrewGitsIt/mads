@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/changes"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/services/session/shadow"
 )
@@ -25,10 +26,18 @@ import (
 // work the moment the agent commits it (HEAD catches up to disk), which is
 // the common shape for a mads session.
 //
-// The requested path must appear in the session's recorded file-change
-// ledger (scoped to task_id when given): that's both the honest 404 for a
-// stale click and the security gate — path is caller-controlled, and
-// without the ledger check this endpoint would read any file on disk.
+// vs=base|main (the Changes tab's baseline switcher) swaps "original" for
+// the file at that baseline's merge base in the session folder's repo
+// (pkg/changes.MergeBaseOriginal); a file outside that repo keeps its
+// session-start original. Absent or vs=start is the behavior above.
+//
+// The security gate: path is caller-controlled, and without one this
+// endpoint would read any file on disk. A path passes when it appears in
+// the session's recorded file-change ledger (scoped to task_id when given)
+// or, with no task_id, when it is a file in the session's computed change
+// set against the same baseline — the Changes tab lists files from disk,
+// including ones the ledger never heard of. Anything else is the honest
+// 404 for a stale click.
 func (s *server) handleSessionWorkingDiff(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 	path := r.URL.Query().Get("path")
@@ -37,34 +46,75 @@ func (s *server) handleSessionWorkingDiff(w http.ResponseWriter, r *http.Request
 		writeErrMsg(w, http.StatusBadRequest, "", errors.New("path is required"))
 		return
 	}
+	vs, ok := normalizeBaseline(r.URL.Query().Get("vs"))
+	if !ok {
+		writeErrMsg(w, http.StatusBadRequest, "", errors.New("vs must be start, base or main"))
+		return
+	}
 
-	changes, err := s.data.FileChanges(r.Context(), sessionID)
+	ledger, err := s.data.FileChanges(r.Context(), sessionID)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	var change *contracts.FileChange
-	for i := range changes {
-		if changes[i].Path != path {
+	target := ""
+	for i := range ledger {
+		if ledger[i].Path != path {
 			continue
 		}
-		if taskID != "" && changes[i].TaskID != taskID {
+		if taskID != "" && ledger[i].TaskID != taskID {
 			continue
 		}
-		change = &changes[i]
+		target = ledger[i].Path
 		break
 	}
-	if change == nil {
+	var sess *contracts.Session
+	if target == "" && taskID == "" {
+		got, err := s.data.Session(r.Context(), sessionID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		sess = &got
+		f, ok, err := s.changeSetFile(r.Context(), got, vs, path)
+		if err != nil {
+			writeChangeSetError(w, err)
+			return
+		}
+		if ok {
+			target = f.Path
+		}
+	}
+	if target == "" {
 		writeErrMsg(w, http.StatusNotFound, "", errors.New("file not changed in this session"))
 		return
 	}
 
-	modified, err := readWorkingFile(change.Path)
+	modified, err := readWorkingFile(target)
 	if err != nil {
 		writeErrMsg(w, http.StatusBadGateway, "", errors.New("file unreadable on disk"))
 		return
 	}
-	original := s.workingOriginal(r.Context(), sessionID, change.Path)
+
+	original, resolved := "", false
+	if vs != contracts.BaselineSessionStart {
+		if sess == nil {
+			got, err := s.data.Session(r.Context(), sessionID)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			sess = &got
+		}
+		original, resolved, err = changes.MergeBaseOriginal(r.Context(), *sess, vs, target)
+		if err != nil {
+			writeChangeSetError(w, err)
+			return
+		}
+	}
+	if !resolved {
+		original = s.workingOriginal(r.Context(), sessionID, target)
+	}
 
 	writeJSON(w, http.StatusOK, fileDiff{Path: path, Original: original, Modified: modified})
 }
@@ -73,7 +123,7 @@ func (s *server) handleSessionWorkingDiff(w http.ResponseWriter, r *http.Request
 // is the expected shape for a deleted change — empty modified side, not an
 // error; anything else unreadable (EISDIR, permissions) is.
 func readWorkingFile(path string) (string, error) {
-	raw, err := os.ReadFile(path) //nolint:gosec // path is gated by the session's file-change ledger
+	raw, err := os.ReadFile(path) //nolint:gosec // path is gated by the session's ledger or change set
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}

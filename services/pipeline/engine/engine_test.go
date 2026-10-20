@@ -467,7 +467,7 @@ func TestForeignLeaseSkipsTask(t *testing.T) {
 	h := newHarness(t)
 	seeded := h.seed(contracts.Task{Title: "mine"}, contracts.Task{Title: "theirs"})
 	other := dataclient.New(h.base, "session-ses_1")
-	if err := other.Claim(context.Background(), seeded[1].ID, time.Minute); err != nil {
+	if err := other.Claim(context.Background(), seeded[1].ID, "", time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	src := "name: solo\nstages:\n  - name: executor\n    agent: executor\n"
@@ -927,5 +927,182 @@ func TestPipelineEventsCarryRunID(t *testing.T) {
 		if len(evs) != 1 || !strings.Contains(string(evs[0].Payload), `"run_id":"run_abc123"`) {
 			t.Errorf("%s: %+v, want run_id run_abc123", typ, evs)
 		}
+	}
+}
+
+// TestExcludedTasksLeftOut: an excluded task is never launched and keeps its
+// status; whatever depends on it, directly or transitively, reports left out
+// (not skipped), so with everything else done the run reads completed.
+// pipeline.started names the excluded ids alongside the run id.
+func TestExcludedTasksLeftOut(t *testing.T) {
+	h := newHarness(t)
+	seeded := h.seed(
+		contracts.Task{Title: "left out"},
+		contracts.Task{Title: "needs left out"},
+		contracts.Task{Title: "needs needs left out"},
+		contracts.Task{Title: "independent"},
+	)
+	for i, dep := range map[int]string{1: seeded[0].ID, 2: seeded[1].ID} {
+		task := seeded[i]
+		task.Dependencies = []string{dep}
+		if err := h.data.UpdateTask(context.Background(), &task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sum, err := Run(context.Background(), Config{
+		Data: h.data, Provider: fake.New(), SessionID: h.sess.ID, RunID: "run_ex",
+		Template: solitaryTemplate(t, ""), Cwd: h.cwd, Concurrency: 2,
+		StageTimeout: 30 * time.Second, ExcludeTaskIDs: []string{seeded[0].ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[3].ID {
+		t.Errorf("done: %v, want just %s (independent)", sum.Done, seeded[3].ID)
+	}
+	if len(sum.Skipped) != 0 || len(sum.Blocked) != 0 {
+		t.Errorf("skipped %v, blocked %v: want none", sum.Skipped, sum.Blocked)
+	}
+	if !sameIDs(sum.LeftOut, seeded[0].ID, seeded[1].ID, seeded[2].ID) {
+		t.Errorf("left out: %v, want the excluded task and its two dependents", sum.LeftOut)
+	}
+	completed := h.events(t, "pipeline.completed")
+	if len(completed) != 1 ||
+		!strings.Contains(string(completed[0].Payload), `"outcome":"completed"`) ||
+		!strings.Contains(string(completed[0].Payload), `"left_out":3`) ||
+		!strings.Contains(string(completed[0].Payload), `"skipped":0`) {
+		t.Errorf("pipeline.completed: %+v, want completed with left_out 3, skipped 0", completed)
+	}
+	if got := h.task(t, seeded[0].ID).Status; got != contracts.StatusReady {
+		t.Errorf("excluded task status = %s, want ready (untouched)", got)
+	}
+	for _, ev := range h.events(t, "stage.started") {
+		if ev.TaskID == seeded[0].ID {
+			t.Errorf("excluded task launched: %+v", ev)
+		}
+	}
+	started := h.events(t, "pipeline.started")
+	want := `"excluded_task_ids":["` + seeded[0].ID + `"]`
+	if len(started) != 1 || !strings.Contains(string(started[0].Payload), want) ||
+		!strings.Contains(string(started[0].Payload), `"run_id":"run_ex"`) {
+		t.Fatalf("pipeline.started: %+v, want %s and run_id", started, want)
+	}
+}
+
+// TestExcludedPlusBlockedIsIncomplete: left-out tasks don't excuse a
+// genuinely blocked one elsewhere in the run — that still reads incomplete.
+func TestExcludedPlusBlockedIsIncomplete(t *testing.T) {
+	h := newHarness(t)
+	seeded := h.seed(
+		contracts.Task{Title: "left out"},
+		contracts.Task{Title: "needs left out"},
+		contracts.Task{Title: "broken"},
+		contracts.Task{Title: "independent"},
+	)
+	setDeps(t, h, seeded[1], seeded[0].ID)
+	sum, completed := runExcluding(t, h, seeded[0].ID)
+	if !sameIDs(sum.Done, seeded[3].ID) || !sameIDs(sum.Blocked, seeded[2].ID) || len(sum.Skipped) != 0 {
+		t.Errorf("summary: %+v, want done independent, blocked broken, nothing skipped", sum)
+	}
+	if !sameIDs(sum.LeftOut, seeded[0].ID, seeded[1].ID) {
+		t.Errorf("left out: %v, want the excluded task and its dependent", sum.LeftOut)
+	}
+	if !strings.Contains(completed, `"outcome":"incomplete"`) || !strings.Contains(completed, `"left_out":2`) {
+		t.Errorf("pipeline.completed: %s, want incomplete with left_out 2", completed)
+	}
+}
+
+// TestExcludedAndBlockedDependencyIsSkipped: a task whose chain hits both an
+// exclusion and a genuinely blocked task is skipped, not left out — the run
+// couldn't have finished it even without the exclusion. Its own dependent
+// inherits that, through the chain.
+func TestExcludedAndBlockedDependencyIsSkipped(t *testing.T) {
+	h := newHarness(t)
+	seeded := h.seed(
+		contracts.Task{Title: "left out"},
+		contracts.Task{Title: "broken"},
+		contracts.Task{Title: "needs both"},
+		contracts.Task{Title: "needs needs both"},
+	)
+	setDeps(t, h, seeded[2], seeded[0].ID, seeded[1].ID)
+	setDeps(t, h, seeded[3], seeded[2].ID)
+	sum, completed := runExcluding(t, h, seeded[0].ID)
+	if !sameIDs(sum.Blocked, seeded[1].ID) || !sameIDs(sum.Skipped, seeded[2].ID, seeded[3].ID) {
+		t.Errorf("summary: %+v, want blocked broken, skipped both dependents", sum)
+	}
+	if !sameIDs(sum.LeftOut, seeded[0].ID) {
+		t.Errorf("left out: %v, want just the excluded task", sum.LeftOut)
+	}
+	if !strings.Contains(completed, `"outcome":"incomplete"`) || !strings.Contains(completed, `"skipped":2`) {
+		t.Errorf("pipeline.completed: %s, want incomplete with skipped 2", completed)
+	}
+}
+
+// runExcluding runs the solo template with excluded left out; the executor
+// fails any task titled "broken", which blocks it. Returns the summary and
+// the pipeline.completed payload.
+func runExcluding(t *testing.T, h *harness, excluded ...string) (*Summary, string) {
+	t.Helper()
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "broken", Rules: []fake.Rule{
+		{Match: "Task: broken", Reply: "Can't.\nSTAGE: fail — broken on purpose"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum, err := Run(context.Background(), Config{
+		Data: h.data, Provider: f, SessionID: h.sess.ID,
+		Template: solitaryTemplate(t, ""), Cwd: h.cwd, Concurrency: 2,
+		StageTimeout: 30 * time.Second, ExcludeTaskIDs: excluded,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := h.events(t, "pipeline.completed")
+	if len(completed) != 1 {
+		t.Fatalf("pipeline.completed: %+v", completed)
+	}
+	return sum, string(completed[0].Payload)
+}
+
+func setDeps(t *testing.T, h *harness, task contracts.Task, deps ...string) {
+	t.Helper()
+	task.Dependencies = deps
+	if err := h.data.UpdateTask(context.Background(), &task); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// sameIDs reports whether got holds exactly want, in any order.
+func sameIDs(got []string, want ...string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, id := range got {
+		seen[id] = true
+	}
+	for _, id := range want {
+		if !seen[id] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestPipelineStartedOmitsExcludedWhenNone: a run with nothing left out
+// carries no excluded_task_ids key at all.
+func TestPipelineStartedOmitsExcludedWhenNone(t *testing.T) {
+	h := newHarness(t)
+	h.seed(contracts.Task{Title: "plain run"})
+	if _, err := Run(context.Background(), Config{
+		Data: h.data, Provider: fake.New(), SessionID: h.sess.ID,
+		Template: solitaryTemplate(t, ""), Cwd: h.cwd, Concurrency: 1,
+		StageTimeout: 30 * time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	started := h.events(t, "pipeline.started")
+	if len(started) != 1 || strings.Contains(string(started[0].Payload), "excluded_task_ids") {
+		t.Fatalf("pipeline.started should omit excluded_task_ids when none: %+v", started)
 	}
 }

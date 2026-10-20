@@ -4,6 +4,10 @@ import styles from "./SegmentedControl.module.css";
 export interface SegmentedOption<T extends string = string> {
   value: T;
   label: string;
+  /** Shown but not choosable; arrow keys skip it. */
+  disabled?: boolean;
+  /** Tooltip — e.g. why an option is disabled. */
+  title?: string;
 }
 
 export interface SegmentedControlProps<T extends string = string> {
@@ -39,18 +43,23 @@ export function SegmentedControl<T extends string = string>({
 
   function choose(index: number) {
     const opt = options[index];
-    if (!opt) return;
+    if (!opt || opt.disabled) return;
     buttonsRef.current[index]?.focus();
     if (opt.value !== value) onChange(opt.value);
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLButtonElement>, index: number) {
-    const last = options.length - 1;
+    const n = options.length;
+    // Walk from `from` in direction `d`, wrapping, to the first enabled option.
+    const walk = (from: number, d: 1 | -1) => {
+      for (let k = 0, i = from; k < n; k++, i = (i + d + n) % n) if (!options[i].disabled) return i;
+      return null;
+    };
     let next: number | null = null;
-    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = index === last ? 0 : index + 1;
-    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = index === 0 ? last : index - 1;
-    else if (e.key === "Home") next = 0;
-    else if (e.key === "End") next = last;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = walk((index + 1) % n, 1);
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = walk((index - 1 + n) % n, -1);
+    else if (e.key === "Home") next = walk(0, 1);
+    else if (e.key === "End") next = walk(n - 1, -1);
     if (next === null) return;
     e.preventDefault();
     choose(next);
@@ -74,7 +83,8 @@ export function SegmentedControl<T extends string = string>({
           role="radio"
           aria-checked={opt.value === value}
           tabIndex={index === tabStop ? 0 : -1}
-          disabled={disabled}
+          disabled={disabled || opt.disabled}
+          title={opt.title}
           className={styles.option}
           onClick={() => choose(index)}
           onKeyDown={(e) => handleKeyDown(e, index)}

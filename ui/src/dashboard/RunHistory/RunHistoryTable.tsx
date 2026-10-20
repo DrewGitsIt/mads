@@ -6,10 +6,9 @@ import styles from "./RunHistoryTable.module.css";
 export interface RunHistoryTableProps {
   runs: PipelineRun[];
   /**
-   * There's no cross-surface router in this codebase yet (HANDOFF.md §7) —
-   * this callback is the whole of "drill-back is wired." Opening the
-   * session's Pipeline tab (e.g. navigating pipeline.html?session=...) is
-   * the caller's decision, deliberately left out of this module.
+   * The row's "View run". The app opens that session's Tasks tab with the
+   * run selected (App.tsx, via requestOpenSession); this module only reports
+   * which run was asked for.
    */
   onDrillBack?: (params: { sessionId: string; runSeq: number }) => void;
 }

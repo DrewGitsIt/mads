@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -143,17 +144,21 @@ func (s *Supervisor) SpawnSession(ctx context.Context, sessionID string) (string
 
 // SpawnPipeline starts a Pipeline Engine child for runID, scoped to
 // sessionID (needed because the failure event's envelope requires a
-// SessionID; runID is Router-generated — see NewRunID). The lease holder
-// identity is runID, not sessionID: a session's tasks might be worked by an
-// interactive Session process and later a Pipeline run at different times,
-// and a distinct holder per run means the Router doesn't have to reason
-// about a session and a pipeline run sharing one holder string. templateID
+// SessionID; runID is Router-generated — see NewRunID). The child's lease
+// holder is PipelineLeaseHolder(runID), not sessionID: a session's tasks
+// might be worked by an interactive Session process and later a Pipeline
+// run at different times, and a distinct holder per run means the Router
+// releases exactly this run's leases when it exits. templateID
 // is passed through so the child can load and validate its own frozen copy
 // (same launch-check the CLI runs), rather than trusting a value already
-// re-resolved once by the caller.
-func (s *Supervisor) SpawnPipeline(ctx context.Context, runID, sessionID, templateID string) (string, error) {
+// re-resolved once by the caller. excludeTaskIDs, when non-empty, rides
+// -exclude-task-ids (comma-joined): tasks the run must never launch.
+func (s *Supervisor) SpawnPipeline(ctx context.Context, runID, sessionID, templateID string, excludeTaskIDs []string) (string, error) {
 	argv := append(append([]string{}, s.pipelineArgv...),
 		"-run-id", runID, "-session-id", sessionID, "-template", templateID)
+	if len(excludeTaskIDs) > 0 {
+		argv = append(argv, "-exclude-task-ids", strings.Join(excludeTaskIDs, ","))
+	}
 	env := s.credentialEnv(ctx)
 	p, err := child.Spawn(ctx, runID, argv, env, func(_ *child.Process, expected bool, exitErr error) {
 		s.onPipelineExit(runID, sessionID, expected, exitErr)
@@ -488,10 +493,17 @@ func (s *Supervisor) onSessionExit(sessionID string, expected bool, exitErr erro
 	s.spawnSessionSummary(ctx, sessionID)
 }
 
+// PipelineLeaseHolder is the lease holder a pipeline run's engine claims
+// tasks under (engine.Config.RunID; docs/PIPELINE-LEASES-DESIGN.md A1).
+func PipelineLeaseHolder(runID string) string { return "pipeline:" + runID }
+
+// onPipelineExit releases the run's leases (tokenless, by holder; task
+// status is untouched, so its in-flight tasks become Interrupted), then
+// reports an exit nobody asked for as pipeline.failed.
 func (s *Supervisor) onPipelineExit(runID, sessionID string, expected bool, exitErr error) {
 	ctx := context.Background()
 	reason := exitReason(expected, exitErr)
-	if err := s.data.ReleaseAll(ctx, runID, reason); err != nil {
+	if err := s.data.ReleaseAll(ctx, PipelineLeaseHolder(runID), reason); err != nil {
 		log.Printf("supervisor: release leases for run %s: %v", runID, err)
 	}
 	s.forgetPipeline(runID)

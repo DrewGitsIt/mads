@@ -44,6 +44,7 @@
   "stage.rate_limited",
   "stage.rate_limit_cleared",
   "stage.retried",
+  "stage.picked_up",
   "retro.started",
   "retro.progress",
   "retro.completed",

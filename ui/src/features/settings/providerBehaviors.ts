@@ -31,6 +31,7 @@ const BEHAVIOR_LABELS: Record<string, string> = {
   trust_read_only: "Read-only trust",
   trust_auto_review: "Auto-review trust",
   one_shot_stream: "One-shot streaming",
+  one_shot_resume: "One-shot resume",
   ref_announce: "Early session ref",
   compaction: "Compact",
   compaction_focus: "Compact instructions",

@@ -1,6 +1,6 @@
 — turn 4 —
 user: add a retry
-tool: Edit client.go
+tools: 1 call (Edit)
 — turn 5 —
+tools: 1 call (Bash)
 assistant: retry added with backoff
-tool: Bash

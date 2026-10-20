@@ -32,7 +32,7 @@ describe("ContextRail", () => {
     vi.unstubAllGlobals();
   });
 
-  it("starts collapsed, with the open-task and touched-file counts on the strip", async () => {
+  it("starts collapsed, with the open-task and changed-file counts on the strip", async () => {
     renderRail();
     expect(screen.queryByRole("button", { name: "All" })).toBeNull();
     expect(screen.getByLabelText(`Tasks, ${openTaskCount} open`)).toBeTruthy();
@@ -124,7 +124,40 @@ describe("ContextRail", () => {
     expect(screen.getByRole("button", { name: "All" })).toBeTruthy();
   });
 
-  it("invokes onOpenFile from the Changes tab", async () => {
+  it("counts changed files from the change set, leaving scratch out", async () => {
+    const client = new FakeRouterClient();
+    render(
+      <ContextRail sessionId="session-files-clean" routerClient={client} tasks={fixtureTasks} tasksById={tasksById} />,
+    );
+    // session-files-clean: five files, one of them scratch.
+    await waitFor(() => expect(screen.getByLabelText("Changes, 4 files")).toBeTruthy());
+  });
+
+  it("onOpenChanges gets the file plus the rail's tier and turn; the footer link opens the tab", async () => {
+    const onOpenChanges = vi.fn();
+    render(
+      <ContextRail
+        sessionId="session-active"
+        routerClient={new FakeRouterClient()}
+        tasks={fixtureTasks}
+        tasksById={tasksById}
+        onOpenChanges={onOpenChanges}
+      />,
+    );
+    expand();
+    fireEvent.click(screen.getByRole("button", { name: "Changes" }));
+    await waitFor(() => expect(screen.getByText("ingest.go")).toBeTruthy());
+    fireEvent.click(screen.getByText("ingest.go"));
+    expect(onOpenChanges).toHaveBeenLastCalledWith({
+      path: "services/data/internal/ingest.go",
+      tier: "source",
+      turn: null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open in Changes →" }));
+    expect(onOpenChanges).toHaveBeenLastCalledWith({ tier: "source", turn: null });
+  });
+
+  it("falls back to onOpenFile for a file click when onOpenChanges isn't given", async () => {
     const onOpenFile = vi.fn();
     render(
       <ContextRail

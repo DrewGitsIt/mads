@@ -49,10 +49,15 @@
   border-left-width: 6px;
   border-image: repeating-linear-gradient(135deg, var(--bad) 0 4px, transparent 4px 8px) 1;
 }
+/* Clamped: the layout slot (NODE_HEIGHT) bounds the card; the full reason is in the tooltip. */
 .reason {
   color: var(--bad-fg);
   font-size: var(--fs-chip);
   margin-top: var(--space-1);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .status_draft {
@@ -65,30 +70,151 @@
 /* status_ready: intentionally no override — Card's own bg1/line-soft base
    already reads as "crisp neutral, default weight" per the mockup. */
 
-.pips {
+.legacyTrack {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   margin-top: var(--space-1);
 }
-.pip {
-  width: 14px;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--bg4);
+.legacyTrack > :first-child {
+  flex: 1;
 }
-.pipPast {
-  background: var(--info);
-  opacity: 0.45;
-}
-.pipNow {
-  background: var(--info);
-  box-shadow: 0 0 6px var(--info);
-}
-.pipLabel {
+.stageLabel {
   font-size: 10px;
   color: var(--info-fg);
-  margin-left: 4px;
+}
+
+/* ── run view (Plan / live / past) ─────────────────────────── */
+
+.top {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.top .title {
+  flex: 1;
+  min-width: 0;
+}
+.include {
+  margin: 2px 0 0;
+  flex: none;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.include:disabled {
+  cursor: not-allowed;
+}
+
+.wave {
+  align-self: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: 600 10px/16px var(--sans);
+}
+
+.line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text2);
+  font: 11px var(--mono);
+}
+.line > span:last-child {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.line_bad,
+.line_warn {
+  font-family: var(--sans);
+}
+/* Wraps, but clamped so the card stays inside its layout slot (RUN_CARD_HEIGHT); the full text is in the tooltip. */
+.line_bad > span:last-child,
+.line_warn > span:last-child {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+.line_bad {
+  color: var(--bad-fg);
+}
+.line_warn {
+  color: var(--warn-fg);
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.run_running {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.run_ready {
+  border-color: var(--accent);
+}
+.run_interrupted {
+  border-color: var(--warn);
+  border-style: dashed;
+}
+.run_blocked {
+  border-color: var(--bad);
+  background: color-mix(in srgb, var(--bad-soft) 60%, var(--bg1));
+}
+.run_done {
+  opacity: 0.75;
+}
+.run_draft,
+.run_skipped,
+.run_excluded {
+  border-style: dashed;
+  opacity: 0.55;
+}
+
+/* Overview / Focus: a ring with its label under it. */
+.ringNode {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  cursor: pointer;
+}
+.ringLabel {
+  position: absolute;
+  top: 42px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 120px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text2);
+  font-size: 10.5px;
+  pointer-events: none;
+}
+.ring_draft,
+.ring_skipped,
+.ring_excluded {
+  opacity: 0.55;
+}
+.ringNode[data-focused] .ringLabel {
+  color: var(--text);
+  font-weight: 500;
+}
+.ringNode .handleIn,
+.ringNode .handleOut {
+  opacity: 0;
+}
+.ringNode:hover .handleOut {
+  opacity: 1;
 }
 
 /* .inCycle/.dimmed declared last so a done/in-progress node that's also

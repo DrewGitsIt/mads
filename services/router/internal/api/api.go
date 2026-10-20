@@ -56,6 +56,9 @@ type server struct {
 	// reportPreflight caches the preflight run GET /sessions/{id}/report
 	// reads harness versions from (report.go).
 	reportPreflight preflightMemo
+	// changesets caches recent change sets for the working-diff gate
+	// (changeset.go).
+	changesets changeSetCache
 }
 
 // Options bundles server's dependencies so New takes a single argument —
@@ -178,6 +181,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("GET /pipelines/{id}/output", s.handlePipelineOutput)
 	mux.HandleFunc("GET /sessions/{id}/pipeline/tasks/{taskId}/output", s.handlePipelineTaskOutput)
 	mux.HandleFunc("GET /sessions/{id}/pipeline/tasks/{taskId}/turns", s.handlePipelineTaskTurns)
+	mux.HandleFunc("GET /sessions/{id}/pipeline/pickup", s.handlePipelinePickup)
 	mux.HandleFunc("POST /agents/generate", s.handleGenerateAgent)
 	mux.HandleFunc("GET /agents/{id}", s.handleGetAgent)
 	mux.HandleFunc("POST /agents", s.handleCreateAgent)
@@ -245,6 +249,8 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("GET /sessions/{id}/commits", s.handleSessionCommits)
 	mux.HandleFunc("GET /sessions/{id}/commits/{hash}/diff", s.handleSessionCommitDiff)
 	mux.HandleFunc("GET /sessions/{id}/changes", s.handleSessionWorkingDiff)
+	mux.HandleFunc("GET /sessions/{id}/changeset", s.handleSessionChangeSet)
+	mux.HandleFunc("POST /sessions/{id}/changeset/delete-scratch", s.handleSessionDeleteScratch)
 	mux.HandleFunc("GET /sessions/{id}/worktree", s.handleSessionWorktree)
 	mux.HandleFunc("POST /sessions/{id}/worktree/refresh", s.handleSessionWorktreeRefresh)
 	mux.HandleFunc("POST /sessions/{id}/commit", s.handleSessionCommit)

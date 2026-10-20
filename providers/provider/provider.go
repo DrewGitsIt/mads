@@ -13,6 +13,12 @@ import (
 // asserts it appears exactly where the matrix says it should.
 var ErrUnsupported = errors.New("behavior unsupported by provider")
 
+// ErrResumeUnsupported is what OneShot returns when OneShotRequest.Resume is
+// set on a provider whose matrix declares BehaviorOneShotResume
+// unsupported. It wraps ErrUnsupported, so errors.Is matches either. A
+// provider never answers a resume request by silently starting fresh.
+var ErrResumeUnsupported = fmt.Errorf("one-shot resume: %w", ErrUnsupported)
+
 // ErrTurnInFlight is returned by a Session's Send (or a Compactor's Compact)
 // when the harness already has a turn running and takes one at a time — ACP's
 // one-prompt-per-session rule (providers/acprpc). The Runner normally never
@@ -210,6 +216,16 @@ type OneShotRequest struct {
 	System string
 	Model  string
 	Cwd    string
+	// Resume, if set, is a provider-native session ref (a previous
+	// OneShotResult.Ref or EventSessionRef, or an interactive Session.Ref)
+	// whose conversation this invocation continues, in Cwd, with Prompt as
+	// the next user message. Gated by BehaviorOneShotResume: a provider
+	// declaring it unsupported returns ErrResumeUnsupported rather than
+	// starting fresh, and an unknown ref is an error, never a fresh start.
+	// Whether the resumed call keeps the same ref is per provider (all
+	// shipped ones do); callers take the ref it reports, as for any call.
+	// Model and System still apply where the harness allows.
+	Resume string
 	// OnEvent, if set, is called with normalized events (text deltas,
 	// tool use) as they arrive during the invocation — best-effort. A
 	// provider with no incremental output mechanism simply never calls

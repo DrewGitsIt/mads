@@ -141,8 +141,19 @@ never called peer-to-peer.
   session-summary job is suppressed on this path, so no summary outlives the session it
   summarises — see "Critical paths" below.
 - `POST /pipelines` — body `{"session_id", "template_id"}`, mints a `run_<hex>` ID, spawns
-  a Pipeline Engine child; 201 with `{"run_id", "addr"}`.
+  a Pipeline Engine child; 201 with `{"run_id", "addr"}`. A session with no ready task
+  can still start a run if it has an Interrupted one (the run picks it up); otherwise 400
+  "session has no ready or interrupted tasks".
 - `POST /pipelines/{id}/cancel` — stop the child and append `pipeline.cancelled`; 204.
+  The Tasks tab calls this **Stop**: tasks keep their state, and in-flight ones become
+  Interrupted.
+- `GET /sessions/{id}/pipeline/pickup?template=<id>` — the session's Interrupted tasks
+  (in_progress, moved there by the pipeline, no live pipeline or session lease) and where a
+  run of that template picks each up: `{"shared_directory", "tasks": [{"task_id", "mode":
+  "resume"|"restart", "from_stage", "last_run_seq", "last_run_id", "template_name",
+  "template_version"}]}`. Computed with the engine's own functions (`pkg/pipelineprogress`),
+  so the Plan says what the run will do. 400 without `template` or for a template that
+  fails launch checks.
 - `GET /events` — the UI's single control-plane subscription point (spec §15). SSE only
   (`Accept: text/event-stream`, no batch/JSON mode — the Data Service already serves that
   directly for one-shot fetches). Query params `since`/`session_id`/`types` are passed
@@ -359,10 +370,14 @@ the Router picks up a new build without a restart.
 - **Supervision beats the lease TTL backstop, not just a graceful path** —
   `TestExternalKillReleasesLeasesAndEmitsCrashEvent` (`internal/supervisor`) spawns a real
   child, claims a task's lease with a 30s TTL, kills the child's OS process directly (not
-  via `Terminate`), and asserts the task is blocked and a `session.crashed` event lands —
-  in well under a second, proving it's supervision catching the exit and not the TTL
-  expiring underneath it. `TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent`
-  covers the same for Pipeline Engine children and `pipeline.failed`.
+  via `Terminate`), and asserts the lease is gone (the task's status untouched: losing a
+  lease never changes status) and a `session.crashed` event lands — in well under a
+  second, proving it's supervision catching the exit and not the TTL expiring underneath
+  it. `TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent` covers the same for
+  Pipeline Engine children and `pipeline.failed`: a run's engine claims under the holder
+  `pipeline:<runID>` (`supervisor.PipelineLeaseHolder`), so `onPipelineExit`'s
+  `ReleaseAll` frees exactly that run's leases, another run's survive, and the run's
+  in-flight tasks stay in_progress (Interrupted; docs/PIPELINE-LEASES-DESIGN.md).
 - **Orphaned-active sessions are reconciled, not left to rot.** Supervisor state
   (`sessions`/`pipelines` maps) is in-memory only, so every Router restart forgets every
   tracked child while `Session.Activity` in the Data Service still says `active` — nothing

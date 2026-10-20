@@ -7,7 +7,7 @@ import type { Session, Task } from "../../router/types";
 
 export type CommandKind =
   | "jump-session"
-  | "start-pipeline"
+  | "run-pipeline"
   | "open-task"
   | "new-session"
   | "run-retro"
@@ -31,7 +31,7 @@ const STATIC_COMMANDS: Command[] = [
 ];
 
 /**
- * Sessions first (jump + start-pipeline pair per session, since the palette
+ * Sessions first (jump + run-pipeline pair per session, since the palette
  * has no "current session" concept — see HANDOFF §4), then tasks (dispatch
  * reuses jump-to-session, no standalone task detail route exists), then the
  * fixed action set.
@@ -47,9 +47,9 @@ export function buildCommands(sessions: Session[], tasks: Task[]): Command[] {
       sessionId: session.id,
     });
     sessionCommands.push({
-      id: `start-pipeline:${session.id}`,
-      kind: "start-pipeline",
-      label: `Start pipeline · ${session.name}`,
+      id: `run-pipeline:${session.id}`,
+      kind: "run-pipeline",
+      label: `Run pipeline… · ${session.name}`,
       detail: session.workspace,
       sessionId: session.id,
     });

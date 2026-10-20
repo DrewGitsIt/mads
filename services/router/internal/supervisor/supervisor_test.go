@@ -151,7 +151,7 @@ func TestExternalKillReleasesLeasesAndEmitsCrashEvent(t *testing.T) {
 	// expiry rather than supervision, they'd still be failing a few hundred
 	// ms in — this proves supervision, not the backstop.
 	sessionClient := dataclient.New(base, sessionID)
-	if err := sessionClient.Claim(ctx, task.ID, 30*time.Second); err != nil {
+	if err := sessionClient.Claim(ctx, task.ID, "", 30*time.Second); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 
@@ -167,10 +167,15 @@ func TestExternalKillReleasesLeasesAndEmitsCrashEvent(t *testing.T) {
 		t.Fatalf("kill child pid %d: %v", pid, err)
 	}
 
+	// Supervision frees the lease; losing a lease changes no task status
+	// (docs/PIPELINE-LEASES-DESIGN.md A3).
 	eventually(t, 5*time.Second, func() bool {
-		got, err := admin.Task(ctx, task.ID)
-		return err == nil && got.Status == contracts.StatusBlocked
+		leases, err := sessionClient.Leases(ctx)
+		return err == nil && len(leases) == 0
 	})
+	if got, err := admin.Task(ctx, task.ID); err != nil || got.Status != contracts.StatusInProgress {
+		t.Fatalf("task after supervision release: %+v, %v; want in_progress", got, err)
+	}
 
 	eventually(t, 5*time.Second, func() bool {
 		events, err := admin.Events(ctx, 0, sessionID, []string{"session.crashed"})
@@ -216,7 +221,7 @@ func TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent(t *testing.T) {
 
 	sessionID := "ses_pipeline"
 	runID := "run_test"
-	addr, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test")
+	addr, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test", nil)
 	if err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
@@ -234,9 +239,24 @@ func TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent(t *testing.T) {
 	if err := admin.CreateTask(ctx, &task); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	runClient := dataclient.New(base, runID)
-	if err := runClient.Claim(ctx, task.ID, 30*time.Second); err != nil {
+	other := contracts.Task{
+		SessionID: sessionID,
+		Title:     "another run's task",
+		Source:    "test",
+		Status:    contracts.StatusInProgress,
+	}
+	if err := admin.CreateTask(ctx, &other); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	// The engine claims as actor "pipeline" under its run's holder
+	// (docs/PIPELINE-LEASES-DESIGN.md A1). A second run's lease must
+	// survive this run's exit.
+	runClient := dataclient.New(base, "pipeline")
+	if err := runClient.Claim(ctx, task.ID, "pipeline:"+runID, 30*time.Second); err != nil {
 		t.Fatalf("Claim: %v", err)
+	}
+	if err := runClient.Claim(ctx, other.ID, "pipeline:run_other", 30*time.Second); err != nil {
+		t.Fatalf("Claim (other run): %v", err)
 	}
 
 	pid, ok := sup.PipelinePID(runID)
@@ -251,10 +271,22 @@ func TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent(t *testing.T) {
 		t.Fatalf("kill child pid %d: %v", pid, err)
 	}
 
+	// Supervision frees the lease; losing a lease changes no task status
+	// (docs/PIPELINE-LEASES-DESIGN.md A3).
 	eventually(t, 5*time.Second, func() bool {
-		got, err := admin.Task(ctx, task.ID)
-		return err == nil && got.Status == contracts.StatusBlocked
+		leases, err := runClient.LeasesOfKind(ctx, "pipeline")
+		return err == nil && len(leases) == 1
 	})
+	leases, err := runClient.LeasesOfKind(ctx, "pipeline")
+	if err != nil {
+		t.Fatalf("LeasesOfKind: %v", err)
+	}
+	if len(leases) != 1 || leases[0].TaskID != other.ID || leases[0].Holder != "pipeline:run_other" {
+		t.Fatalf("leases after the run's exit = %+v, want only the other run's lease on %s", leases, other.ID)
+	}
+	if got, err := admin.Task(ctx, task.ID); err != nil || got.Status != contracts.StatusInProgress {
+		t.Fatalf("task after supervision release: %+v, %v; want in_progress", got, err)
+	}
 
 	eventually(t, 5*time.Second, func() bool {
 		events, err := admin.Events(ctx, 0, sessionID, []string{"pipeline.failed"})
@@ -271,7 +303,7 @@ func TestPipelineCancelDoesNotEmitFailedEvent(t *testing.T) {
 
 	sessionID := "ses_cancel"
 	runID := "run_cancel"
-	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test"); err != nil {
+	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test", nil); err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
 
@@ -312,7 +344,7 @@ func TestPipelineExitLeavesSessionActiveWhenChildLive(t *testing.T) {
 	}
 
 	runID := "run_live_child"
-	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test"); err != nil {
+	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test", nil); err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
 	if err := sup.TerminatePipeline(ctx, runID); err != nil {
@@ -363,7 +395,7 @@ func TestPipelineExitHealsStaleInactiveSessionWithLiveChild(t *testing.T) {
 	}
 
 	runID := "run_heal_active"
-	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test"); err != nil {
+	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test", nil); err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
 	if err := sup.TerminatePipeline(ctx, runID); err != nil {
@@ -473,7 +505,7 @@ func TestSpawnPipelineGrantsImplicitHandRaiserWhenSessionLive(t *testing.T) {
 	if _, err := sup.SpawnSession(ctx, sessionID); err != nil {
 		t.Fatalf("SpawnSession: %v", err)
 	}
-	if _, err := sup.SpawnPipeline(ctx, "run_edge_a", sessionID, "tpl_test"); err != nil {
+	if _, err := sup.SpawnPipeline(ctx, "run_edge_a", sessionID, "tpl_test", nil); err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
 
@@ -499,7 +531,7 @@ func TestSpawnSessionGrantsImplicitHandRaiserWhenPipelineLive(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	sessionID := sess.ID
-	if _, err := sup.SpawnPipeline(ctx, "run_edge_b", sessionID, "tpl_test"); err != nil {
+	if _, err := sup.SpawnPipeline(ctx, "run_edge_b", sessionID, "tpl_test", nil); err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
 	if _, err := sup.SpawnSession(ctx, sessionID); err != nil {
@@ -532,7 +564,7 @@ func TestSpawnPipelineGrantsImplicitHandRaiserWithoutLiveChild(t *testing.T) {
 	}
 	sessionID := sess.ID
 	runID := "run_no_child"
-	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test"); err != nil {
+	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test", nil); err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
 	if _, ok := sup.SessionAddr(sessionID); ok {
@@ -575,7 +607,7 @@ func TestPipelineExitRevokesImplicitHandRaiser(t *testing.T) {
 	if _, err := sup.SpawnSession(ctx, sessionID); err != nil {
 		t.Fatalf("SpawnSession: %v", err)
 	}
-	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test"); err != nil {
+	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test", nil); err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
 
@@ -618,7 +650,7 @@ func TestSessionAndPipelineAddr(t *testing.T) {
 	}
 
 	runID := "run_addr"
-	pipelineAddr, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test")
+	pipelineAddr, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test", nil)
 	if err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
@@ -876,7 +908,7 @@ func TestBootSweepReconcilesOrphanedActiveSession(t *testing.T) {
 		t.Fatalf("CreateTask (engine-active): %v", err)
 	}
 	engineClient := dataclient.New(base, "external-mads-run")
-	if err := engineClient.Claim(ctx, engineTask.ID, 30*time.Second); err != nil {
+	if err := engineClient.Claim(ctx, engineTask.ID, "", 30*time.Second); err != nil {
 		t.Fatalf("Claim (engine-active): %v", err)
 	}
 

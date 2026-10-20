@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { usePipelineRun } from "./usePipelineRun";
+import { foldReducer, initialRunFoldState, usePipelineRun } from "./usePipelineRun";
+import type { Envelope } from "../../router/types";
 import { FakeEventSource } from "../../router/testFakeEventSource";
 import { FakePipelineClient } from "../client/fixtures";
 import {
@@ -383,5 +384,154 @@ describe("usePipelineRun", () => {
     await Promise.resolve();
     expect(result.current.taskRunState[recordedTaskIds.coreLib]).toEqual(before);
     expect(result.current.taskRunState[recordedTaskIds.coreLib]?.attempts[0]?.retries).toBeUndefined();
+  });
+
+  it("reads run_id, template and excluded_task_ids from a resumed run's pipeline.started, so a remount can cancel", async () => {
+    const client = newClient();
+    client.runs = [
+      {
+        session_id: recordedSessionId,
+        run_seq: 100,
+        run_id: "run_abc",
+        started_at: "2026-07-16T05:00:00Z",
+        outcome: "running",
+        tasks_done: 0,
+        tasks_blocked: 0,
+        tasks_skipped: 0,
+        cost_usd: 0,
+      },
+    ];
+    client.runEvents = [
+      {
+        seq: 100,
+        timestamp: "2026-07-16T05:00:00Z",
+        type: "pipeline.started",
+        session_id: recordedSessionId,
+        actor: "pipeline",
+        payload: {
+          template: "default-implementation",
+          run_id: "run_abc",
+          excluded_task_ids: [recordedTaskIds.coreLib],
+        },
+      },
+    ];
+    const { result } = renderHook(() => usePipelineRun(recordedSessionId, client));
+
+    await waitFor(() => expect(result.current.resuming).toBe(false));
+    expect(result.current.runId).toBe("run_abc");
+    expect(result.current.template).toBe("default-implementation");
+    expect(result.current.excludedTaskIds).toEqual([recordedTaskIds.coreLib]);
+  });
+
+  it("falls back to the run history's run_id when an older pipeline.started carried none", async () => {
+    const client = newClient();
+    client.runs = [
+      {
+        session_id: recordedSessionId,
+        run_seq: 100,
+        run_id: "run_from_history",
+        started_at: "2026-07-16T05:00:00Z",
+        outcome: "running",
+        tasks_done: 0,
+        tasks_blocked: 0,
+        tasks_skipped: 0,
+        cost_usd: 0,
+      },
+    ];
+    client.runEvents = [
+      {
+        seq: 100,
+        timestamp: "2026-07-16T05:00:00Z",
+        type: "pipeline.started",
+        session_id: recordedSessionId,
+        actor: "pipeline",
+        payload: { template: "default-implementation" },
+      },
+    ];
+    const { result } = renderHook(() => usePipelineRun(recordedSessionId, client));
+
+    await waitFor(() => expect(result.current.resuming).toBe(false));
+    expect(result.current.runId).toBe("run_from_history");
+    expect(result.current.excludedTaskIds).toEqual([]);
+  });
+});
+
+describe("foldReducer pipeline.started", () => {
+  function started(seq: number, payload: Record<string, unknown>): Envelope {
+    return {
+      seq,
+      timestamp: "2026-10-19T10:00:00Z",
+      type: "pipeline.started",
+      session_id: "ses_1",
+      actor: "pipeline",
+      payload,
+    };
+  }
+
+  it("leaves runId undefined and excludedTaskIds empty for events from before they existed", () => {
+    const state = foldReducer(initialRunFoldState, started(1, { template: "default-implementation" }));
+    expect(state.phase).toBe("running");
+    expect(state.runId).toBeUndefined();
+    expect(state.excludedTaskIds).toEqual([]);
+  });
+
+  it("treats a null excluded_task_ids as empty", () => {
+    const state = foldReducer(initialRunFoldState, started(1, { run_id: "r1", excluded_task_ids: null }));
+    expect(state.runId).toBe("r1");
+    expect(state.excludedTaskIds).toEqual([]);
+  });
+
+  it("a newer run replaces the previous run's id and exclusions", () => {
+    let state = foldReducer(initialRunFoldState, started(1, { run_id: "r1", excluded_task_ids: ["t1"] }));
+    state = foldReducer(state, started(9, { run_id: "r2" }));
+    expect(state.runId).toBe("r2");
+    expect(state.excludedTaskIds).toEqual([]);
+  });
+
+  it("ignores another run's end event, such as an older run marked lost", () => {
+    const failed = (seq: number, payload: Record<string, unknown>): Envelope => ({
+      ...started(seq, payload),
+      type: "pipeline.failed",
+      actor: "router",
+    });
+    let state = foldReducer(initialRunFoldState, started(9, { run_id: "r2" }));
+    state = foldReducer(state, failed(10, { run_id: "r1", reason: "lost" }));
+    expect(state.phase).toBe("running");
+    state = foldReducer(state, failed(11, { run_id: "r2", reason: "lost" }));
+    expect(state.phase).toBe("finished");
+    expect(state.outcome).toBe("failed");
+  });
+});
+
+describe("foldReducer stage timestamps", () => {
+  function env(seq: number, type: string, timestamp: string, payload: Record<string, unknown> = {}): Envelope {
+    return { seq, timestamp, type, session_id: "ses_1", task_id: "t1", actor: "pipeline", payload };
+  }
+
+  it("stamps an attempt with its opening and closing envelopes' timestamps", () => {
+    const state = [
+      env(1, "pipeline.started", "2026-10-19T10:00:00Z"),
+      env(2, "stage.started", "2026-10-19T10:00:05Z", { stage: "architect" }),
+      env(3, "stage.retried", "2026-10-19T10:01:00Z", { stage: "architect" }),
+      env(4, "stage.failed", "2026-10-19T10:02:10Z", { stage: "architect", reason: "no" }),
+      env(5, "stage.started", "2026-10-19T10:02:11Z", { stage: "architect" }),
+      env(6, "stage.skipped", "2026-10-19T10:03:00Z", { stage: "docs" }),
+    ].reduce(foldReducer, initialRunFoldState);
+    const attempts = state.taskRunState.t1.attempts;
+    expect(attempts.map((a) => [a.startedAt, a.endedAt])).toEqual([
+      ["2026-10-19T10:00:05Z", "2026-10-19T10:02:10Z"],
+      ["2026-10-19T10:02:11Z", undefined],
+      ["2026-10-19T10:03:00Z", "2026-10-19T10:03:00Z"],
+    ]);
+  });
+
+  it("the recorded run's attempts all carry both timestamps once it finishes", () => {
+    const state = recordedEnvelopes.reduce(foldReducer, initialRunFoldState);
+    const attempts = Object.values(state.taskRunState).flatMap((t) => t.attempts);
+    expect(attempts.length).toBeGreaterThan(0);
+    for (const a of attempts) {
+      expect(a.startedAt).toBeTruthy();
+      expect(a.endedAt).toBeTruthy();
+    }
   });
 });

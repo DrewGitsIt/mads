@@ -39,6 +39,13 @@ type outputLog struct {
 // any failure to open — callers treat capture as best-effort and never let
 // it block a stage.
 func openOutputLog(madsHome, sessionID string, runSeq int64, taskID, stage string, attempt int, model string) *outputLog {
+	return openOutputLogNote(madsHome, sessionID, runSeq, taskID, stage, attempt, model, "")
+}
+
+// openOutputLogNote is openOutputLog with a preface line written before the
+// header (none when empty) — a resumed attempt's note of the run and attempt
+// it continues.
+func openOutputLogNote(madsHome, sessionID string, runSeq int64, taskID, stage string, attempt int, model, preface string) *outputLog {
 	if madsHome == "" {
 		return nil
 	}
@@ -51,6 +58,9 @@ func openOutputLog(madsHome, sessionID string, runSeq int64, taskID, stage strin
 		return nil
 	}
 	l := &outputLog{f: f, stage: stage, attempt: attempt, startedAt: time.Now(), lastNL: true}
+	if preface != "" {
+		_, _ = fmt.Fprintln(f, preface)
+	}
 	_, _ = fmt.Fprintf(f, "=== stage=%s attempt=%d task=%s model=%s started=%s ===\n",
 		stage, attempt, taskID, model, l.startedAt.Format(time.RFC3339))
 	return l

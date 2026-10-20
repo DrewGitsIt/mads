@@ -35,9 +35,16 @@ export function requestedShelf(): string | null {
   return requestedLibraryShelf;
 }
 
-/** Show the Sessions surface with `sessionId` selected. */
-export function requestOpenSession(sessionId: string): void {
-  window.dispatchEvent(new CustomEvent(OPEN_SESSION_EVENT, { detail: { sessionId } }));
+export interface OpenSessionDetail {
+  sessionId: string;
+  /** Open the Tasks tab on this run (a run_seq), or on Plan ("new"). Omitted: the session opens as usual. */
+  run?: number | "new";
+}
+
+/** Show the Sessions surface with `sessionId` selected — on its Tasks tab showing `opts.run`, when given. */
+export function requestOpenSession(sessionId: string, opts: { run?: number | "new" } = {}): void {
+  const detail: OpenSessionDetail = { sessionId, run: opts.run };
+  window.dispatchEvent(new CustomEvent(OPEN_SESSION_EVENT, { detail }));
 }
 
 export const OPEN_CREATED_SESSION_EVENT = "mads:open-created-session";

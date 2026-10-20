@@ -87,6 +87,9 @@ type Fake struct {
 	// and hotSets counts SetMCPServers calls.
 	mcpHotSet bool
 	hotSets   int
+	// oneShotResumes records every OneShot's Resume ref, in order
+	// (ResumeCalls).
+	oneShotResumes []string
 }
 
 // Option configures a Fake at construction. The zero value of every Option
@@ -216,6 +219,9 @@ func (f *Fake) Matrix() provider.Matrix {
 		provider.BehaviorMCPServers: provider.Native,
 		// OneShot streams scripted chunks with their scripted delay.
 		provider.BehaviorOneShotStream: provider.Native,
+		// OneShot with Resume continues the ref's history in place and
+		// records the call (ResumeCalls).
+		provider.BehaviorOneShotResume: provider.Native,
 		// The fake implements RefAnnouncer and scripts timing via
 		// Scenario.RefAnnounce for conformance/runner test coverage.
 		provider.BehaviorRefAnnounce: provider.Native,
@@ -309,8 +315,16 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 	return s, nil
 }
 
-func (f *Fake) OneShot(_ context.Context, req provider.OneShotRequest) (*provider.OneShotResult, error) {
-	plan := f.plan(req.Prompt, nil)
+func (f *Fake) OneShot(ctx context.Context, req provider.OneShotRequest) (*provider.OneShotResult, error) {
+	var history []provider.Message
+	if req.Resume != "" {
+		h, err := f.resumeOneShot(req.Resume)
+		if err != nil {
+			return nil, err
+		}
+		history = h
+	}
+	plan := f.plan(req.Prompt, history, req.Resume != "")
 	switch {
 	case plan.rateLimit:
 		return nil, &provider.RateLimitError{RetryAfter: time.Second, Message: "scripted rate limit"}
@@ -322,9 +336,17 @@ func (f *Fake) OneShot(_ context.Context, req provider.OneShotRequest) (*provide
 	// whose one-shot invocations announce a native session ref mid-flight and
 	// leave a transcript behind it. The zero-value fake stays "no ref, no
 	// transcript" — the fallback-to-raw-log case downstream callers depend on.
+	// A resumed one-shot always continues its ref in place, announced and
+	// recorded whatever the scenario says (claude-code's --resume keeps the
+	// session id).
 	var ref string
-	if f.scenario.AnnounceOneShotRef {
+	switch {
+	case req.Resume != "":
+		ref = req.Resume
+	case f.scenario.AnnounceOneShotRef || plan.announceRef:
 		ref = f.newOneShotRef()
+	}
+	if ref != "" {
 		f.record(ref, provider.Message{Role: "user", Text: req.Prompt, Timestamp: time.Now()})
 		if req.OnEvent != nil {
 			req.OnEvent(provider.Event{Kind: provider.EventSessionRef, Ref: ref})
@@ -353,9 +375,16 @@ func (f *Fake) OneShot(_ context.Context, req provider.OneShotRequest) (*provide
 	// caller watching for incremental output sees genuine pacing rather
 	// than one wait followed by the whole result at once.
 	var b strings.Builder
+	//
+	// Cancelling ctx stops the one-shot between chunks, as killing a real
+	// agent process would: an error, and no agent turn recorded.
 	for _, chunk := range plan.chunks {
 		if plan.delay > 0 {
-			time.Sleep(plan.delay)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(plan.delay):
+			}
 		}
 		b.WriteString(chunk)
 		if req.OnEvent != nil {
@@ -376,12 +405,46 @@ func (f *Fake) OneShot(_ context.Context, req provider.OneShotRequest) (*provide
 	return &provider.OneShotResult{Text: text, Ref: ref, Usage: applyUsageOverride(u, plan.usage)}, nil
 }
 
+// resumeOneShot validates and records a one-shot resume of ref, returning
+// the history it continues. The ref must be known (in memory, or on disk
+// under WithTranscriptDir — a resume after the process that made it is gone)
+// and not attached to a live session; anything else is an error, never a
+// fresh start.
+func (f *Fake) resumeOneShot(ref string) ([]provider.Message, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.oneShotResumes = append(f.oneShotResumes, ref)
+	if f.liveRefs[ref] {
+		return nil, fmt.Errorf("resume: session ref %q already attached", ref)
+	}
+	if _, known := f.histories[ref]; !known {
+		if f.transcriptDir == "" {
+			return nil, fmt.Errorf("resume: unknown session ref %q", ref)
+		}
+		msgs, err := readTranscriptFile(f.transcriptDir, ref)
+		if err != nil {
+			return nil, fmt.Errorf("resume: %w", err)
+		}
+		f.histories[ref] = msgs
+	}
+	return append([]provider.Message{}, f.histories[ref]...), nil
+}
+
+// ResumeCalls returns the ref of every OneShot that asked to resume one
+// (OneShotRequest.Resume), in order — including calls that then failed, so
+// a test can assert "this attempt tried to resume session X".
+func (f *Fake) ResumeCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string{}, f.oneShotResumes...)
+}
+
 // Complete implements provider.Completer: the same scripted dialect as
 // OneShot (Scenario rules, built-in echo/slow/crash/etc.), but stateless —
 // no ref, no transcript recording, matching the hermetic "no session left
 // behind" contract Complete promises.
 func (f *Fake) Complete(_ context.Context, req provider.CompleteRequest) (provider.CompleteResult, error) {
-	plan := f.plan(req.Prompt, nil)
+	plan := f.plan(req.Prompt, nil, false)
 	switch {
 	case plan.rateLimit:
 		return provider.CompleteResult{}, &provider.RateLimitError{RetryAfter: time.Second, Message: "scripted rate limit"}
@@ -473,10 +536,12 @@ type turnPlan struct {
 	crash     bool
 	rateLimit bool
 	usage     *UsageOverride
+	// announceRef: the rule's AnnounceRef (one-shots only).
+	announceRef bool
 }
 
-func (f *Fake) plan(prompt string, history []provider.Message) turnPlan {
-	if r := f.scenario.match(prompt); r != nil {
+func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) turnPlan {
+	if r := f.scenario.match(prompt, resumed); r != nil {
 		rateLimit := r.RateLimit
 		if r.RateLimitTimes > 0 {
 			f.mu.Lock()
@@ -488,6 +553,7 @@ func (f *Fake) plan(prompt string, history []provider.Message) turnPlan {
 		p := turnPlan{
 			chunks: r.Chunks, delay: time.Duration(r.DelayMs) * time.Millisecond,
 			tools: r.Tools, crash: r.Crash, rateLimit: rateLimit, usage: r.Usage,
+			announceRef: r.AnnounceRef,
 		}
 		if len(p.chunks) == 0 && r.Reply != "" {
 			p.chunks = []string{r.Reply}
@@ -828,7 +894,7 @@ func (s *fakeSession) Send(_ context.Context, text string) error {
 
 	history := s.f.history(s.ref)
 	s.f.record(s.ref, provider.Message{Role: "user", Text: text})
-	go s.respond(text, s.f.plan(text, history))
+	go s.respond(text, s.f.plan(text, history, false))
 	return nil
 }
 

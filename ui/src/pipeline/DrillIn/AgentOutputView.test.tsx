@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { AgentOutputView } from "./AgentOutputView";
 import type { PipelineOutputSource } from "../client/pipelineClient";
 
@@ -32,6 +32,36 @@ describe("AgentOutputView", () => {
 
     expect(() => emit("Reading task context...\r\n")).not.toThrow();
     expect(() => emit("STAGE: pass\r\n")).not.toThrow();
+  });
+
+  describe("with an empty state", () => {
+    function makeEndingSource() {
+      const stub = makeStubSource();
+      const ends = new Set<() => void>();
+      stub.source.onEnd = vi.fn((listener: () => void) => {
+        ends.add(listener);
+        return () => ends.delete(listener);
+      });
+      return { ...stub, end: () => act(() => ends.forEach((l) => l())) };
+    }
+
+    it("draws it instead of the terminal once the stream ends with zero chunks", async () => {
+      const { source, end } = makeEndingSource();
+      const { container } = render(<AgentOutputView source={source} empty={<p>No output.</p>} />);
+      expect(container.querySelector('[data-testid="terminal-view"]')).toBeTruthy();
+      end();
+      expect(screen.getByText("No output.")).toBeTruthy();
+      expect(container.querySelector('[data-testid="terminal-view"]')).toBeNull();
+    });
+
+    it("keeps the terminal when a chunk arrived before the end", async () => {
+      const { source, emit, end } = makeEndingSource();
+      const { container } = render(<AgentOutputView source={source} empty={<p>No output.</p>} />);
+      act(() => emit("STAGE: pass\r\n"));
+      end();
+      expect(screen.queryByText("No output.")).toBeNull();
+      expect(container.querySelector('[data-testid="terminal-view"]')).toBeTruthy();
+    });
   });
 
   it("closes the source on unmount", async () => {

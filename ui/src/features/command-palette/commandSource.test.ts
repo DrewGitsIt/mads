@@ -28,12 +28,12 @@ function makeTask(overrides: Partial<Task>): Task {
 }
 
 describe("buildCommands", () => {
-  it("emits one jump-session and one start-pipeline command per session", () => {
+  it("emits one jump-session and one run-pipeline command per session", () => {
     const sessions = [makeSession({ id: "s1", name: "Alpha" }), makeSession({ id: "s2", name: "Beta" })];
     const commands = buildCommands(sessions, []);
 
     const jumps = commands.filter((c) => c.kind === "jump-session");
-    const starts = commands.filter((c) => c.kind === "start-pipeline");
+    const starts = commands.filter((c) => c.kind === "run-pipeline");
     expect(jumps.map((c) => c.sessionId)).toEqual(["s1", "s2"]);
     expect(starts.map((c) => c.sessionId)).toEqual(["s1", "s2"]);
   });
@@ -64,7 +64,7 @@ describe("buildCommands", () => {
     const tasks = [makeTask({ id: "t1", session_id: "s1" })];
     const commands = buildCommands(sessions, tasks);
     const kinds = commands.map((c) => c.kind);
-    expect(kinds).toEqual(["jump-session", "start-pipeline", "open-task", "new-session", "run-retro", "toggle-shell", "open-settings"]);
+    expect(kinds).toEqual(["jump-session", "run-pipeline", "open-task", "new-session", "run-retro", "toggle-shell", "open-settings"]);
   });
 });
 

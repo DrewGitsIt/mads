@@ -1,0 +1,863 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — pipeline runs inside the Tasks tab (v2)</title>
+<link rel="stylesheet" href="../../ui/src/tokens/tokens.css" />
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg0); color: var(--text); font: 14px/1.5 var(--sans); padding: 22px 24px 80px; }
+  .frame { max-width: 1360px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .lede { color: var(--text2); max-width: 110ch; margin: 0 0 14px; }
+  .lede b { color: var(--text); }
+  button, select { font: inherit; color: inherit; }
+  code { background: var(--bg2); border: 1px solid var(--line-soft); border-radius: 4px; padding: 0 4px; font-size: .9em; font-family: var(--mono); }
+  kbd { font: 11px var(--mono); padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg2); }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin: 0 0 14px; padding: 10px 12px; background: var(--bg1); border: 1px solid var(--line-soft); border-radius: 10px; font-size: 12.5px; color: var(--text2); }
+  .controls .grp { display: flex; gap: 4px; align-items: center; }
+  .controls .lbl { color: var(--text3); text-transform: uppercase; letter-spacing: .08em; font-size: 10.5px; margin-right: 4px; }
+  .controls button, .controls select { background: var(--bg2); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; cursor: pointer; font: 12px var(--sans); }
+  .controls button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .controls .sep { width: 1px; align-self: stretch; background: var(--line-soft); }
+
+  /* ── workspace chrome ─────────────────────────────────── */
+  .app { position: relative; border: 1px solid var(--line-soft); border-radius: 12px; overflow: hidden; background: var(--bg0); min-height: 720px; display: flex; flex-direction: column; }
+  .topbar { display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line-soft); background: var(--bg1); }
+  .topbar .sess { font-weight: 600; }
+  .topbar .wt { color: var(--text3); font: 11.5px var(--mono); }
+  .tabs { display: flex; gap: 2px; margin-left: 18px; }
+  .tab { padding: 5px 12px; border-radius: 7px; color: var(--text2); font-size: 13px; display: inline-flex; gap: 7px; align-items: center; cursor: default; }
+  .tab.on { background: var(--bg3); color: var(--text); }
+  .main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+  /* ── run bar ──────────────────────────────────────────── */
+  .runbar { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--line-soft); position: relative; min-height: 50px; }
+  .views { display: flex; gap: 2px; background: var(--bg2); padding: 2px; border-radius: 8px; }
+  .views span { padding: 2px 10px; border-radius: 6px; font-size: 12px; color: var(--text2); cursor: pointer; }
+  .views span.on { background: var(--bg4); color: var(--text); }
+  .dd { display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg1); cursor: pointer; font-size: 12.5px; white-space: nowrap; }
+  .dd:hover { border-color: var(--text3); }
+  .dd .k { color: var(--text3); font-size: 11px; }
+  .dd b { font-weight: 600; }
+  .rb-meta { font-size: 12.5px; color: var(--text2); display: inline-flex; gap: 10px; align-items: center; white-space: nowrap; }
+  .rb-meta .el { font-family: var(--mono); }
+  .warnline { font-size: 12px; color: var(--warn-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .spacer { flex: 1; }
+  .btn { padding: 5px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg2); cursor: pointer; font-size: 12.5px; white-space: nowrap; }
+  .btn:hover { border-color: var(--text3); }
+  .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .btn.pri:hover { background: var(--accent-hover); }
+  .btn.sm { padding: 2px 9px; font-size: 11.5px; border-radius: 6px; }
+  .btn.ghost { background: transparent; }
+  .btn[disabled] { opacity: .45; cursor: not-allowed; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border-radius: 9px; font: 500 11px/18px var(--sans); background: var(--bg3); color: var(--text2); white-space: nowrap; }
+  .chip.info { background: var(--info-soft); color: var(--info-fg); }
+  .chip.ok { background: var(--ok-soft); color: var(--ok-fg); }
+  .chip.bad { background: var(--bad-soft); color: var(--bad-fg); }
+  .chip.warn { background: var(--warn-soft); color: var(--warn-fg); }
+  .chip.dr { background: var(--draft-soft); color: var(--draft-fg); }
+  .spin { width: 9px; height: 9px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; display: inline-block; animation: rot .9s linear infinite; flex: none; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .chain { display: inline-flex; align-items: center; gap: 4px; font: 11.5px var(--mono); color: var(--text2); flex-wrap: wrap; }
+  .chain .st { padding: 0 5px; border-radius: 4px; background: var(--bg2); }
+  .chain .st.cmd { background: transparent; border: 1px dashed var(--line); }
+  .chain .ar { color: var(--text3); }
+  .chain .lp { color: var(--warn-fg); }
+
+  /* popovers */
+  .pop { position: absolute; top: 46px; z-index: 30; background: var(--bg1); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 6px; }
+  .pop .hd { font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); padding: 6px 8px 4px; }
+  .pop .ft { border-top: 1px solid var(--line-soft); margin-top: 6px; padding: 8px 8px 2px; font-size: 12px; color: var(--text3); display: flex; justify-content: space-between; gap: 12px; }
+  .pop .ft a { color: var(--accent); cursor: pointer; }
+  .opt { padding: 7px 10px; border-radius: 8px; cursor: pointer; display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; }
+  .opt:hover { background: var(--bg2); }
+  .opt.on { background: var(--accent-soft); }
+  .opt .nm { font-weight: 600; font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
+  .opt .ds { grid-column: 1 / -1; color: var(--text3); font-size: 12px; }
+  .opt .chain { grid-column: 1 / -1; margin-top: 3px; }
+  .opt .meta { color: var(--text3); font-size: 11.5px; text-align: right; }
+  .runpop { left: 120px; width: 420px; }
+  .tplpop { left: 120px; width: 560px; }
+
+  /* ── metro (List view) ────────────────────────────────── */
+  .metro-wrap { padding: 8px 16px 0; }
+  .metro { position: relative; height: 250px; margin: 0 6px; }
+  .metro svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+  .m-line { position: absolute; top: 100px; height: 6px; border-radius: 3px; background: var(--line); }
+  .m-stn { position: absolute; top: 93px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; }
+  .m-stn .ring { width: 20px; height: 20px; border-radius: 50%; background: var(--bg0); border: 4px solid var(--text2); }
+  .m-stn.cmd .ring { border-radius: 5px; }
+  .m-stn .nm { margin-top: 6px; font: 11.5px var(--mono); color: var(--text2); white-space: nowrap; }
+  .m-stn .sub { font-size: 10.5px; color: var(--text3); white-space: nowrap; }
+  .m-stn.hot .ring { border-color: var(--accent); }
+  .m-stn.end .ring { width: 26px; height: 26px; border-width: 5px; margin-top: -3px; }
+  .m-stn.end .nm { font-family: var(--sans); font-weight: 600; }
+  .m-stn.dim { opacity: .35; }
+  .m-stn.path .ring { border-color: var(--ok); }
+  .m-stn.pathnow .ring { border-color: var(--accent); box-shadow: 0 0 0 5px var(--accent-soft); }
+  .m-stack { position: absolute; bottom: calc(100% - 88px); transform: translateX(-50%); display: flex; flex-direction: column-reverse; gap: 3px; align-items: center; }
+  .m-below { position: absolute; top: 196px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 3px; align-items: center; z-index: 2; }
+  .m-below .cap { font-size: 10px; color: var(--bad-fg); text-transform: uppercase; letter-spacing: .08em; }
+  .tok { display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border-radius: 10px; font: 500 11px/20px var(--sans); background: var(--bg3); color: var(--text); white-space: nowrap; cursor: pointer; border: 1px solid var(--line); transition: transform var(--dur-fast); }
+  .tok:hover { transform: translateY(-1px); border-color: var(--text3); }
+  .tok.run { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .tok.done { background: var(--ok-soft); color: var(--ok-fg); border-color: transparent; }
+  .tok.blocked { background: var(--bad); color: var(--bg0); border-color: var(--bad); }
+  .tok.queued, .tok.ready { border-style: dashed; background: var(--bg1); }
+  .tok.draft, .tok.skipped { background: transparent; border-style: dotted; color: var(--text3); }
+  .tok.focus { box-shadow: 0 0 0 2px var(--text); }
+  .tok.more { background: var(--bg2); color: var(--text2); border-style: solid; }
+  .tok .a { font-size: 9.5px; opacity: .85; }
+  .m-lbl { position: absolute; font-size: 10.5px; color: var(--warn-fg); transform: translateX(-50%); white-space: nowrap; }
+  .m-out { position: absolute; left: 0; top: 216px; display: flex; gap: 6px; align-items: center; }
+  .m-out .cap, .m-cap { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: .08em; }
+  .stackpop { position: absolute; z-index: 20; width: 260px; transform: translateX(-50%); background: var(--bg1); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); padding: 6px; }
+  .stackpop .hd { display: flex; justify-content: space-between; font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); padding: 2px 6px 6px; }
+  .stackpop .it { display: flex; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+  .stackpop .it:hover { background: var(--bg2); }
+  .stackpop .it .d { margin-left: auto; color: var(--text3); font: 11px var(--mono); }
+  .stackpop input { width: 100%; margin: 0 0 4px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--line-soft); background: var(--bg0); color: var(--text); font-size: 12px; }
+
+  /* task list under the metro */
+  .blist { padding: 4px 16px 24px; }
+  .grp-h { display: flex; align-items: center; gap: 8px; margin: 12px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); }
+  .grp-h .n { font-weight: 600; }
+  .grp-h.bad { color: var(--bad-fg); }
+  .brow { display: grid; grid-template-columns: 22px 1fr auto 70px; gap: 12px; align-items: center; padding: 6px 10px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+  .brow.plan { grid-template-columns: 22px 22px 1fr auto 40px; }
+  .brow:hover { background: var(--bg1); }
+  .brow.focus { background: var(--bg2); }
+  .brow .sub { color: var(--text3); font-size: 11.5px; }
+  .brow .sub.bad { color: var(--bad-fg); }
+  .brow .sub.warn { color: var(--warn-fg); }
+  .brow.excl { opacity: .55; }
+  .brow .acts { text-align: right; color: var(--text3); font-size: 12px; }
+  .inc { width: 15px; height: 15px; border-radius: 4px; border: 1.5px solid var(--text3); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; cursor: pointer; }
+  .inc.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .inc.na { border-style: dotted; cursor: not-allowed; }
+  .glyph { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--text3); display: inline-block; }
+  .glyph.done { background: var(--ok); border-color: var(--ok); }
+  .glyph.run { border-color: var(--accent); border-right-color: transparent; animation: rot 1s linear infinite; }
+  .glyph.blocked { background: var(--bad); border-color: var(--bad); }
+  .glyph.queued { border-style: dashed; }
+  .glyph.draft, .glyph.skipped { border-style: dotted; }
+  .addrow { margin-top: 10px; padding: 7px 10px; border: 1px dashed var(--line); border-radius: 8px; color: var(--text3); font-size: 12.5px; display: flex; gap: 10px; }
+  .addrow i { font-style: normal; font-size: 11.5px; }
+
+  /* ── lens ─────────────────────────────────────────────── */
+  .lens { border: 1px solid var(--line); border-radius: 10px; background: var(--bg1); overflow: hidden; display: flex; flex-direction: column; animation: lensIn .25s var(--ease-out); }
+  .lens.below { margin: 4px 16px 20px; }
+  @keyframes lensIn { from { opacity: 0; transform: translateY(-4px) scale(.995); } }
+  .lens-h { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line-soft); }
+  .lens-h .ti { font-weight: 600; font-size: 14px; }
+  .lens-h .x { color: var(--text3); cursor: pointer; font-size: 12px; display: inline-flex; gap: 6px; align-items: center; }
+  .strip { display: flex; align-items: center; padding: 12px 18px 6px; overflow-x: auto; }
+  .stn { display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; min-width: 92px; }
+  .stn .dot { width: 18px; height: 18px; border-radius: 50%; background: var(--bg3); border: 2px solid var(--line); display: flex; align-items: center; justify-content: center; font-size: 10px; }
+  .stn.done .dot { background: var(--ok); border-color: var(--ok); color: var(--bg0); }
+  .stn.now .dot { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 5px var(--accent-soft); animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 9px transparent; } }
+  .stn.fail .dot { background: var(--bad); border-color: var(--bad); color: var(--bg0); }
+  .stn.skip .dot { background: var(--bg2); border-style: dashed; }
+  .stn .nm { font: 11.5px var(--mono); color: var(--text2); }
+  .stn.sel .nm { color: var(--text); font-weight: 700; }
+  .stn.sel .dot { outline: 2px solid var(--text); outline-offset: 3px; }
+  .stn .att { font-size: 10px; color: var(--text3); height: 14px; }
+  .stn .att.warn { color: var(--warn-fg); }
+  .wire { flex: 1; height: 2px; background: var(--line); min-width: 18px; margin-bottom: 32px; }
+  .wire.done { background: var(--ok); }
+  .lens-b { display: grid; grid-template-columns: 250px 1fr; min-height: 340px; border-top: 1px solid var(--line-soft); }
+  .side { border-right: 1px solid var(--line-soft); padding: 10px 12px; display: flex; flex-direction: column; gap: 14px; font-size: 12px; }
+  .side h4 { margin: 0 0 6px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); font-weight: 600; }
+  .tl { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .tl li { display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: start; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+  .tl li:hover { background: var(--bg2); }
+  .tl li.sel { background: var(--bg3); }
+  .tl .b { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; background: var(--text3); }
+  .tl .b.completed { background: var(--ok); } .tl .b.failed { background: var(--bad); } .tl .b.started { background: var(--accent); } .tl .b.skipped { background: transparent; border: 1px dashed var(--text3); }
+  .tl .s { font-family: var(--mono); }
+  .tl .r { grid-column: 2 / -1; color: var(--bad-fg); font-size: 11.5px; line-height: 1.35; }
+  .tl .d { color: var(--text3); font: 10.5px var(--mono); }
+  .files div { font: 11.5px var(--mono); color: var(--text2); display: flex; justify-content: space-between; padding: 1px 0; }
+  .files .add { color: var(--ok-fg); } .files .del { color: var(--bad-fg); }
+  .files a { color: var(--accent); font-family: var(--sans); font-size: 11.5px; cursor: pointer; }
+  .ac { color: var(--text2); line-height: 1.45; }
+  .out { display: flex; flex-direction: column; min-width: 0; }
+  .out-h { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line-soft); font-size: 12px; color: var(--text2); }
+  .out-h b { color: var(--text); font-family: var(--mono); }
+  .attsel { background: var(--warn-soft); color: var(--warn-fg); border: 1px solid transparent; border-radius: 9px; font: 500 11px/18px var(--sans); padding: 0 4px 0 7px; cursor: pointer; }
+  .attsel:hover { border-color: var(--warn); }
+  .seg2 { display: flex; gap: 2px; background: var(--bg2); padding: 2px; border-radius: 6px; }
+  .seg2 span { padding: 0 8px; border-radius: 4px; font-size: 11px; line-height: 18px; color: var(--text3); }
+  .seg2 span.on { background: var(--bg4); color: var(--text); }
+  .feed { flex: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; max-height: 380px; font-size: 12.5px; }
+  .ln { display: flex; gap: 8px; align-items: baseline; animation: lnIn .3s var(--ease-out); }
+  @keyframes lnIn { from { opacity: 0; transform: translateY(3px); } }
+  .ln.think { color: var(--text3); font-style: italic; }
+  .ln .tool { flex: none; font: 600 10.5px/17px var(--mono); padding: 0 6px; border-radius: 4px; background: var(--info-soft); color: var(--info-fg); }
+  .ln .tool.edit { background: var(--warn-soft); color: var(--warn-fg); }
+  .ln .tool.bash { background: var(--bg3); color: var(--text); }
+  .ln .p { font-family: var(--mono); font-size: 12px; }
+  .ln .res { color: var(--text3); font: 11.5px var(--mono); }
+  .ln .stat { font: 11px var(--mono); } .ln .stat .a { color: var(--ok-fg); } .ln .stat .d { color: var(--bad-fg); }
+  .cursor { display: inline-block; width: 7px; height: 13px; background: var(--accent); animation: blink 1s steps(1) infinite; vertical-align: -2px; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .term { font: 11.5px/1.55 var(--mono); color: var(--text2); white-space: pre-wrap; background: var(--bg0); border-radius: 6px; padding: 10px 12px; border: 1px solid var(--line-soft); }
+  .term .ok { color: var(--ok-fg); } .term .dim { color: var(--text3); }
+  .verdict { border: 1px solid var(--bad); background: var(--bad-soft); border-radius: 8px; padding: 10px 12px; }
+  .verdict.ok { border-color: var(--ok); background: var(--ok-soft); }
+  .verdict h5 { margin: 0 0 6px; font-size: 13px; }
+  .verdict ul { margin: 0; padding-left: 18px; font-size: 12.5px; }
+  .verdict code { background: var(--bg1); }
+  .plan { font-size: 12.5px; line-height: 1.55; }
+  .plan h5 { margin: 0 0 4px; font-size: 12px; color: var(--text3); text-transform: uppercase; letter-spacing: .06em; }
+  .plan ol { margin: 0 0 8px; padding-left: 18px; }
+  .empty-out { color: var(--text3); padding: 30px 14px; text-align: center; font-size: 12.5px; }
+  .handoff { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-radius: 6px; background: var(--bg2); color: var(--text2); font-size: 11.5px; }
+  .handoff b { color: var(--text); }
+  .blockbox { margin: 10px 14px; border: 1px solid var(--bad); border-radius: 8px; padding: 10px 12px; background: var(--bad-soft); display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
+  .blockbox .acts { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  /* ── graph (Graph view) ───────────────────────────────── */
+  .cwrap { position: relative; flex: 1; display: flex; min-height: 560px; }
+  .canvas { position: relative; flex: 1; background-image: radial-gradient(var(--line-soft) 1px, transparent 1px); background-size: 18px 18px; max-width: 100%; overflow: hidden; transition: max-width var(--dur-slow) var(--ease-io); }
+  .cwrap.focus .canvas { max-width: 300px; }
+  .canvas svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .canvas svg path { fill: none; stroke: var(--line); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+  .canvas svg path.hot { stroke: var(--accent); stroke-dasharray: 5 4; animation: dash 1s linear infinite; }
+  .canvas svg path.crit { stroke: var(--warn); stroke-width: 2.5; }
+  .canvas svg path.done { stroke: var(--ok); }
+  .canvas svg path.cut { stroke: var(--bad); stroke-dasharray: 2 4; }
+  @keyframes dash { to { stroke-dashoffset: -9; } }
+  .gn { position: absolute; transform: translate(-50%, -50%); transition: all var(--dur-slow) var(--ease-io); cursor: pointer; }
+  .gcard { width: 220px; background: var(--bg1); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+  .gcard:hover { border-color: var(--text3); }
+  .gcard .top { display: flex; gap: 8px; align-items: flex-start; }
+  .gcard .ti { font-size: 12.5px; font-weight: 500; line-height: 1.3; flex: 1; }
+  .gcard .act { font: 11px var(--mono); color: var(--text2); display: flex; gap: 6px; align-items: center; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .gcard .act.bad { color: var(--bad-fg); white-space: normal; font-family: var(--sans); }
+  .gcard .act.warn { color: var(--warn-fg); white-space: normal; font-family: var(--sans); }
+  .gcard.run { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .gcard.blocked { border-color: var(--bad); background: color-mix(in srgb, var(--bad-soft) 60%, var(--bg1)); }
+  .gcard.done { opacity: .75; }
+  .gcard.draft, .gcard.skipped { border-style: dashed; opacity: .55; }
+  .gcard.willrun { border-color: var(--accent); }
+  .gcard .wave { align-self: flex-start; font: 600 10px/16px var(--sans); padding: 0 6px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); }
+  .track { display: flex; gap: 2px; }
+  .seg { height: 8px; flex: 1; border-radius: 2px; background: var(--bg3); }
+  .seg.done { background: color-mix(in srgb, var(--ok) 55%, var(--bg2)); }
+  .seg.now { background: var(--accent); }
+  .seg.fail { background: var(--bad); }
+  .seg.skip { background: repeating-linear-gradient(135deg, var(--bg2) 0 3px, var(--bg3) 3px 6px); }
+  .gdot { width: 38px; height: 38px; border-radius: 50%; position: relative; }
+  .gdot::after { content: ""; position: absolute; inset: 6px; border-radius: 50%; background: var(--bg1); }
+  .gdot .lb { position: absolute; top: 42px; left: 50%; transform: translateX(-50%); font-size: 10.5px; color: var(--text2); white-space: nowrap; }
+  .gdot.blocked::after { background: var(--bad); }
+  .gdot.done::after { background: var(--ok); }
+  .gdot.focus { box-shadow: 0 0 0 3px var(--text); }
+  .zoomer { position: absolute; left: 12px; bottom: 12px; display: flex; gap: 2px; background: var(--bg1); border: 1px solid var(--line); border-radius: 8px; padding: 2px; z-index: 5; }
+  .zoomer span { padding: 2px 10px; border-radius: 6px; font-size: 11.5px; color: var(--text2); cursor: pointer; }
+  .zoomer span.on { background: var(--bg4); color: var(--text); }
+  .zoomer .hint { color: var(--text3); cursor: default; font-size: 11px; }
+  .legend { position: absolute; right: 12px; top: 10px; display: flex; gap: 10px; font-size: 11px; color: var(--text3); z-index: 5; }
+  .legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 4px; border-radius: 2px; }
+  .cside { flex: 1; min-width: 0; display: none; padding: 10px 12px 10px 0; }
+  .cwrap.focus .cside { display: block; }
+  .crumbs { font-size: 12px; color: var(--text3); display: flex; gap: 6px; align-items: center; margin: 2px 0 8px; }
+  .crumbs b { color: var(--text); font-weight: 500; }
+  .crumbs a { color: var(--accent); cursor: pointer; }
+  .neigh { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 0; font-size: 11.5px; color: var(--text3); align-items: center; }
+
+  .files .f { cursor: pointer; border-radius: 4px; padding: 1px 4px; margin: 0 -4px; }
+  .files .f:hover { background: var(--bg2); color: var(--text); }
+  .sheet { position: absolute; top: 0; right: 0; bottom: 0; width: 440px; z-index: 40; background: var(--bg1); border-left: 1px solid var(--line); box-shadow: var(--shadow); display: flex; flex-direction: column; animation: sheetIn .2s var(--ease-out); }
+  @keyframes sheetIn { from { transform: translateX(24px); opacity: 0; } }
+  .sheet-h { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
+  .sheet-h .ti { font-weight: 600; flex: 1; }
+  .sheet-b { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; font-size: 12.5px; }
+  .sheet-b label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); display: block; margin-bottom: 4px; }
+  .sheet-b textarea, .sheet-b input { width: 100%; background: var(--bg0); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font: 12.5px/1.45 var(--sans); resize: vertical; }
+  .sheet-b textarea[readonly], .sheet-b input[readonly] { color: var(--text2); border-style: dashed; }
+  .sheet-b .lockn { padding: 6px 10px; border-radius: 6px; background: var(--bg2); color: var(--text2); }
+  .sheet-b .pin { border: 1px solid var(--bad); background: var(--bad-soft); border-radius: 8px; padding: 9px 11px; }
+  .sheet-b .pin b { display: block; font-size: 11px; color: var(--bad-fg); margin-bottom: 3px; }
+  .sheet-f { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 16px; border-top: 1px solid var(--line-soft); }
+  .toast { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 45; background: var(--bg3); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; font-size: 12.5px; box-shadow: var(--shadow); }
+  .notes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 16px; }
+  .note { background: var(--bg1); border: 1px solid var(--line-soft); border-radius: 10px; padding: 12px 14px; font-size: 13px; color: var(--text2); }
+  .note h3 { margin: 0 0 6px; font-size: 13px; color: var(--text); }
+  .note ul { margin: 0; padding-left: 18px; }
+  .note li { margin: 3px 0; }
+  .note b { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="frame">
+  <h1>Pipeline runs, inside the Tasks tab (v2)</h1>
+  <p class="lede">The Tasks tab has two views of the same run. <b>List</b> draws the template as a metro line with tasks riding it, above an editable task list. <b>Graph</b> is the dependency graph with semantic zoom. Both share one run bar and one <b>lens</b> for zooming into a task. Click any task to zoom in, and press <kbd>Esc</kbd> to close a lens, a focus view, or a popover. In the Plan phase, the template picker and the per-task <b>include</b> boxes work, and the pre-flight warnings update as you change them.</p>
+
+  <div class="controls">
+    <div class="grp"><span class="lbl">Phase</span>
+      <button data-phase="plan">1 · Plan</button>
+      <button data-phase="running">2 · Running</button>
+      <button data-phase="zoom">3 · Zoom in</button>
+      <button data-phase="finished">4 · Finished</button>
+    </div>
+    <div class="sep"></div>
+    <div class="grp"><span class="lbl">Theme</span>
+      <button id="theme">dark</button>
+      <select id="palette"></select>
+    </div>
+  </div>
+
+  <div class="app">
+    <div class="topbar">
+      <span class="sess">auth-hardening</span><span class="wt">⎇ mads/auth-hardening</span>
+      <div class="tabs">
+        <span class="tab">Conversation</span>
+        <span class="tab on" id="tasksTab">Tasks</span>
+        <span class="tab">Changes</span>
+      </div>
+    </div>
+    <div class="main" id="main"></div>
+  </div>
+
+  <div class="notes">
+    <div class="note"><h3>What changed from v1</h3><ul>
+      <li><b>The run bar shows only the run</b>: view toggle, run dropdown, template, status, elapsed time, and Cancel. No cost, no progress bar, no counts written out. Pre-flight shows a single warning line, and only when something needs your attention.</li>
+      <li><b>The run dropdown is the run history.</b> Picking a past run loads its final state. Picking the live run follows it live. In Plan, the dropdown reads <code>New run</code>.</li>
+      <li><b>Blocked is called Blocked.</b> "Needs review" is reserved for a future human-gate stage. That status already exists (<code>needs_review</code>), but no stage type produces it yet.</li>
+      <li><b>The metro line replaces per-task stage tracks in the list.</b> List rows are grouped Blocked → Running → Queued → Done → Not in this run. Any stack of more than 3 tokens on a station collapses to <code>+N</code>, and clicking it opens a filterable list.</li>
+      <li><b>No made-up words.</b> Stations read Queued / Ready and Done. A blocked task sits under the stage that blocked it, labelled Blocked.</li>
+      <li><b>Past attempts:</b> when a stage ran more than once, <code>attempt N ▾</code> becomes a dropdown that switches between that stage's attempt logs.</li>
+    </ul></div>
+    <div class="note"><h3>Backend this design needs</h3><ul>
+      <li><b>Leave tasks out of a run:</b> <code>POST /pipelines</code> accepts <code>exclude_task_ids</code>, and the engine's <code>runnable()</code> skips them. Tasks that depend on a left-out task are reported as skipped, the same way an unsatisfiable dependency is today.</li>
+      <li><b>Logs for a given run and attempt:</b> <code>…/output</code> and <code>…/turns</code> accept <code>?run=&amp;stage=&amp;attempt=</code>. The files already exist as <code>runs/&lt;session&gt;/&lt;run&gt;/&lt;task&gt;/&lt;stage&gt;-attempt-&lt;n&gt;.log</code>. Today both endpoints only ever read the latest run.</li>
+      <li><b>Cancel after a reload:</b> put <code>run_id</code> on <code>pipeline.started</code> (or add <code>POST /sessions/{id}/pipeline/cancel</code>). The run fold already replays that event, so a reloaded page gets the id back.</li>
+      <li><b>The template picker:</b> list Library templates and default to the workspace's bound template, instead of the hard-coded <code>default-implementation</code>.</li>
+    </ul></div>
+  </div>
+</div>
+
+<script>
+/* ── data ─────────────────────────────────────────────────── */
+const TEMPLATES = {
+  "default-implementation": { v: 3, used: "last run 2d ago", bound: true, desc: "Design, implement, build, review, merge, verify. Review and build failures loop back to the executor.",
+    stages: [ { n: "architect", k: "agent", when: "trivial" }, { n: "executor", k: "agent" }, { n: "build", k: "cmd", loop: "executor", max: 2 },
+              { n: "code_review", k: "agent", loop: "executor", max: 2, block: true }, { n: "merge", k: "cmd" }, { n: "verify", k: "cmd", block: true } ] },
+  "quick-fix": { v: 1, used: "never run", desc: "No design or review pass. For small, well-specified changes.",
+    stages: [ { n: "executor", k: "agent" }, { n: "build", k: "cmd", loop: "executor", max: 2 }, { n: "merge", k: "cmd" }, { n: "verify", k: "cmd", block: true } ] },
+  "spec-first": { v: 2, used: "last run 9d ago", desc: "An architect writes a spec, a second agent critiques it, then the standard implementation runs.",
+    stages: [ { n: "architect", k: "agent" }, { n: "spec_review", k: "agent", loop: "architect", max: 1 }, { n: "executor", k: "agent" }, { n: "build", k: "cmd", loop: "executor", max: 2 },
+              { n: "code_review", k: "agent", loop: "executor", max: 2, block: true }, { n: "merge", k: "cmd" }, { n: "verify", k: "cmd", block: true } ] },
+  "review-only": { v: 1, used: "last run 1mo ago", desc: "Run a reviewer over work already in the worktree. Blocks with findings, never merges.",
+    stages: [ { n: "code_review", k: "agent", block: true } ] },
+};
+const RUNS = [
+  { n: 4, outcome: "running", tpl: "default-implementation v3", when: "started 14 min ago" },
+  { n: 3, outcome: "completed", tpl: "default-implementation v3", when: "Oct 17 · 22m" },
+  { n: 2, outcome: "cancelled", tpl: "quick-fix v1", when: "Oct 16 · 4m" },
+  { n: 1, outcome: "failed", tpl: "default-implementation v2", when: "Oct 15 · 1m" },
+];
+const OUTCOME_TONE = { running: "info", completed: "ok", incomplete: "warn", interrupted: "warn", cancelled: "", failed: "bad" };
+
+const TASKS = [
+  { id: "t1", short: "TokenStore", title: "Extract TokenStore interface", deps: [], labels: ["refactor"] },
+  { id: "t2", short: "Refresh rotation", title: "Add refresh-token rotation with reuse detection", deps: ["t1"], labels: ["security"] },
+  { id: "t3", short: "SameSite", title: "Migrate session cookies to SameSite=Lax", deps: [], labels: [] },
+  { id: "t4", short: "Rate limit", title: "Rate-limit POST /login per IP + account", deps: [], labels: ["security"] },
+  { id: "t5", short: "Auth docs", title: "Update auth docs for rotation", deps: ["t2"], labels: ["trivial", "docs"] },
+  { id: "t6", short: "Legacy JWT", title: "Remove legacy JWT verification path", deps: ["t1"], labels: ["cleanup"] },
+  { id: "t7", short: "e2e login", title: "Add e2e login + refresh test", deps: ["t3", "t4"], labels: [], draft: true },
+  { id: "t8", short: "CSRF", title: "Add CSRF token to the account settings form", deps: [], labels: ["security"] },
+  { id: "t9", short: "Lockout", title: "Lock account after 10 failed logins", deps: ["t4"], labels: ["security"] },
+];
+const byId = Object.fromEntries(TASKS.map(t => [t.id, t]));
+
+const ALL_DONE = { architect: "done", executor: "done", build: "done", code_review: "done", merge: "done", verify: "done" };
+const BLOCKED_T6 = { status: "blocked", st: { architect: "done", executor: "done", build: "done", code_review: "fail" }, loops: { executor: 3 },
+  at: "code_review", reason: "3 callers in admin/ still use VerifyLegacy. Removing it breaks /admin/impersonate." };
+const RUN = {
+  running: {
+    t1: { status: "done", st: ALL_DONE, el: "11:02" },
+    t2: { status: "run", st: { architect: "done", executor: "now", build: "done", code_review: "fail" }, now: "executor", att: 2, el: "1:42", act: "Edit auth/refresh.go" },
+    t3: { status: "run", st: { architect: "done", executor: "done", build: "now" }, now: "build", att: 1, el: "0:38", act: "go test ./... 212/340" },
+    t4: { status: "run", st: { architect: "now" }, now: "architect", att: 1, el: "2:05", act: "Read middleware/ratelimit.go" },
+    t5: { status: "queued", st: { architect: "skip" }, why: "waits on Refresh rotation" },
+    t6: BLOCKED_T6,
+    t7: { status: "draft" },
+    t8: { status: "done", st: ALL_DONE, el: "7:40" },
+    t9: { status: "queued", st: {}, why: "waits on Rate limit" },
+  },
+  finished: {
+    t1: { status: "done", st: ALL_DONE, el: "11:02" },
+    t2: { status: "done", st: ALL_DONE, el: "19:40" },
+    t3: { status: "done", st: ALL_DONE, el: "9:15" },
+    t4: { status: "done", st: ALL_DONE, el: "14:51" },
+    t5: { status: "done", st: { ...ALL_DONE, architect: "skip" }, el: "3:08" },
+    t6: BLOCKED_T6,
+    t7: { status: "draft" },
+    t8: { status: "done", st: ALL_DONE, el: "7:40" },
+    t9: { status: "done", st: ALL_DONE, el: "8:12" },
+  },
+};
+
+const FEED = [
+  { k: "say", t: "Review asked that reuse of a rotated token revokes the whole family. I'll add a family id and revoke on reuse." },
+  { k: "tool", c: "Read", p: "auth/refresh.go", r: "212 lines" },
+  { k: "tool", c: "Read", p: "auth/store/token_store.go", r: "TokenStore has no family concept" },
+  { k: "think", t: "The family id can ride on the existing jti claim prefix, so the store schema doesn't change…" },
+  { k: "tool", c: "Edit", cls: "edit", p: "auth/store/token_store.go", s: [18, 2] },
+  { k: "tool", c: "Edit", cls: "edit", p: "auth/refresh.go", s: [41, 9] },
+];
+const FEED_MORE = [
+  { k: "tool", c: "Bash", cls: "bash", p: "go test ./auth/...", r: "ok  auth 1.82s · ok  auth/store 0.41s" },
+  { k: "tool", c: "Edit", cls: "edit", p: "auth/refresh_test.go", s: [64, 0] },
+  { k: "think", t: "Need a test where an old token is presented after rotation, and every sibling gets revoked." },
+  { k: "tool", c: "Bash", cls: "bash", p: "go test ./auth/ -run Reuse -v", r: "--- PASS: TestRefreshReuseRevokesFamily (0.02s)" },
+  { k: "say", t: "Family revocation is in place and tested. Handing back to build." },
+];
+const FEED_ATTEMPT1 = [
+  { k: "say", t: "Implementing the architect's plan: rotation on every refresh, old token marked used." },
+  { k: "tool", c: "Read", p: "auth/refresh.go", r: "171 lines" },
+  { k: "tool", c: "Edit", cls: "edit", p: "auth/refresh.go", s: [38, 6] },
+  { k: "tool", c: "Bash", cls: "bash", p: "go test ./auth/...", r: "ok  auth 1.70s" },
+  { k: "say", t: "Rotation done. Each refresh mints a new token and the old one is rejected." },
+];
+
+/* ── state ────────────────────────────────────────────────── */
+const FILES = { t2: [["auth/refresh.go", 50, 9], ["auth/store/token_store.go", 18, 2], ["auth/refresh_test.go", 64, 0]], t6: [["auth/legacy.go", 0, 140], ["auth/verify.go", 4, 31]], t3: [["session/cookie.go", 12, 5]] };
+const S = { sheet: null, toast: null, view: "list", phase: "running", tpl: "default-implementation", open: null, sel: null, pop: null, zoom: "cards", feedN: 0,
+  excluded: new Set(), stack: null, pastRun: null };
+const isLive = () => S.phase === "running" || S.phase === "zoom";
+const runKey = () => (S.phase === "finished" ? "finished" : "running");
+const stages = () => TEMPLATES[S.phase === "plan" ? S.tpl : "default-implementation"].stages;
+const rs = id => (S.phase === "plan" ? null : RUN[runKey()][id]);
+
+// Plan: a task is left out if excluded, or if anything it depends on is left out.
+function cutBy(t, seen = new Set()) {
+  for (const d of t.deps) {
+    if (seen.has(d)) continue; seen.add(d);
+    const dt = byId[d];
+    if (S.excluded.has(d) || dt.draft) return dt;
+    const up = cutBy(dt, seen); if (up) return up;
+  }
+  return null;
+}
+function statusOf(t) {
+  if (S.phase !== "plan") return rs(t.id).status;
+  if (t.draft) return "draft";
+  if (S.excluded.has(t.id) || cutBy(t)) return "skipped";
+  return "ready";
+}
+function stState(t, st) {
+  if (S.phase === "plan") {
+    const s = statusOf(t);
+    if (s !== "ready") return "off";
+    return st.when && t.labels.includes(st.when) ? "skip" : "wait";
+  }
+  const r = rs(t.id);
+  return r.status === "draft" ? "off" : r.st[st.n] || "wait";
+}
+function waveOf(t, memo = {}) {
+  if (memo[t.id]) return memo[t.id];
+  return (memo[t.id] = t.deps.length ? 1 + Math.max(...t.deps.map(d => waveOf(byId[d], memo))) : 1);
+}
+
+function attempts(t) {
+  const r = rs(t.id);
+  if (!r || r.status === "draft") return [];
+  if (t.id === "t2") {
+    const a = [
+      { s: "architect", a: 1, st: "completed", d: "2:10" }, { s: "executor", a: 1, st: "completed", d: "6:31" },
+      { s: "build", a: 1, st: "completed", d: "1:04" },
+      { s: "code_review", a: 1, st: "failed", d: "2:48", r: "Reusing a rotated token doesn't revoke its siblings (auth/refresh.go:88)." },
+    ];
+    if (S.phase === "finished") a.push({ s: "executor", a: 2, st: "completed", d: "3:12" }, { s: "build", a: 2, st: "completed", d: "1:01" },
+      { s: "code_review", a: 2, st: "completed", d: "1:55" }, { s: "merge", a: 1, st: "completed", d: "0:04" }, { s: "verify", a: 1, st: "completed", d: "0:55" });
+    else a.push({ s: "executor", a: 2, st: "started", d: "1:42" });
+    return a;
+  }
+  if (t.id === "t6") return [
+    { s: "architect", a: 1, st: "completed", d: "1:30" }, { s: "executor", a: 1, st: "completed", d: "4:02" }, { s: "build", a: 1, st: "completed", d: "0:58" },
+    { s: "code_review", a: 1, st: "failed", d: "2:01", r: "admin/impersonate.go still calls VerifyLegacy." },
+    { s: "executor", a: 2, st: "completed", d: "2:44" }, { s: "build", a: 2, st: "completed", d: "1:00" },
+    { s: "code_review", a: 2, st: "failed", d: "1:47", r: "3 callers in admin/ still use VerifyLegacy. Removing it breaks /admin/impersonate. Needs a decision on the impersonation flow." },
+  ];
+  const out = [];
+  for (const st of stages()) {
+    const v = r.st[st.n];
+    if (!v) continue;
+    out.push({ s: st.n, a: 1, st: v === "done" ? "completed" : v === "now" ? "started" : v === "skip" ? "skipped" : "failed", d: v === "now" ? r.el : v === "skip" ? "" : "1:" + (10 + out.length * 7) });
+  }
+  return out;
+}
+
+/* ── shared bits ──────────────────────────────────────────── */
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const glyph = s => `<span class="glyph ${s}"></span>`;
+function chainHTML(stgs) {
+  return `<span class="chain">${stgs.map((s, i) => `${i ? '<span class="ar">›</span>' : ""}<span class="st ${s.k === "cmd" ? "cmd" : ""}">${s.n}${s.loop ? ` <span class="lp" title="on_fail: loop_back ${s.loop} ×${s.max}">↺</span>` : ""}</span>`).join("")}</span>`;
+}
+function trackHTML(t) {
+  return `<div class="track">${stages().map(st => `<div class="seg ${stState(t, st)}" title="${st.n}"></div>`).join("")}</div>`;
+}
+function planWarnings() {
+  const w = [];
+  const cut = TASKS.filter(t => !t.draft && !S.excluded.has(t.id) && cutBy(t));
+  if (cut.length) w.push(cut.map(t => t.short).join(", ") + ` won't run (depends on ${[...new Set(cut.map(t => cutBy(t).short))].join(", ")})`);
+  return w;
+}
+
+function runbarHTML() {
+  const views = `<div class="views"><span class="${S.view === "list" ? "on" : ""}" data-view="list">List</span><span class="${S.view === "graph" ? "on" : ""}" data-view="graph">Graph</span></div>`;
+  let runLabel, rest;
+  if (S.phase === "plan") {
+    const n = TASKS.filter(t => statusOf(t) === "ready").length;
+    const warn = planWarnings();
+    runLabel = `<b>New run</b>`;
+    rest = `<button class="dd" data-pop="tpl"><span class="k">Template</span><b>${S.tpl}</b><span class="k">v${TEMPLATES[S.tpl].v} ▾</span></button>
+      ${warn.length ? `<span class="warnline" title="${esc(warn.join("; "))}">⚠ ${esc(warn[0])}</span>` : ""}
+      <span class="spacer"></span>
+      <button class="btn pri" ${n ? "" : "disabled"}>▶ Run ${n} task${n === 1 ? "" : "s"}</button>`;
+  } else if (isLive()) {
+    runLabel = `<b>Run 4</b> <span class="chip info"><span class="spin"></span>running</span>`;
+    rest = `<span class="rb-meta"><span>default-implementation v3</span><span class="el">14:27</span></span><span class="spacer"></span>
+      <button class="btn">Cancel run</button>`;
+  } else {
+    const r = S.pastRun ? RUNS.find(x => x.n === S.pastRun) : { n: 4, outcome: "incomplete", tpl: "default-implementation v3" };
+    runLabel = `<b>Run ${r.n}</b> <span class="chip ${OUTCOME_TONE[r.outcome]}">${r.outcome}</span>`;
+    rest = `<span class="rb-meta"><span>${r.tpl}</span><span class="el">31:06</span></span><span class="spacer"></span>
+      <button class="btn pri" data-phase="plan">New run</button>`;
+  }
+  return `<div class="runbar">${views}<button class="dd" data-pop="run">${runLabel} <span class="k">▾</span></button>${rest}
+    ${S.pop === "run" ? runPopHTML() : ""}${S.pop === "tpl" ? tplPopHTML() : ""}</div>`;
+}
+function runPopHTML() {
+  const cur = S.phase === "plan" ? "new" : isLive() ? 4 : S.pastRun || 4;
+  const runs = S.phase === "finished" ? [{ ...RUNS[0], outcome: "incomplete", when: "Oct 19 · 31m" }, ...RUNS.slice(1)] : RUNS;
+  return `<div class="pop runpop">
+    <div class="opt ${cur === "new" ? "on" : ""}" data-run="new"><span class="nm">＋ New run</span><span class="meta">choose a template, then Run</span></div>
+    <div class="hd">This session's runs</div>
+    ${runs.map(r => `<div class="opt ${cur === r.n ? "on" : ""}" data-run="${r.n}"><span class="nm">Run ${r.n} <span class="chip ${OUTCOME_TONE[r.outcome]}">${r.outcome === "running" ? '<span class="spin"></span>' : ""}${r.outcome}</span></span>
+      <span class="meta">${r.when}</span><span class="ds">${r.tpl}</span></div>`).join("")}
+  </div>`;
+}
+function tplPopHTML() {
+  return `<div class="pop tplpop" style="left:260px"><div class="hd">Run this session's ready tasks through…</div>
+    ${Object.entries(TEMPLATES).map(([k, t]) => `<div class="opt ${k === S.tpl ? "on" : ""}" data-tpl="${k}">
+      <span class="nm">${k}${t.bound ? '<span class="chip">workspace default</span>' : ""}</span><span class="meta">v${t.v} · ${t.used}</span>
+      <span class="ds">${t.desc}</span>${chainHTML(t.stages)}</div>`).join("")}
+    <div class="ft"><span>Templates live in Library. A run keeps a frozen copy.</span><a>Edit in Library ↗</a></div></div>`;
+}
+
+/* ── lens ─────────────────────────────────────────────────── */
+function lensHTML(t) {
+  const at = attempts(t);
+  const r = rs(t.id);
+  const sel = S.sel != null && at[S.sel] ? S.sel : at.length - 1;
+  const cur = at[sel];
+  const strip = stages().map((st, i) => {
+    const v = stState(t, st);
+    const lastIdx = at.map(a => a.s).lastIndexOf(st.n);
+    const n = at.filter(a => a.s === st.n).length;
+    return `${i ? `<div class="wire ${["done", "now", "fail"].includes(v) ? "done" : ""}"></div>` : ""}<div class="stn ${v} ${cur && cur.s === st.n ? "sel" : ""}" data-att="${lastIdx}">
+      <span class="dot">${v === "done" ? "✓" : v === "fail" ? "✕" : ""}</span><span class="nm">${st.n}</span>
+      <span class="att ${n > 1 ? "warn" : ""}">${n > 1 ? `${n} attempts` : v === "skip" ? "skipped (when:)" : st.k === "cmd" ? "command" : ""}</span></div>`;
+  }).join("");
+  const chip = { run: '<span class="chip info"><span class="spin"></span>running</span>', done: '<span class="chip ok">done</span>',
+    blocked: '<span class="chip bad">blocked</span>', queued: '<span class="chip">queued</span>', draft: '<span class="chip dr">draft</span>' }[r?.status] || "";
+  const block = r?.status === "blocked" ? `<div class="blockbox"><div><b>Blocked at ${r.at}</b> after 2 loop-backs (<code>then: block</code>). ${esc(r.reason)}</div>
+     <div class="acts"><button class="btn sm pri" data-sheet="retry" data-for="${t.id}">Edit &amp; retry</button><button class="btn sm">Retry as is</button><button class="btn sm">Discuss in Conversation</button><button class="btn sm ghost">Won't do</button></div></div>` : "";
+  return `<div class="lens ${S.view === "list" ? "below" : ""}">
+    <div class="lens-h">${glyph(r?.status || "")}<span class="ti">${esc(t.title)}</span>${chip}
+      ${t.labels.map(l => `<span class="chip">${l}</span>`).join("")}<span class="spacer"></span>
+      <button class="btn sm ghost" data-sheet="details" data-for="${t.id}">Task details</button><span class="x" data-close><kbd>Esc</kbd> close</span></div>
+    <div class="strip">${strip}</div>
+    ${block}
+    <div class="lens-b">
+      <div class="side">
+        <div><h4>Timeline</h4><ol class="tl">${at.map((a, i) => `<li class="${i === sel ? "sel" : ""}" data-att="${i}"><span class="b ${a.st}"></span>
+          <span class="s">${a.s}${a.a > 1 ? ` <span style="color:var(--warn-fg)">#${a.a}</span>` : ""}</span><span class="d">${a.st === "started" ? "live " : ""}${a.d}</span>
+          ${a.r ? `<span class="r">↺ ${esc(a.r)}</span>` : ""}</li>`).join("") || '<li style="color:var(--text3);cursor:default">Not started.</li>'}</ol></div>
+        <div class="files"><h4>Files touched</h4>
+          ${(FILES[t.id] || []).map(([f, a, d]) => `<div class="f" data-file="${f}" title="Open this file's diff in Changes"><span>${f}</span><span>${a ? `<span class="add">+${a}</span>` : ""} ${d ? `<span class="del">−${d}</span>` : ""}</span></div>`).join("") || '<div style="color:var(--text3)">None yet.</div>'}
+          <a>View in Changes ↗</a></div>
+        <div><h4>Acceptance</h4><div class="ac">${t.id === "t2" ? "Each refresh issues a new token. Reusing a rotated token revokes its whole family and returns 401." : "As written on the task."}</div></div>
+      </div>
+      <div class="out">${outputHTML(t, cur, at)}</div>
+    </div>
+  </div>`;
+}
+function outputHTML(t, a, at) {
+  if (!a) return `<div class="empty-out">${statusOf(t) === "queued" ? "Queued: " + esc(rs(t.id).why) + ". Nothing to show until a stage starts." : "This task isn't in the run."}</div>`;
+  const live = a.st === "started";
+  const st = stages().find(s => s.n === a.s) || { k: "agent" };
+  const same = at.map((x, i) => ({ ...x, i })).filter(x => x.s === a.s);
+  const attCtl = same.length > 1
+    ? `<select class="attsel" data-attsel title="Switch attempt">${same.map(x => `<option value="${x.i}" ${x.a === a.a ? "selected" : ""}>attempt ${x.a} of ${same.length}${x.st === "started" ? " · live" : x.st === "failed" ? " · failed" : ""}</option>`).join("")}</select>`
+    : "";
+  const head = `<div class="out-h"><b>${a.s}</b>${attCtl}
+    ${live ? `<span class="chip info"><span class="spin"></span>live ${a.d}</span>` : `<span class="chip ${a.st === "failed" ? "bad" : a.st === "skipped" ? "" : "ok"}">${a.st}</span><span>${a.d}</span>`}
+    <span>${st.k === "cmd" ? "command" : "claude-code · sonnet"}</span><span class="spacer"></span>
+    ${st.k === "agent" ? '<span class="seg2"><span class="on">Turns</span><span>Raw log</span></span>' : ""}${live ? '<button class="btn sm ghost">⏵ follow</button>' : ""}</div>`;
+  let body;
+  if (a.st === "skipped") body = `<div class="empty-out">Skipped: <code>when: !contains(labels, "trivial")</code> was false for this task.</div>`;
+  else if (a.s === "architect") body = `<div class="feed"><div class="plan"><h5>Plan · handed to executor</h5><ol>
+      <li>Add a <code>family</code> field to stored refresh tokens, derived from the first jti.</li>
+      <li>On refresh, mint a sibling in the same family and mark the old token as used.</li>
+      <li>When a used token is presented, revoke the whole family and return 401.</li></ol>
+      <h5>Risks</h5><ol><li>Concurrent refreshes from two tabs look like reuse. Add a 10s grace window.</li></ol></div></div>`;
+  else if (a.s === "build" && live) body = `<div class="feed"><div class="term"><span class="dim">$ make build && make test</span>
+go build ./...                       <span class="ok">ok</span>
+ok   mads/auth          1.82s
+ok   mads/auth/store    0.41s
+…    mads/session       running (212/340)<span class="cursor"></span></div></div>`;
+  else if (["build", "verify", "merge"].includes(a.s)) body = `<div class="feed"><div class="term"><span class="dim">$ ${a.s === "merge" ? "git merge --no-ff" : "make build && make test"}</span>
+${a.s === "merge" ? "Merge made by the 'ort' strategy.\n 3 files changed, 132 insertions(+), 11 deletions(-)" : 'ok   mads/auth          1.79s\nok   mads/auth/store    0.40s\n<span class="ok">PASS · 340 tests · exit 0</span>'}</div></div>`;
+  else if (a.s === "code_review") body = a.st === "failed"
+    ? `<div class="feed"><div class="verdict"><h5>✕ Changes requested → loop back to executor (${a.a}/2)</h5><ul><li>${esc(a.r)}</li>
+       <li style="color:var(--text2)">Minor: <code>RotateRefresh</code> swallows the store error on line 97.</li></ul></div>
+       <div class="handoff">↳ Passed to <b>executor attempt ${a.a + 1}</b> as its feedback.</div></div>`
+    : `<div class="feed"><div class="verdict ok"><h5>✓ Approved</h5><ul><li>Family revocation is correct and tested. The grace window is noted as a follow-up.</li></ul></div></div>`;
+  else if (t.id === "t2" && a.s === "executor" && a.a === 1) body = `<div class="feed">${FEED_ATTEMPT1.map(lnHTML).join("")}</div>`;
+  else if (live && t.id === "t2") body = `<div class="feed" id="feed"><div class="handoff">↳ Started from <b>code_review attempt 1</b> feedback: "Reusing a rotated token doesn't revoke its siblings."</div>
+      ${FEED.concat(FEED_MORE.slice(0, S.feedN)).map(lnHTML).join("")}<div class="ln"><span class="cursor"></span></div></div>`;
+  else if (live) body = `<div class="feed" id="feed">${lnHTML({ k: "tool", c: "Read", p: t.id === "t4" ? "middleware/ratelimit.go" : "…" })}${lnHTML({ k: "think", t: "Looking for an existing limiter to reuse before proposing a new one…" })}<div class="ln"><span class="cursor"></span></div></div>`;
+  else body = `<div class="feed">${(t.id === "t2" ? FEED.concat(FEED_MORE) : [{ k: "say", t: "Implemented as planned. 3 files changed." }, { k: "tool", c: "Bash", cls: "bash", p: "go test ./auth/...", r: "ok" }]).map(lnHTML).join("")}</div>`;
+  return head + body;
+}
+function lnHTML(l) {
+  if (l.k === "think") return `<div class="ln think">✻ ${esc(l.t)}</div>`;
+  if (l.k === "say") return `<div class="ln">${esc(l.t)}</div>`;
+  return `<div class="ln"><span class="tool ${l.cls || ""}">${l.c}</span><span class="p">${esc(l.p)}</span>
+    ${l.s ? `<span class="stat"><span class="a">+${l.s[0]}</span> <span class="d">−${l.s[1]}</span></span>` : ""}${l.r ? `<span class="res">→ ${esc(l.r)}</span>` : ""}</div>`;
+}
+
+/* ── List view: metro + task list ─────────────────────────── */
+const STACK_MAX = 3;
+function renderList() {
+  const stg = stages(), n = stg.length;
+  const x0 = 17, x1 = 86;
+  const xs = stg.map((_, i) => (n === 1 ? (x0 + x1) / 2 : x0 + (i * (x1 - x0)) / (n - 1)));
+  const xQ = 6, xD = 95;
+  const fr = S.open ? rs(S.open) : null;
+  const visited = s => fr && ["done", "now", "fail"].includes(fr.st[s]);
+  const at = {}, below = {}, start = [], done = [], out = [];
+  for (const t of TASKS) {
+    const st = statusOf(t), r = rs(t.id);
+    if (st === "draft" || st === "skipped") out.push(t);
+    else if (st === "ready" || st === "queued") start.push(t);
+    else if (st === "done") done.push(t);
+    else if (st === "blocked") (below[r.at] ||= []).push(t);
+    else (at[r.now] ||= []).push(t);
+  }
+  const tok = t => {
+    const st = statusOf(t), r = rs(t.id);
+    return `<span class="tok ${st} ${S.open === t.id ? "focus" : ""}" data-task="${t.id}" title="${esc(t.title)}">${st === "run" ? '<span class="spin"></span>' : ""}${esc(t.short)}${r?.att > 1 ? `<span class="a">#${r.att}</span>` : ""}</span>`;
+  };
+  // A stack shows up to STACK_MAX tokens; past that, the last slot becomes "+N", which opens a filterable list.
+  const stack = (key, list) => {
+    if (list.length <= STACK_MAX) return list.map(tok).join("");
+    const shown = list.slice(0, STACK_MAX - 1);
+    return shown.map(tok).join("") + `<span class="tok more" data-stack="${key}">+${list.length - shown.length} more</span>`;
+  };
+  let arcs = "", lbls = "", k = 0;
+  stg.forEach((s, i) => {
+    if (!s.loop) return;
+    const j = stg.findIndex(q => q.n === s.loop); if (j < 0) return;
+    const a = xs[i] * 10, b = xs[j] * 10, depth = 178 + k * 22;
+    arcs += `<path d="M ${a} 152 C ${a} ${depth}, ${b} ${depth}, ${b} 152" stroke="var(--warn)" stroke-width="1.5" stroke-dasharray="4 3" fill="none" vector-effect="non-scaling-stroke" marker-end="url(#ah)"/>`;
+    lbls += `<span class="m-lbl" style="left:${(a + b) / 20}%;top:${158 + k * 18}px">↺ on fail ≤${s.max}</span>`;
+    k++;
+  });
+  const stations = stg.map((s, i) => {
+    const cls = [s.k === "cmd" ? "cmd" : "", (at[s.n] || []).length ? "hot" : "", fr ? (fr.now === s.n ? "pathnow" : visited(s.n) ? "path" : "dim") : ""].join(" ");
+    const bl = below[s.n] || [];
+    return `<div class="m-stn ${cls}" style="left:${xs[i]}%"><span class="ring"></span><span class="nm">${s.n}</span><span class="sub">${s.k === "cmd" ? "command" : "agent"}</span></div>
+      ${(at[s.n] || []).length ? `<div class="m-stack" style="left:${xs[i]}%">${stack(s.n, at[s.n])}</div>` : ""}
+      ${bl.length ? `<div class="m-below" style="left:${xs[i]}%;top:206px"><span class="cap">blocked</span>${stack("blocked:" + s.n, bl)}</div>` : ""}`;
+  }).join("");
+  const stacks = { start, done, out, ...at, ...Object.fromEntries(Object.entries(below).map(([k2, v]) => ["blocked:" + k2, v])) };
+  const stackX = key => key === "start" ? xQ : key === "done" ? xD : key === "out" ? 12 : xs[stg.findIndex(s => s.n === key.replace("blocked:", ""))];
+  const sp = S.stack && stacks[S.stack] ? `<div class="stackpop" style="left:${Math.min(Math.max(stackX(S.stack), 10), 90)}%;top:${S.stack.startsWith("blocked") || S.stack === "out" ? 120 : 0}px">
+      <div class="hd"><span>${{ start: S.phase === "plan" ? "Ready" : "Queued", done: "Done", out: "Not in this run" }[S.stack] || S.stack.replace(":", " at ")} · ${stacks[S.stack].length}</span><span data-close style="cursor:pointer"><kbd>Esc</kbd></span></div>
+      <input placeholder="Filter…" />
+      ${stacks[S.stack].map(t => `<div class="it" data-task="${t.id}">${glyph(statusOf(t))}${esc(t.title)}<span class="d">${rs(t.id)?.el || ""}</span></div>`).join("")}</div>` : "";
+  const metro = `<div class="metro-wrap"><div class="metro">
+    <svg viewBox="0 0 1000 250" preserveAspectRatio="none"><defs><marker id="ah" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--warn)"/></marker></defs>${arcs}</svg>
+    <div class="m-line" style="left:${xQ}%;right:${100 - xD}%"></div>
+    <div class="m-stn end ${fr ? "dim" : ""}" style="left:${xQ}%"><span class="ring"></span><span class="nm">${S.phase === "plan" ? "Ready" : "Queued"}</span><span class="sub">${start.length} task${start.length === 1 ? "" : "s"}</span></div>
+    <div class="m-stack" style="left:${xQ}%">${stack("start", start)}</div>
+    ${stations}
+    <div class="m-stn end ${fr ? (fr.status === "done" ? "path" : "dim") : ""}" style="left:${xD}%"><span class="ring" style="${done.length ? "border-color:var(--ok)" : ""}"></span><span class="nm">Done</span><span class="sub">${done.length} task${done.length === 1 ? "" : "s"}</span></div>
+    <div class="m-stack" style="left:${xD}%">${stack("done", done)}</div>
+    ${lbls}
+    ${out.length ? `<div class="m-out"><span class="cap">Not in this run</span>${stack("out", out)}</div>` : ""}
+    ${sp}
+  </div></div>`;
+  return runbarHTML() + metro + (S.open ? lensHTML(byId[S.open]) : listHTML());
+}
+function listHTML() {
+  const groups = S.phase === "plan"
+    ? [["Will run", "ready"], ["Not in this run", ["skipped", "draft"]]]
+    : [["Blocked", "blocked"], ["Running", "run"], ["Queued", "queued"], ["Done", "done"], ["Not in this run", ["draft", "skipped"]]];
+  let h = `<div class="blist">`;
+  for (const [label, sts] of groups) {
+    const list = TASKS.filter(t => [].concat(sts).includes(statusOf(t)));
+    if (!list.length) continue;
+    h += `<div class="grp-h ${label === "Blocked" ? "bad" : ""}">${label}<span class="n">${list.length}</span></div>`;
+    for (const t of list) h += rowHTML(t);
+  }
+  return h + `<div class="addrow">＋ Add task <i>${isLive() ? "A new ready task is picked up by this run" : ""}</i></div></div>`;
+}
+function rowHTML(t) {
+  const st = statusOf(t), r = rs(t.id);
+  if (S.phase === "plan") {
+    const cut = cutBy(t);
+    const sub = t.draft ? "draft: confirm it before it can run" : S.excluded.has(t.id) ? "left out of this run" : cut ? `won't run: depends on ${cut.short}, which is left out` : t.labels.join(" · ");
+    return `<div class="brow plan ${st !== "ready" ? "excl" : ""}" data-task="${t.id}">
+      <span class="inc ${t.draft ? "na" : S.excluded.has(t.id) ? "" : "on"}" data-inc="${t.id}" title="${t.draft ? "Drafts can't run until confirmed" : "Include in this run"}">${!t.draft && !S.excluded.has(t.id) ? "✓" : ""}</span>
+      ${glyph(st === "ready" ? "" : st)}<span>${esc(t.title)}<br><span class="sub ${cut && !S.excluded.has(t.id) ? "warn" : ""}">${esc(sub)}</span></span>
+      <span>${t.draft ? '<button class="btn sm">Confirm</button>' : ""}</span><span class="acts">✎</span></div>`;
+  }
+  const sub = st === "run" ? r.act : st === "blocked" ? r.reason : st === "queued" ? r.why : st === "done" ? `${r.el}` : "draft: confirm it before it can run";
+  const chip = { run: '<span class="chip info"><span class="spin"></span>running</span>', blocked: '<span class="chip bad">blocked</span>', queued: '<span class="chip">queued</span>', done: '<span class="chip ok">done</span>', draft: '<span class="chip dr">draft</span>' }[st];
+  return `<div class="brow ${st === "draft" ? "excl" : ""}" data-task="${t.id}">${glyph(st)}
+    <span>${esc(t.title)}<br><span class="sub ${st === "blocked" ? "bad" : ""}">${esc(sub)}</span></span>${chip}
+    <span class="acts">${st === "run" ? '<span title="Locked while the pipeline works on it">🔒</span>' : st === "blocked" ? '<button class="btn sm pri">Retry</button>' : "✎"}</span></div>`;
+}
+
+/* ── Graph view ───────────────────────────────────────────── */
+const POS = { t1: [16, 15], t3: [40, 15], t4: [64, 15], t8: [88, 15], t2: [12, 49], t6: [36, 49], t7: [62, 49], t9: [86, 49], t5: [12, 84] };
+const EDGES = [["t1", "t2"], ["t1", "t6"], ["t2", "t5"], ["t3", "t7"], ["t4", "t7"], ["t4", "t9"]];
+function ringBG(t) {
+  const stg = stages(), n = stg.length, col = { done: "var(--ok)", now: "var(--accent)", fail: "var(--bad)", skip: "var(--bg2)", wait: "var(--bg4)", off: "var(--bg2)" };
+  return `conic-gradient(${stg.map((s, i) => `${col[stState(t, s)]} ${(i * 360) / n + 2}deg ${((i + 1) * 360) / n - 2}deg, var(--bg0) ${((i + 1) * 360) / n - 2}deg ${((i + 1) * 360) / n + 2}deg`).join(",")})`;
+}
+function renderGraph() {
+  const focus = S.open, level = focus ? "focus" : S.zoom;
+  const crit = S.phase === "plan" && !S.excluded.has("t1") && !S.excluded.has("t2") && !S.excluded.has("t5") ? new Set(["t1>t2", "t2>t5"]) : new Set();
+  const edges = EDGES.map(([a, b]) => {
+    const [x1, y1] = POS[a], [x2, y2] = POS[b], sa = statusOf(byId[a]), sb = statusOf(byId[b]), my = (y1 + y2) / 2;
+    const cls = crit.has(a + ">" + b) ? "crit" : S.phase === "plan" && S.excluded.has(a) ? "cut" : sb === "run" ? "hot" : sa === "done" && ["done", "run"].includes(sb) ? "done" : "";
+    return `<path class="${cls}" d="M ${x1 * 10} ${y1 * 10} C ${x1 * 10} ${my * 10}, ${x2 * 10} ${my * 10}, ${x2 * 10} ${y2 * 10}"/>`;
+  }).join("");
+  const nodes = TASKS.map(t => {
+    const [x, y] = POS[t.id], st = statusOf(t), r = rs(t.id);
+    if (level !== "cards") return `<div class="gn" data-task="${t.id}" style="left:${x}%;top:${y}%"><div class="gdot ${st} ${focus === t.id ? "focus" : ""}" style="background:${ringBG(t)}" title="${esc(t.title)}"><span class="lb">${esc(t.short)}</span></div></div>`;
+    let act;
+    if (S.phase === "plan") {
+      const cut = cutBy(t);
+      act = t.draft ? '<div class="act">draft: confirm it before it can run</div>' : S.excluded.has(t.id) ? '<div class="act">left out of this run</div>'
+        : cut ? `<div class="act warn">won't run: depends on ${esc(cut.short)}</div>` : `<span class="wave">wave ${waveOf(t)}${t.labels.includes("trivial") && stages().some(s => s.when) ? " · skips architect" : ""}</span>`;
+    } else act = st === "run" ? `<div class="act"><span class="spin" style="color:var(--accent)"></span>${r.now}${r.att > 1 ? " · attempt " + r.att : ""} · ${esc(r.act)}</div>`
+      : st === "blocked" ? `<div class="act bad">Blocked at ${r.at}: ${esc(r.reason)}</div><div style="display:flex;gap:4px"><button class="btn sm pri" data-sheet="retry" data-for="${t.id}">Edit &amp; retry</button><button class="btn sm">Retry</button></div>`
+      : st === "queued" ? `<div class="act">${esc(r.why)}</div>` : st === "done" ? `<div class="act">✓ done · ${r.el}</div>` : `<div class="act">draft: not in this run</div>`;
+    const inc = S.phase === "plan" ? `<span class="inc ${t.draft ? "na" : S.excluded.has(t.id) ? "" : "on"}" data-inc="${t.id}">${!t.draft && !S.excluded.has(t.id) ? "✓" : ""}</span>` : "";
+    return `<div class="gn" data-task="${t.id}" style="left:${x}%;top:${y}%"><div class="gcard ${st} ${st === "ready" ? "willrun" : ""}">
+      <div class="top">${inc}<div class="ti">${esc(t.title)}</div></div>${st === "draft" || st === "skipped" ? "" : trackHTML(t)}${act}</div></div>`;
+  }).join("");
+  const zoomer = `<div class="zoomer">${["overview", "cards", "focus"].map(z => `<span class="${level === z ? "on" : ""}" data-zoom="${z}">${z[0].toUpperCase() + z.slice(1)}</span>`).join("")}<span class="hint">⌘ scroll / pinch</span></div>`;
+  const legend = S.phase === "plan" && crit.size ? `<div class="legend"><span><i style="background:var(--warn)"></i>critical path (3 waves)</span></div>` : "";
+  const side = focus ? `<div class="cside"><div class="crumbs"><a data-close>Run 4</a> › <b>${esc(byId[focus].short)}</b> › <span>${(attempts(byId[focus]).slice(-1)[0] || {}).s || ""}</span><span class="spacer"></span><kbd>Esc</kbd> back to graph</div>
+      ${lensHTML(byId[focus])}
+      <div class="neigh">Upstream: ${byId[focus].deps.map(d => `<span class="tok ${statusOf(byId[d])}" data-task="${d}">${byId[d].short}</span>`).join("") || "none"}
+       · Unblocks: ${TASKS.filter(x => x.deps.includes(focus)).map(x => `<span class="tok ${statusOf(x)}" data-task="${x.id}">${x.short}</span>`).join("") || "none"}</div></div>` : "";
+  return runbarHTML() + `<div class="cwrap ${focus ? "focus" : ""}"><div class="canvas"><svg viewBox="0 0 1000 1000" preserveAspectRatio="none">${edges}</svg>${nodes}${zoomer}${legend}</div>${side}</div>`;
+}
+
+/* ── task detail sheet (stand-in for TaskDetailSheet) ────── */
+const DESC = { t2: "Refresh tokens are long-lived and never rotate. Rotate on every refresh and detect reuse of a rotated token.", t6: "VerifyLegacy predates TokenStore. Remove it and its config flag." };
+const ACC = { t2: "Each refresh issues a new token. Reusing a rotated token revokes its whole family and returns 401.", t6: "No references to VerifyLegacy remain. All auth tests pass." };
+function sheetHTML() {
+  if (!S.sheet) return "";
+  const t = byId[S.sheet.id], st = statusOf(t), r = rs(t.id);
+  const locked = st === "run";
+  const ro = locked ? "readonly" : "";
+  const retry = S.sheet.mode === "retry" && st === "blocked";
+  return `<div class="sheet">
+    <div class="sheet-h">${glyph(st)}<span class="ti">${retry ? "Edit &amp; retry" : "Task details"}</span><span class="x" data-close style="cursor:pointer;color:var(--text3);font-size:12px"><kbd>Esc</kbd> close</span></div>
+    <div class="sheet-b">
+      ${locked ? `<div class="lockn">🔒 Locked while the pipeline works on it (${r.now}${r.att > 1 ? ", attempt " + r.att : ""}). You can read it. Editing reopens once the pipeline is done with the task (done or blocked).</div>` : ""}
+      ${retry ? `<div class="pin"><b>Why it's blocked · code_review attempt 2</b>${esc(r.reason)}</div>` : ""}
+      <div><label>Title</label><input ${ro} value="${esc(t.title)}" /></div>
+      <div><label>Description</label><textarea rows="4" ${ro}>${esc(DESC[t.id] || "")}</textarea></div>
+      <div><label>Acceptance criteria</label><textarea rows="3" ${ro}>${esc(ACC[t.id] || "")}</textarea></div>
+      <div><label>Depends on</label>${t.deps.map(x => `<span class="tok ${statusOf(byId[x])}">${byId[x].short}</span>`).join(" ") || '<span style="color:var(--text3)">nothing</span>'}</div>
+      <div><label>Labels</label>${t.labels.map(l => `<span class="chip">${l}</span>`).join(" ") || '<span style="color:var(--text3)">none</span>'}</div>
+    </div>
+    <div class="sheet-f">${locked ? "" : `<button class="btn" data-close>Cancel</button><button class="btn pri" data-close>${retry ? "Save &amp; retry" : "Save"}</button>`}</div>
+  </div>`;
+}
+
+/* ── render + events ──────────────────────────────────────── */
+function render() {
+  document.querySelectorAll(".controls [data-phase]").forEach(b => b.classList.toggle("on", b.dataset.phase === S.phase));
+  const running = TASKS.filter(t => statusOf(t) === "run").length;
+  document.getElementById("tasksTab").innerHTML = "Tasks" + (isLive() ? ` <span class="chip info" title="${running} running"><span class="spin"></span>${running}</span>` : "");
+  document.getElementById("main").innerHTML = (S.view === "list" ? renderList() : renderGraph()) + sheetHTML() + (S.toast ? `<div class="toast">${S.toast}</div>` : "");
+  const f = document.getElementById("feed"); if (f) f.scrollTop = f.scrollHeight;
+}
+function setPhase(p) {
+  S.phase = p; S.sheet = null; S.pop = null; S.stack = null; S.sel = null; S.feedN = 0; S.pastRun = null;
+  S.open = p === "zoom" ? "t2" : null;
+  if (p === "plan" && S.zoom === "focus") S.zoom = "cards";
+}
+// Esc peels one layer at a time: detail sheet → popover → stack list → lens/focus.
+function closeTop() {
+  if (S.sheet) S.sheet = null;
+  else if (S.pop) S.pop = null;
+  else if (S.stack) S.stack = null;
+  else if (S.open) { S.open = null; S.sel = null; if (S.phase === "zoom") S.phase = "running"; }
+  else return false;
+  return true;
+}
+document.addEventListener("keydown", e => { if (e.key === "Escape" && closeTop()) render(); });
+document.addEventListener("change", e => {
+  if (e.target.matches("[data-attsel]")) { S.sel = +e.target.value; render(); }
+  if (e.target.id === "palette") document.documentElement.dataset.palette = e.target.value;
+});
+document.addEventListener("click", e => {
+  if (e.target.closest("select, input, textarea")) return;
+  const el = e.target.closest("[data-sheet],[data-file],[data-phase],[data-view],[data-pop],[data-run],[data-tpl],[data-close],[data-att],[data-zoom],[data-inc],[data-stack],[data-task]");
+  if (!el) { if (S.pop || S.stack) { S.pop = null; S.stack = null; render(); } return; }
+  const d = el.dataset;
+  if (d.sheet) S.sheet = { id: d.for, mode: d.sheet };
+  else if (d.file) { S.toast = `Opens <b>${esc(d.file)}</b> in Changes, scoped to this task — see CHANGES-DESIGN open questions`; clearTimeout(S.tt); S.tt = setTimeout(() => { S.toast = null; render(); }, 2600); }
+  else if (d.phase) setPhase(d.phase);
+  else if (d.view) { S.view = d.view; S.stack = null; }
+  else if (d.pop) S.pop = S.pop === d.pop ? null : d.pop;
+  else if (d.run) {
+    if (d.run === "new") setPhase("plan");
+    else if (+d.run === 4) setPhase(S.phase === "finished" ? "finished" : "running");
+    else { setPhase("finished"); S.pastRun = +d.run; }
+  }
+  else if (d.tpl) { S.tpl = d.tpl; S.pop = null; }
+  else if (el.hasAttribute("data-close")) closeTop();
+  else if (d.att !== undefined) { if (+d.att >= 0) S.sel = +d.att; }
+  else if (d.zoom) { if (d.zoom === "focus") { if (S.phase !== "plan") S.open = S.open || "t2"; } else { S.zoom = d.zoom; S.open = null; } }
+  else if (d.inc) { const t = byId[d.inc]; if (!t.draft) S.excluded.has(t.id) ? S.excluded.delete(t.id) : S.excluded.add(t.id); }
+  else if (d.stack) S.stack = S.stack === d.stack ? null : d.stack;
+  else if (d.task) {
+    if (e.target.closest("button")) return;
+    if (S.phase === "plan") { S.sheet = { id: d.task, mode: "details" }; render(); return; }
+    S.open = d.task; S.sel = null; S.stack = null;
+  }
+  render();
+});
+setInterval(() => {
+  if (isLive() && S.open === "t2" && S.sel == null && S.feedN < FEED_MORE.length) { S.feedN++; render(); }
+}, 1800);
+
+const PALETTES = ["aubergine", "citrus", "clay", "dune", "ember", "glacier", "graphite", "harbor", "ink", "lagoon", "moss", "rosewood", "sakura", "space", "synthwave"];
+document.getElementById("palette").innerHTML = PALETTES.map(p => `<option ${p === "clay" ? "selected" : ""}>${p}</option>`).join("");
+document.getElementById("theme").onclick = e => { const r = document.documentElement; r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark"; e.target.textContent = r.dataset.theme; };
+render();
+</script>
+</body>
+</html>

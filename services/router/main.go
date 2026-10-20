@@ -196,6 +196,7 @@ func newIdentity(uiDist string) identity {
 }
 
 func main() {
+	routerStart := time.Now()
 	addr := flag.String("addr", "localhost:17373", "listen address")
 	dataURL := flag.String("data-url", "http://localhost:17374", "Data Service base URL")
 	sessionCmd := flag.String("session-cmd", defaultChildCmd("session", "go run ./services/session"), "command to spawn a Session Service child")
@@ -304,6 +305,9 @@ func main() {
 	// engine (e.g. a CLI `mads run`) is still genuinely driving one.
 	sweepCtx, sweepCancel := context.WithTimeout(ctx, 30*time.Second)
 	sup.ReconcileOrphanedSessions(sweepCtx)
+	// Runs lost to a reboot or an unwatched death get their end event
+	// (docs/PIPELINE-LEASES-DESIGN.md B1).
+	sup.ReconcileLostRuns(sweepCtx, supervisor.LostRunOptions{RouterStart: routerStart})
 	sweepCancel()
 
 	watcher := digestwatch.NewWatcher(data, jobs)

@@ -1,0 +1,54 @@
+.ring {
+  display: block;
+  border-radius: 50%;
+}
+
+.ring path,
+.empty {
+  fill: none;
+  stroke-width: 5;
+}
+
+.empty {
+  stroke: var(--bg4);
+}
+
+.seg_done {
+  stroke: var(--ok);
+}
+.seg_now {
+  stroke: var(--accent);
+}
+.seg_stopped {
+  stroke: var(--warn);
+}
+.seg_failed {
+  stroke: var(--bad);
+}
+.seg_skipped {
+  stroke: var(--bg3);
+  stroke-dasharray: 2 2;
+}
+.seg_waiting {
+  stroke: var(--bg4);
+}
+.seg_off {
+  stroke: var(--bg2);
+}
+
+.core {
+  fill: var(--bg1);
+}
+.core_blocked {
+  fill: var(--bad);
+}
+.core_done {
+  fill: var(--ok);
+}
+.core_interrupted {
+  fill: var(--warn-soft);
+}
+
+.focused {
+  box-shadow: 0 0 0 3px var(--text);
+}

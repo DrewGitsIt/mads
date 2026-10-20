@@ -1,0 +1,58 @@
+.glyph {
+  display: inline-block;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1.5px solid var(--text3);
+}
+
+.ready {
+  border-color: var(--text2);
+}
+
+.queued {
+  border-style: dashed;
+}
+
+.running {
+  border-color: var(--accent);
+  border-right-color: transparent;
+  animation: runGlyphSpin 1s linear infinite;
+}
+
+/* Interrupted: the running arc, stopped. Calm (warn), never Blocked's alarm. */
+.interrupted {
+  border-color: var(--warn);
+  border-right-color: transparent;
+  background: var(--warn-soft);
+}
+
+.blocked {
+  background: var(--bad);
+  border-color: var(--bad);
+}
+
+.done {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+
+.skipped,
+.excluded,
+.draft {
+  border-style: dotted;
+}
+
+@keyframes runGlyphSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .running {
+    animation: none;
+  }
+}

@@ -22,6 +22,8 @@ export interface DependencyPickerProps {
   /** Live run state, keyed by task id — feeds the in-progress subline. Absent when no pipelineClient is wired. */
   taskRunState?: Record<string, TaskRunState>;
   reducedMotion?: boolean;
+  /** Show the dependencies without the add/remove controls. */
+  readOnly?: boolean;
 }
 
 /**
@@ -109,6 +111,7 @@ export function DependencyPicker({
   onSelectTask,
   taskRunState,
   reducedMotion,
+  readOnly = false,
 }: DependencyPickerProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -219,70 +222,74 @@ export function DependencyPicker({
                     ›
                   </span>
                 </button>
-                <button
-                  type="button"
-                  className={styles.remove}
-                  title="Remove dependency"
-                  aria-label={`Remove dependency: ${dep.title}`}
-                  onClick={() => onChange(dependencies.filter((id) => id !== dep.id))}
-                >
-                  ×
-                </button>
+                {!readOnly && (
+                  <button
+                    type="button"
+                    className={styles.remove}
+                    title="Remove dependency"
+                    aria-label={`Remove dependency: ${dep.title}`}
+                    onClick={() => onChange(dependencies.filter((id) => id !== dep.id))}
+                  >
+                    ×
+                  </button>
+                )}
               </li>
             );
           })}
         </ul>
       )}
 
-      <Popover
-        open={pickerOpen}
-        onClose={closePicker}
-        anchor={
-          !pickerOpen && (
-            <button type="button" className={styles.addbtn} onClick={openPicker}>
-              + Add dependency…
-            </button>
-          )
-        }
-      >
-        <div className={styles.pickerBox}>
-          <input
-            ref={inputRef}
-            className={styles.pickerInput}
-            placeholder="Search tasks…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={handleInputKeyDown}
-          />
-          <div className={styles.cands}>
-            {candidates.map((candidate, index) => {
-              const badge = candidateBadge(candidate);
-              const status = graphStatusOf(candidate);
-              return (
-                <div
-                  key={candidate.id}
-                  className={[
-                    styles.cand,
-                    badge && styles.candDisabled,
-                    index === highlightedIndex && styles.candHighlighted,
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                  onMouseEnter={() => setHighlightedIndex(index)}
-                  onClick={() => addDependency(candidate)}
-                >
-                  <StatusGlyph status={status} animate={status === "in_progress" && !reducedMotion} />
-                  <span className={styles.candTitle}>{candidate.title}</span>
-                  {badge && (
-                    <span className={badge === "would create a cycle" ? styles.warn : styles.already}>{badge}</span>
-                  )}
-                </div>
-              );
-            })}
+      {!readOnly && (
+        <Popover
+          open={pickerOpen}
+          onClose={closePicker}
+          anchor={
+            !pickerOpen && (
+              <button type="button" className={styles.addbtn} onClick={openPicker}>
+                + Add dependency…
+              </button>
+            )
+          }
+        >
+          <div className={styles.pickerBox}>
+            <input
+              ref={inputRef}
+              className={styles.pickerInput}
+              placeholder="Search tasks…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleInputKeyDown}
+            />
+            <div className={styles.cands}>
+              {candidates.map((candidate, index) => {
+                const badge = candidateBadge(candidate);
+                const status = graphStatusOf(candidate);
+                return (
+                  <div
+                    key={candidate.id}
+                    className={[
+                      styles.cand,
+                      badge && styles.candDisabled,
+                      index === highlightedIndex && styles.candHighlighted,
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    onMouseEnter={() => setHighlightedIndex(index)}
+                    onClick={() => addDependency(candidate)}
+                  >
+                    <StatusGlyph status={status} animate={status === "in_progress" && !reducedMotion} />
+                    <span className={styles.candTitle}>{candidate.title}</span>
+                    {badge && (
+                      <span className={badge === "would create a cycle" ? styles.warn : styles.already}>{badge}</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className={styles.pickhint}>↑↓ to move · Enter to add · Esc to close</div>
           </div>
-          <div className={styles.pickhint}>↑↓ to move · Enter to add · Esc to close</div>
-        </div>
-      </Popover>
+        </Popover>
+      )}
 
       <div className={styles.secUnblocks}>
         <span>Unblocks</span>

@@ -69,8 +69,10 @@ func main() {
 		log.Fatalf("data: %v", err)
 	}
 
-	// The meter reader (spec §15): collect expired leases so tasks whose
-	// holder died silently land blocked-with-event instead of stuck.
+	// The meter reader (spec §15): collect expired leases so a task whose
+	// holder died silently is free again. Its status is untouched: an
+	// in_progress task with no live lease is Interrupted, and the next
+	// pipeline run picks it up (docs/PIPELINE-LEASES-DESIGN.md).
 	leases := store.NewLeases(store.NewLog(db))
 	go func() {
 		for range time.Tick(2 * time.Second) {

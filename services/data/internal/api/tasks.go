@@ -20,7 +20,9 @@ func actor(r *http.Request) string {
 }
 
 // writeStoreError maps store errors onto the API contract: ValidationError →
-// 422 with every problem listed (spec §10.3), ErrNotFound → 404, else 500.
+// 422 with every problem listed (spec §10.3), LeaseHeldError → 409 code
+// "lease_held", ErrLeaseLost → 409 code "lease_lost", ErrNotFound → 404,
+// else 500.
 func writeStoreError(w http.ResponseWriter, err error) {
 	var (
 		verr *contracts.ValidationError
@@ -30,7 +32,9 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	case errors.As(err, &verr):
 		writeJSON(w, http.StatusUnprocessableEntity, verr)
 	case errors.As(err, &lerr):
-		writeJSON(w, http.StatusConflict, map[string]string{"error": lerr.Error(), "holder": lerr.Holder})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": lerr.Error(), "code": "lease_held", "holder": lerr.Holder})
+	case errors.Is(err, store.ErrLeaseLost):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "code": "lease_lost"})
 	case errors.Is(err, store.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 	default:
@@ -122,7 +126,7 @@ func (s *server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t.ID = r.PathValue("id")
-	if err := s.tasks.Update(r.Context(), &t, actor(r)); err != nil {
+	if err := s.tasks.Update(leaseCtx(r), &t, actor(r)); err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -130,7 +134,7 @@ func (s *server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleConfirmTask(w http.ResponseWriter, r *http.Request) {
-	if err := s.tasks.Confirm(r.Context(), r.PathValue("id"), actor(r)); err != nil {
+	if err := s.tasks.Confirm(leaseCtx(r), r.PathValue("id"), actor(r)); err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -138,7 +142,7 @@ func (s *server) handleConfirmTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleDiscardTask(w http.ResponseWriter, r *http.Request) {
-	if err := s.tasks.Discard(r.Context(), r.PathValue("id"), actor(r)); err != nil {
+	if err := s.tasks.Discard(leaseCtx(r), r.PathValue("id"), actor(r)); err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -150,7 +154,7 @@ func (s *server) handleAddHandoff(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &h) {
 		return
 	}
-	if err := s.tasks.AddHandoff(r.Context(), r.PathValue("id"), &h, actor(r)); err != nil {
+	if err := s.tasks.AddHandoff(leaseCtx(r), r.PathValue("id"), &h, actor(r)); err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -162,7 +166,7 @@ func (s *server) handleAddNote(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &n) {
 		return
 	}
-	if err := s.tasks.AddNote(r.Context(), r.PathValue("id"), &n, actor(r)); err != nil {
+	if err := s.tasks.AddNote(leaseCtx(r), r.PathValue("id"), &n, actor(r)); err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -175,7 +179,7 @@ func (s *server) handleConfirmNote(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid note id"})
 		return
 	}
-	if err := s.tasks.ConfirmNote(r.Context(), r.PathValue("id"), noteID, actor(r)); err != nil {
+	if err := s.tasks.ConfirmNote(leaseCtx(r), r.PathValue("id"), noteID, actor(r)); err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -188,7 +192,7 @@ func (s *server) handleDiscardNote(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid note id"})
 		return
 	}
-	if err := s.tasks.DiscardNote(r.Context(), r.PathValue("id"), noteID, actor(r)); err != nil {
+	if err := s.tasks.DiscardNote(leaseCtx(r), r.PathValue("id"), noteID, actor(r)); err != nil {
 		writeStoreError(w, err)
 		return
 	}

@@ -82,6 +82,16 @@ const (
 	// a provider with no incremental output mechanism simply never calls
 	// OnEvent; the engine falls back to a single end-of-run chunk.
 	BehaviorOneShotStream Behavior = "one_shot_stream"
+	// BehaviorOneShotResume — OneShotRequest.Resume continues a previous
+	// session's conversation (by the ref a one-shot reported, or an
+	// interactive Session.Ref) instead of starting fresh. Separate from
+	// BehaviorResume, which is about interactive Start: a harness can
+	// reattach a terminal session yet have a one-shot path that takes no
+	// ref (kiro-cli's `chat --no-interactive` reports none at all), and the
+	// pipeline engine decides between resuming and a fresh fallback attempt
+	// from this row alone, without calling. Optional; unsupported means
+	// OneShot with Resume returns ErrResumeUnsupported.
+	BehaviorOneShotResume Behavior = "one_shot_resume"
 	// BehaviorRefAnnounce — the session's provider-native ref becomes knowable
 	// before the first turn completes, via RefAnnouncer, rather than only
 	// after a turn ends. Expected: every provider takes an honest stance, even
@@ -176,6 +186,7 @@ var requirements = map[Behavior]Level{
 	BehaviorTrustReadOnly:   LevelExpected,
 	BehaviorTrustAutoReview: LevelOptional,
 	BehaviorOneShotStream:   LevelOptional,
+	BehaviorOneShotResume:   LevelOptional,
 	BehaviorRefAnnounce:     LevelExpected,
 	BehaviorCompaction:      LevelOptional,
 	BehaviorCompactionFocus: LevelOptional,

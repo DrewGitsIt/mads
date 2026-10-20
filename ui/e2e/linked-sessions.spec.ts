@@ -19,7 +19,7 @@ test.describe("linked sessions: link UI behind the flag", () => {
   test.beforeAll(async () => {
     const routerURL = process.env.MADS_ROUTER_URL!;
     // The flag is false by default (Settings -> Advanced) — flip it here so
-    // the rail multi-select/chooser/badges exist at all for this journey.
+    // the chain buttons and the link editor exist at all for this journey.
     await setConfig(routerURL, { feature_flags: { linked_sessions: true } });
 
     leaderName = `e2e linked-sessions leader ${Date.now()}`;
@@ -36,66 +36,54 @@ test.describe("linked sessions: link UI behind the flag", () => {
     workerId = worker.id;
   });
 
-  test("multi-select -> chooser -> link created, relationship shown, attributed inject and digest render", async ({
+  test("link editor -> link created, relationship shown, attributed inject and digest render", async ({
     page,
     routerURL,
   }) => {
     await page.goto(routerURL);
     const rail = page.locator('[aria-label="Session list"]');
 
-    // Link mode starts from the leader row's 🔗 action, which anchors and
-    // auto-selects that row (so the leader is the chooser's default holder);
-    // other rows then toggle by clicking them, and the link bar's
-    // "Choose mode" opens the chooser once ≥2 are selected. The holder radio
-    // is still selected explicitly below so this doesn't rely on ordering.
-    // The 🔗 lives in the action cluster, which hangs outside the card and
-    // stays inert until the row is hovered — hover first, as a real pointer
-    // would, or the cluster never anchors and the click hit-tests through to
-    // the card underneath.
+    // The chain button lives in the card's action cluster, which hangs
+    // outside the card and stays inert until the row is hovered — hover
+    // first, as a real pointer would.
     await rail.getByText(leaderName, { exact: true }).hover();
-    await rail.getByLabel(`Add ${leaderName} to link selection`).click();
-    await rail.getByText(workerName, { exact: true }).click();
-    await expect(rail.getByLabel(`Remove ${workerName} from link selection`)).toBeChecked();
-    await rail.getByRole("button", { name: "Choose mode" }).click();
-
-    const dialog = page.getByRole("dialog", { name: "Link sessions" });
+    await rail.getByRole("button", { name: `Links for ${leaderName}` }).click();
+    const dialog = page.getByRole("dialog", { name: `Links · ${leaderName}` });
     await expect(dialog).toBeVisible();
 
-    // Leader is the default preset, but this journey exercises the Leader
-    // preset card explicitly rather than relying on default state.
-    await dialog.getByText("Leader", { exact: true }).click();
-
-    // The cadence default is Wake on signals (on_signal), which pushes no
-    // per-turn digests — this journey drives the per-turn digest pipeline,
-    // so pick Follow intently explicitly.
-    await dialog.getByText("Follow intently", { exact: true }).click();
-
-    // Each radio's accessible name is "{own name} ⟶ {others}" (from the
-    // label's full text content) — anchor on the prefix so the row whose own
-    // name is leaderName isn't confused with the other row, whose fan-out
-    // span also mentions leaderName.
-    await dialog.getByRole("radio", { name: new RegExp(`^${leaderName} ⟶`) }).check();
+    // While the editor is open the rail is its picker: clicking the worker
+    // links it under the centred leader and opens that link's editor.
+    await rail.getByText(workerName, { exact: true }).click();
+    const editor = dialog.getByRole("group", { name: `Edit link ${leaderName} → ${workerName}` });
+    await expect(editor).toBeVisible();
+    await expect(editor.getByText("New link")).toBeVisible();
+    // Leads is the default for a session nobody leads yet.
+    await expect(editor.getByRole("button", { name: "♛ Leads" })).toHaveAttribute("aria-pressed", "true");
+    // The default cadence is Signals (on_signal), which pushes no per-turn
+    // digests — this journey drives the per-turn digest pipeline, so pick
+    // Follow explicitly.
+    await editor.getByRole("radio", { name: /Follow/ }).click();
 
     const [linkResponse] = await Promise.all([
-      page.waitForResponse(
-        (res) => res.request().method() === "POST" && res.url().endsWith("/links"),
-      ),
-      dialog.getByRole("button", { name: "Create 1 link" }).click(),
+      page.waitForResponse((res) => res.request().method() === "POST" && res.url().endsWith("/links")),
+      dialog.getByRole("button", { name: "Save 1 change" }).click(),
     ]);
     expect(linkResponse.ok()).toBeTruthy();
-    const link = (await linkResponse.json()) as { id: string };
-
+    const link = (await linkResponse.json()) as { id: string; grants: string[]; cadence: string };
+    expect(link.grants).toContain("orchestrate");
+    expect(link.cadence).toBe("per_turn");
     await expect(dialog).not.toBeVisible();
 
-    // The LEADER / LINKED pills are gone: the rail now states the
-    // relationship by nesting the subject under its holder with a drawn
-    // connector, and moves the link controls into each card's action
-    // cluster — the holder's "who I lead" menu, the subject's link options.
-    // Those controls exist only on a linked pair, so they are the assertion.
+    // The rail states the relationship by nesting the subject under its
+    // holder, and the editor shows the line.
+    await expect(rail.locator('[class*="subjects"]').getByText(workerName, { exact: true })).toBeVisible();
     await rail.getByText(leaderName, { exact: true }).hover();
-    await expect(rail.getByLabel(`Linked sessions held by ${leaderName}`)).toBeVisible();
-    await rail.getByText(workerName, { exact: true }).hover();
-    await expect(rail.getByLabel(`Link options for ${workerName}`)).toBeVisible();
+    await rail.getByRole("button", { name: `Links for ${leaderName}` }).click();
+    await expect(
+      dialog.getByRole("button", { name: new RegExp(`^${leaderName} leads ${workerName}, Follow\\.`) }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).not.toBeVisible();
 
     // Subject session's conversation: an injected message from the leader
     // renders as an attributed chip, never the subject's own bubble.
@@ -136,9 +124,7 @@ test.describe("linked sessions: link UI behind the flag", () => {
     routerURL,
   }) => {
     // Depends on the previous test: worker is now led by leader (serial
-    // mode). The rail can't reach this case (a linked subject is nested
-    // under its holder and never joins link selection), but the Launchpad's
-    // staged chooser lists every session.
+    // mode). The Launchpad's staged chooser lists every session.
     await page.goto(routerURL);
     await page.getByRole("button", { name: "New session" }).click();
     await page.getByRole("button", { name: "More start options" }).click();
@@ -171,6 +157,7 @@ test.describe("linked sessions: two isolated sessions can't be linked", () => {
   test.describe.configure({ mode: "serial" });
 
   let aId: string;
+  let bId: string;
   let aName: string;
   let bName: string;
 
@@ -186,38 +173,49 @@ test.describe("linked sessions: two isolated sessions can't be linked", () => {
     const a = await createSession(routerURL, { name: aName, provider: "fake" });
     const b = await createSession(routerURL, { name: bName, provider: "fake" });
     aId = a.id;
+    bId = b.id;
     for (const id of [a.id, b.id]) await pollWorktreeDir(routerURL, id);
   });
 
-  test("the link is refused with a sentence that says what to do instead", async ({ page, routerURL }) => {
-    // The refusal is a 422 from POST /links — expected here.
-    page.allowStatus("/links");
+  test("the editor won't link them, and the server refuses with a sentence that says what to do instead", async ({
+    page,
+    routerURL,
+  }) => {
+    let posted = false;
+    page.on("request", (req) => {
+      if (req.method() === "POST" && req.url().endsWith("/links")) posted = true;
+    });
     await page.goto(routerURL);
     const rail = page.locator('[aria-label="Session list"]');
 
     await rail.getByText(aName, { exact: true }).hover();
-    await rail.getByLabel(`Add ${aName} to link selection`).click();
-    await rail.getByText(bName, { exact: true }).click();
-    await rail.getByRole("button", { name: "Choose mode" }).click();
-
-    const dialog = page.getByRole("dialog", { name: "Link sessions" });
+    await rail.getByRole("button", { name: `Links for ${aName}` }).click();
+    const dialog = page.getByRole("dialog", { name: `Links · ${aName}` });
     await expect(dialog).toBeVisible();
-    await dialog.getByText("Monitor", { exact: true }).click();
-    await dialog.getByRole("radio", { name: new RegExp(`^${aName} ⟶`) }).check();
 
-    const [res] = await Promise.all([
-      page.waitForResponse((r) => r.request().method() === "POST" && r.url().endsWith("/links")),
-      dialog.getByRole("button", { name: "Create 1 link" }).click(),
-    ]);
-    expect(res.status()).toBeGreaterThanOrEqual(400);
-    expect(res.status()).toBeLessThan(500);
+    // The other isolated session is dimmed, says why, and a click adds nothing.
+    const bCard = rail.locator("[data-rail-card]", { hasText: bName });
+    await expect(bCard).toHaveAttribute("data-link-edit", "blocked");
+    await expect(bCard).toHaveAttribute("title", /own isolated copy of the repo/);
+    await expect(bCard.getByText("separate worktree")).toBeVisible();
+    // aria-disabled, so Playwright won't click it unforced; a pointer still can.
+    await bCard.click({ force: true });
+    await expect(dialog.getByRole("group")).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: "No changes" })).toBeDisabled();
+    expect(posted).toBe(false);
 
-    // The dialog stays open and says, in words, why and what to do.
-    await expect(dialog).toBeVisible();
-    await expect(dialog.getByText(/each have their own isolated copy of the repo/)).toBeVisible();
-    await expect(dialog.getByText(/link them when starting the second session/)).toBeVisible();
-    // No developer field key in front of the sentence.
-    await expect(dialog.getByText(/^worktree:/)).toHaveCount(0);
+    // The server holds the same rule, and its refusal is a sentence.
+    const res = await fetch(`${routerURL}/links`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ granting_session_id: aId, subject_session_id: bId, preset: "monitor" }),
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+    const body = (await res.json()) as { errors: { message: string }[] };
+    const message = body.errors.map((e) => e.message).join(" ");
+    expect(message).toMatch(/each have their own isolated copy of the repo/);
+    expect(message).toMatch(/link them when starting the second session/);
     // Nothing was linked.
     const links = (await (await fetch(`${routerURL}/sessions/${aId}/links`)).json()) as unknown[];
     expect(links).toEqual([]);

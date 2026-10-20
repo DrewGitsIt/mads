@@ -286,6 +286,60 @@ func TestOneShotNoRefWithoutAnnounceOptIn(t *testing.T) {
 	}
 }
 
+// A rule's announce_ref gives its one-shots a ref without opting every
+// other one-shot in.
+func TestOneShotRuleAnnouncesRef(t *testing.T) {
+	f, err := fake.NewWithScenario(fake.Scenario{Rules: []fake.Rule{
+		{Match: "slow task", Reply: "ok", AnnounceRef: true},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.OneShot(context.Background(), provider.OneShotRequest{Prompt: "the slow task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Ref == "" {
+		t.Error("announce_ref rule: OneShotResult.Ref is empty")
+	}
+	other, err := f.OneShot(context.Background(), provider.OneShotRequest{Prompt: "echo hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.Ref != "" {
+		t.Errorf("unmatched one-shot: Ref = %q, want empty", other.Ref)
+	}
+}
+
+// Cancelling a one-shot's ctx stops it between chunks, as killing a real
+// agent would, rather than streaming the rest of the scripted reply.
+func TestOneShotStopsOnCancel(t *testing.T) {
+	f, err := fake.NewWithScenario(fake.Scenario{Rules: []fake.Rule{
+		{Match: "slow", Chunks: []string{"a", "b", "c", "d"}, DelayMs: 200},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var got []string
+	start := time.Now()
+	_, err = f.OneShot(ctx, provider.OneShotRequest{
+		Prompt: "slow",
+		OnEvent: func(ev provider.Event) {
+			if ev.Kind == provider.EventText {
+				got = append(got, ev.Text)
+				cancel()
+			}
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if len(got) != 1 || time.Since(start) > 2*time.Second {
+		t.Errorf("streamed %v in %v after cancel; want one chunk, promptly", got, time.Since(start))
+	}
+}
+
 // TestFakeComplete proves Fake implements provider.Completer using the same
 // scripted dialect as OneShot, but leaves no ref or transcript behind —
 // Complete's hermetic "no session left behind" contract.
@@ -732,5 +786,127 @@ func TestFailOnceThenEcho(t *testing.T) {
 	}
 	if strings.Join(shape, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("transcript =\n%s\nwant\n%s", strings.Join(shape, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A resumed one-shot continues the ref in place: it recalls the earlier
+// turn, reports and announces the resumed ref, appends to its history, and
+// ResumeCalls records it (failed resumes too).
+func TestOneShotResume(t *testing.T) {
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "r", AnnounceOneShotRef: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	first, err := f.OneShot(ctx, provider.OneShotRequest{Prompt: "echo mk-1"})
+	if err != nil || first.Ref == "" {
+		t.Fatalf("seed: %+v, %v", first, err)
+	}
+	var announced string
+	res, err := f.OneShot(ctx, provider.OneShotRequest{
+		Prompt: "recall", Resume: first.Ref,
+		OnEvent: func(ev provider.Event) {
+			if ev.Kind == provider.EventSessionRef {
+				announced = ev.Ref
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Text, "mk-1") {
+		t.Fatalf("resumed reply %q lost the earlier turn", res.Text)
+	}
+	if res.Ref != first.Ref || announced != first.Ref {
+		t.Fatalf("Ref = %q, announced %q; want the resumed %q", res.Ref, announced, first.Ref)
+	}
+	msgs, err := f.Transcript(ctx, first.Ref)
+	if err != nil || len(msgs) != 4 {
+		t.Fatalf("history after resume = %+v, %v; want both turns (4 messages)", msgs, err)
+	}
+
+	if _, err := f.OneShot(ctx, provider.OneShotRequest{Prompt: "echo x", Resume: "nope"}); err == nil {
+		t.Fatal("resuming an unknown ref must fail, not start fresh")
+	}
+	if got := f.ResumeCalls(); strings.Join(got, ",") != first.Ref+",nope" {
+		t.Fatalf("ResumeCalls = %q, want [%s nope]", got, first.Ref)
+	}
+}
+
+// The ref can come from an interactive session, and a resume works without
+// AnnounceOneShotRef (a resumed one-shot always has its ref); a ref attached
+// to a live session can't be resumed underneath it.
+func TestOneShotResumeOfSessionRef(t *testing.T) {
+	f := fake.New()
+	ctx := context.Background()
+	sess, err := f.Start(ctx, provider.StartOptions{Mode: provider.ModeACP})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Send(ctx, "echo mk-s"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ended := collect(t, sess); !ended {
+		t.Fatal("no turn end")
+	}
+	ref := sess.Ref()
+	if _, err := f.OneShot(ctx, provider.OneShotRequest{Prompt: "recall", Resume: ref}); err == nil {
+		t.Fatal("resuming a ref attached to a live session must fail")
+	}
+	_ = sess.Close()
+	res, err := f.OneShot(ctx, provider.OneShotRequest{Prompt: "recall", Resume: ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Ref != ref || !strings.Contains(res.Text, "mk-s") {
+		t.Fatalf("got %+v, want ref %q recalling mk-s", res, ref)
+	}
+}
+
+// Resumed rules match resumed one-shots only, so a scenario can script the
+// resumed attempt apart from a fresh one with the same prompt.
+func TestScenarioResumedRule(t *testing.T) {
+	f, err := fake.NewWithScenario(fake.Scenario{
+		Name:               "resumed-rule",
+		AnnounceOneShotRef: true,
+		Rules: []fake.Rule{
+			{Match: "continue", Resumed: true, Reply: "picked up"},
+			{Match: "continue", Reply: "fresh start"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	fresh, err := f.OneShot(ctx, provider.OneShotRequest{Prompt: "continue"})
+	if err != nil || fresh.Text != "fresh start" {
+		t.Fatalf("fresh: %+v, %v", fresh, err)
+	}
+	resumed, err := f.OneShot(ctx, provider.OneShotRequest{Prompt: "continue", Resume: fresh.Ref})
+	if err != nil || resumed.Text != "picked up" {
+		t.Fatalf("resumed: %+v, %v", resumed, err)
+	}
+	// A resumed-only catch-all doesn't shadow the fresh rules after it.
+	if _, err := fake.NewWithScenario(fake.Scenario{Name: "c", Rules: []fake.Rule{
+		{Resumed: true, Reply: "r"}, {Match: "x", Reply: "y"},
+	}}); err != nil {
+		t.Fatalf("resumed catch-all before fresh rules rejected: %v", err)
+	}
+}
+
+// Under WithTranscriptDir a resume works from another Fake instance: the
+// pipeline engine picking up after the process that ran the attempt died.
+func TestOneShotResumeAcrossInstances(t *testing.T) {
+	dir := t.TempDir()
+	sc := fake.Scenario{Name: "x", AnnounceOneShotRef: true}
+	a, _ := fake.NewWithScenario(sc, fake.WithTranscriptDir(dir))
+	first, err := a.OneShot(context.Background(), provider.OneShotRequest{Prompt: "echo mk-disk"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := fake.NewWithScenario(sc, fake.WithTranscriptDir(dir))
+	res, err := b.OneShot(context.Background(), provider.OneShotRequest{Prompt: "recall", Resume: first.Ref})
+	if err != nil || !strings.Contains(res.Text, "mk-disk") {
+		t.Fatalf("cross-instance resume: %+v, %v", res, err)
 	}
 }

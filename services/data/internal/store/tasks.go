@@ -174,7 +174,7 @@ func (s *Tasks) updateInTx(tx *Tx, t *contracts.Task, actor string) error {
 		return err
 	}
 	now := time.Now().UTC()
-	if err := checkAndRenew(tx, t.ID, actor, now); err != nil {
+	if err := checkAndRenew(tx, t.ID, now); err != nil {
 		return err
 	}
 	t.UpdatedAt = now
@@ -248,7 +248,7 @@ func (s *Tasks) draftTransition(ctx context.Context, id, actor string, event con
 		if err != nil {
 			return err
 		}
-		if err := checkAndRenew(tx, id, actor, time.Now().UTC()); err != nil {
+		if err := checkAndRenew(tx, id, time.Now().UTC()); err != nil {
 			return err
 		}
 		if draft == 0 {
@@ -348,7 +348,7 @@ func (s *Tasks) noteTransition(ctx context.Context, taskID string, noteID int64,
 		if err != nil {
 			return err
 		}
-		if err := checkAndRenew(tx, taskID, actor, time.Now().UTC()); err != nil {
+		if err := checkAndRenew(tx, taskID, time.Now().UTC()); err != nil {
 			return err
 		}
 		if status != string(contracts.NoteStatusDraft) {
@@ -380,7 +380,7 @@ func (s *Tasks) subRecordInTx(tx *Tx, taskID, actor string, event contracts.Even
 	if err != nil {
 		return err
 	}
-	if err := checkAndRenew(tx, taskID, actor, time.Now().UTC()); err != nil {
+	if err := checkAndRenew(tx, taskID, time.Now().UTC()); err != nil {
 		return err
 	}
 	if err := apply(tx); err != nil {

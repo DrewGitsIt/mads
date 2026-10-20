@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Task, TranscriptMessage } from "../../router/types";
 import type { StageAttempt } from "../state/usePipelineRun";
 import type { PipelineOutputSource, PipelineTurnsSource } from "../client/pipelineClient";
@@ -10,6 +10,12 @@ export interface DrillInFeedProps {
   attempts: StageAttempt[];
   outputSource: PipelineOutputSource;
   turnsSource: PipelineTurnsSource;
+  /** Show the raw log even when turns arrive (the lens's Raw log toggle). */
+  raw?: boolean;
+  /** Passed to AgentFeedView. */
+  showHeader?: boolean;
+  /** Passed to AgentOutputView: drawn when the log ends with no output. */
+  empty?: ReactNode;
 }
 
 /**
@@ -20,12 +26,20 @@ export interface DrillInFeedProps {
  * falls back to the tee'd output exactly as it rendered before the feed
  * existed — the fallback layering DESIGN point 3 requires.
  */
-export function DrillInFeed({ task, attempts, outputSource, turnsSource }: DrillInFeedProps) {
+export function DrillInFeed({
+  task,
+  attempts,
+  outputSource,
+  turnsSource,
+  raw = false,
+  showHeader,
+  empty,
+}: DrillInFeedProps) {
   const [turns, setTurns] = useState<TranscriptMessage[]>([]);
   useEffect(() => turnsSource.onTurns(setTurns), [turnsSource]);
 
-  if (turns.length > 0) {
-    return <AgentFeedView task={task} attempts={attempts} turns={turns} />;
+  if (!raw && turns.length > 0) {
+    return <AgentFeedView task={task} attempts={attempts} turns={turns} showHeader={showHeader} />;
   }
-  return <AgentOutputView source={outputSource} />;
+  return <AgentOutputView source={outputSource} empty={empty} />;
 }

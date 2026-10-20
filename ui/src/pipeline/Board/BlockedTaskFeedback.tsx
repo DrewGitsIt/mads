@@ -12,9 +12,8 @@ export interface BlockedTaskFeedbackProps {
   client: PipelineClient;
 }
 
-// Shared by BlockedPanel (Pipeline tab) and TaskDetailSheet (Tasks tab) so a
-// blocked task's review surface — blocker note + Retry/Reassign — is one
-// implementation, not two that can drift.
+// A blocked task's review surface in TaskDetailSheet: the blocker and
+// observation notes, plus Retry/Reassign.
 export function BlockedTaskFeedback({ taskId, notes, client }: BlockedTaskFeedbackProps) {
   const [retrying, setRetrying] = useState(false);
   const [error, setError] = useState<string | null>(null);

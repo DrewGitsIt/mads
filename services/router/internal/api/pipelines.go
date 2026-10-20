@@ -18,6 +18,10 @@ func (s *server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		SessionID  string `json:"session_id"`
 		TemplateID string `json:"template_id"`
+		// ExcludeTaskIDs are tasks the run leaves out: never launched, and
+		// anything depending on them is reported skipped. Their statuses
+		// are untouched.
+		ExcludeTaskIDs []string `json:"exclude_task_ids"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -57,25 +61,55 @@ func (s *server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	tasks, err := s.data.Tasks(ctx, body.SessionID, contracts.StatusReady)
+	tasks, err := s.data.Tasks(ctx, body.SessionID, "")
 	if err != nil {
 		writeError(w, err)
 		return
 	}
+	inSession := make(map[string]bool, len(tasks))
+	for _, t := range tasks {
+		inSession[t.ID] = true
+	}
+	excluded := make(map[string]bool, len(body.ExcludeTaskIDs))
+	for _, id := range body.ExcludeTaskIDs {
+		if !inSession[id] {
+			verr.Add("exclude_task_ids", "unknown task "+id+" in session "+body.SessionID)
+		}
+		excluded[id] = true
+	}
+	if !verr.Empty() {
+		writeJSON(w, http.StatusBadRequest, verr)
+		return
+	}
 	ready := false
 	for _, t := range tasks {
-		if !t.Draft {
+		if t.Status == contracts.StatusReady && !t.Draft && !excluded[t.ID] {
 			ready = true
 			break
 		}
 	}
 	if !ready {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session has no ready tasks"})
+		// A run also picks up Interrupted tasks (docs/PIPELINE-LEASES-DESIGN.md
+		// B2), so they are work too.
+		interrupted, _, err := s.interruptedTasks(ctx, body.SessionID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		for _, id := range interrupted {
+			if !excluded[id] {
+				ready = true
+				break
+			}
+		}
+	}
+	if !ready {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session has no ready or interrupted tasks"})
 		return
 	}
 
 	runID := supervisor.NewRunID()
-	addr, err := s.sup.SpawnPipeline(ctx, runID, body.SessionID, body.TemplateID)
+	addr, err := s.sup.SpawnPipeline(ctx, runID, body.SessionID, body.TemplateID, body.ExcludeTaskIDs)
 	if err != nil {
 		writeErrMsg(w, http.StatusBadGateway, "spawn pipeline: ", err)
 		return

@@ -1,12 +1,14 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { RouterClient } from "../router/client";
-import type { FileChange, Task, TaskStatus } from "../router/types";
+import type { Task, TaskStatus } from "../router/types";
 import { Chip } from "../components/Chip/Chip";
 import { Button } from "../components/Button/Button";
 import { RailTaskList } from "./RailTaskList";
 import { RailChangesList } from "./RailChangesList";
 import { RailProposalList } from "./RailProposalList";
-import { collapseChanges } from "./collapseChanges";
+import { countNonScratch, type ChangesFocus } from "../files/changesModel";
+import { useSeenState } from "../files/seenState";
+import { useChangeSet } from "../files/useChangeSet";
 import { useProposalStore } from "./useProposalStore";
 import styles from "./ContextRail.module.css";
 
@@ -17,7 +19,10 @@ export interface ContextRailProps {
   tasksById: Record<string, Task>;
   onSelectTask?: (task: Task) => void;
   onEditDraftTask?: (task: Task) => void;
+  /** Opens a file's diff in the Changes tab — used when onOpenChanges isn't given. */
   onOpenFile?: (path: string) => void;
+  /** Opens the Changes tab on a file, or on the rail's tier and turn ("Open in Changes"). */
+  onOpenChanges?: (focus: ChangesFocus) => void;
 }
 
 type RailTab = "tasks" | "changes";
@@ -44,32 +49,23 @@ export function ContextRail({
   onSelectTask,
   onEditDraftTask,
   onOpenFile,
+  onOpenChanges,
 }: ContextRailProps) {
   const [tab, setTab] = useState<RailTab>("tasks");
   // Starts collapsed: the conversation owns the pane until the user asks for
   // the rail, and the collapsed strip's counts say when that's worth doing.
   const [collapsed, setCollapsed] = useState(true);
   const [statusFilter, setStatusFilter] = useState<TaskStatus | undefined>(undefined);
-  const [changes, setChanges] = useState<FileChange[]>([]);
   const proposals = useProposalStore(routerClient, sessionId);
 
   // Fetched here (not in RailChangesList) so the Changes tab can show the
-  // touched-file count even while the Tasks tab is active — otherwise the tab
-  // gives no hint of what's behind it.
-  useEffect(() => {
-    let cancelled = false;
-    void routerClient.getSessionChanges(sessionId).then((fc) => {
-      if (!cancelled) setChanges(fc);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [routerClient, sessionId]);
-
-  // getSessionChanges returns the append-only ledger (one row per touch), so a
-  // file edited across tasks or created-then-modified shows up many times.
-  // Collapse to a set of touched files for both the count badge and the list.
-  const touched = collapseChanges(changes);
+  // file count even while the Tasks tab is active — otherwise the tab gives
+  // no hint of what's behind it. Scratch files aren't counted.
+  const { changeSet, loading: changesLoading, error: changesError } = useChangeSet(routerClient, sessionId);
+  const { isUnseen } = useSeenState(sessionId);
+  const changedCount = countNonScratch(changeSet);
+  const openChanges =
+    onOpenChanges ?? (onOpenFile ? (focus: ChangesFocus) => focus.path && onOpenFile(focus.path) : undefined);
   const openTasks = tasks.filter((t) => t.status !== "done" && t.status !== "wont_do").length;
   const pendingProposals = proposals.filter((p) => p.status === "proposed").length;
 
@@ -98,10 +94,10 @@ export function ContextRail({
           type="button"
           className={styles.peek}
           onClick={() => setTab("changes")}
-          aria-label={`Changes, ${touched.length} files`}
+          aria-label={`Changes, ${changedCount} files`}
         >
           Changes
-          <span className={styles.count}>{touched.length}</span>
+          <span className={styles.count}>{changedCount}</span>
         </button>
         {pendingProposals > 0 && (
           <span
@@ -138,9 +134,9 @@ export function ContextRail({
             onClick={() => setTab("changes")}
           >
             Changes
-            {touched.length > 0 && (
+            {changedCount > 0 && (
               <span className={styles.count} aria-hidden="true">
-                {touched.length}
+                {changedCount}
               </span>
             )}
           </button>
@@ -182,7 +178,15 @@ export function ContextRail({
         </>
       )}
 
-      {tab === "changes" && <RailChangesList changes={touched} onOpenFile={onOpenFile} />}
+      {tab === "changes" && (
+        <RailChangesList
+          changeSet={changeSet}
+          loading={changesLoading}
+          error={changesError}
+          isUnseen={isUnseen}
+          onOpen={openChanges}
+        />
+      )}
     </div>
   );
 }

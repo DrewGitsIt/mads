@@ -154,6 +154,13 @@
   opacity: 0.75;
 }
 
+.quietGroup {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
 .digest {
   align-self: stretch;
   border: 1px solid var(--line-soft);

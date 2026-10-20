@@ -32,6 +32,19 @@ describe("ChatRenderer", () => {
     expect(screen.getByText("hi back")).toBeTruthy();
   });
 
+  // A Shift+Enter in the composer is a new line in the history too; an
+  // agent's single newline stays markdown's soft wrap.
+  it("breaks a user message's lines where they were typed, but not an agent's", () => {
+    const messages: TranscriptMessage[] = [
+      { role: "user", text: "first line\nsecond line" },
+      { role: "agent", text: "wrapped\nprose" },
+    ];
+    const { container } = render(<ChatRenderer messages={messages} />);
+    const user = container.querySelector("[data-user-msg]")!;
+    expect(user.querySelectorAll("br")).toHaveLength(1);
+    expect(screen.getByText(/wrapped/).querySelector("br")).toBeNull();
+  });
+
   it("shows a user message's attached files as thumbnails and tiles, not the path list", () => {
     const text =
       "why is this red?\n\nAttached files (open each one with your file-reading tool):\n" +
@@ -282,6 +295,72 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     // The third digest got a real reply — both render in full.
     expect(screen.getByText("digest three")).toBeTruthy();
     expect(screen.getByText("I'll step in and unblock the task.")).toBeTruthy();
+  });
+
+  it("collapses past the monitor's thinking, but not past a tool call", () => {
+    FLAGS.linkedSessions = true;
+    const digest = (text: string, at: string): TranscriptMessage => ({
+      role: "user",
+      text,
+      timestamp: at,
+      attribution: { link_id: "lnk_1", source_name: "payments refactor" },
+    });
+    const messages: TranscriptMessage[] = [
+      digest("thought then noop", "2026-10-15T10:00:00Z"),
+      { role: "agent", text: "NOOP", timestamp: "2026-10-15T10:00:02Z" },
+      digest("worked then noop", "2026-10-15T10:01:00Z"),
+      {
+        role: "tool",
+        timestamp: "2026-10-15T10:01:01Z",
+        tool: { id: "t1", name: "Read", kind: "read", title: "read notes.md" },
+      },
+      { role: "agent", text: "NOOP", timestamp: "2026-10-15T10:01:02Z" },
+    ];
+    render(
+      <ChatRenderer
+        messages={messages}
+        links={[makeLink({ cadence: "per_turn" })]}
+        viewedSessionId="leader-id"
+        thinkingHistory={[{ text: "", timestamp: "2026-10-15T10:00:01Z" }]}
+      />,
+    );
+    expect(screen.getByText(/1 quiet check · payments refactor/)).toBeTruthy();
+    expect(screen.queryByText("thought then noop")).toBeNull();
+    // A tool call means the monitor did real work: the pair stays visible.
+    expect(screen.getByText("worked then noop")).toBeTruthy();
+    expect(screen.getByText("NOOP")).toBeTruthy();
+  });
+
+  it("expands a quiet-check chip to show the digests it absorbed", () => {
+    FLAGS.linkedSessions = true;
+    const digest = (text: string): TranscriptMessage => ({
+      role: "user",
+      text,
+      attribution: { link_id: "lnk_1", source_name: "payments refactor" },
+    });
+    const messages: TranscriptMessage[] = [
+      digest("digest one"),
+      { role: "agent", text: "NOOP" },
+      digest("digest two"),
+      { role: "agent", text: "NOOP" },
+    ];
+    render(
+      <ChatRenderer
+        messages={messages}
+        links={[makeLink({ cadence: "per_turn" })]}
+        viewedSessionId="leader-id"
+      />,
+    );
+    const chip = screen.getByRole("button", { name: /2 quiet checks/ });
+    expect(chip.getAttribute("aria-pressed")).toBe("false");
+    expect(screen.queryByText("digest one")).toBeNull();
+    fireEvent.click(chip);
+    expect(chip.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText("digest one")).toBeTruthy();
+    expect(screen.getByText("digest two")).toBeTruthy();
+    expect(screen.queryByText("NOOP")).toBeNull();
+    fireEvent.click(chip);
+    expect(screen.queryByText("digest one")).toBeNull();
   });
 
   it("never collapses a NOOP-shaped reply to the subject's own inject chip", () => {

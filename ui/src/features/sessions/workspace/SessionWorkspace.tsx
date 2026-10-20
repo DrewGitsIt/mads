@@ -21,8 +21,10 @@ import { useShellDockState } from "../../../conversation/ShellDock/dockState";
 import { useLiveShells } from "../../../conversation/ShellDock/useLiveShells";
 import { requestShellToggle } from "../../../conversation/shellToggleSignal";
 import { requestStreamReattach } from "../../../conversation/streamReattachSignal";
-import { WORKSPACE_TABS, type WorkspaceTabId } from "./tabRegistry";
+import type { ChangesFocus } from "../../../files/changesModel";
+import { toWorkspaceTabId, WORKSPACE_TABS, type WorkspaceTabId } from "./tabRegistry";
 import { RUN_EVENT_TYPES } from "./usePipelineRunning";
+import { useLiveRunTaskCount } from "./useLiveRunTaskCount";
 import styles from "./SessionWorkspace.module.css";
 
 export interface SessionWorkspaceProps {
@@ -33,7 +35,14 @@ export interface SessionWorkspaceProps {
   openTaskBreakdown?: OpenTaskBreakdown;
   /** This session's live agent state (useSessionAgentState) — only the delete dialog reads it, and only to say what the turn in flight is doing. */
   agentState?: SessionAgentState;
-  initialTab?: WorkspaceTabId;
+  /** A string, not a WorkspaceTabId: an old deep link may still name the retired "pipeline" tab (it opens Tasks). */
+  initialTab?: string;
+  /**
+   * Opens the Tasks tab on a run (a run_seq) or on Plan ("new") — the
+   * palette's Run pipeline… and the Dashboard's View run. A new object each
+   * time, so a repeat request re-applies even if this workspace is open.
+   */
+  openRun?: { run: number | "new" };
   /**
    * Sleep and wake this session. Not done here: both go through the one
    * controller the surface owns (useSessionSleep), which is what makes the
@@ -69,7 +78,8 @@ export function SessionWorkspace({
   pipelineClient,
   openTaskBreakdown = EMPTY_OPEN_TASK_BREAKDOWN,
   agentState,
-  initialTab,
+  initialTab: initialTabRequest,
+  openRun,
   onSleep,
   onWake,
   onClose,
@@ -80,6 +90,7 @@ export function SessionWorkspace({
   onOpenDelegate,
 }: SessionWorkspaceProps) {
   const [session, setSession] = useState<Session | null>(null);
+  const initialTab = toWorkspaceTabId(initialTabRequest);
   const [activeTab, setActiveTab] = useState<WorkspaceTabId>(initialTab ?? "conversation");
   const [visited, setVisited] = useState<Set<WorkspaceTabId>>(
     () => new Set([initialTab ?? "conversation"]),
@@ -96,8 +107,11 @@ export function SessionWorkspace({
   const [draftName, setDraftName] = useState("");
   const [focusFilePath, setFocusFilePath] = useState<string>();
   const [focusCommitFile, setFocusCommitFile] = useState<{ hash: string; path: string }>();
+  const [focusChanges, setFocusChanges] = useState<ChangesFocus>();
   const [focusTask, setFocusTask] = useState<{ id: string }>();
+  const [focusRun, setFocusRun] = useState<{ run: number | "new" }>();
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
+  const runTaskCount = useLiveRunTaskCount(sessionId, pipelineClient, running);
 
   const refetchSession = useCallback(() => {
     void routerClient.getSession(sessionId).then(setSession);
@@ -162,11 +176,20 @@ export function SessionWorkspace({
     setVisited((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   }
 
-  // A touched-file click in the Conversation tab's rail routes here: surface
-  // the Files tab (mounting it if unvisited) and hand it the file to diff.
+  // The Commit dialog's path links route here: surface the Changes tab
+  // (mounting it if unvisited) and hand it the file to diff.
   function openFileDiff(path: string) {
     setFocusCommitFile(undefined);
+    setFocusChanges(undefined);
     setFocusFilePath(path);
+    selectTab("files");
+  }
+
+  // The Context Rail's Changes list: a file, or the rail's tier and turn.
+  function openChanges(focus: ChangesFocus) {
+    setFocusCommitFile(undefined);
+    setFocusFilePath(undefined);
+    setFocusChanges({ ...focus });
     selectTab("files");
   }
 
@@ -174,6 +197,7 @@ export function SessionWorkspace({
   // merge commit left it, against the session's branch before it.
   function openCommitFileDiff(hash: string, path: string) {
     setFocusFilePath(undefined);
+    setFocusChanges(undefined);
     setFocusCommitFile({ hash, path });
     selectTab("files");
   }
@@ -184,6 +208,15 @@ export function SessionWorkspace({
     setFocusTask({ id });
     selectTab("tasks");
   }
+
+  // The palette's Run pipeline… and the Dashboard's View run: the Tasks tab
+  // on that run (or Plan).
+  useEffect(() => {
+    if (!openRun) return;
+    setFocusRun({ ...openRun });
+    setActiveTab("tasks");
+    setVisited((prev) => (prev.has("tasks") ? prev : new Set(prev).add("tasks")));
+  }, [openRun]);
 
   function commitName() {
     setEditingName(false);
@@ -246,18 +279,36 @@ export function SessionWorkspace({
               onClick={() => selectTab(tab.id)}
             >
               {tab.label}
-              {tab.id === "tasks" && openTaskCount > 0 && (
-                // The badge counts OPEN work only (running + ready, which
-                // includes needs_review, + blocked); done and discarded
-                // tasks never count. A bare number reads as the total or as
-                // the done count, and matches neither, so the tooltip says
-                // what it is.
-                <span className={styles.badge} aria-hidden="true" title={openTasksTitle(openTaskBreakdown)}>
-                  {openTaskCount}
+              {tab.id === "tasks" && running ? (
+                // While a pipeline run is live the badge is the run: a
+                // spinner and how many tasks it is working on right now
+                // (its own, not someone's in-progress work it never
+                // touches); just the spinner until that count is known.
+                <span
+                  className={[styles.badge, styles.runBadge].join(" ")}
+                  aria-hidden="true"
+                  title={
+                    runTaskCount === undefined
+                      ? "Pipeline running"
+                      : `Pipeline running · ${runTaskCount} ${runTaskCount === 1 ? "task" : "tasks"} running`
+                  }
+                  data-testid="tasks-run-badge"
+                >
+                  <span className={styles.spin} />
+                  {runTaskCount}
                 </span>
-              )}
-              {tab.id === "pipeline" && running && (
-                <span className={styles.rundot} aria-hidden="true" title="run in progress" />
+              ) : (
+                tab.id === "tasks" &&
+                openTaskCount > 0 && (
+                  // The badge counts OPEN work only (running + ready, which
+                  // includes needs_review, + blocked); done and discarded
+                  // tasks never count. A bare number reads as the total or as
+                  // the done count, and matches neither, so the tooltip says
+                  // what it is.
+                  <span className={styles.badge} aria-hidden="true" title={openTasksTitle(openTaskBreakdown)}>
+                    {openTaskCount}
+                  </span>
+                )
               )}
             </button>
           ))}
@@ -331,6 +382,7 @@ export function SessionWorkspace({
         >
           <tab.component
             sessionId={sessionId}
+            active={tab.id === activeTab}
             routerClient={routerClient}
             pipelineClient={pipelineClient}
             provisioning={provisioning}
@@ -339,11 +391,14 @@ export function SessionWorkspace({
             onPendingFirstMessageHandled={onPendingFirstMessageHandled}
             onOpenFile={openFileDiff}
             focusFilePath={focusFilePath}
+            onOpenChanges={openChanges}
+            focusChanges={focusChanges}
             onOpenCommitFile={openCommitFileDiff}
             focusCommitFile={focusCommitFile}
             onOpenDelegate={onOpenDelegate}
             onOpenTask={openTask}
             focusTask={focusTask}
+            focusRun={focusRun}
           />
         </div>
       ))}

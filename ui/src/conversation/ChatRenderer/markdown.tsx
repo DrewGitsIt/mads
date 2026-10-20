@@ -57,9 +57,17 @@ export function Markdown({
   text,
   className,
   foldNewCode = false,
+  breaks = false,
 }: {
   text: string;
   className?: string;
+  /**
+   * Every newline is a line break, not standard markdown's soft wrap. For
+   * the user's own messages: a Shift+Enter in the composer should read as a
+   * new line in the history too. Agent prose keeps the standard rule — a
+   * model may wrap lines inside a paragraph.
+   */
+  breaks?: boolean;
   /**
    * A paced reveal lands each code block whole: fold in the ones that
    * arrive after mount. Unpaced text grows a block line by line, which
@@ -68,15 +76,17 @@ export function Markdown({
   foldNewCode?: boolean;
 }) {
   const blocks = useMemo(() => {
-    const tokens = marked.lexer(text);
+    // Breaks are decided at lex time (the inline tokenizer emits the <br>).
+    const tokens = marked.lexer(text, { ...marked.defaults, breaks });
     // Reference-style link definitions are collected document-wide; each
-    // block's parse needs the whole table.
+    // block's parse needs the whole table. `breaks` rides in the key too: it
+    // changes a block's tokens without changing its source.
     const links = tokens.links;
-    const linksKey = JSON.stringify(links);
+    const linksKey = JSON.stringify(links) + (breaks ? ":breaks" : "");
     return tokens
       .filter((t) => t.type !== "space")
       .map((t, i) => ({ key: `${i}:${t.type}`, token: t, links, linksKey }));
-  }, [text]);
+  }, [text, breaks]);
   const arrived = useArrivals(
     blocks.map((b) => b.key),
     foldNewCode,

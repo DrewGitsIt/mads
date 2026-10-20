@@ -719,6 +719,82 @@ func TestStartPipelineNoReadyTasks(t *testing.T) {
 	}
 }
 
+// TestStartPipelineExcludeTaskIDs covers exclude_task_ids validation: an id
+// that isn't one of the session's tasks is a field error, excluding every
+// ready task leaves no ready work, and a valid partial exclusion spawns.
+func TestStartPipelineExcludeTaskIDs(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	data := dataclient.New(base, "test")
+
+	ws := &contracts.Workspace{Name: "ws1", Repos: []contracts.WorkspaceRepo{{Path: t.TempDir(), Primary: true}}}
+	if err := data.CreateWorkspace(context.Background(), ws); err != nil {
+		t.Fatal(err)
+	}
+	tpl := &contracts.Template{Name: "nightly", Source: "name: nightly\nstages:\n  - name: verify\n    command: make test\n"}
+	if err := data.CreateTemplate(context.Background(), tpl); err != nil {
+		t.Fatal(err)
+	}
+	sess := &contracts.Session{Name: "s1", Workspace: ws.ID, Provider: "fake"}
+	if err := data.CreateSession(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+	other := &contracts.Session{Name: "s2", Workspace: ws.ID}
+	if err := data.CreateSession(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	var tasks []*contracts.Task
+	for _, tk := range []*contracts.Task{
+		{SessionID: sess.ID, Title: "t1", Status: contracts.StatusReady, Source: "user"},
+		{SessionID: sess.ID, Title: "t2", Status: contracts.StatusReady, Source: "user"},
+		{SessionID: other.ID, Title: "elsewhere", Status: contracts.StatusReady, Source: "user"},
+	} {
+		if err := data.CreateTask(context.Background(), tk); err != nil {
+			t.Fatal(err)
+		}
+		tasks = append(tasks, tk)
+	}
+	start := func(exclude ...string) *http.Response {
+		return postJSON(t, srv.URL+"/pipelines", map[string]any{
+			"session_id": sess.ID, "template_id": tpl.ID, "exclude_task_ids": exclude,
+		})
+	}
+
+	for _, unknown := range []string{"tsk_nope", tasks[2].ID} {
+		resp := start(tasks[0].ID, unknown)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("exclude %s: status = %d, want 400", unknown, resp.StatusCode)
+		}
+		verr := decodeJSON[struct {
+			Errors []struct {
+				Field string `json:"field"`
+			} `json:"errors"`
+		}](t, resp)
+		if len(verr.Errors) != 1 || verr.Errors[0].Field != "exclude_task_ids" {
+			t.Fatalf("exclude %s: errors = %+v, want one on exclude_task_ids", unknown, verr.Errors)
+		}
+	}
+
+	resp := start(tasks[0].ID, tasks[1].ID)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("all excluded: status = %d, want 400", resp.StatusCode)
+	}
+	if body := decodeJSON[map[string]string](t, resp); body["error"] != "session has no ready or interrupted tasks" {
+		t.Fatalf("all excluded: body = %+v", body)
+	}
+
+	resp = start(tasks[0].ID)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("partial exclude: status = %d, want 201", resp.StatusCode)
+	}
+	started := decodeJSON[struct {
+		RunID string `json:"run_id"`
+	}](t, resp)
+	resp = postJSON(t, srv.URL+"/pipelines/"+started.RunID+"/cancel", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("cancel status = %d, want 204", resp.StatusCode)
+	}
+}
+
 // TestStartPipelineInvalidTemplate covers the same requirement for an
 // unresolvable template_id.
 func TestStartPipelineInvalidTemplate(t *testing.T) {

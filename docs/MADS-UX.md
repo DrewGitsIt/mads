@@ -19,7 +19,7 @@ Five top-level areas in a left icon rail (replacing tao's top-right button row).
 | **Settings** | Config, profiles, credentials, providers, updates, About | Settings (#25–26) + Secrets (#24) + About (#27) |
 
 **Structural changes from tao:**
-- **Build page is eliminated** (your note #11). Autonomous execution is a tab within the Session Workspace — same session, same tasks, no context switch. The good parts of Build (per-task files, live agent terminal) move into the Pipeline tab.
+- **Build page is eliminated** (your note #11). Autonomous execution is a tab within the Session Workspace — same session, same tasks, no context switch. The good parts of Build (per-task files, live agent terminal) move into the Tasks tab, which plans, runs and watches pipeline runs (TASKS-PIPELINE-DESIGN.md).
 - **Secrets move into Settings** (§13.4 mandates credentials live in settings). The manager UI itself is kept (#24 — "this is cool").
 - **DAG and task detail stop being modals.** DAG is a view within the Tasks tab; task detail is a side sheet with room to breathe (notes #8, #9, #12).
 - **Knowledge docs are gone as a concept** (note #18, finalized in mockup review). Reference material lives inside skill directories per the standard format (SKILL.md + nested content) or in workspace steering files — no attachment slots anywhere.
@@ -83,7 +83,7 @@ Replaces #1's empty state. Centered hero composer — greeting copy (approved): 
 
 The heart. There is no header bar or subheader above the conversation (the consolidated header this section first proposed was built, then retired on 2026-10-07). The session's name and status are on its rail card; everything about the session itself is in the **session dock** at the bottom edge (below). The shell panel toggles with ^`. "Continue" is renamed **Resume** (#2).
 
-Center pane tabs: **Conversation · Tasks · Files · Pipeline**. Right side: **Context Rail** (§4's constant pane). Bottom: the session dock. Optional docked, **resizable** shell panel (#5).
+Center pane tabs: **Conversation · Tasks · Changes** (the Pipeline tab folded into Tasks; an old `pipeline` tab id opens Tasks). While a run is live the Tasks tab's badge is a spinner plus the number of tasks in progress. Right side: **Context Rail** (§4's constant pane). Bottom: the session dock. Optional docked, **resizable** shell panel (#5).
 
 #### Conversation tab
 Chat renderer (markdown + collapsible tool cards) or terminal renderer (xterm.js on real PTY) per global display mode (§2). The stream is full-width — no centered reading column; agent prose keeps a readable measure (~90ch) while tool cards and code blocks use the available room. Inactive sessions show the **session summary card** at top (only non-empty sections — §16 structure: accomplished / decisions / remaining) above the transcript. Injected content preview before send (§2.4).
@@ -130,12 +130,18 @@ Session-level and per-task file changes (§5 dual granularity). File list with A
 - **Subscribes:** `file.changed`, `commit.created`, `commit.linked` (session filter)
 - **Actions:** `POST /system/open-editor {path}`, `POST /sessions/:id/merge {target_branch}`
 
-#### Pipeline tab
-Replaces the Build page (#11–13). Appears when a run exists. Layout: run header (status, started, concurrency, cost-so-far is **not** shown live — §8 after-the-fact; show elapsed + counts) with **Start/Pause/Resume/Cancel**. Task board grouped by pipeline stage (columns = stages from the template §6; tasks move across as `stage.started/completed` events arrive). Click a task → split drill-in: stage progression timeline (attempts, loop-backs, feedback §6) + **live agent output terminal** (kept from #11) + per-task files (kept from #13, with touched-file count on the tab). The drill-in panel — like the shell dock — is drag-resizable from its top edge. Blocked tasks surface prominently with accumulated feedback. Orphan/unmerged state visible per task.
+#### Pipeline runs (inside the Tasks tab)
+Replaces the Build page (#11–13) and the former Pipeline tab. Design, decisions and contracts: [TASKS-PIPELINE-DESIGN.md](TASKS-PIPELINE-DESIGN.md); mockup `docs/mockups/tasks-pipeline.html`. A **run bar** tops the Tasks tab: List | Graph toggle · `Run N ▾` (this session's run history; `+ New run` enters Plan) · template · status · elapsed · Stop (live) / Run N tasks (Plan) / New run (finished). **Stop** ends the run and keeps all state: tasks in flight become Interrupted, and a stopped run reads `Run N · stopped` (a crashed or lost one, `Run N · interrupted`). No cost, no progress bar. The tab opens on the live run if one exists, else the newest past run, else Plan.
 
-- **Reads:** `GET /pipeline-runs?session=:id`, `GET /pipeline-runs/:id` (per-task stage, attempts, timings, agent assignments)
-- **Subscribes:** `pipeline.*`, `stage.*`, `task.status_changed` (session filter); **data-plane** per-stage agent stream on drill-in
-- **Actions:** `POST .../pipeline/start|pause|resume|cancel`, `POST /tasks/:id/retry`, `POST /tasks/:id/reassign {agent}`
+- **Plan:** template picker (workspace default preselected), an include box per task (drafts can't be included), one warning line naming tasks a left-out dependency keeps out. Clicking a task opens its detail sheet.
+- **List view:** a metro line (the template's stages as stations, tasks as tokens at their current stage, blocked tokens under the stage that blocked them, Interrupted tokens at the stage a run will resume them) above the task list grouped Blocked · Running · Queued · Interrupted · Done · Not in this run (Plan: Will run · Not in this run). **Interrupted** (a pipeline-only word, never a task status elsewhere) is pipeline work that started and that nobody is doing now; any new run picks it up, and Plan lists it under Will run as "Interrupted · resumes at code_review" or "Interrupted · restarts under *template*, keeps its work" ([PIPELINE-LEASES-DESIGN.md](PIPELINE-LEASES-DESIGN.md)). `+ Add task` and Bulk import sit at the end of the list.
+- **Graph view:** the dependency graph with Overview · Cards · Focus zoom; Plan shows waves and the critical path.
+- **Lens** (both views, on clicking a task in a live or past run): stage strip, attempt timeline with durations, the selected attempt's output (turns or raw log; `attempt N of M ▾` after loop-backs), files touched (open in Changes), acceptance criteria. A blocked task offers Edit & retry (detail sheet with the block reason pinned, Save & retry), Retry as is, Won't do. A picked-up task's timeline marks the pickup ("Picked up from Run N · resumes at …"), its resumed attempt says "resumed from Run N" (a fallback, "rerun after interruption"), and the stages an earlier run completed show done, marked with that run. The detail sheet is read-only while the live run works on the task; an Interrupted task is editable. Esc closes one layer at a time: sheet → popover → lens/focus.
+- Entry points: the palette's **Run pipeline… · <session>** opens that session's Tasks tab in Plan; the Dashboard's run history **View run** opens it on that run.
+
+- **Reads:** `GET /metrics/pipelines?session=:id` (run history), `GET /events?session=:id&since=` (a run's fold), `GET /templates`, `GET /sessions/:id/pipeline/tasks/:taskId/output|turns?run=&stage=&attempt=`
+- **Subscribes:** `pipeline.*`, `stage.*`, `file.changed`, `task.*` (session filter)
+- **Actions:** `POST /pipelines {template, exclude_task_ids}`, `POST /pipelines/:id/cancel` (Stop), `GET /sessions/:id/pipeline/pickup?template=` (Plan's Interrupted lines), `POST /tasks/:id/retry`; Pause stays disabled (no engine support)
 
 #### Context Rail (right)
 Constant across display modes (§4). Two tabs: **Tasks** (compact list; synthesis draft cards appear at top with pulse + yellow border → Confirm / Edit / Discard §4) and **Changes** (compact file list; click → Files tab). Status quick-filter chips (All / In progress / Ready / Review / Done) cut the task list to a single status; grouping returns on All. Collapsible.
@@ -173,7 +179,7 @@ Left sub-nav: **Agents · Capabilities · Workspaces**. Within each: Local list 
 
 ### 3.6 Dashboard
 
-New (§8). System-level only, data-not-interpretation. Widgets: active sessions + running pipelines (live), cost over time by model/session/pipeline, agent leaderboard (usage, success rate, retries), capability usage incl. never-used, task outcomes, pipeline run history table → run drill-in links back to the session's Pipeline tab. All charts are queries over the event log (§15).
+New (§8). System-level only, data-not-interpretation. Widgets: active sessions + running pipelines (live), cost over time by model/session/pipeline, agent leaderboard (usage, success rate, retries), capability usage incl. never-used, task outcomes, pipeline run history table → View run opens the session's Tasks tab on that run. All charts are queries over the event log (§15).
 
 - **Reads:** `GET /metrics/*` (views over `GET /events`), `GET /pipeline-runs`
 - **Subscribes:** `session.*`, `pipeline.*` for the live widget only; charts refresh on view
@@ -188,7 +194,7 @@ Left-nav sections: **Appearance · General · Profiles · Providers · Credentia
 
 ### 3.8 Command Palette (⌘K)
 
-Global. Sessions (jump), tasks (open sheet), actions (new session, start pipeline, run retro, toggle shell, open settings). The GUI twin of slash commands (§2.5).
+Global. Sessions (jump), tasks (open sheet), actions (new session, run pipeline… (opens the session's Tasks tab in Plan), run retro, toggle shell, open settings). The GUI twin of slash commands (§2.5).
 
 - **Reads:** local caches of sessions/tasks/actions (already subscribed)
 - **Actions:** dispatches to the surfaces above
@@ -201,7 +207,7 @@ Wizard over empty app (§14.2): provider detection → credential setup → defa
 
 ## 4. Event Vocabulary (starter set implied by the surfaces)
 
-`session.created|provisioning|renamed|activity_changed|updated|deleted` · `task.created|updated|status_changed|confirmed|discarded` · `note.created|confirmed|discarded` · `file.changed` · `commit.created|linked` · `pipeline.started|paused|resumed|cancelled|completed` · `stage.started|completed|failed|skipped` · `retro.started|progress|completed|failed` · `capability.created|updated|deleted|health_changed` · `agent.created|updated|deleted` · `workspace.created|updated|deleted` · `link.created|updated|deleted` · `attachment.added` · `merge.attempted|conflicted|completed`
+`session.created|provisioning|renamed|activity_changed|updated|deleted` · `task.created|updated|status_changed|confirmed|discarded` · `note.created|confirmed|discarded` · `file.changed` · `commit.created|linked` · `pipeline.started|paused|resumed|cancelled|completed|failed` · `stage.started|completed|failed|skipped|retried|picked_up` · `retro.started|progress|completed|failed` · `capability.created|updated|deleted|health_changed` · `agent.created|updated|deleted` · `workspace.created|updated|deleted` · `link.created|updated|deleted` · `attachment.added` · `merge.attempted|conflicted|completed`
 
 This list feeds §15's event log contract; expect growth during mockups.
 

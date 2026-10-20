@@ -1,0 +1,594 @@
+import { useEffect, useMemo, useState } from "react";
+import { Button } from "../../components/Button/Button";
+import { Chip, type ChipTone } from "../../components/Chip/Chip";
+import { SegmentedControl } from "../../components/SegmentedControl/SegmentedControl";
+import { Select } from "../../components/Select/Select";
+import type { PipelineClient, TaskStreamTarget } from "../../pipeline/client/pipelineClient";
+import { AgentOutputView } from "../../pipeline/DrillIn/AgentOutputView";
+import { DrillInFeed } from "../../pipeline/DrillIn/DrillInFeed";
+import { attemptDuration, StageTimeline } from "../../pipeline/DrillIn/StageTimeline";
+import { TaskFiles } from "../../pipeline/DrillIn/TaskFiles";
+import type { RunStage } from "../../pipeline/plan/runStages";
+import type { RunStatus } from "../../pipeline/plan/runStatus";
+import type { StageAttempt, TaskRunState } from "../../pipeline/state/usePipelineRun";
+import { useEscapeLayer } from "../../platform/escapeLayers";
+import type { Task } from "../../router/types";
+import { usePrefersReducedMotion } from "../GraphView/usePrefersReducedMotion";
+import { RunStatusGlyph } from "../RunList/RunStatusGlyph";
+import { useNow } from "../RunBar/useNow";
+import styles from "./TaskLens.module.css";
+
+export type TaskDetailsMode = "details" | "retry";
+
+export interface TaskLensProps {
+  task: Task;
+  tasksById: Record<string, Task>;
+  /** Where the task stands in the run being viewed (runStatusOf). */
+  runStatus: RunStatus;
+  /** The run's stages, in order (runStages). */
+  stages: RunStage[];
+  /** The task's fold for the run being viewed. Absent: nothing ran yet. */
+  runState?: TaskRunState;
+  sessionId: string;
+  pipelineClient: PipelineClient;
+  /** run_seq of the run being viewed; passed to every stream target. */
+  runSeq?: number;
+  /** The viewed run is the live one (a started attempt is still being written). */
+  live: boolean;
+  onClose: () => void;
+  onOpenDetails: (taskId: string, mode: TaskDetailsMode) => void;
+  /** Opens a touched file in the Changes tab. Rows aren't clickable without it. */
+  onOpenFile?: (path: string) => void;
+  onRetry: (taskId: string) => void;
+  onWontDo: (taskId: string) => void;
+  /** Hidden when absent. */
+  onDiscuss?: (taskId: string) => void;
+  /** Overrides the last failed attempt's reason in the blocked box. */
+  blockReason?: string;
+  /** A run's name from its run_seq, e.g. "Run 3": marks what an earlier run did. */
+  runLabelOf?: (runSeq: number) => string;
+  /** An Interrupted task no run has picked up yet: where a run picks it up (pickupLine). */
+  pickupText?: string;
+  /**
+   * Shows the "Esc close" button in the header (default). Off where the host
+   * already offers the same way out, e.g. the graph's focus breadcrumb.
+   */
+  showCloseHint?: boolean;
+  className?: string;
+}
+
+const STATUS_CHIP: Record<RunStatus, { label: string; tone: ChipTone }> = {
+  ready: { label: "ready", tone: "neutral" },
+  queued: { label: "queued", tone: "neutral" },
+  running: { label: "running", tone: "info" },
+  interrupted: { label: "interrupted", tone: "warn" },
+  blocked: { label: "blocked", tone: "bad" },
+  done: { label: "done", tone: "ok" },
+  skipped: { label: "not in this run", tone: "neutral" },
+  excluded: { label: "not in this run", tone: "neutral" },
+  draft: { label: "draft", tone: "draft" },
+};
+
+type StationState = "wait" | "now" | "stop" | "done" | "fail" | "skip";
+
+const STATION_STATE: Record<StageAttempt["status"], StationState> = {
+  started: "now",
+  completed: "done",
+  failed: "fail",
+  skipped: "skip",
+};
+
+const STATION_LABEL: Record<StationState, string> = {
+  wait: "not reached",
+  now: "running",
+  stop: "interrupted",
+  done: "done",
+  fail: "failed",
+  skip: "skipped",
+};
+
+function plural(n: number, one: string, many = `${one}s`) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/**
+ * One task's journey through a run, shared by the List and Graph views
+ * (docs/TASKS-PIPELINE-DESIGN.md): the stage strip, every attempt, the
+ * selected attempt's output, files touched and acceptance criteria. Esc
+ * closes it (a detail sheet opened over it takes Esc first).
+ */
+export function TaskLens({
+  task,
+  tasksById,
+  runStatus,
+  stages,
+  runState,
+  sessionId,
+  pipelineClient,
+  runSeq,
+  live,
+  onClose,
+  onOpenDetails,
+  onOpenFile,
+  onRetry,
+  onWontDo,
+  onDiscuss,
+  blockReason,
+  runLabelOf,
+  pickupText,
+  showCloseHint = true,
+  className,
+}: TaskLensProps) {
+  useEscapeLayer(true, onClose);
+  const reducedMotion = usePrefersReducedMotion();
+  const attempts = useMemo(() => runState?.attempts ?? [], [runState]);
+  // Open attempts of a live run show a ticking time so far.
+  const ticking = live && attempts.some((a) => a.status === "started");
+  const now = useNow(ticking);
+  const clock = ticking ? now : undefined;
+
+  // null follows the newest attempt, so a live task's next stage takes over
+  // the output pane as it starts. Picking the newest attempt goes back to
+  // following. Attempts only ever append within a run, so an index is stable.
+  const [picked, setPicked] = useState<number | null>(null);
+  useEffect(() => setPicked(null), [task.id, runSeq]);
+  const selectedIndex = picked !== null && picked < attempts.length ? picked : attempts.length - 1;
+  const selected: StageAttempt | undefined = attempts[selectedIndex];
+  function select(index: number) {
+    setPicked(index >= attempts.length - 1 ? null : index);
+  }
+
+  const stageByName = useMemo(() => new Map(stages.map((s) => [s.name, s])), [stages]);
+  // A stage the run names but the template doesn't still gets a station.
+  const stripStages = useMemo(() => {
+    const names = new Set(stages.map((s) => s.name));
+    const extra: RunStage[] = [];
+    for (const a of attempts) {
+      if (!names.has(a.stage)) {
+        names.add(a.stage);
+        extra.push({ name: a.stage, kind: "agent" });
+      }
+    }
+    return [...stages, ...extra];
+  }, [stages, attempts]);
+
+  const chip = STATUS_CHIP[runStatus];
+  // A picked-up task: the stages an earlier run completed, and where it came from.
+  const pickup = runState?.pickup;
+  const earlierDone = new Set(pickup?.completedStages ?? []);
+  const fromRun = pickup?.resumedFromRunSeq !== undefined ? (runLabelOf?.(pickup.resumedFromRunSeq) ?? "an earlier run") : undefined;
+  const pickupNote = pickup ? pickupNoteOf(pickup.mode, pickup.fromStage, fromRun) : undefined;
+  // An open attempt the run left behind (it ended, or the task is waiting for a pickup).
+  const stoppedOpen = runStatus === "interrupted";
+
+  return (
+    <section
+      className={[styles.lens, className].filter(Boolean).join(" ")}
+      aria-label={`Task: ${task.title}`}
+      data-testid="task-lens"
+    >
+      <header className={styles.head}>
+        <RunStatusGlyph status={runStatus} />
+        <span className={styles.title}>{task.title}</span>
+        <Chip tone={chip.tone}>{chip.label}</Chip>
+        {(task.labels ?? []).map((label) => (
+          <Chip key={label}>{label}</Chip>
+        ))}
+        <span className={styles.spacer} />
+        <Button variant="ghost" size="sm" onClick={() => onOpenDetails(task.id, "details")}>
+          Task details
+        </Button>
+        {showCloseHint && (
+          <button type="button" className={styles.close} onClick={onClose} aria-label="Close">
+            <kbd className={styles.kbd}>Esc</kbd> close
+          </button>
+        )}
+      </header>
+
+      <ol className={styles.strip} aria-label="Stages">
+        {stripStages.map((stage, i) => {
+          const own = attempts.filter((a) => a.stage === stage.name);
+          const latest = own[own.length - 1];
+          const doneEarlier = !latest && earlierDone.has(stage.name);
+          let state: StationState = latest ? STATION_STATE[latest.status] : doneEarlier ? "done" : "wait";
+          if (state === "now" && stoppedOpen) state = "stop";
+          const lastIndex = latest ? attempts.lastIndexOf(latest) : -1;
+          const sub = doneEarlier
+            ? (fromRun ?? "earlier run")
+            : own.length > 1
+              ? plural(own.length, "attempt")
+              : state === "skip"
+                ? stage.when
+                  ? "skipped (when:)"
+                  : "skipped"
+                : stage.kind === "command"
+                  ? "command"
+                  : "";
+          return (
+            <li key={stage.name} className={styles.stationItem}>
+              {i > 0 && (
+                <span
+                  className={[styles.wire, state !== "wait" && state !== "skip" && styles.wireOn]
+                    .filter(Boolean)
+                    .join(" ")}
+                  aria-hidden="true"
+                />
+              )}
+              <button
+                type="button"
+                className={[styles.station, styles[state], selected?.stage === stage.name && styles.sel]
+                  .filter(Boolean)
+                  .join(" ")}
+                data-state={state}
+                data-still={reducedMotion || undefined}
+                disabled={!latest}
+                aria-pressed={selected?.stage === stage.name}
+                aria-label={`${stage.name}: ${STATION_LABEL[state]}${doneEarlier ? ` in ${fromRun ?? "an earlier run"}` : ""}${own.length > 1 ? `, ${own.length} attempts` : ""}`}
+                onClick={() => select(lastIndex)}
+              >
+                <span className={styles.dot} aria-hidden="true">
+                  {state === "done" ? "✓" : state === "fail" ? "✕" : ""}
+                </span>
+                <span className={styles.stationName}>{stage.name}</span>
+                <span className={[styles.stationSub, own.length > 1 && styles.warn].filter(Boolean).join(" ")}>
+                  {sub}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+
+      {runStatus === "blocked" && (
+        <BlockedBox
+          task={task}
+          attempts={attempts}
+          runState={runState}
+          stageByName={stageByName}
+          blockReason={blockReason}
+          onOpenDetails={onOpenDetails}
+          onRetry={onRetry}
+          onWontDo={onWontDo}
+          onDiscuss={onDiscuss}
+        />
+      )}
+
+      <div className={styles.body}>
+        <div className={styles.side}>
+          <div>
+            <h4 className={styles.h}>Timeline</h4>
+            {attempts.length === 0 && !pickupNote ? (
+              <p className={styles.muted}>{runStatus === "interrupted" && pickupText ? pickupText : "Not started."}</p>
+            ) : (
+              <StageTimeline
+                attempts={attempts}
+                selectedIndex={selectedIndex}
+                onSelect={select}
+                now={clock}
+                pickupNote={pickupNote}
+                resumedFrom={fromRun}
+                interrupted={stoppedOpen}
+              />
+            )}
+          </div>
+          <div>
+            <h4 className={styles.h}>Files touched</h4>
+            {(runState?.touchedFiles.length ?? 0) === 0 ? (
+              <p className={styles.muted}>None yet.</p>
+            ) : (
+              <TaskFiles touchedFiles={runState?.touchedFiles ?? []} onOpenFile={onOpenFile} showCount={false} />
+            )}
+          </div>
+          <div>
+            <h4 className={styles.h}>Acceptance</h4>
+            {task.acceptance_criteria ? (
+              <p className={styles.acceptance}>{task.acceptance_criteria}</p>
+            ) : (
+              <p className={styles.muted}>None written.</p>
+            )}
+          </div>
+        </div>
+        <div className={styles.out}>
+          {selected ? (
+            <AttemptOutput
+              key={`${task.id}|${runSeq ?? ""}`}
+              task={task}
+              attempts={attempts}
+              index={selectedIndex}
+              stage={stageByName.get(selected.stage)}
+              sessionId={sessionId}
+              pipelineClient={pipelineClient}
+              runSeq={runSeq}
+              live={live}
+              now={clock}
+              onSelect={select}
+              resumedFrom={fromRun}
+              stopped={stoppedOpen}
+            />
+          ) : (
+            <p className={styles.emptyOut}>{emptyOutputText(task, runStatus, tasksById, pickupText)}</p>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// The pickup marker: "Picked up from Run 3 · resumes at code_review", or
+// "Picked up from Run 3 · restarts at architect, keeps its work".
+function pickupNoteOf(mode: "resume" | "restart", fromStage: string | undefined, fromRun: string | undefined): string {
+  const head = fromRun ? `Picked up from ${fromRun}` : "Picked up";
+  if (mode === "resume") return fromStage ? `${head} · resumes at ${fromStage}` : head;
+  return `${head} · restarts${fromStage ? ` at ${fromStage}` : ""}, keeps its work`;
+}
+
+function emptyOutputText(task: Task, status: RunStatus, tasksById: Record<string, Task>, pickupText?: string): string {
+  switch (status) {
+    case "interrupted":
+      return pickupText ? `${pickupText}.` : "Interrupted. Nothing to show for this run.";
+    case "queued": {
+      const waits = (task.dependencies ?? [])
+        .map((id) => tasksById[id])
+        .filter((t): t is Task => !!t && t.status !== "done")
+        .map((t) => t.title);
+      return waits.length > 0
+        ? `Queued: waits on ${waits.join(", ")}. Nothing to show until a stage starts.`
+        : "Queued. Nothing to show until a stage starts.";
+    }
+    case "ready":
+      return "Ready. Nothing to show until the run starts.";
+    case "draft":
+      return "A draft. It runs once it's confirmed.";
+    case "skipped":
+    case "excluded":
+      return "This task isn't in the run.";
+    default:
+      return "No stage ran for this task in this run.";
+  }
+}
+
+interface BlockedBoxProps {
+  task: Task;
+  attempts: StageAttempt[];
+  runState?: TaskRunState;
+  stageByName: Map<string, RunStage>;
+  blockReason?: string;
+  onOpenDetails: (taskId: string, mode: TaskDetailsMode) => void;
+  onRetry: (taskId: string) => void;
+  onWontDo: (taskId: string) => void;
+  onDiscuss?: (taskId: string) => void;
+}
+
+function BlockedBox({
+  task,
+  attempts,
+  runState,
+  stageByName,
+  blockReason,
+  onOpenDetails,
+  onRetry,
+  onWontDo,
+  onDiscuss,
+}: BlockedBoxProps) {
+  const lastFailed = [...attempts].reverse().find((a) => a.status === "failed");
+  const at = lastFailed?.stage ?? runState?.currentStage;
+  // Every failure of the blocking stage but the last sent the task back once.
+  const loopBacks = at
+    ? Math.max(0, attempts.filter((a) => a.stage === at && a.status === "failed").length - 1)
+    : 0;
+  const then = at ? stageByName.get(at)?.then : undefined;
+  const reason = blockReason ?? lastFailed?.reason;
+  return (
+    <div className={styles.blocked} role="group" aria-label="Blocked">
+      <p className={styles.blockedText}>
+        <b>{at ? `Blocked at ${at}` : "Blocked"}</b>
+        {loopBacks > 0 && ` after ${plural(loopBacks, "loop-back")}`}
+        {then && (
+          <>
+            {" "}
+            (<code>then: {then}</code>)
+          </>
+        )}
+        .{reason && ` ${reason}`}
+      </p>
+      <div className={styles.blockedActions}>
+        <Button variant="primary" size="sm" onClick={() => onOpenDetails(task.id, "retry")}>
+          Edit &amp; retry
+        </Button>
+        <Button size="sm" onClick={() => onRetry(task.id)}>
+          Retry as is
+        </Button>
+        {onDiscuss && (
+          <Button size="sm" onClick={() => onDiscuss(task.id)}>
+            Discuss in Conversation
+          </Button>
+        )}
+        <Button variant="ghost" size="sm" onClick={() => onWontDo(task.id)}>
+          Won&apos;t do
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+type OutputView = "turns" | "raw";
+
+const VIEW_OPTIONS = [
+  { value: "turns" as const, label: "Turns" },
+  { value: "raw" as const, label: "Raw log" },
+];
+
+interface AttemptOutputProps {
+  task: Task;
+  attempts: StageAttempt[];
+  index: number;
+  stage?: RunStage;
+  sessionId: string;
+  pipelineClient: PipelineClient;
+  runSeq?: number;
+  live: boolean;
+  /** Set while the run is live: an open attempt's time so far ticks from it. */
+  now?: number;
+  onSelect: (index: number) => void;
+  /** The run a resumed attempt came from, e.g. "Run 3". */
+  resumedFrom?: string;
+  /** The task is Interrupted: an open attempt stopped, it isn't live. */
+  stopped?: boolean;
+}
+
+function AttemptOutput({
+  task,
+  attempts,
+  index,
+  stage,
+  sessionId,
+  pipelineClient,
+  runSeq,
+  live,
+  now,
+  onSelect,
+  resumedFrom,
+  stopped,
+}: AttemptOutputProps) {
+  const attempt = attempts[index];
+  const duration = attemptDuration(attempt, now);
+  const [view, setView] = useState<OutputView>("turns");
+  const isCommand = stage?.kind === "command";
+  const raw = isCommand || view === "raw";
+  const isLive = live && attempt.status === "started" && !stopped;
+  const streams = attempt.status !== "skipped";
+
+  const same = attempts.map((a, i) => ({ a, i })).filter(({ a }) => a.stage === attempt.stage);
+  // Attempt numbers continue across runs (a pickup), so "of M" is the highest, not a count.
+  const ofCount = Math.max(...same.map(({ a }) => a.attempt));
+
+  // Opening an EventSource is a side effect: once per selected attempt (and
+  // view: the raw view tears its source down when it unmounts), never once
+  // per render, and closed on change and unmount.
+  const streamKey = streams ? `${runSeq ?? ""}|${attempt.stage}|${attempt.attempt}|${raw ? "raw" : "turns"}` : null;
+  const target: TaskStreamTarget = { run: runSeq, stage: attempt.stage, attempt: attempt.attempt };
+  const outputSource = useMemo(
+    () => (streamKey ? pipelineClient.streamTaskOutput(sessionId, task.id, target) : undefined),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pipelineClient, sessionId, task.id, streamKey],
+  );
+  useEffect(() => () => outputSource?.close(), [outputSource]);
+  const turnsSource = useMemo(
+    () => (streamKey && !raw ? pipelineClient.streamTaskTurns(sessionId, task.id, target) : undefined),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pipelineClient, sessionId, task.id, streamKey],
+  );
+  useEffect(() => () => turnsSource?.close(), [turnsSource]);
+
+  // An attempt a loop-back started carries the failure that sent it here.
+  const prev = attempts[index - 1];
+  const handoffFrom =
+    attempt.attempt > 1 && !attempt.rerun && prev?.status === "failed" && prev.reason ? prev : undefined;
+  const next = attempts[index + 1];
+  const handoffTo = attempt.status === "failed" && next && next.attempt > 1 ? next : undefined;
+
+  // The log ended without a chunk: say so rather than draw an empty terminal.
+  const noOutput = <p className={styles.emptyOut}>No output.</p>;
+
+  return (
+    <>
+      <div className={styles.outHead}>
+        <b className={styles.outStage}>{attempt.stage}</b>
+        {same.length > 1 ? (
+          <Select
+            className={styles.attemptSelect}
+            value={String(index)}
+            onChange={(v) => onSelect(Number(v))}
+            options={same.map(({ a, i }) => ({
+              value: String(i),
+              label: `attempt ${a.attempt} of ${ofCount}${
+                a.status === "started" && live && !stopped ? " · live" : a.status === "failed" ? " · failed" : ""
+              }`,
+            }))}
+          />
+        ) : (
+          attempt.attempt > 1 && <span>attempt {attempt.attempt}</span>
+        )}
+        {isLive ? (
+          <Chip tone="info">live{duration ? ` ${duration}` : ""}</Chip>
+        ) : (
+          <>
+            <Chip
+              tone={
+                attempt.status === "failed"
+                  ? "bad"
+                  : attempt.status === "completed"
+                    ? "ok"
+                    : stopped && attempt.status === "started"
+                      ? "warn"
+                      : "neutral"
+              }
+            >
+              {stopped && attempt.status === "started" ? "interrupted" : attempt.status}
+            </Chip>
+            {duration && <span className={styles.duration}>{duration}</span>}
+          </>
+        )}
+        {!!attempt.retries && <Chip tone="warn">retried ×{attempt.retries}</Chip>}
+        {attempt.resumed && <span className={styles.resumeNote}>resumed from {resumedFrom ?? "an earlier run"}</span>}
+        {attempt.rerun && <span className={styles.resumeNote}>rerun after interruption</span>}
+        {isCommand && <span>command</span>}
+        <span className={styles.spacer} />
+        {!isCommand && streams && (
+          <SegmentedControl
+            aria-label="Output view"
+            className={styles.viewToggle}
+            value={view}
+            options={VIEW_OPTIONS}
+            onChange={setView}
+          />
+        )}
+      </div>
+      {handoffFrom && (
+        <p className={styles.handoff} data-testid="handoff">
+          ↳ Started from{" "}
+          <b>
+            {handoffFrom.stage} attempt {handoffFrom.attempt}
+          </b>{" "}
+          feedback: “{handoffFrom.reason}”
+        </p>
+      )}
+      {handoffTo && (
+        <p className={styles.handoff}>
+          ↳ Passed to{" "}
+          <b>
+            {handoffTo.stage} attempt {handoffTo.attempt}
+          </b>{" "}
+          as its feedback.
+        </p>
+      )}
+      <div className={styles.feed}>
+        {!streams ? (
+          <p className={styles.emptyOut}>
+            {stage?.when ? (
+              <>
+                Skipped: <code>when: {stage.when}</code> was false for this task.
+              </>
+            ) : (
+              "Skipped for this task."
+            )}
+          </p>
+        ) : raw || !turnsSource ? (
+          outputSource && <AgentOutputView key={streamKey} source={outputSource} empty={noOutput} />
+        ) : (
+          outputSource && (
+            <DrillInFeed
+              key={streamKey}
+              task={task}
+              attempts={[attempt]}
+              outputSource={outputSource}
+              turnsSource={turnsSource}
+              showHeader={false}
+              empty={noOutput}
+            />
+          )
+        )}
+      </div>
+    </>
+  );
+}

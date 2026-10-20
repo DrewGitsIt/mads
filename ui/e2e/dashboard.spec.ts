@@ -5,6 +5,7 @@ import { test, expect } from "./fixtures";
 import { createSession, importTasks, runFakePipeline, setupWorkspace } from "./lib/seed";
 
 let sessionId: string;
+let taskId: string;
 
 test.beforeAll(async () => {
   const routerURL = process.env.MADS_ROUTER_URL!;
@@ -12,7 +13,7 @@ test.beforeAll(async () => {
   setupWorkspace(workspaceDir);
   const session = await createSession(routerURL, { name: "e2e dashboard journey", provider: "fake" });
   sessionId = session.id;
-  await importTasks(routerURL, sessionId, ["e2e dashboard task"]);
+  [{ id: taskId }] = await importTasks(routerURL, sessionId, ["e2e dashboard task"]);
   runFakePipeline({
     madsBin: process.env.MADS_BIN!,
     dataURL: process.env.MADS_DATA_URL!,
@@ -46,4 +47,17 @@ test("dashboard journey: real pipeline run shows up in metrics", async ({ page, 
   await expect(page.getByText(sessionId)).toBeVisible();
 
   await expect(page.getByText("Something went wrong")).toHaveCount(0);
+
+  // Run history's View run opens that session's Tasks tab on that run.
+  const runRow = page.getByRole("row").filter({ has: page.getByRole("cell", { name: sessionId, exact: true }) });
+  await expect(runRow).toHaveCount(1);
+  await runRow.getByRole("button", { name: "View run" }).click();
+  await expect(page.getByRole("tab", { name: "Tasks", exact: true })).toHaveAttribute("aria-selected", "true");
+  const panel = page.locator("#workspace-panel-tasks");
+  const runTrigger = panel.locator('button[aria-haspopup="menu"]').first();
+  await expect(runTrigger).toContainText("Run 1");
+  await expect(runTrigger).toContainText("completed");
+  await expect(
+    panel.getByTestId("metro").locator('[data-stack="done"]').locator(`button[data-task="${taskId}"]`),
+  ).toBeVisible();
 });

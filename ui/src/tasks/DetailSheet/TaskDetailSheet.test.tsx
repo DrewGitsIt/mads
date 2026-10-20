@@ -554,4 +554,82 @@ describe("TaskDetailSheet", () => {
       );
     });
   });
+
+  describe("while the pipeline works on the task", () => {
+    function renderLocked() {
+      const onClose = vi.fn();
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_queued")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={new FakeRouterClient()}
+          onClose={onClose}
+          readOnly
+          lockedAt={{ stage: "executor", attempt: 2 }}
+        />,
+      );
+      return { onClose };
+    }
+
+    it("says it's locked and where the pipeline is", () => {
+      renderLocked();
+      expect(screen.getByRole("note").textContent).toBe(
+        "Locked while the pipeline works on it (executor, attempt 2). Editing reopens once the pipeline is done with the task.",
+      );
+    });
+
+    it("shows the fields without any way to edit or save them", () => {
+      renderLocked();
+      expect((screen.getByLabelText("Title") as HTMLInputElement).readOnly).toBe(true);
+      expect((screen.getByRole("combobox") as HTMLSelectElement).disabled).toBe(true);
+      expect(screen.getByText("Waiting on the ingest worker's policy to be finalized.")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Edit Description" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /Remove dependency/ })).toBeNull();
+      expect(screen.queryByText("+ Add dependency…")).toBeNull();
+      expect(screen.queryByText("Suggest capabilities")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+    });
+  });
+
+  it("pins the block reason above the fields and saves under the caller's label", async () => {
+    const onSaved = vi.fn();
+    render(
+      <TaskDetailSheet
+        task={byId("tsk_ready")}
+        tasksById={tasksById}
+        sessionTasks={fixtureTasks}
+        routerClient={new FakeRouterClient()}
+        onClose={vi.fn()}
+        onSaved={onSaved}
+        pinnedReason="3 callers in admin/ still use VerifyLegacy."
+        primaryLabel="Save & retry"
+      />,
+    );
+    const pin = screen.getByRole("note");
+    expect(pin.textContent).toBe("Why it's blocked3 callers in admin/ still use VerifyLegacy.");
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save & retry" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(onSaved.mock.calls[0][0].id).toBe("tsk_ready");
+  });
+
+  it("Escape closes the sheet, but not while a field edit claims it", () => {
+    const onClose = vi.fn();
+    render(
+      <TaskDetailSheet
+        task={byId("tsk_ready")}
+        tasksById={tasksById}
+        sessionTasks={fixtureTasks}
+        routerClient={new FakeRouterClient()}
+        onClose={onClose}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit Description" }));
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Description" }), { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });

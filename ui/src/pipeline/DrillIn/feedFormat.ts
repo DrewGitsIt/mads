@@ -3,7 +3,7 @@ import { foldToolResults } from "../../router/toolPairing";
 import type { ToolUse, TranscriptMessage } from "../../router/types";
 
 /** HH:MM:SS in the viewer's local timezone — consistent with the rest of the
- * UI (e.g. RunPicker's toLocaleTimeString), not the RFC3339 wire zone. */
+ * UI (toLocaleTimeString), not the RFC3339 wire zone. */
 export function formatClock(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;

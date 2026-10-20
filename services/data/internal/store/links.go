@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -73,8 +74,8 @@ func validateCadence(link *contracts.Link) *contracts.ValidationError {
 // order (docs/LINKED-SESSIONS-DESIGN.md, existence first — everything else
 // needs both rows): grant shape, both sessions exist, no self-link, no
 // reverse-direction duplicate (leader→subject only), the same-workspace
-// different-worktree constraint, orchestrate-vs-live-pipeline-subject, and
-// at-most-one-orchestrate-holder-per-subject.
+// different-worktree constraint, orchestrate-vs-live-pipeline-subject,
+// at-most-one-orchestrate-holder-per-subject, and no loop of leaders.
 //
 // A directed pair holds at most one link, so a create for a pair that
 // already has one merges into it instead of adding a parallel row (two rows
@@ -141,6 +142,13 @@ func (l *Links) Create(ctx context.Context, link *contracts.Link, actor string) 
 			if err := l.checkOrchestrateInTx(tx, link.SubjectSessionID, excludeID, "grants", &v); err != nil {
 				return err
 			}
+			// A self-link or a reverse pair is already refused above;
+			// reporting it again as a two-session loop would be noise.
+			if link.GrantingSessionID != link.SubjectSessionID && !reverseExists {
+				if err := l.checkLeaderLoopInTx(tx, link.GrantingSessionID, link.SubjectSessionID, "grants", &v); err != nil {
+					return err
+				}
+			}
 		}
 
 		if !v.Empty() {
@@ -204,7 +212,8 @@ type StagedLinkCheck struct {
 // ValidateStaged is the dry run of creating links for a session that does
 // not exist yet: it applies the rules Create would apply to each entry —
 // grant shape, cadence, counterpart exists, orchestrate vs. a live pipeline
-// run, at most one orchestrate holder per subject — and writes nothing (the
+// run, at most one orchestrate holder per subject, no loop of leaders — and
+// writes nothing (the
 // tx never appends, so it commits empty). Rules that need both rows
 // (self-link, differing worktrees) can't fire for a brand-new endpoint, and
 // an existing pair can't pre-exist, so they're skipped — but two staged
@@ -212,11 +221,17 @@ type StagedLinkCheck struct {
 // which the second create would refuse, so that is checked among the
 // entries. Entries are checked in order; a placeholder subject led by an
 // earlier entry makes a later orchestrate entry the second leader, as
-// sequential creates would. A missing counterpart returns ErrNotFound.
+// sequential creates would. The new session has no links yet, so a loop of
+// leaders through it needs two staged entries: it leads X, Y leads it, and X
+// already reaches Y through leader links; the later of the two is refused.
+// A missing counterpart returns ErrNotFound.
 func (l *Links) ValidateStaged(ctx context.Context, checks []StagedLinkCheck) (*contracts.ValidationError, error) {
 	var v contracts.ValidationError
 	err := l.log.WithTx(ctx, func(tx *Tx) error {
-		newLeader := ""
+		newLeader, newLeaderID := "", ""
+		// ledByNew lists the counterparts staged entries have the new
+		// session lead, for the loop-of-leaders check.
+		var ledByNew []string
 		// grantedBy records, per counterpart, the direction an earlier
 		// entry staged with it: true when the new session grants.
 		grantedBy := map[string]bool{}
@@ -259,13 +274,22 @@ func (l *Links) ValidateStaged(ctx context.Context, checks []StagedLinkCheck) (*
 				if err := l.checkOrchestrateInTx(tx, counterpartID, "", c.Field+".grants", &v); err != nil {
 					return err
 				}
+				ledByNew = append(ledByNew, counterpartID)
+				if newLeaderID != "" {
+					if err := l.checkStagedLeaderLoopInTx(tx, []string{counterpartID}, newLeaderID, c.Field+".grants", &v); err != nil {
+						return err
+					}
+				}
 				continue
 			}
 			if newLeader != "" {
 				v.Add(c.Field+".grants", orchestrateHolderMessage(newLeader))
 				continue
 			}
-			newLeader = holderLabel(counterpartID, counterpart.Name)
+			newLeader, newLeaderID = holderLabel(counterpartID, counterpart.Name), counterpartID
+			if err := l.checkStagedLeaderLoopInTx(tx, ledByNew, newLeaderID, c.Field+".grants", &v); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -372,7 +396,9 @@ func nextOrchestrateStatus(old *contracts.Link, newGrants []contracts.Grant) con
 // Re-validates grant shape, orchestrate-vs-live-pipeline, and the
 // single-orchestrate-holder rule (excluding this link's own row); does not
 // re-check existence/self-link/direction/worktree since the endpoints can't
-// change.
+// change. The loop-of-leaders check runs only when the update adds
+// orchestrate, so a cadence edit or a downgrade on a link that is already
+// part of a stored loop still goes through.
 func (l *Links) Update(ctx context.Context, link *contracts.Link, actor string) error {
 	if verr := validateGrants(link.Grants); verr != nil {
 		return verr
@@ -401,6 +427,11 @@ func (l *Links) Update(ctx context.Context, link *contracts.Link, actor string) 
 				return err
 			} else if msg != "" {
 				v.Add("grants", msg)
+			}
+			if !hasGrant(old.Grants, contracts.GrantOrchestrate) {
+				if err := l.checkLeaderLoopInTx(tx, link.GrantingSessionID, link.SubjectSessionID, "grants", &v); err != nil {
+					return err
+				}
 			}
 		}
 		if !v.Empty() {
@@ -721,6 +752,115 @@ func holderLabel(id, name string) string {
 
 func orchestrateHolderMessage(holder string) string {
 	return fmt.Sprintf("the subject is already led by %s — a subject may have at most one orchestrate holder", holder)
+}
+
+// checkLeaderLoopInTx adds to v, under field, the refusal for a new leader
+// link grantingID → subjectID that would close a loop of leaders: subjectID
+// already leads, directly or through others, grantingID.
+func (l *Links) checkLeaderLoopInTx(tx *Tx, grantingID, subjectID, field string, v *contracts.ValidationError) error {
+	path, err := leaderPathInTx(tx, subjectID, grantingID)
+	if err != nil || path == nil {
+		return err
+	}
+	v.Add(field, l.leaderLoopMessageInTx(tx, append([]string{grantingID}, path...)))
+	return nil
+}
+
+// checkStagedLeaderLoopInTx is checkLeaderLoopInTx for staged links: the new
+// session leads each of ledIDs and is led by leaderID, so a loop exists when
+// any of ledIDs already reaches leaderID through leader links. Reports the
+// first loop found.
+func (l *Links) checkStagedLeaderLoopInTx(tx *Tx, ledIDs []string, leaderID, field string, v *contracts.ValidationError) error {
+	for _, led := range ledIDs {
+		path, err := leaderPathInTx(tx, led, leaderID)
+		if err != nil {
+			return err
+		}
+		if path != nil {
+			loop := append([]string{contracts.NewSessionPlaceholder}, path...)
+			v.Add(field, l.leaderLoopMessageInTx(tx, append(loop, contracts.NewSessionPlaceholder)))
+			return nil
+		}
+	}
+	return nil
+}
+
+// leaderLoopMessageInTx renders the refusal for loop, a session-id path
+// that starts and ends on the same session, naming each step as holderLabel
+// does (the staged placeholder reads as "the new session").
+func (l *Links) leaderLoopMessageInTx(tx *Tx, loop []string) string {
+	labels := make([]string, len(loop))
+	for i, id := range loop {
+		if id == contracts.NewSessionPlaceholder {
+			labels[i] = "the new session"
+			continue
+		}
+		name := ""
+		if sess, err := l.sessions.getInTx(tx, id); err == nil {
+			name = sess.Name
+		}
+		labels[i] = holderLabel(id, name)
+	}
+	return fmt.Sprintf("this would make a loop of leaders: %s — a session can't be led, directly or through others, by a session it leads",
+		strings.Join(labels, " → "))
+}
+
+// leaderPathInTx returns the shortest chain of leader links (orchestrate,
+// not implicit) from fromID to toID as session ids, both ends included, or
+// nil when toID isn't reachable that way. Breadth-first, one query per
+// visited session.
+func leaderPathInTx(tx *Tx, fromID, toID string) ([]string, error) {
+	parent := map[string]string{fromID: ""}
+	queue := []string{fromID}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if cur == toID {
+			var path []string
+			for id := cur; id != ""; id = parent[id] {
+				path = append([]string{id}, path...)
+			}
+			return path, nil
+		}
+		led, err := ledSessionsInTx(tx, cur)
+		if err != nil {
+			return nil, err
+		}
+		for _, next := range led {
+			if _, seen := parent[next]; seen {
+				continue
+			}
+			parent[next] = cur
+			queue = append(queue, next)
+		}
+	}
+	return nil, nil
+}
+
+// ledSessionsInTx returns the subjects grantingID holds orchestrate over
+// through non-implicit links, oldest link first.
+func ledSessionsInTx(tx *Tx, grantingID string) ([]string, error) {
+	rows, err := tx.Query(
+		`SELECT subject_session_id, grants FROM links WHERE granting_session_id = ? AND implicit = 0 ORDER BY created_at`, grantingID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var subjectID, grantsJSON string
+		if err := rows.Scan(&subjectID, &grantsJSON); err != nil {
+			return nil, err
+		}
+		var grants []contracts.Grant
+		if err := json.Unmarshal([]byte(grantsJSON), &grants); err != nil {
+			return nil, err
+		}
+		if hasGrant(grants, contracts.GrantOrchestrate) {
+			out = append(out, subjectID)
+		}
+	}
+	return out, rows.Err()
 }
 
 // orchestrateHolderInTx returns the granting session id of subjectID's

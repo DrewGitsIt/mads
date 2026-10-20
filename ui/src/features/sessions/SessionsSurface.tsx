@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../../components/Button/Button";
 import { Toast } from "../../components/Toast/Toast";
 import { useBusHealth } from "../../router/useBusHealth";
@@ -11,7 +11,9 @@ import type { Session } from "../../router/types";
 import { NoSessionsEmptyState } from "./EmptyStates";
 import { Launchpad } from "./launchpad/Launchpad";
 import { SessionRail } from "./rail/SessionRail";
-import { EMPTY_OPEN_TASK_BREAKDOWN } from "./rail/railGroups";
+import { EMPTY_AGENT_STATE, EMPTY_OPEN_TASK_BREAKDOWN, statusOf } from "./rail/railGroups";
+import { LinkModal, type NodeStatus } from "./links/LinkModal";
+import { useLinkEditor, useRailLinkEditor } from "./links/useLinkEditor";
 import { SessionSleepPrompt, useSessionSleep } from "./actions/useSessionSleep";
 import { useOpenTaskCounts } from "./state/useOpenTaskCounts";
 import { useSessionAgentState } from "./state/useSessionAgentState";
@@ -22,16 +24,19 @@ import { DelegateView } from "./delegate/DelegateView";
 import { useDelegateSettings } from "./state/useDelegateSettings";
 import { delegateFadeMs } from "./rail/DelegateRows";
 import type { WorkspaceTabId } from "./workspace/tabRegistry";
+import { FullWidthContext, type FullWidthApi } from "./fullWidth";
 import styles from "./SessionsSurface.module.css";
 
 export interface SessionsSurfaceProps {
   jumpToSessionId?: string;
   jumpToTab?: WorkspaceTabId;
+  /** With jumpToTab "tasks": the run to show (a run_seq, or "new" for Plan). A new object each time, so a repeat jump re-applies. */
+  jumpToRun?: { run: number | "new" };
   pipelineClient: PipelineClient;
 }
 
 /** Top-level Sessions surface (registered in App.tsx) — owns the shared session list so the rail and launchpad don't duplicate fetch/subscribe logic. */
-export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: SessionsSurfaceProps) {
+export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelineClient }: SessionsSurfaceProps) {
   const { sessions, loading, error, retry, createSession } = useSessionsList();
   // The error a user dismissed; a later, different failure shows again.
   const [dismissedError, setDismissedError] = useState<string | null>(null);
@@ -70,6 +75,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   // transition arrives. Opening a session retires its sticky "Done · your turn".
   const agentStates = useSessionAgentState(sessions, selectedId, fadeMs);
   const [initialTab, setInitialTab] = useState<WorkspaceTabId>();
+  const [openRun, setOpenRun] = useState<{ run: number | "new" }>();
   const [actionError, setActionError] = useState<{ title: string; message: string }>();
   const [provisioningSessionId, setProvisioningSessionId] = useState<string>();
   const [pendingFirstMessage, setPendingFirstMessage] =
@@ -80,8 +86,9 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
       setSelectedId(jumpToSessionId);
       setOpenDelegate(undefined);
       setInitialTab(jumpToTab);
+      setOpenRun(jumpToRun);
     }
-  }, [jumpToSessionId, jumpToTab]);
+  }, [jumpToSessionId, jumpToTab, jumpToRun]);
 
   /**
    * A session action (resume/delete) can fail for a session that isn't the
@@ -107,6 +114,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
     setSelectedId(session.id);
     setOpenDelegate(undefined);
     setInitialTab(undefined);
+    setOpenRun(undefined);
     setProvisioningSessionId(session.id);
     setPendingFirstMessage({ sessionId: session.id, text: goalText });
   }
@@ -123,8 +131,35 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
     return () => window.removeEventListener(OPEN_CREATED_SESSION_EVENT, onCreated);
   }, []);
 
-  return (
-    <div className={styles.surface}>
+  // The link editor: one draft shared by the modal and the rail, which turns
+  // into the editor's picker while it is open.
+  const linkEditor = useLinkEditor({ links, sessions, client: router });
+  const railLinkEditor = useRailLinkEditor(linkEditor);
+  const nodeStatus = (id: string): NodeStatus | undefined => {
+    const session = sessions.find((s) => s.id === id);
+    if (!session) return undefined;
+    const status = statusOf(
+      session,
+      agentStates[id] ?? EMPTY_AGENT_STATE,
+      openTaskCounts[id] ?? EMPTY_OPEN_TASK_BREAKDOWN,
+    );
+    return { label: status.label, tone: status.tone };
+  };
+  // The pane under the editor is blurred and out of reach: no pointer, no
+  // focus. inert is set by hand — React 18 doesn't know the attribute.
+  const paneRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const pane = paneRef.current;
+    if (!pane) return;
+    if (linkEditor.isOpen) pane.setAttribute("inert", "");
+    else pane.removeAttribute("inert");
+  }, [linkEditor.isOpen]);
+
+  const [fullWidth, setFullWidth] = useState(false);
+  const fullWidthApi = useMemo<FullWidthApi>(() => ({ full: fullWidth, setFull: setFullWidth }), [fullWidth]);
+
+  const surface = (
+    <div className={styles.surface} data-full-width={fullWidth || undefined}>
       {/* data-rail-scroll marks the rail's scroll viewport — this aside owns the
           overflow-y:auto, not the SessionRail div inside it, which is unbounded
           and simply as tall as its content. SessionRow reads the marked box's
@@ -178,11 +213,13 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
                 setOpenDelegate(undefined);
                 setSelectedId(id);
                 setInitialTab(undefined);
+                setOpenRun(undefined);
                 setActionError(undefined);
                 return;
               }
               setSelectedId((cur) => (cur === id ? undefined : id));
               setInitialTab(undefined);
+              setOpenRun(undefined);
               // A prior action's error toast is scoped to the surface, not the
               // session it named — clear it on navigation so it can't linger
               // over an unrelated session.
@@ -207,51 +244,68 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
                 reportActionError("delete", id, err);
               });
             }}
+            onOpenLinks={(id, trigger) => linkEditor.openOn(id, trigger)}
+            linkEditor={railLinkEditor}
           />
         )}
       </aside>
       <main className={styles.main}>
-        {openDelegate ? (
-          <DelegateView
-            key={`${openDelegate.sessionId}/${openDelegate.harnessId}`}
-            sessionId={openDelegate.sessionId}
-            harnessId={openDelegate.harnessId}
-            parent={sessions.find((s) => s.id === openDelegate.sessionId)}
-            routerClient={router}
-            onBack={() => {
-              setSelectedId(openDelegate.sessionId);
-              setOpenDelegate(undefined);
-            }}
-          />
-        ) : selectedId ? (
-          <SessionWorkspace
-            key={selectedId}
-            sessionId={selectedId}
-            routerClient={router}
-            pipelineClient={pipelineClient}
-            openTaskBreakdown={openTaskCounts[selectedId] ?? EMPTY_OPEN_TASK_BREAKDOWN}
-            agentState={agentStates[selectedId]}
-            initialTab={initialTab}
-            onSleep={sleep.requestSleep}
-            onWake={sleep.wake}
-            onClose={() => setSelectedId(undefined)}
-            provisioning={selectedId === provisioningSessionId}
-            onProvisioningDone={() => setProvisioningSessionId(undefined)}
-            pendingFirstMessage={
-              selectedId && selectedId === pendingFirstMessage?.sessionId
-                ? pendingFirstMessage.text
-                : undefined
-            }
-            onPendingFirstMessageHandled={() => setPendingFirstMessage(undefined)}
-            onOpenDelegate={(harnessId) => setOpenDelegate({ sessionId: selectedId, harnessId })}
-          />
-        ) : (
-          <Launchpad
-            createSession={createSession}
-            onSessionCreated={handleSessionCreated}
-            sessions={sessions}
-            links={links}
-          />
+        <div
+          ref={paneRef}
+          className={styles.pane}
+          data-session-pane=""
+          data-blurred={linkEditor.isOpen || undefined}
+          aria-hidden={linkEditor.isOpen || undefined}
+        >
+          {openDelegate ? (
+            <DelegateView
+              key={`${openDelegate.sessionId}/${openDelegate.harnessId}`}
+              sessionId={openDelegate.sessionId}
+              harnessId={openDelegate.harnessId}
+              parent={sessions.find((s) => s.id === openDelegate.sessionId)}
+              routerClient={router}
+              onBack={() => {
+                setSelectedId(openDelegate.sessionId);
+                setOpenDelegate(undefined);
+              }}
+            />
+          ) : selectedId ? (
+            <SessionWorkspace
+              key={selectedId}
+              sessionId={selectedId}
+              routerClient={router}
+              pipelineClient={pipelineClient}
+              openTaskBreakdown={openTaskCounts[selectedId] ?? EMPTY_OPEN_TASK_BREAKDOWN}
+              agentState={agentStates[selectedId]}
+              initialTab={initialTab}
+              openRun={openRun}
+              onSleep={sleep.requestSleep}
+              onWake={sleep.wake}
+              onClose={() => setSelectedId(undefined)}
+              provisioning={selectedId === provisioningSessionId}
+              onProvisioningDone={() => setProvisioningSessionId(undefined)}
+              pendingFirstMessage={
+                selectedId && selectedId === pendingFirstMessage?.sessionId
+                  ? pendingFirstMessage.text
+                  : undefined
+              }
+              onPendingFirstMessageHandled={() => setPendingFirstMessage(undefined)}
+              onOpenDelegate={(harnessId) => setOpenDelegate({ sessionId: selectedId, harnessId })}
+            />
+          ) : (
+            <Launchpad
+              createSession={createSession}
+              onSessionCreated={handleSessionCreated}
+              sessions={sessions}
+              links={links}
+            />
+          )}
+        </div>
+        {linkEditor.isOpen && (
+          // A click on the blurred pane around the editor is a close request.
+          <div className={styles.linkScrim} onClick={linkEditor.requestClose} data-link-scrim="">
+            <LinkModal editor={linkEditor} statusOf={nodeStatus} />
+          </div>
         )}
         <SessionSleepPrompt sleep={sleep} routerClient={router} />
         {error && error !== dismissedError && (
@@ -289,4 +343,6 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
       </main>
     </div>
   );
+
+  return <FullWidthContext.Provider value={fullWidthApi}>{surface}</FullWidthContext.Provider>;
 }

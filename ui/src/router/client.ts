@@ -28,6 +28,9 @@ import type {
   FastModelStatus,
   FileChange,
   FileDiff,
+  ChangeBaselineId,
+  ChangeSet,
+  DeleteScratchResult,
   GenerateAgentBody,
   Link,
   LinkRequest,
@@ -38,6 +41,7 @@ import type {
   Note,
   NoteType,
   PermissionRequest,
+  PipelinePickup,
   PipelineRun,
   PreflightCheck,
   Profile,
@@ -202,7 +206,12 @@ export interface RouterClient {
   // documented-but-unimplemented contracts this client is built ahead of.
   getFileChanges(sessionId: string, taskId?: string): Promise<FileChange[]>;
   getCommits(sessionId: string): Promise<Commit[]>;
-  getFileDiff(sessionId: string, path: string, taskId?: string): Promise<FileDiff>;
+  /** Working diff for one file; `vs` picks the Changes tab's baseline (the server defaults to "start"). */
+  getFileDiff(sessionId: string, path: string, taskId?: string, vs?: ChangeBaselineId): Promise<FileDiff>;
+  /** Changes tab / rail (docs/CHANGES-DESIGN.md): everything the session changed against one baseline. */
+  getChangeSet(sessionId: string, vs?: ChangeBaselineId): Promise<ChangeSet>;
+  /** Deletes scratch files; the server re-classifies each path and skips anything no longer scratch. */
+  deleteScratch(sessionId: string, paths: string[]): Promise<DeleteScratchResult>;
 
   getCommitFileDiff(sessionId: string, hash: string, path: string): Promise<FileDiff>;
   /**
@@ -230,7 +239,7 @@ export interface RouterClient {
 
   // Batch (non-streaming) read of GET /events — a plain fetch (no explicit
   // Accept header) takes the Router's JSON branch instead of the SSE branch
-  // (Pipeline tab HANDOFF.md §2/§3). Used to replay historical pipeline runs.
+  // (pipeline HANDOFF.md §2/§3). Used to replay historical pipeline runs.
   getEvents(filter: { sessionId: string; since?: number; types?: string[] }): Promise<Envelope[]>;
 
   // --- Sessions (session-agnostic) ---
@@ -349,8 +358,15 @@ export interface RouterClient {
   cancelJob(jobId: string): Promise<void>;
 
   // --- Pipeline ---
-  createPipelineRun(sessionId: string, templateId: string): Promise<{ run_id: string }>;
+  /** `excludeTaskIds` is sent as `exclude_task_ids` only when non-empty: the engine never launches those tasks, and reports their dependents as skipped. */
+  createPipelineRun(
+    sessionId: string,
+    templateId: string,
+    excludeTaskIds?: string[],
+  ): Promise<{ run_id: string }>;
   cancelPipelineRun(runId: string): Promise<void>;
+  /** The session's Interrupted tasks and where a run of `templateId` would pick each up. */
+  pipelinePickup(sessionId: string, templateId: string): Promise<PipelinePickup>;
   retryTask(taskId: string): Promise<Task>;
 
   // --- Registry (Library, flag-gated — W7.6) ---
@@ -891,8 +907,21 @@ export class FetchRouterClient implements RouterClient {
 
   // Working-change diff (services/router/internal/api/working_diff.go):
   // HEAD-vs-disk for a file in the session's file-change ledger.
-  async getFileDiff(sessionId: string, path: string, taskId?: string): Promise<FileDiff> {
-    return routerGet(this.baseUrl, `/sessions/${sessionId}/changes`, { path, task_id: taskId });
+  async getFileDiff(
+    sessionId: string,
+    path: string,
+    taskId?: string,
+    vs?: ChangeBaselineId,
+  ): Promise<FileDiff> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/changes`, { path, task_id: taskId, vs });
+  }
+
+  async getChangeSet(sessionId: string, vs?: ChangeBaselineId): Promise<ChangeSet> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/changeset`, { vs });
+  }
+
+  async deleteScratch(sessionId: string, paths: string[]): Promise<DeleteScratchResult> {
+    return routerPost(this.baseUrl, `/sessions/${sessionId}/changeset/delete-scratch`, { paths });
   }
 
   async getCommitFileDiff(sessionId: string, hash: string, path: string): Promise<FileDiff> {
@@ -1276,15 +1305,21 @@ export class FetchRouterClient implements RouterClient {
   async createPipelineRun(
     sessionId: string,
     templateId: string,
+    excludeTaskIds?: string[],
   ): Promise<{ run_id: string }> {
     return routerPost(this.baseUrl, "/pipelines", {
       session_id: sessionId,
       template_id: templateId,
+      ...(excludeTaskIds && excludeTaskIds.length > 0 ? { exclude_task_ids: excludeTaskIds } : {}),
     });
   }
 
   async cancelPipelineRun(runId: string): Promise<void> {
     return routerPost(this.baseUrl, `/pipelines/${runId}/cancel`);
+  }
+
+  async pipelinePickup(sessionId: string, templateId: string): Promise<PipelinePickup> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/pipeline/pickup`, { template: templateId });
   }
 
   async retryTask(taskId: string): Promise<Task> {

@@ -4,6 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,11 +59,11 @@ func TestClientRoundTrip(t *testing.T) {
 	}
 
 	// Leases: claim, conflicting claim from another actor, release.
-	if err := c.Claim(ctx, task.ID, time.Minute); err != nil {
+	if err := c.Claim(ctx, task.ID, "", time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	other := dataclient.New(base, "someone-else")
-	if err := other.Claim(ctx, task.ID, time.Minute); !errors.Is(err, dataclient.ErrConflict) {
+	if err := other.Claim(ctx, task.ID, "", time.Minute); !errors.Is(err, dataclient.ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
 	if err := c.Release(ctx, task.ID); err != nil {
@@ -138,22 +144,28 @@ func TestClientReclaimWireRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A run that will "die": it claims under its own holder and writes.
+	dead := dataclient.New(base, "pipeline")
 	identity := contracts.LeaseIdentity{MachineID: "m1", BootID: "b1", PID: 42, PIDStartTicks: 999}
-	if err := c.ClaimWithIdentity(ctx, task.ID, time.Minute, identity); err != nil {
+	if err := dead.ClaimWithIdentity(ctx, task.ID, "pipeline:run_dead", time.Minute, identity); err != nil {
+		t.Fatal(err)
+	}
+	task.Status = contracts.StatusInProgress
+	if err := dead.UpdateTask(ctx, &task); err != nil {
 		t.Fatal(err)
 	}
 
-	leases, err := c.Leases(ctx)
+	// A new engine of the same kind lists by kind (not by its own holder).
+	if own, err := c.Leases(ctx); err != nil || len(own) != 0 {
+		t.Fatalf("Leases (exact actor) = %+v, %v; want none", own, err)
+	}
+	leases, err := c.LeasesOfKind(ctx, "pipeline")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(leases) != 1 || leases[0].TaskID != task.ID || leases[0].Identity == nil || *leases[0].Identity != identity {
-		t.Fatalf("Leases = %+v, want one lease for %s with identity %+v", leases, task.ID, identity)
-	}
-
-	task.Status = contracts.StatusInProgress
-	if err := c.UpdateTask(ctx, &task); err != nil {
-		t.Fatal(err)
+	if len(leases) != 1 || leases[0].TaskID != task.ID || leases[0].Holder != "pipeline:run_dead" ||
+		leases[0].Identity == nil || *leases[0].Identity != identity || leases[0].Token != "" {
+		t.Fatalf("LeasesOfKind = %+v, want one tokenless lease for %s with identity %+v", leases, task.ID, identity)
 	}
 
 	ok, err := c.ReclaimLease(ctx, task.ID, identity, "provably dead")
@@ -167,16 +179,184 @@ func TestClientReclaimWireRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != contracts.StatusReady {
-		t.Errorf("task status after reclaim = %s, want ready", got.Status)
+	if got.Status != contracts.StatusInProgress {
+		t.Errorf("task status after reclaim = %s, want in_progress (lease loss changes no status)", got.Status)
 	}
 
-	leases, err = c.Leases(ctx)
+	leases, err = c.LeasesOfKind(ctx, "pipeline")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(leases) != 0 {
-		t.Errorf("Leases after reclaim = %+v, want none", leases)
+		t.Errorf("LeasesOfKind after reclaim = %+v, want none", leases)
+	}
+}
+
+// recordingProxy forwards to the real Data Service and records the
+// X-Mads-Lease header and path of every request.
+type recordingProxy struct {
+	mu   sync.Mutex
+	seen []string // "METHOD path token"
+}
+
+func (p *recordingProxy) start(t *testing.T, target string) string {
+	t.Helper()
+	u, err := url.Parse(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rp := httputil.NewSingleHostReverseProxy(u)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p.mu.Lock()
+		p.seen = append(p.seen, r.Method+" "+r.URL.Path+" "+r.Header.Get("X-Mads-Lease"))
+		p.mu.Unlock()
+		rp.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func (p *recordingProxy) last() (method, path, token string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	parts := strings.SplitN(p.seen[len(p.seen)-1], " ", 3)
+	return parts[0], parts[1], parts[2]
+}
+
+// TestClientLeaseTokens covers the per-task token map: Claim stores the
+// token, every request about that task carries it (and no other request
+// does), Renew maps lease_lost to ErrLeaseLost and forgets the token, and
+// Release forgets it too. The token never appears in an error string.
+func TestClientLeaseTokens(t *testing.T) {
+	base := datatest.Start(t)
+	ctx := context.Background()
+	proxy := &recordingProxy{}
+	c := dataclient.New(proxy.start(t, base), "pipeline")
+	admin := dataclient.New(base, "user")
+
+	sess := contracts.Session{Name: "tokens"}
+	if err := admin.CreateSession(ctx, &sess); err != nil {
+		t.Fatal(err)
+	}
+	var task, other contracts.Task
+	for _, tk := range []*contracts.Task{&task, &other} {
+		*tk = contracts.Task{Title: "A", SessionID: sess.ID, Source: "user"}
+		if err := admin.CreateTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := c.Claim(ctx, task.ID, "pipeline:run_1", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, tok := proxy.last(); tok != "" {
+		t.Errorf("the claim request itself carried a token %q", tok)
+	}
+
+	// Requests about the task carry the token automatically.
+	if err := c.UpdateTask(ctx, &task); err != nil {
+		t.Fatalf("UpdateTask under the lease: %v", err)
+	}
+	_, path, token := proxy.last()
+	if path != "/tasks/"+task.ID || token == "" {
+		t.Fatalf("PUT %s carried token %q, want the lease token", path, token)
+	}
+	if err := c.AddNote(ctx, task.ID, &contracts.Note{Type: contracts.NoteObservation, Content: "x"}); err != nil {
+		t.Fatalf("AddNote under the lease: %v", err)
+	}
+	if _, _, tok := proxy.last(); tok != token {
+		t.Errorf("POST notes carried %q, want the lease token", tok)
+	}
+	if err := c.Renew(ctx, task.ID); err != nil {
+		t.Fatalf("Renew: %v", err)
+	}
+	if _, path, tok := proxy.last(); path != "/tasks/"+task.ID+"/lease/renew" || tok != token {
+		t.Errorf("renew %s carried %q, want the lease token", path, tok)
+	}
+	// Requests about anything else don't.
+	if _, err := c.Task(ctx, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, tok := proxy.last(); tok != "" {
+		t.Errorf("a request about another task carried a token %q", tok)
+	}
+	if _, err := c.Tasks(ctx, sess.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, tok := proxy.last(); tok != "" {
+		t.Errorf("GET /tasks carried a token %q", tok)
+	}
+
+	// Another client (no token) is refused on the leased task.
+	if err := admin.UpdateTask(ctx, &task); !errors.Is(err, dataclient.ErrConflict) {
+		t.Fatalf("tokenless write: want ErrConflict, got %v", err)
+	}
+
+	// The lease is lost (supervision frees it): Renew is ErrLeaseLost, never
+	// re-takes it, and the client forgets the token.
+	if err := admin.ReleaseAll(ctx, "pipeline:run_1", "test"); err != nil {
+		t.Fatal(err)
+	}
+	err := c.Renew(ctx, task.ID)
+	if !errors.Is(err, dataclient.ErrLeaseLost) || !errors.Is(err, dataclient.ErrConflict) {
+		t.Fatalf("Renew after loss: want ErrLeaseLost (and ErrConflict), got %v", err)
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatal("an error string carried the lease token")
+	}
+	if leases, err := c.LeasesOfKind(ctx, "pipeline"); err != nil || len(leases) != 0 {
+		t.Fatalf("Renew re-created the lease: %+v, %v", leases, err)
+	}
+	if err := c.Renew(ctx, task.ID); !errors.Is(err, dataclient.ErrLeaseLost) {
+		t.Fatalf("second Renew: want ErrLeaseLost, got %v", err)
+	}
+	if _, _, tok := proxy.last(); tok != "" {
+		t.Errorf("after lease_lost the client still sent token %q", tok)
+	}
+
+	// Claim again, then Release forgets the token.
+	if err := c.Claim(ctx, task.ID, "pipeline:run_1", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Release(ctx, task.ID); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if _, _, tok := proxy.last(); tok == "" {
+		t.Error("Release sent no token")
+	}
+	if _, err := c.Task(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, tok := proxy.last(); tok != "" {
+		t.Errorf("after Release the client still sent token %q", tok)
+	}
+	if err := admin.UpdateTask(ctx, &task); err != nil {
+		t.Errorf("write after release: %v", err)
+	}
+}
+
+// A claim on a task the same client already holds is a conflict, not a
+// renewal, and keeps the token it has.
+func TestClientReclaimOfHeldLeaseConflicts(t *testing.T) {
+	base := datatest.Start(t)
+	ctx := context.Background()
+	c := dataclient.New(base, "pipeline")
+	task := contracts.Task{Title: "A", SessionID: "ses_x", Source: "user"}
+	if err := c.CreateTask(ctx, &task); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Claim(ctx, task.ID, "", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Claim(ctx, task.ID, "", time.Minute); !errors.Is(err, dataclient.ErrConflict) {
+		t.Fatalf("re-claim of a held lease: want ErrConflict, got %v", err)
+	}
+	if err := c.Renew(ctx, task.ID); err != nil {
+		t.Fatalf("Renew after the refused re-claim: %v", err)
+	}
+	var verr *contracts.ValidationError
+	if err := c.Claim(ctx, task.ID, "synthesizer", time.Minute); !errors.As(err, &verr) {
+		t.Fatalf("cross-kind holder: want a validation error, got %v", err)
 	}
 }
 

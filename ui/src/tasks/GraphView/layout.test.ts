@@ -6,6 +6,8 @@ import {
   packComponents,
   NODE_WIDTH,
   NODE_HEIGHT,
+  RUN_CARD_HEIGHT,
+  graphNodeHeight,
   type ComponentLayout,
   type ComponentSlots,
 } from "./layout";
@@ -82,6 +84,48 @@ describe("computeGraphLayout", () => {
       expect(n.y - n.height / 2).toBeGreaterThanOrEqual(extent.minY);
       expect(n.y + n.height / 2).toBeLessThanOrEqual(extent.maxY);
     }
+  });
+
+  describe("slot height", () => {
+    it("is the run card's bound with a run view and the plain card's without", () => {
+      expect(graphNodeHeight(true)).toBe(RUN_CARD_HEIGHT);
+      expect(graphNodeHeight(false)).toBe(NODE_HEIGHT);
+      expect(RUN_CARD_HEIGHT).toBeGreaterThan(NODE_HEIGHT);
+    });
+
+    it("spaces ranks and packed components so a slot-tall card drawn from its slot top stays clear", () => {
+      const tasks = [
+        task({ id: "tsk_a", created_at: "2026-01-01T00:00:00Z" }),
+        task({ id: "tsk_b", dependencies: ["tsk_a"], created_at: "2026-01-01T00:00:01Z" }),
+        task({ id: "tsk_c", dependencies: ["tsk_b"], created_at: "2026-01-01T00:00:02Z" }),
+        // A second component, wide enough to wrap onto its own packed row.
+        ...Array.from({ length: 6 }, (_, i) =>
+          task({ id: `tsk_w${i}`, dependencies: i ? ["tsk_w0"] : [], created_at: "2026-01-02T00:00:00Z" }),
+        ),
+      ];
+      const { canvasNodes } = computeGraphLayout(tasks, [], {}, emptySlots, RUN_CARD_HEIGHT);
+      expect(canvasNodes.every((n) => n.height === RUN_CARD_HEIGHT)).toBe(true);
+      const boxes = canvasNodes.map((n) => ({
+        id: n.id,
+        left: n.x - NODE_WIDTH / 2,
+        right: n.x + NODE_WIDTH / 2,
+        top: n.y - n.height / 2,
+        bottom: n.y - n.height / 2 + RUN_CARD_HEIGHT,
+      }));
+      for (const a of boxes) {
+        for (const b of boxes) {
+          if (a.id === b.id) continue;
+          const overlap = a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+          expect(overlap, `${a.id} overlaps ${b.id}`).toBe(false);
+        }
+      }
+    });
+
+    it("gives a floating (manually placed, edgeless) node the same slot height", () => {
+      const tasks = [task({ id: "tsk_a" })];
+      const { canvasNodes } = computeGraphLayout(tasks, [], { tsk_a: { x: 1, y: 2 } }, emptySlots, RUN_CARD_HEIGHT);
+      expect(canvasNodes[0]).toMatchObject({ x: 1, y: 2, height: RUN_CARD_HEIGHT });
+    });
   });
 
   describe("tray membership", () => {

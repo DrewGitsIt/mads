@@ -65,7 +65,7 @@ function unionTypes(): string[] {
 /**
  * Whether live updates are reaching this window. "failing" means the stream
  * has failed to connect repeatedly — every live view (the session rail, task
- * counts, a Pipeline tab's run state) is showing whatever it last fetched and
+ * counts, the Tasks tab's run state) is showing whatever it last fetched and
  * nothing will correct it until the stream comes back. Surfaces show that
  * rather than let stale state pass for current: a frozen rail reading
  * "Sleeping" beside a conversation that is plainly awake is how the last

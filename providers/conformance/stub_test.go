@@ -25,6 +25,9 @@ type lies struct {
 	acceptAnyResume     bool // resumes despite declaring resume unsupported
 	completesDisallowed bool // a disallowed tool completes (non-error result) below full trust
 	dropsFocus          bool // takes compaction instructions despite declaring compaction_focus unsupported
+	// oneShotFreshOnResume answers a one-shot with Resume by silently
+	// starting fresh, whatever the declaration.
+	oneShotFreshOnResume bool
 }
 
 type stub struct {
@@ -111,7 +114,21 @@ func (s *stub) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 }
 
 func (s *stub) OneShot(_ context.Context, req provider.OneShotRequest) (*provider.OneShotResult, error) {
-	text := s.reply(req.Prompt, nil)
+	var history []provider.Message
+	if req.Resume != "" {
+		switch {
+		case s.lies.oneShotFreshOnResume:
+			// starts fresh: no history, no error
+		case !s.matrix[provider.BehaviorOneShotResume].Works():
+			return nil, provider.ErrResumeUnsupported
+		default:
+			s.mu.Lock()
+			history = append(history, s.sessions[req.Resume]...)
+			s.sessions[req.Resume] = append(s.sessions[req.Resume], provider.Message{Role: "user", Text: req.Prompt})
+			s.mu.Unlock()
+		}
+	}
+	text := s.reply(req.Prompt, history)
 	if s.lies.oneShotWrong {
 		text = "whatever"
 	}
@@ -119,6 +136,9 @@ func (s *stub) OneShot(_ context.Context, req provider.OneShotRequest) (*provide
 		req.OnEvent(provider.Event{Kind: provider.EventText, Text: text})
 	}
 	res := &provider.OneShotResult{Text: text, Usage: s.usage(text)}
+	if req.Resume != "" {
+		res.Ref = req.Resume
+	}
 	return res, nil
 }
 

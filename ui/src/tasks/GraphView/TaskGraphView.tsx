@@ -1,7 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ConfirmDialog } from "../../components/ConfirmDialog/ConfirmDialog";
 import { Toast } from "../../components/Toast/Toast";
 import type { PipelineClient } from "../../pipeline/client/pipelineClient";
+import { criticalPath } from "../../pipeline/plan/planScope";
+import { runStages, type RunStage } from "../../pipeline/plan/runStages";
+import { interruptedIds, type PickupInfo, type RunMode } from "../../pipeline/plan/runStatus";
+import type { TaskRunState } from "../../pipeline/state/usePipelineRun";
+import { useEscapeLayer } from "../../platform/escapeLayers";
 import type { RouterClient } from "../../router/client";
 import type { Task } from "../../router/types";
 import {
@@ -12,15 +17,27 @@ import {
   planEdgeStrip,
   type EdgeStripPlan,
 } from "./edgeOps";
+import { FocusPanel } from "./FocusPanel";
 import { GraphCanvas } from "./GraphCanvas";
+import { GraphRunActionsContext, type GraphRunActions } from "./graphRunActions";
 import { graphStatusOf, type GraphStatus } from "./graphStatus";
-import { computeGraphLayout, type ComponentSlots } from "./layout";
+import { computeGraphLayout, graphNodeHeight, type ComponentSlots } from "./layout";
 import { loadPositions, savePositions } from "./positions";
+import {
+  criticalEdgeIds,
+  currentStageOf,
+  edgeRunKindOf,
+  neighboursOf,
+  nodeRunViews,
+  type EdgeRunKind,
+} from "./runView";
 import { StatusFilterStrip } from "./StatusFilterStrip";
+import type { GraphLevel } from "./TaskNode";
 import { trayOrder } from "./tray";
 import { useGraphRunState } from "./useGraphRunState";
 import { usePrefersReducedMotion } from "./usePrefersReducedMotion";
 import { UnsequencedTray } from "./UnsequencedTray";
+import { ZoomLevelControl, type ZoomLevel } from "./ZoomLevelControl";
 import styles from "./TaskGraphView.module.css";
 
 export interface TaskGraphViewProps {
@@ -28,10 +45,46 @@ export interface TaskGraphViewProps {
   routerClient: RouterClient;
   tasks: Task[];
   tasksById: Record<string, Task>;
-  /** Opt-in — no live run-state subscription (and no EventSource) is ever created without it. */
+  /**
+   * Opt-in — no live run-state subscription (and no EventSource) is ever
+   * created without it. Only used when the caller doesn't hand over the run
+   * itself (`mode` unset): then a live run shows as `live`.
+   */
   pipelineClient?: PipelineClient;
+  /** Plan clicks, and every click outside a run view, select the task (the detail sheet). */
   onSelectTask?: (task: Task) => void;
+
+  // ── The run to show (the Tasks tab owns it) ──
+  /** Set to show a run: Plan (include boxes, waves, critical path) or a live/past run. */
+  mode?: RunMode;
+  /** Plan: the unticked include boxes. Live/past: the run's excluded_task_ids. */
+  excluded?: ReadonlySet<string>;
+  /** The run's template stages, in order — ring arcs and track segments. */
+  stages?: RunStage[];
+  /** The run fold's per-task state. */
+  taskRunState?: Record<string, TaskRunState>;
+  /** Plan and live: the session's Interrupted tasks and where a run picks each up. */
+  pickup?: PickupInfo;
+  /** The focus breadcrumb's first crumb, e.g. "Run 4". Defaults to "Run". */
+  runLabel?: string;
+  onToggleInclude?: (taskId: string) => void;
+  /** A blocked task's Edit & retry (opens the detail sheet with the reason pinned). */
+  onEditRetry?: (taskId: string) => void;
+  onRetry?: (taskId: string) => void;
+  /** The task the focus view is zoomed into; controlled by the caller. */
+  focusTaskId?: string;
+  /** Live/past clicks call this with the task; leaving focus (Esc, the Run crumb, Overview/Cards) with undefined. */
+  onFocusTask?: (taskId: string | undefined) => void;
+  /** The lens for the focused task, drawn beside the narrowed graph. */
+  renderFocus?: (taskId: string) => ReactNode;
 }
+
+const EMPTY_RUN_STATE: Record<string, TaskRunState> = {};
+const NO_SLOTS: ComponentSlots = new Map();
+
+// Zoom thresholds for switching level as the user zooms (hysteresis between them).
+const OVERVIEW_BELOW = 0.6;
+const CARDS_ABOVE = 0.9;
 
 type Point = { x: number; y: number };
 type Rect = { left: number; right: number; top: number; bottom: number };
@@ -68,19 +121,72 @@ export function TaskGraphView({
   tasksById,
   pipelineClient,
   onSelectTask,
+  mode,
+  excluded,
+  stages,
+  taskRunState,
+  pickup,
+  runLabel = "Run",
+  onToggleInclude,
+  onEditRetry,
+  onRetry,
+  focusTaskId,
+  onFocusTask,
+  renderFocus,
 }: TaskGraphViewProps) {
   const [cycles, setCycles] = useState<string[][]>([]);
   const [positions, setPositions] = useState<Record<string, Point>>(() => loadPositions(sessionId));
-  const previousSlotsRef = useRef<ComponentSlots>(new Map());
+  const previousSlotsRef = useRef<{ height: number; slots: ComponentSlots }>({ height: 0, slots: NO_SLOTS });
   const trayRef = useRef<HTMLDivElement>(null);
   const [pendingDragOut, setPendingDragOut] = useState<PendingDragOut | null>(null);
   const [toast, setToast] = useState<GraphToast | null>(null);
   const [autoLayoutSignal, setAutoLayoutSignal] = useState(0);
-  const runState = useGraphRunState(sessionId, pipelineClient);
+  // Fallback until every caller hands over the run: follow the newest run
+  // ourselves, and show it as live while it runs.
+  const runState = useGraphRunState(sessionId, mode === undefined ? pipelineClient : undefined);
+  const runMode: RunMode | undefined = mode ?? (runState?.phase === "running" ? "live" : undefined);
+  const runTaskState = taskRunState ?? runState?.taskRunState ?? EMPTY_RUN_STATE;
+  const foldColumns = runState?.columns;
+  const runStageList = useMemo(() => stages ?? runStages(undefined, foldColumns), [stages, foldColumns]);
+  const runColumns = useMemo(() => runStageList.map((s) => s.name), [runStageList]);
+  const foldExcluded = runState?.excludedTaskIds;
+  const runExcluded = useMemo(() => excluded ?? new Set(foldExcluded ?? []), [excluded, foldExcluded]);
+  const interrupted = useMemo(() => interruptedIds(pickup), [pickup]);
+  const runViews = useMemo(
+    () =>
+      runMode
+        ? nodeRunViews(tasks, {
+            mode: runMode,
+            tasksById,
+            excluded: runExcluded,
+            stages: runStageList,
+            taskRunState: runTaskState,
+            pickup,
+            interrupted,
+          })
+        : undefined,
+    [runMode, tasks, tasksById, runExcluded, runStageList, runTaskState, pickup, interrupted],
+  );
+  const critical = useMemo(
+    () => (runMode === "plan" ? criticalPath(tasks, tasksById, runExcluded, interrupted) : []),
+    [runMode, tasks, tasksById, runExcluded, interrupted],
+  );
+  const actions = useMemo<GraphRunActions>(
+    () => ({ onToggleInclude, onEditRetry, onRetry }),
+    [onToggleInclude, onEditRetry, onRetry],
+  );
+
+  const [zoom, setZoom] = useState<GraphLevel>("cards");
+  const lastZoomRef = useRef<number | undefined>(undefined);
+  const focused = runViews && focusTaskId && tasksById[focusTaskId] ? focusTaskId : undefined;
+  const level: GraphLevel = focused ? "overview" : zoom;
+  useEscapeLayer(focused !== undefined, () => onFocusTask?.(undefined));
   const reducedMotion = usePrefersReducedMotion();
   const [statusFilter, setStatusFilter] = useState<GraphStatus | null>(null);
   const [statusSpotlight, setStatusSpotlight] = useState<GraphStatus | null>(null);
-  const activeStatus = statusSpotlight ?? statusFilter;
+  // A live or past run speaks in run statuses; the task-status strip is for planning only.
+  const showStatusStrip = runMode !== "live" && runMode !== "past";
+  const activeStatus = showStatusStrip ? (statusSpotlight ?? statusFilter) : null;
   const statusDimmedIds = activeStatus
     ? new Set(tasks.filter((t) => graphStatusOf(t) !== activeStatus).map((t) => t.id))
     : null;
@@ -103,19 +209,23 @@ export function TaskGraphView({
   // re-reading the same data the lazy useState initializer already loaded).
   useEffect(() => {
     setPositions(loadPositions(sessionId));
-    previousSlotsRef.current = new Map();
+    previousSlotsRef.current = { height: 0, slots: NO_SLOTS };
   }, [sessionId]);
 
   useEffect(() => {
     savePositions(sessionId, positions);
   }, [sessionId, positions]);
 
-  const result = computeGraphLayout(tasks, cycles, positions, previousSlotsRef.current);
+  // One slot height for every level, so zooming between levels never moves a node.
+  const nodeHeight = graphNodeHeight(runViews !== undefined);
+  // Slots packed at another height would overlap at this one; re-pack instead.
+  const reusableSlots = previousSlotsRef.current.height === nodeHeight ? previousSlotsRef.current.slots : NO_SLOTS;
+  const result = computeGraphLayout(tasks, cycles, positions, reusableSlots, nodeHeight);
 
   // Updated after render commits, never mutated during render (§7).
   useEffect(() => {
-    previousSlotsRef.current = result.slots;
-  }, [result.slots]);
+    previousSlotsRef.current = { height: nodeHeight, slots: result.slots };
+  }, [nodeHeight, result.slots]);
 
   const edgeDegree = new Map<string, number>();
   for (const edge of result.edges) {
@@ -128,6 +238,57 @@ export function TaskGraphView({
   const cycleNodeIds = new Set(cycles.flat());
 
   const trayTasks = trayOrder(result.trayTaskIds.map((id) => tasksById[id]));
+
+  let edgeKinds: Record<string, EdgeRunKind> | undefined;
+  if (runMode && runViews) {
+    const criticalIds = criticalEdgeIds(critical);
+    edgeKinds = {};
+    for (const edge of result.edges) {
+      const kind = edgeRunKindOf(edge, runMode, runViews, criticalIds);
+      if (kind) edgeKinds[edge.id] = kind;
+    }
+  }
+
+  // Focus without a click: the task needing attention most (running, then blocked).
+  const focusCandidate =
+    runViews && runMode !== "plan"
+      ? (tasks.find((t) => runViews[t.id]?.status === "running") ??
+        tasks.find((t) => runViews[t.id]?.status === "blocked") ??
+        tasks.find((t) => runTaskState[t.id]))
+      : undefined;
+
+  function handleZoomLevel(next: ZoomLevel) {
+    if (next === "focus") {
+      if (focusCandidate) onFocusTask?.(focusCandidate.id);
+      return;
+    }
+    setZoom(next);
+    if (focused) onFocusTask?.(undefined);
+  }
+
+  function handleUserZoom(z: number) {
+    const previous = lastZoomRef.current;
+    lastZoomRef.current = z;
+    if (!runViews || focused || previous === undefined) return;
+    if (previous >= OVERVIEW_BELOW && z < OVERVIEW_BELOW) setZoom("overview");
+    else if (previous <= CARDS_ABOVE && z > CARDS_ABOVE) setZoom("cards");
+  }
+
+  function handleSelectTask(task: Task) {
+    if (runViews && runMode !== "plan" && onFocusTask) onFocusTask(task.id);
+    else onSelectTask?.(task);
+  }
+
+  const legend =
+    runMode === "plan" && critical.length >= 2 ? (
+      <span className={styles.legend}>
+        <i className={styles.legendSwatch} />
+        critical path ({critical.length} waves)
+      </span>
+    ) : undefined;
+
+  const focusTask = focused ? tasksById[focused] : undefined;
+  const neighbours = focused ? neighboursOf(focused, tasks, tasksById) : undefined;
 
   function finishDragOut(taskId: string, plan: EdgeStripPlan, previousPosition: Point | undefined) {
     setPositions((prev) => {
@@ -220,7 +381,7 @@ export function TaskGraphView({
 
   function handleAutoLayout() {
     setPositions({});
-    previousSlotsRef.current = new Map();
+    previousSlotsRef.current = { height: 0, slots: NO_SLOTS };
     setAutoLayoutSignal((n) => n + 1);
   }
 
@@ -232,43 +393,85 @@ export function TaskGraphView({
         : (toast?.title ?? "");
 
   return (
-    <div className={styles.wrapper}>
-      <UnsequencedTray
-        tasks={trayTasks}
-        tasksById={tasksById}
-        containerRef={trayRef}
-        reducedMotion={reducedMotion}
-      />
-      <StatusFilterStrip
-        tasks={tasks}
-        activeFilter={statusFilter}
-        onHoverStatus={setStatusSpotlight}
-        onToggleFilter={handleToggleStatusFilter}
-      />
-      <div className={styles.canvas}>
-        {cycles.length > 0 && (
-          <div className={styles.cycleBanner} role="status">
-            cycle — the pipeline will refuse to launch these
-          </div>
+    <div className={[styles.wrapper, focused && styles.focus].filter(Boolean).join(" ")}>
+      {!focused && (
+        <>
+          <UnsequencedTray
+            tasks={trayTasks}
+            tasksById={tasksById}
+            containerRef={trayRef}
+            reducedMotion={reducedMotion}
+            mode={runMode}
+            runViews={runViews}
+            onFocusTask={runViews && runMode !== "plan" && onFocusTask ? (id) => onFocusTask(id) : undefined}
+          />
+          {showStatusStrip && (
+            <StatusFilterStrip
+              tasks={tasks}
+              activeFilter={statusFilter}
+              onHoverStatus={setStatusSpotlight}
+              onToggleFilter={handleToggleStatusFilter}
+            />
+          )}
+        </>
+      )}
+      <div className={styles.body}>
+        <div className={styles.canvas}>
+          {cycles.length > 0 && (
+            <div className={styles.cycleBanner} role="status">
+              cycle — the pipeline will refuse to launch these
+            </div>
+          )}
+          <GraphRunActionsContext.Provider value={actions}>
+            <GraphCanvas
+              canvasNodes={result.canvasNodes}
+              edges={result.edges}
+              tasksById={tasksById}
+              unsequencedIds={unsequencedIds}
+              cycleNodeIds={cycleNodeIds}
+              taskRunState={runTaskState}
+              columns={runColumns}
+              statusDimmedIds={statusDimmedIds}
+              runViews={runViews}
+              edgeKinds={edgeKinds}
+              level={level}
+              focusTaskId={focused}
+              legend={legend}
+              onUserZoom={handleUserZoom}
+              refitSignal={focused ? 1 : 0}
+              onSelectTask={handleSelectTask}
+              onNodeDragStop={handleNodeDragStop}
+              onDropOnCanvas={handleDropOnCanvas}
+              onAutoLayout={handleAutoLayout}
+              extent={result.extent}
+              autoLayoutSignal={autoLayoutSignal}
+              onConnect={handleConnect}
+              onDeleteEdges={handleDeleteEdges}
+            />
+          </GraphRunActionsContext.Provider>
+          {runViews && (
+            <ZoomLevelControl
+              value={focused ? "focus" : zoom}
+              onChange={handleZoomLevel}
+              focusDisabled={!onFocusTask || !focusCandidate}
+              compact={!!focused}
+            />
+          )}
+        </div>
+        {focusTask && neighbours && (
+          <FocusPanel
+            task={focusTask}
+            runLabel={runLabel}
+            currentStage={currentStageOf(runTaskState[focusTask.id])}
+            upstream={neighbours.upstream}
+            unblocks={neighbours.unblocks}
+            statusOf={(id) => runViews?.[id]?.status}
+            onBack={() => onFocusTask?.(undefined)}
+            onFocusTask={(id) => onFocusTask?.(id)}
+          >
+            {renderFocus?.(focusTask.id)}
+          </FocusPanel>
         )}
-        <GraphCanvas
-          canvasNodes={result.canvasNodes}
-          edges={result.edges}
-          tasksById={tasksById}
-          unsequencedIds={unsequencedIds}
-          cycleNodeIds={cycleNodeIds}
-          taskRunState={runState?.taskRunState}
-          columns={runState?.columns}
-          statusDimmedIds={statusDimmedIds}
-          onSelectTask={onSelectTask}
-          onNodeDragStop={handleNodeDragStop}
-          onDropOnCanvas={handleDropOnCanvas}
-          onAutoLayout={handleAutoLayout}
-          extent={result.extent}
-          autoLayoutSignal={autoLayoutSignal}
-          onConnect={handleConnect}
-          onDeleteEdges={handleDeleteEdges}
-        />
       </div>
       <ConfirmDialog
         open={pendingDragOut !== null}

@@ -71,7 +71,7 @@ export function CommandPalette({ open, onClose, commands, onDispatch }: CommandP
             <input
               autoFocus
               className={styles.input}
-              placeholder="Jump to a session, start a pipeline, run retro…"
+              placeholder="Jump to a session, run a pipeline, run retro…"
               value={query}
               onChange={handleQueryChange}
               onKeyDown={handleInputKeyDown}

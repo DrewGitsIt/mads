@@ -16,11 +16,75 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  min-width: 0;
 }
 
+/* The name block: dot, stage name, #N. Holds together and ellipsizes rather
+   than breaking a stage name mid-word. */
 .stage {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
   font: 650 var(--fs-ui) var(--sans);
   color: var(--text);
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text3);
+}
+
+.dot[data-status="completed"] {
+  background: var(--ok);
+}
+
+.dot[data-status="failed"] {
+  background: var(--bad);
+}
+
+.dot[data-status="started"] {
+  background: var(--accent);
+}
+
+.dot[data-status="interrupted"] {
+  background: var(--warn);
+}
+
+.dot[data-status="skipped"] {
+  background: transparent;
+  border: 1px dashed var(--text3);
+}
+
+.name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.attemptNo {
+  flex: none;
+  color: var(--warn-fg);
+  white-space: nowrap;
+}
+
+.retries {
+  flex: none;
+  font: var(--fs-sm) var(--mono);
+  color: var(--text3);
+  white-space: nowrap;
+}
+
+.duration {
+  flex: none;
+  margin-left: auto;
+  font: var(--fs-sm) var(--mono);
+  color: var(--text3);
+  white-space: nowrap;
 }
 
 .reason {
@@ -30,8 +94,84 @@
   white-space: pre-wrap;
 }
 
+/* Pickup and resume markers: where this run took over from an earlier one. */
+.marker {
+  padding: var(--space-1) var(--space-2);
+  border-left: 2px solid var(--warn);
+  font: var(--fs-sm) var(--sans);
+  color: var(--warn-fg);
+}
+
+.note {
+  margin: var(--space-1) 0 0;
+  font: var(--fs-sm) var(--sans);
+  color: var(--text3);
+}
+
+.selectable .note {
+  padding-left: calc(8px + var(--space-2));
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .empty {
   margin: 0;
   color: var(--text3);
   font: var(--fs-sm) var(--sans);
+}
+
+.selectable {
+  padding: var(--space-1) var(--space-2);
+  border-left: none;
+  border-radius: var(--r-sm);
+}
+
+.selectable:hover {
+  background: var(--bg2);
+}
+
+.selected,
+.selected:hover {
+  background: var(--bg3);
+}
+
+.stageButton {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  font: var(--fs-sm) var(--mono);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.stageButton .attemptNo {
+  margin-left: calc(-1 * var(--space-1));
+}
+
+.stageButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* In the lens the reason lines up under the stage name, past the dot. */
+.selectable .reason {
+  padding-left: calc(8px + var(--space-2));
+  font-family: var(--sans);
+  line-height: 1.35;
 }

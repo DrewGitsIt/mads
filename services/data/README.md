@@ -67,20 +67,29 @@ Task routes (spec §3–§4; mutations carry `X-Mads-Actor`, defaulting to `user
 - `GET /tasks/cycles?session_id=` — dependency cycles (legal at rest, block pipeline
   launch, spec §3.6)
 
-Lease routes (spec §15 — holder = `X-Mads-Actor`):
+Lease routes (spec §15, docs/PIPELINE-LEASES-DESIGN.md). The holder is the
+`X-Mads-Actor` or `<actor>:<suffix>` (a pipeline run holds `pipeline:<runID>`); the
+`<actor>` part is its kind. Proof of possession is a token, sent as `X-Mads-Lease`:
 
-- `POST /tasks/{id}/claim` `{ttl_seconds?}` (default 600) — take or renew the lease;
-  409 with the current holder when live-leased by someone else
-- `POST /tasks/{id}/release` — idempotent; only the holder may release
-- `POST /leases/release-all` `{holder, reason?}` — the Router's supervision call:
-  frees everything a dead child held, blocking its mid-flight tasks with events
+- `POST /tasks/{id}/claim` `{holder?, ttl_seconds?, identity?}` (default 600) — take a
+  free lease and get its token (the store keeps only its hash); 409 with the current
+  holder when live-leased by anyone, the same holder included
+- `POST /tasks/{id}/lease/renew` — extend a live lease for its token; otherwise 409
+  `lease_lost`. Never creates a lease
+- `POST /tasks/{id}/release` — for the token; a free task is a no-op
+- `POST /leases/release-all` `{holder, reason?}` — the Router's supervision call,
+  tokenless: frees everything a dead child held. Task status is untouched
+- `GET /leases[?kind=k]` — the caller's own leases, or every live lease of kind `k`
+  (`k` must be the caller's actor); `POST /tasks/{id}/reclaim` deletes a lease of the
+  caller's kind whose holder process is proven dead (reap-on-launch)
 - `GET /sessions/{id}/lease-active` — `{"active": bool}`, read-only, no actor/attribution:
   whether any task under the session currently has an unexpired write-lease (any holder) —
   the Router boot sweep's signal that a live engine (e.g. a CLI `mads run`) is still
   genuinely working under a session it has no other way to see
-- Enforcement: while a task is live-leased, every task mutation by a non-holder
-  returns 409; each holder write renews the meter. Unleased tasks are writable by
-  anyone. The sweep (2s ticker in main) collects expired leases.
+- Enforcement: while a task is live-leased, every task mutation without its token
+  returns 409; each write with the token renews the meter. Unleased tasks are writable
+  by anyone. The sweep (2s ticker in main) deletes expired leases and changes no status
+  (an in_progress task with no lease is Interrupted, a pipeline concept).
 
 Registry routes (spec §9, §12, §17) — uniform CRUD on `/agents`, `/capabilities`,
 `/workspaces`: `POST /<base>`, `GET /<base>`, `GET|PUT|DELETE /<base>/{id-or-name}`
@@ -211,9 +220,12 @@ subscribers are woken post-commit.
   transaction leaves no rows and no events: TestDependencyValidation,
   TestImportAtomicity.
 
-- **Lease expiry blocks, loudly** — an expired lease on a mid-flight task releases,
-  marks the task blocked, and emits task.status_changed with the reason; idle tasks
-  keep their status: TestExpireStaleBlocksMidFlightTasks, TestReleaseAllForCrashedHolder.
+- **Losing a lease changes no status** — the sweep, ReleaseAll and Reclaim only
+  delete leases (and log): TestExpireStaleLeavesStatusAlone,
+  TestReleaseAllForCrashedHolder, TestReclaimMatchesHolderKind.
+- **A token is the only proof of possession** — renew never re-takes a lost lease, and
+  writes and release need the token: TestRenew, TestReleaseRequiresToken,
+  TestWritesToLeasedTaskNeedTheToken, TestClaimHolderPrefixRule.
 - **Exactly one claimant wins** — racing claims produce one lease and clean
   LeaseHeldError losses: TestClaimContention (under -race).
 - **Pipeline run reconstruction never drops an unterminated run** — a

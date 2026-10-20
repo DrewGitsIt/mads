@@ -191,25 +191,56 @@ func fcReply(prompt string, history []string) (string, bool /*crash*/) {
 	}
 }
 
+// fcOneShotTurn is the conversation half both one-shot output formats
+// share: the session id (the resumed one, kept in place as real claude
+// does, else a fresh one), the reply given that session's history, and the
+// transcript append, so a later `-p --resume <id>` can recall it.
+func fcOneShotTurn(a fcArgs) (id, reply string, crash bool) {
+	id = fcOneShotID(a)
+	dir := os.Getenv("MADS_FAKE_CLAUDE_DIR")
+	var history []string
+	if dir != "" && a.resume != "" {
+		history = fcLoadHistory(filepath.Join(dir, "proj", a.resume+".jsonl"))
+	}
+	switch a.prompt {
+	case "complete-echo":
+		reply = fcCompleteEcho(a)
+	case "fork-echo":
+		reply = fcForkEcho(a)
+	default:
+		if reply, crash = fcReply(a.prompt, history); crash {
+			return id, "", true
+		}
+	}
+	if dir != "" {
+		transcript := filepath.Join(dir, "proj", id+".jsonl")
+		fcAppendTranscript(transcript, "user", a.prompt, "")
+		fcAppendTranscript(transcript, "assistant", reply, "")
+	}
+	return id, reply, false
+}
+
+// fcOneShotID is a one-shot's session id: the resumed one, else fresh.
+func fcOneShotID(a fcArgs) string {
+	if a.resume != "" {
+		return a.resume
+	}
+	return fmt.Sprintf("fc-oneshot-%d", os.Getpid())
+}
+
 func fcOneShot(a fcArgs) {
 	if a.prompt == "ratelimit" {
 		fmt.Fprintln(os.Stderr, "Rate limit reached. Try again at 5pm.")
 		os.Exit(1)
 	}
-	var reply string
-	if a.prompt == "complete-echo" {
-		reply = fcCompleteEcho(a)
-	} else {
-		var crash bool
-		reply, crash = fcReply(a.prompt, nil)
-		if crash {
-			fmt.Fprintln(os.Stderr, "boom")
-			os.Exit(1)
-		}
+	id, reply, crash := fcOneShotTurn(a)
+	if crash {
+		fmt.Fprintln(os.Stderr, "boom")
+		os.Exit(1)
 	}
 	out := map[string]any{
 		"type": "result", "subtype": "success", "is_error": false,
-		"result": reply, "session_id": "fc-oneshot",
+		"result": reply, "session_id": id,
 		"usage":      map[string]any{"input_tokens": 7, "output_tokens": 11},
 		"modelUsage": map[string]any{"fake-sonnet": map[string]any{}},
 	}
@@ -245,10 +276,11 @@ func fcOneShotStream(a fcArgs) {
 		fmt.Fprintln(os.Stderr, "Rate limit reached. Try again at 5pm.")
 		os.Exit(1)
 	}
+	id := fcOneShotID(a)
 	if strings.HasPrefix(a.prompt, "edit ") {
 		path := strings.TrimPrefix(a.prompt, "edit ")
 		fcEmit(map[string]any{
-			"type": "assistant", "session_id": "fc-oneshot",
+			"type": "assistant", "session_id": id,
 			"message": map[string]any{
 				"role": "assistant",
 				"content": []map[string]any{{
@@ -258,7 +290,7 @@ func fcOneShotStream(a fcArgs) {
 			},
 		})
 	}
-	reply, crash := fcReply(a.prompt, nil)
+	_, reply, crash := fcOneShotTurn(a)
 	if crash {
 		fmt.Fprintln(os.Stderr, "boom")
 		os.Exit(1)
@@ -272,11 +304,11 @@ func fcOneShotStream(a fcArgs) {
 		if i < len(words)-1 {
 			text += " "
 		}
-		fcEmit(fcAssistantText("fc-oneshot", text))
+		fcEmit(fcAssistantText(id, text))
 	}
 	fcEmit(map[string]any{
 		"type": "result", "subtype": "success", "is_error": false,
-		"result": reply, "session_id": "fc-oneshot",
+		"result": reply, "session_id": id,
 		"usage":      map[string]any{"input_tokens": 7, "output_tokens": 11},
 		"modelUsage": map[string]any{"fake-sonnet": map[string]any{}},
 	})

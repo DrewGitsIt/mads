@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Chip } from "../../components/Chip/Chip";
 import { Fold, useArrivals } from "../../components/Motion";
 import { FLAGS } from "../../featureFlags";
@@ -115,8 +115,60 @@ const CADENCE_LABEL: Record<Link["cadence"], string> = {
 
 /** A digest push the monitor answered with exactly NOOP (the framing every
  * monitor-facing push carries) collapses to a quiet-check chip; consecutive
- * quiet checks aggregate into one. */
-type QuietItem = { key: string; type: "quiet"; count: number; sources: string[] };
+ * quiet checks aggregate into one, keeping the digests it absorbed so the
+ * chip can expand to show them. */
+type QuietItem = { key: string; type: "quiet"; digests: QuietDigest[]; sources: string[] };
+type QuietDigest = { key: string; source: string; text: string; cadence: Link["cadence"] };
+
+/** A finished activity group of only thinking rows — what a thinking model
+ * (claude-code thinks by default) leaves between a digest and its NOOP. A
+ * group with any tool call means the monitor did real work, so it is not
+ * skippable. */
+function isThinkingOnly(item: ReturnType<typeof buildItems>[number] | undefined): boolean {
+  return (
+    item?.type === "activity" &&
+    !item.live &&
+    item.entries.length > 0 &&
+    item.entries.every((e) => e.type === "thinking")
+  );
+}
+
+function DigestCard({ findKey, source, text, cadence }: {
+  findKey?: string;
+  source: string;
+  text: string;
+  cadence: Link["cadence"];
+}) {
+  return (
+    <div className={styles.digest} data-find={findKey}>
+      <div className={styles.digestHeader}>
+        ⌗ digest · <b>{source}</b>
+      </div>
+      <Markdown className={styles.prose} text={text} />
+      <div className={styles.digestCadence}>{CADENCE_LABEL[cadence]}</div>
+    </div>
+  );
+}
+
+/** The quiet-check chip; clicking it reveals the digests it stands for. */
+function QuietChecks({ item }: { item: QuietItem }) {
+  const [open, setOpen] = useState(false);
+  const n = item.digests.length;
+  return (
+    <div className={styles.quietGroup}>
+      <div className={styles.quiet}>
+        <Chip tone="neutral" pressed={open} onClick={() => setOpen((o) => !o)}>
+          {open ? "▾" : "▸"} {n === 1 ? "1 quiet check" : `${n} quiet checks`} ·{" "}
+          {item.sources.join(", ")} · nothing needed
+        </Chip>
+      </div>
+      {open &&
+        item.digests.map((d) => (
+          <DigestCard key={d.key} source={d.source} text={d.text} cadence={d.cadence} />
+        ))}
+    </div>
+  );
+}
 
 /** Would this message render as a digest card (vs. an inject chip)? The
  * viewed session being the attributed link's granting side is what makes it
@@ -191,30 +243,39 @@ export function ChatRenderer({
   const arrivedPermission = useArrivals(permissions.unanchored.map((r) => r.id));
 
   // Collapse digest→NOOP pairs into quiet-check chips before rendering. A
-  // completed (non-live) agent reply of exactly NOOP directly after a digest
-  // card is the monitor saying "nothing to do" — showing both in full would
-  // pay the transcript cost the noop protocol exists to avoid.
+  // completed (non-live) agent reply of exactly NOOP after a digest card —
+  // directly, or past thinking-only activity — is the monitor saying
+  // "nothing to do"; showing both in full would pay the transcript cost the
+  // noop protocol exists to avoid.
   const rendered: (ReturnType<typeof buildItems>[number] | QuietItem)[] = [];
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
-    const next = items[i + 1];
+    let j = i + 1;
+    while (isThinkingOnly(items[j])) j++;
+    const reply = items[j];
     if (
       item.type === "message" &&
       isDigestCard(item.message, linksById, viewedSessionId) &&
-      next?.type === "message" &&
-      !next.live &&
-      next.message.role === "agent" &&
-      (next.message.text ?? "").trim() === "NOOP"
+      reply?.type === "message" &&
+      !reply.live &&
+      reply.message.role === "agent" &&
+      (reply.message.text ?? "").trim() === "NOOP"
     ) {
       const source = item.message.attribution!.source_name;
+      const digest: QuietDigest = {
+        key: item.key,
+        source,
+        text: item.message.text ?? "",
+        cadence: linksById.get(item.message.attribution!.link_id)!.cadence,
+      };
       const last = rendered[rendered.length - 1];
       if (last?.type === "quiet") {
-        last.count++;
+        last.digests.push(digest);
         if (!last.sources.includes(source)) last.sources.push(source);
       } else {
-        rendered.push({ key: item.key, type: "quiet", count: 1, sources: [source] });
+        rendered.push({ key: item.key, type: "quiet", digests: [digest], sources: [source] });
       }
-      i++; // the NOOP reply is consumed by the chip
+      i = j; // the thinking rows and the NOOP reply are consumed by the chip
       continue;
     }
     rendered.push(item);
@@ -251,14 +312,7 @@ export function ChatRenderer({
     <div className={styles.stream} ref={rootRef}>
       {rendered.map((item) => {
         if (item.type === "quiet") {
-          return (
-            <div key={item.key} className={styles.quiet}>
-              <Chip tone="neutral">
-                {item.count === 1 ? "1 quiet check" : `${item.count} quiet checks`} ·{" "}
-                {item.sources.join(", ")} · nothing needed
-              </Chip>
-            </div>
-          );
+          return <QuietChecks key={item.key} item={item} />;
         }
         if (item.type === "activity") {
           return (
@@ -329,13 +383,13 @@ export function ChatRenderer({
           const link = linksById.get(message.attribution.link_id);
           if (link && viewedSessionId === link.granting_session_id) {
             return (
-              <div key={item.key} className={styles.digest} data-find={item.key}>
-                <div className={styles.digestHeader}>
-                  ⌗ digest · <b>{message.attribution.source_name}</b>
-                </div>
-                <Markdown className={styles.prose} text={message.text ?? ""} />
-                <div className={styles.digestCadence}>{CADENCE_LABEL[link.cadence]}</div>
-              </div>
+              <DigestCard
+                key={item.key}
+                findKey={item.key}
+                source={message.attribution.source_name}
+                text={message.text ?? ""}
+                cadence={link.cadence}
+              />
             );
           }
           return (
@@ -414,10 +468,15 @@ export function ChatRenderer({
           attachments.length > 0 ? (
             <div className={styles.withAttachments}>
               <MessageAttachments attachments={attachments} attachmentUrl={attachmentUrl} />
-              {body && <Markdown className={styles.prose} text={body} />}
+              {body && <Markdown className={styles.prose} text={body} breaks />}
             </div>
           ) : (
-            <Markdown className={styles.prose} text={body} foldNewCode={foldNewCode && Boolean(item.live)} />
+            <Markdown
+              className={styles.prose}
+              text={body}
+              breaks={isUser}
+              foldNewCode={foldNewCode && Boolean(item.live)}
+            />
           );
         const sent = isUser ? delivery.get(message) : undefined;
         const retry =

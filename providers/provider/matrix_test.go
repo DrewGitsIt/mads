@@ -77,7 +77,9 @@ func TestRequirementLevels(t *testing.T) {
 		BehaviorInteractive: LevelRequired,
 		BehaviorOneShot:     LevelRequired,
 		BehaviorResume:      LevelExpected,
-		BehaviorBranching:   LevelOptional,
+		// The engine falls back to a fresh attempt without it.
+		BehaviorOneShotResume: LevelOptional,
+		BehaviorBranching:     LevelOptional,
 		// A provider without a reviewer is fine: auto_review falls back.
 		BehaviorTrustAutoReview: LevelOptional,
 		// Most harnesses have no subagents at all.
@@ -96,8 +98,8 @@ func TestRequirementLevels(t *testing.T) {
 	if Requirement("telepathy") != "" {
 		t.Error("unknown behavior should have no level")
 	}
-	if n := len(Behaviors()); n != 23 {
-		t.Errorf("Behaviors() = %d entries, want 23", n)
+	if n := len(Behaviors()); n != 24 {
+		t.Errorf("Behaviors() = %d entries, want 24", n)
 	}
 }
 

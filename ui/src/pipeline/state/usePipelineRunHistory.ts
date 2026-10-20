@@ -8,9 +8,17 @@ export interface UsePipelineRunHistoryResult {
   runs: PipelineRun[];
   selectedRunSeq?: number;
   selectRun: (runSeq: number) => void;
+  /** The run the fold fields below describe; lags selectedRunSeq while a newly selected run loads. */
+  foldedRunSeq?: number;
   /** Folded board state for the selected run. */
   columns: string[];
   taskRunState: Record<string, TaskRunState>;
+  /** The selected run's pipeline.started `excluded_task_ids` (empty for older runs). */
+  excludedTaskIds: string[];
+  /** The selected run's pipeline.started `template` name. */
+  template?: string;
+  /** The run list has been fetched at least once (whatever the outcome). */
+  loaded: boolean;
   loading: boolean;
   error: string | null;
 }
@@ -19,22 +27,27 @@ export interface UsePipelineRunHistoryResult {
  * Fetches a session's pipeline run history (GET /metrics/pipelines) and
  * folds the selected run's own event window through the same
  * transport-agnostic fold usePipelineRun uses for live SSE (HANDOFF.md
- * §4b) — this is how the Pipeline tab renders a run that finished before
+ * §4b) — this is how the Tasks tab renders a run that finished before
  * this mount ever opened a live connection (e.g. a CLI-driven run).
  *
- * `active` gates both fetches so this hook stays idle once a live run has
- * ever started this mount (PipelineTab.tsx composes the two, HANDOFF.md
- * §4e).
+ * `active` gates both fetches. A change of `refreshKey` refetches the run
+ * list (the Tasks tab passes the live run's phase, so a run that just
+ * started or ended shows up in the run menu).
  */
 export function usePipelineRunHistory(
   sessionId: string,
   client: PipelineClient,
   active: boolean,
+  refreshKey?: string | number,
 ): UsePipelineRunHistoryResult {
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [selectedRunSeq, setSelectedRunSeq] = useState<number | undefined>(undefined);
   const [columns, setColumns] = useState<string[]>([]);
   const [taskRunState, setTaskRunState] = useState<Record<string, TaskRunState>>({});
+  const [excludedTaskIds, setExcludedTaskIds] = useState<string[]>([]);
+  const [template, setTemplate] = useState<string | undefined>();
+  const [foldedRunSeq, setFoldedRunSeq] = useState<number | undefined>();
+  const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,12 +75,14 @@ export function usePipelineRunHistory(
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (cancelled) return;
+        setLoading(false);
+        setLoaded(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [client, sessionId, active]);
+  }, [client, sessionId, active, refreshKey]);
 
   useEffect(() => {
     if (!active || selectedRunSeq === undefined) return;
@@ -92,6 +107,9 @@ export function usePipelineRunHistory(
         const folded = bounded.reduce(foldReducer, initialRunFoldState);
         setColumns(folded.columns);
         setTaskRunState(folded.taskRunState);
+        setExcludedTaskIds(folded.excludedTaskIds);
+        setTemplate(folded.template);
+        setFoldedRunSeq(selectedRunSeq);
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
@@ -108,5 +126,5 @@ export function usePipelineRunHistory(
     setSelectedRunSeq(runSeq);
   }, []);
 
-  return { runs, selectedRunSeq, selectRun, columns, taskRunState, loading, error };
+  return { runs, selectedRunSeq, selectRun, foldedRunSeq, columns, taskRunState, excludedTaskIds, template, loaded, loading, error };
 }
