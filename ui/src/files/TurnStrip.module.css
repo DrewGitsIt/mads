@@ -11,9 +11,20 @@
   min-width: 0;
 }
 
+/* An arrow and, under it, the count of turns out of view past that edge:
+   stacked, so the counts cost no width. */
+.side {
+  flex: none;
+  width: 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 6px;
+}
+
 .arrow {
-  flex-shrink: 0;
-  width: 26px;
+  width: 28px;
+  height: 26px;
   border: 0;
   border-radius: var(--r-sm);
   background: none;
@@ -30,24 +41,88 @@
   cursor: default;
 }
 
-/* Columns are 32px until the strip runs out of room, then shrink to 8px,
-   then the strip scrolls horizontally. */
-.cols {
+.more {
+  visibility: hidden;
+  font: 10px/12px var(--mono);
+  color: var(--text3);
+  text-align: center;
+  white-space: nowrap;
+}
+.more[data-on] {
+  visibility: visible;
+}
+.more b {
+  display: block;
+  font-weight: 600;
+  color: var(--text2);
+}
+
+/* The window onto the columns: at most half the strip, so the prompt always
+   keeps the rest. Past that it scrolls, with a scrollbar drawn always (this
+   is the one place mads wants one; ::-webkit-scrollbar keeps macOS from
+   hiding it). The edge fades sit on this wrapper so they don't fade the
+   scrollbar too; they blend into the Changes tab's --bg0. */
+.window {
+  position: relative;
   flex: 0 1 auto;
+  display: flex;
+  min-width: 0;
+  max-width: 50%;
+}
+.window::before,
+.window::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 10px;
+  z-index: 1;
+  width: 28px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast);
+}
+.window::before {
+  left: 0;
+  background: linear-gradient(to right, var(--bg0), transparent);
+}
+.window::after {
+  right: 0;
+  background: linear-gradient(to left, var(--bg0), transparent);
+}
+.window[data-fade-l]::before,
+.window[data-fade-r]::after {
+  opacity: 1;
+}
+
+.cols {
   position: relative;
   display: flex;
   align-items: stretch;
   gap: 2px;
   min-width: 0;
+  padding-bottom: 2px;
   overflow-x: auto;
-  scrollbar-width: thin;
+  overflow-y: hidden;
+}
+.cols::-webkit-scrollbar {
+  height: 8px;
+}
+.cols::-webkit-scrollbar-track {
+  border-radius: 4px;
+  background: var(--bg2);
+}
+.cols::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: var(--bg4);
+}
+.cols::-webkit-scrollbar-thumb:hover {
+  background: var(--line);
 }
 
-/* width (not just flex-basis) so the strip's max-content counts 32px a column. */
+/* Columns never shrink: the window scrolls instead, so every number fits. */
 .col {
-  flex: 0 1 32px;
+  flex: none;
   width: 32px;
-  min-width: 8px;
   height: 56px;
   display: flex;
   flex-direction: column;
@@ -104,8 +179,8 @@
 /* The turn's label, file count and prompt sit right of the bars, so the
    strip is one row tall. The prompt gets two lines. */
 .ctx {
-  flex: 1 1 240px;
-  min-width: 200px;
+  flex: 1 1 0;
+  min-width: 0;
   align-self: center;
   display: flex;
   flex-direction: column;

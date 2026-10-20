@@ -27,7 +27,7 @@ class DemoRouterClient extends FakeRouterClient {
 }
 
 const client = new DemoRouterClient();
-// ?long pads the session to 70 turns (the strip narrows, then scrolls).
+// ?long pads the session to 70 turns (the strip caps at half its row and scrolls).
 const params = new URLSearchParams(location.search);
 const cs = demoChangeSet(params.has("long") ? 56 : 0);
 const showRail = !params.has("norail");

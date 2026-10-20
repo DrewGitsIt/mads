@@ -1,0 +1,365 @@
+<!doctype html>
+<!--
+  mads — Changes tab turn strip: a capped, scrolling window
+  ==========================================================
+
+  Problem: in a long session the strip's columns took nearly all the row and
+  pushed the turn's prompt (the context block on the right) off screen.
+
+  Drew's calls (2026-10-20), applied here:
+
+  - The columns get at most 50% of the strip's width; the context block
+    always keeps the rest.
+  - Turns out of view are shown by a fade at that edge plus a "{x} more"
+    count stacked under the arrow on that side, so no extra width is spent.
+  - This is the one place a horizontal scrollbar is welcome: it is always
+    drawn (custom-styled, so macOS overlay scrollbars don't hide it).
+  - ‹ › step one turn at a time. When the selected turn is at an edge the
+    window shifts by exactly one column (smoothly, unless reduce motion is
+    on). A mouse wheel scrolls the strip sideways.
+
+  Also agreed after a first look:
+  - Columns stay a full 32px with every number shown; the old 8px "dense"
+    mode (past 30 turns) goes, since the window scrolls instead.
+  - A long session opens at turn 1 with nothing selected: the list shows
+    everything, and the story reads from the start at the user's pace.
+  - With nothing selected, the arrows start from what you can see: › picks
+    the leftmost visible turn and ‹ the rightmost, instead of jumping to
+    turn 1 or turn N off screen.
+  - The "more" counts are labels, not buttons.
+
+  Tokens: clay / dark (from changes-v2.html).
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — turn strip window</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-soft:rgba(192,133,82,.15);
+    --info:#96afc7;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px; --fs-sm:12px; --fs-body:13px; --fs-ui:14px; --space-3:12px;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.5 var(--sans); }
+  button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+  code { font:var(--fs-sm) var(--mono); background:var(--bg2); border-radius:3px; padding:1px 4px; }
+
+  .page { max-width:1440px; margin:0 auto; padding:28px 24px 120px; display:flex; flex-direction:column; gap:28px; }
+  header.intro h1 { font-size:20px; font-weight:650; }
+  header.intro p { color:var(--text2); max-width:100ch; margin-top:8px; }
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); overflow:hidden; }
+  .block > h2 { font-size:var(--fs-ui); font-weight:650; padding:12px 16px; border-bottom:1px solid var(--line-soft); }
+  .block > h2 .sub { font-weight:500; color:var(--text3); font-size:var(--fs-sm); margin-left:8px; }
+  .note { padding:12px 16px; color:var(--text2); border-top:1px solid var(--line-soft); font-size:var(--fs-sm); }
+  .note li { margin-left:18px; margin-top:3px; } .note b { color:var(--text); }
+
+  .controls { display:flex; flex-wrap:wrap; gap:20px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line-soft); font-size:var(--fs-sm); color:var(--text2); }
+  .controls label { display:flex; gap:8px; align-items:center; }
+  .controls output { font-family:var(--mono); color:var(--text); min-width:4ch; }
+  .controls input[type=range] { accent-color:var(--accent); }
+  .controls input[type=checkbox] { accent-color:var(--accent); }
+
+  /* Stands in for the Changes tab: a header row, the strip, then the list. */
+  .stage { padding:16px; background:var(--bg0); }
+  .tab { margin:0 auto; background:var(--bg1); border:1px solid var(--line-soft); border-radius:var(--r); overflow:hidden; }
+  .tabhead { display:flex; gap:12px; align-items:baseline; padding:8px 12px; border-bottom:1px solid var(--line-soft); font-size:var(--fs-sm); color:var(--text3); }
+  .tabhead b { color:var(--text); font-weight:600; }
+  .listfake { padding:10px 12px; display:flex; flex-direction:column; gap:6px; }
+  .listfake i { display:block; height:10px; border-radius:3px; background:var(--bg2); }
+
+  /* ---- The strip (TurnStrip.module.css, changed parts marked NEW) ---- */
+  .wrap { padding:4px 8px; border-bottom:1px solid var(--line-soft); }
+  .strip { display:flex; align-items:stretch; gap:2px; min-width:0; }
+
+  /* NEW: the arrow and its out-of-view count share one 36px column. */
+  .side { flex:none; width:36px; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; gap:0; padding-top:6px; }
+  .arrow { width:28px; height:26px; border-radius:var(--r-sm); color:var(--text2); font-size:16px; line-height:1; }
+  .arrow:hover:not(:disabled) { background:var(--bg2); color:var(--text); }
+  .arrow:disabled { opacity:.3; cursor:default; }
+  .more { font:10px/12px var(--mono); color:var(--text3); text-align:center; white-space:nowrap; visibility:hidden; }
+  .more[data-on] { visibility:visible; }
+  .more b { display:block; color:var(--text2); font-weight:600; }
+
+  /* NEW: the window. At most half the strip; a drawn scrollbar; fades over
+     whichever edge has turns beyond it. The fades sit on a wrapper so they
+     don't also fade the scrollbar. */
+  .window { position:relative; flex:0 1 auto; max-width:50%; min-width:0; display:flex; }
+  .window::before, .window::after { content:""; position:absolute; top:0; bottom:10px; width:28px; pointer-events:none; opacity:0; transition:opacity .12s; z-index:1; }
+  .window::before { left:0; background:linear-gradient(to right, var(--bg1), transparent); }
+  .window::after { right:0; background:linear-gradient(to left, var(--bg1), transparent); }
+  .window[data-fade-l]::before, .window[data-fade-r]::after { opacity:1; }
+
+  .cols { display:flex; align-items:stretch; gap:2px; min-width:0; overflow-x:auto; overflow-y:hidden; padding-bottom:2px; }
+  .cols::-webkit-scrollbar { height:8px; }
+  .cols::-webkit-scrollbar-track { background:var(--bg2); border-radius:4px; }
+  .cols::-webkit-scrollbar-thumb { background:var(--bg4); border-radius:4px; }
+  .cols::-webkit-scrollbar-thumb:hover { background:var(--line); }
+
+  /* CHANGED: columns no longer shrink; the window scrolls instead. */
+  .col { flex:none; width:32px; height:56px; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; gap:3px; padding:0 0 3px; border-radius:4px; }
+  .col:hover { background:var(--bg2); }
+  .col:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+  .bar { width:min(18px,70%); border-radius:2px 2px 0 0; background:var(--bg4); }
+  .bar[data-zero] { background:var(--line); }
+  .n { height:14px; overflow:hidden; font:10px/14px var(--mono); color:var(--text3); }
+  .col[data-sel] { background:var(--accent-soft); }
+  .col[data-sel] .bar { background:var(--accent); }
+  .col[data-sel] .n { color:var(--text); }
+
+  /* CHANGED: the context block takes the rest; no 200px floor needed now. */
+  .ctx { flex:1 1 0; min-width:0; align-self:center; display:flex; flex-direction:column; gap:2px; padding:0 4px 0 var(--space-3); font-size:var(--fs-sm); }
+  .head { display:flex; align-items:baseline; white-space:nowrap; }
+  .tn { font:600 11px var(--mono); text-transform:uppercase; color:var(--text3); }
+  .meta { color:var(--text3); white-space:nowrap; }
+  .link { color:var(--accent); } .link:hover { text-decoration:underline; }
+  .prompt, .none { min-width:0; overflow:hidden; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-height:1.35; overflow-wrap:anywhere; }
+  .ctx[data-preview] .prompt { color:var(--text2); }
+  .none { color:var(--text3); font-style:italic; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="intro">
+    <h1>Turn strip: a capped, scrolling window</h1>
+    <p>The turn columns get at most half the strip; the turn's prompt always keeps the other half. Turns out of view fade at that edge, and a count sits under the arrow on that side. Click a turn, shift-click for a range, and use ‹ › to step. At an edge the window moves one column. Drag the <b>Tab width</b> slider to see a narrow window.</p>
+  </header>
+
+  <section class="block">
+    <h2>Long session <span class="sub">140 turns: opens at turn 1, nothing selected</span></h2>
+    <div class="controls" data-for="long">
+      <label>Tab width <input type="range" min="520" max="1400" value="1100" data-ctl="width" /><output></output></label>
+      <label>Turns <input type="range" min="3" max="300" value="140" data-ctl="turns" /><output></output></label>
+      <label><input type="checkbox" data-ctl="smooth" checked /> Smooth edge shift</label>
+    </div>
+    <div class="stage"><div class="tab" id="long"></div></div>
+    <div class="note"><ul>
+      <li><b>Counts:</b> a turn counts as out of view once more than half of its column is past the edge.</li>
+      <li><b>Arrows:</b> with nothing selected, › picks the leftmost visible turn and ‹ the rightmost, so the first press never jumps out of view.</li>
+      <li><b>Wheel:</b> a vertical mouse wheel over the strip scrolls it sideways; trackpads scroll it natively.</li>
+    </ul></div>
+  </section>
+
+  <section class="block">
+    <h2>Short session <span class="sub">9 turns: no window, no counts, no fade</span></h2>
+    <div class="stage"><div class="tab" id="short" style="width:1100px"></div></div>
+  </section>
+</div>
+
+<script>
+const PROMPTS = [
+  "The turn selector in the Changes tab pushes turn text off the screen in long sessions; cap it and show what's out of view.",
+  "Run the vitest suite for settings and fix whatever the palette default broke.",
+  "Why does the rail's checklist reorder when a task finishes? It should hold position until I leave.",
+  "ok",
+  "Merge origin/main into links-int3 in a worktree, not the live checkout.",
+  "Write the e2e for inbound messages but only run it with make ui-smoke.",
+  "Lint is capped at 14 errcheck findings in CI; clear them all instead of raising the cap.",
+  "Let's mock that up so I can try it.",
+  "Can you explain the stats plainly? I don't need the p-values, I need to know whether it got better.",
+  "Revert that last change, the spacing was better before.",
+];
+
+function makeTurns(n) {
+  const out = [];
+  for (let i = 1; i <= n; i++) {
+    const r = Math.sin(i * 12.9898) * 43758.5453;
+    const f = (r - Math.floor(r));
+    out.push({ n: i, files: f < 0.22 ? 0 : Math.round(f * 14), prompt: PROMPTS[i % PROMPTS.length] });
+  }
+  return out;
+}
+
+const clip = (s) => (s.length > 120 ? s.slice(0, 119) + "…" : s);
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function mountStrip(host, opts) {
+  let turns = makeTurns(opts.turns);
+  let sel = null;       // a contiguous range of turn numbers, or null for all
+  let anchor = null;    // shift-click anchor
+  let hover = null;
+  let smooth = false;
+
+  host.innerHTML = `
+    <div class="tabhead"><b>Changes</b><span class="files"></span></div>
+    <div class="wrap"><div class="strip">
+      <div class="side"><button class="arrow" data-d="-1" aria-label="Previous turn" title="Previous turn">‹</button><span class="more" data-side="l"></span></div>
+      <div class="window"><div class="cols" role="group" aria-label="Turns"></div></div>
+      <div class="side"><button class="arrow" data-d="1" aria-label="Next turn" title="Next turn">›</button><span class="more" data-side="r"></span></div>
+      <div class="ctx" data-testid="turn-context"></div>
+    </div></div>
+    <div class="listfake">${"<i></i>".repeat(6).replace(/<i>/g, () => `<i style="width:${40 + Math.random() * 50}%">`)}</div>`;
+
+  const win = host.querySelector(".window");
+  const cols = host.querySelector(".cols");
+  const ctx = host.querySelector(".ctx");
+  const [prev, next] = host.querySelectorAll(".arrow");
+  const moreL = host.querySelector('.more[data-side="l"]');
+  const moreR = host.querySelector('.more[data-side="r"]');
+
+  function renderCols() {
+    const max = Math.max(1, ...turns.map((t) => t.files));
+    cols.innerHTML = turns.map((t) => `
+      <button type="button" class="col" data-turn-col="${t.n}" aria-label="Turn ${t.n}, ${t.files} ${t.files === 1 ? "file" : "files"}">
+        <span class="bar" ${t.files ? "" : "data-zero"} style="height:${t.files ? 6 + (36 * t.files) / max : 2}px"></span>
+        <span class="n">${t.n}</span>
+      </button>`).join("");
+    host.querySelector(".files").textContent = `${turns.reduce((a, t) => a + t.files, 0)} files across ${turns.length} turns`;
+  }
+
+  // Which columns are out of view: more than half past the edge.
+  function hidden() {
+    const left = cols.scrollLeft, right = left + cols.clientWidth;
+    let l = 0, r = 0;
+    for (const c of cols.children) {
+      const mid = c.offsetLeft + c.offsetWidth / 2;
+      if (mid < left) l++;
+      else if (mid > right) r++;
+    }
+    return { l, r };
+  }
+  function visibleRange() {
+    const left = cols.scrollLeft, right = left + cols.clientWidth;
+    const vis = [...cols.children].filter((c) => { const mid = c.offsetLeft + c.offsetWidth / 2; return mid >= left && mid <= right; });
+    return vis.length ? [+vis[0].dataset.turnCol, +vis[vis.length - 1].dataset.turnCol] : [turns[0].n, turns[turns.length - 1].n];
+  }
+
+  function renderEdges() {
+    const { l, r } = hidden();
+    win.toggleAttribute("data-fade-l", l > 0);
+    win.toggleAttribute("data-fade-r", r > 0);
+    moreL.toggleAttribute("data-on", l > 0);
+    moreR.toggleAttribute("data-on", r > 0);
+    moreL.innerHTML = `<b>${l}</b>more`;
+    moreR.innerHTML = `<b>${r}</b>more`;
+  }
+
+  function renderSel() {
+    for (const c of cols.children) {
+      const on = !!sel && sel.includes(+c.dataset.turnCol);
+      c.toggleAttribute("data-sel", on);
+      c.setAttribute("aria-pressed", on);
+    }
+    prev.disabled = !!sel && sel[0] === turns[0].n;
+    next.disabled = !!sel && sel[sel.length - 1] === turns[turns.length - 1].n;
+    renderCtx();
+  }
+
+  function renderCtx() {
+    const show = hover ?? (sel ? sel[0] : null);
+    const t = show !== null ? turns.find((x) => x.n === show) : null;
+    ctx.toggleAttribute("data-preview", hover !== null && !(sel ?? []).includes(hover));
+    if (!t) {
+      ctx.innerHTML = `<span class="head"><span class="tn">All turns</span></span>
+        <span class="none">Hover a turn to see its prompt. Click to filter to it, shift-click for a range.</span>`;
+      return;
+    }
+    const label = sel && sel.length > 1 && hover === null ? `Turns ${sel[0]}–${sel[sel.length - 1]}` : `Turn ${show}`;
+    ctx.innerHTML = `<span class="head"><span class="tn">${label}</span><span class="meta">&nbsp;· ${t.files} ${t.files === 1 ? "file" : "files"}${sel && hover === null ? ' · <button type="button" class="link" data-clear>clear</button>' : ""}</span></span>
+      <span class="prompt" title="${t.prompt.replace(/"/g, "&quot;")}">“${clip(t.prompt)}”</span>`;
+  }
+
+  // At an edge, move the window just enough to show the turn: one column per
+  // step. A neighbour stays in view past it, so the edge fade lands on the
+  // neighbour, never on the selection.
+  function reveal(n) {
+    const c = cols.querySelector(`[data-turn-col="${n}"]`);
+    if (!c) return;
+    const pitch = c.offsetWidth + 2;
+    const left = c.offsetLeft - cols.offsetLeft - (c.previousElementSibling ? pitch : 0);
+    const right = c.offsetLeft - cols.offsetLeft + c.offsetWidth + (c.nextElementSibling ? pitch : 0);
+    let to = null;
+    if (left < cols.scrollLeft) to = left;
+    else if (right > cols.scrollLeft + cols.clientWidth) to = right - cols.clientWidth;
+    if (to !== null) cols.scrollTo({ left: to, behavior: smooth && !reduceMotion ? "smooth" : "auto" });
+  }
+
+  function select(next) {
+    sel = next;
+    renderSel();
+    if (sel) reveal(sel[0] === anchor ? sel[sel.length - 1] : sel[0]);
+  }
+
+  function step(d) {
+    const order = turns.map((t) => t.n);
+    let n;
+    if (sel) {
+      const edge = d > 0 ? sel[sel.length - 1] : sel[0];
+      n = order[Math.max(0, Math.min(order.length - 1, order.indexOf(edge) + d))];
+    } else {
+      const [first, last] = visibleRange();
+      n = d > 0 ? first : last;
+    }
+    anchor = n;
+    select([n]);
+  }
+
+  cols.addEventListener("click", (e) => {
+    const c = e.target.closest(".col");
+    if (!c) return;
+    const n = +c.dataset.turnCol;
+    if (e.shiftKey && anchor !== null) {
+      const [a, b] = [Math.min(anchor, n), Math.max(anchor, n)];
+      sel = turns.map((t) => t.n).filter((x) => x >= a && x <= b);
+      renderSel();
+    } else if (sel && sel.length === 1 && sel[0] === n) {
+      anchor = null; select(null);
+    } else {
+      anchor = n; select([n]);
+    }
+  });
+  cols.addEventListener("mouseover", (e) => { const c = e.target.closest(".col"); if (c) { hover = +c.dataset.turnCol; renderCtx(); } });
+  cols.addEventListener("mouseleave", () => { hover = null; renderCtx(); });
+  cols.addEventListener("scroll", renderEdges, { passive: true });
+  // A vertical mouse wheel scrolls sideways (trackpads already send deltaX).
+  cols.addEventListener("wheel", (e) => {
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && cols.scrollWidth > cols.clientWidth) {
+      e.preventDefault();
+      cols.scrollLeft += e.deltaY;
+    }
+  }, { passive: false });
+  prev.addEventListener("click", () => step(-1));
+  next.addEventListener("click", () => step(1));
+  ctx.addEventListener("click", (e) => { if (e.target.closest("[data-clear]")) { anchor = null; select(null); } });
+  // A narrower window must not hide the selected turn.
+  new ResizeObserver(() => { if (sel) reveal(sel[sel.length - 1]); renderEdges(); }).observe(cols);
+
+  function reset(n) {
+    turns = makeTurns(n);
+    sel = null; anchor = null; hover = null;
+    renderCols(); renderSel();
+    renderEdges();
+  }
+  reset(opts.turns);
+
+  return {
+    setTurns: reset,
+    setWidth: (w) => { host.style.width = w + "px"; renderEdges(); },
+    setSmooth: (on) => { smooth = on; },
+  };
+}
+
+const long = mountStrip(document.getElementById("long"), { turns: 140 });
+mountStrip(document.getElementById("short"), { turns: 9 });
+
+const ctl = document.querySelector('[data-for="long"]');
+for (const input of ctl.querySelectorAll("[data-ctl]")) {
+  const out = input.parentElement.querySelector("output");
+  const apply = () => {
+    if (out) out.textContent = input.dataset.ctl === "width" ? input.value + "px" : input.value;
+    if (input.dataset.ctl === "width") long.setWidth(+input.value);
+    if (input.dataset.ctl === "turns") long.setTurns(+input.value);
+    if (input.dataset.ctl === "smooth") long.setSmooth(input.checked);
+  };
+  input.addEventListener("input", apply);
+  apply();
+}
+</script>
+</body>
+</html>
