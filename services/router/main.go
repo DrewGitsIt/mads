@@ -28,6 +28,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/claudecode"
+	"github.com/drewkidwell/mads/providers/codexcli"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/goosecli"
@@ -143,6 +144,9 @@ func buildProviderRegistry(madsHome string) (*provider.Registry, error) {
 	}
 	if err := providers.Register(hermescli.New(hermescli.Config{})); err != nil {
 		return nil, fmt.Errorf("register hermes provider: %w", err)
+	}
+	if err := providers.Register(codexcli.New(codexcli.Config{})); err != nil {
+		return nil, fmt.Errorf("register codex provider: %w", err)
 	}
 	// WithTranscriptDir points this Router-local fake instance at the same
 	// $MADS_HOME/fake-transcripts a `mads run` child (cmd/mads/run.go) with

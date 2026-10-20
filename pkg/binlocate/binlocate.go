@@ -31,6 +31,17 @@ var knownLocations = map[string][]string{
 	"hermes-acp": {
 		"~/.local/bin/hermes-acp",
 	},
+	// codex (providers/codexcli): the standalone installer's link and the
+	// release it points at (~/.local/bin/codex →
+	// ~/.codex/packages/standalone/current/bin/codex), then the CLI the
+	// ChatGPT desktop app ships inside its bundle — all observed on a codex
+	// 0.154.0 machine, none on a desktop app's PATH by default.
+	"codex": {
+		"~/.local/bin/codex",
+		"~/.codex/packages/standalone/current/bin/codex",
+		"/Applications/ChatGPT.app/Contents/Resources/codex",
+		"~/Applications/ChatGPT.app/Contents/Resources/codex",
+	},
 	// mergiraf (pkg/mergedriver): Homebrew's documented prefixes (Apple
 	// silicon, Intel macOS, Linuxbrew) and cargo's install directory. An
 	// app launched from the desktop often has none of them on PATH.

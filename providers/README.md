@@ -68,6 +68,17 @@ agents — not services themselves.
   (`hermescli/testdata/captures/`); CI runs the full conformance suite
   against a stand-in that writes a real state.db; `MADS_HERMES_SMOKE=1`
   runs the real binary on Copilot in a scratch home.
+- `codexcli/` — the OpenAI Codex CLI adapter, registry name `codex`
+  (shown as "Codex (ChatGPT)"): its own small JSON-RPC client for
+  `codex app-server` (threads, turns, items — not ACP), `turn/steer` for a
+  mid-turn Send, approvals mapped onto codex's sandbox + approval policy,
+  `thread/fork` branching, `thread/compact/start`, `thread/items/list`
+  transcripts, and a reaper for the tool processes codex moves out of its
+  process group. A per-thread config override stops codex persisting folder
+  trust into the user's `~/.codex/config.toml`. Capture-pinned against
+  codex 0.154.0 (`codexcli/testdata/captures/`); CI runs the full
+  conformance suite against a scripted stand-in, `MADS_CODEX_SMOKE=1` opts
+  into the real-binary smoke.
 
 ## Test it
 
@@ -102,4 +113,5 @@ and PTY-only), and every lie class is caught (`TestMismatchesAreCaught`).
   `OneShot`, PTY) builds its environment through the shared
   `agentenv.Build` helper — see that package's doc comment for the isolated
   base allowlist and passthrough semantics — so inherit/isolated behavior is
-  defined exactly once and can't drift between spawn sites.
+  defined exactly once and can't drift between spawn sites (goosecli and
+  codexcli build theirs the same way).

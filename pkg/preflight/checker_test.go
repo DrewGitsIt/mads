@@ -166,6 +166,42 @@ func TestGooseCompatRange(t *testing.T) {
 	}
 }
 
+// TestCheckProviderBinary_Codex proves the codex row end to end with a
+// scripted stand-in printing codex's real `--version` shape.
+func TestCheckProviderBinary_Codex(t *testing.T) {
+	bin := t.TempDir()
+	script := filepath.Join(bin, "codex")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'codex-cli 0.154.0'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("HOME", t.TempDir()) // keep binlocate's ~/.local/bin fallback out of it
+	check := checkProviderBinary(context.Background(), "codex", knownProviderBinaries["codex"])
+	if !check.Healthy || check.Detail != "codex v0.154.0" {
+		t.Errorf("checkProviderBinary(codex) = %+v, want healthy with Detail %q", check, "codex v0.154.0")
+	}
+}
+
+// TestCodexCompatRange pins the proven 0.154.x window.
+func TestCodexCompatRange(t *testing.T) {
+	r, known := compatMatrix["codex"]
+	if !known {
+		t.Fatal("no codex row in compatMatrix")
+	}
+	for version, want := range map[string]struct{ ok, unproven bool }{
+		"0.153.9": {false, false},
+		"0.154.0": {true, false},
+		"0.154.7": {true, false},
+		"0.155.0": {false, true},
+		"1.0.0":   {false, true},
+	} {
+		ok, unproven, _ := r.evaluate(version)
+		if ok != want.ok || unproven != want.unproven {
+			t.Errorf("codex compat evaluate(%s) = ok %v unproven %v, want %+v", version, ok, unproven, want)
+		}
+	}
+}
+
 func TestCheckDiskSpace_Healthy(t *testing.T) {
 	check := checkDiskSpace(t.TempDir())
 	if !check.Healthy {

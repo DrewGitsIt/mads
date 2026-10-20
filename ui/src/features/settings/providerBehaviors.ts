@@ -2,10 +2,13 @@ import type { BehaviorInfo, ProviderInfo, ProviderSupport } from "../../router/t
 import { fullAccessOnly, fullAccessReason } from "../sessions/pills/trustLevels";
 
 // Product names for provider ids where the id isn't already how people
-// say it (goose, kiro-cli read fine as they are).
+// say it (goose, kiro-cli read fine as they are). codex is the OpenAI Codex
+// CLI, which signs in with a ChatGPT account: both names are on the label so
+// it is recognisable by either (providers/codexcli/README.md).
 const PROVIDER_LABELS: Record<string, string> = {
   "claude-code": "Claude Code",
   hermes: "Hermes",
+  codex: "Codex (ChatGPT)",
 };
 
 /** A provider's display name: its product name if it has one, else its id. */

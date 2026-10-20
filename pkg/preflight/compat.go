@@ -44,6 +44,14 @@ var compatMatrix = map[string]compatRange{
 	// from replay — providers/acprpc/testdata/captures/README.md), so the
 	// floor is the line actually proven.
 	"hermes": {Min: "0.22.0", Max: "0.23.0", Note: "proven against hermes 0.22.2 (survey captures, source, real-binary smoke) — docs/HERMES-ADAPTER-DESIGN.md"},
+	// codex: proven against 0.154.0 only — the survey and probe captures
+	// (providers/codexcli/testdata/captures) and the real-binary smoke. The
+	// adapter speaks `codex app-server`, whose protocol codex versions with
+	// the CLI and marks partly experimental (clientUserMessageId,
+	// thread/items/list ride experimentalApi), so the window is the one
+	// minor line: 0.154.x passes, 0.155+ warns as unproven. The ChatGPT
+	// app's bundled CLI reports "0.154.0-alpha.N", which parses as 0.154.0.
+	"codex": {Min: "0.154.0", Max: "0.155.0", Note: "proven against codex 0.154.0 (captures + real-binary smoke) — docs/CODEX-ADAPTER-DESIGN.md"},
 }
 
 // evaluate reports whether version sits in the proven window. Below Min is
