@@ -523,8 +523,12 @@ func withClientID(it threadItem, cid any) map[string]any {
 // gate asks the client when the thread's approval policy says codex would
 // ("untrusted": every edit and every non-read command), and reports whether
 // the call may run. "never" runs without asking.
+//
+// MADS_FAKE_CODEX_ASK_ALWAYS=1 asks under any policy — codex is not
+// supposed to under "never", which is exactly what proves the client
+// answers such an ask by trust rather than forwarding it.
 func (srv *fcServer) gate(th *fcThread, turn *fcTurn, method, itemID string, extra map[string]any) (allowed, asked bool) {
-	if th.Approval != "untrusted" {
+	if th.Approval != "untrusted" && os.Getenv("MADS_FAKE_CODEX_ASK_ALWAYS") != "1" {
 		return true, false
 	}
 	params := map[string]any{"threadId": th.ID, "turnId": turn.id, "itemId": itemID, "startedAtMs": time.Now().UnixMilli()}
@@ -545,10 +549,10 @@ func (srv *fcServer) attemptWrite(th *fcThread, turn *fcTurn) string {
 		Changes: []fileChange{{Path: path, Diff: "hi\n"}}}
 	it.Changes[0].Kind.Type = "add"
 	srv.item(th, turn, it, false)
-	if th.Sandbox == "read-only" {
-		it.Status = "failed" // the sandbox refuses the patch
-	} else if allowed, _ := srv.gate(th, turn, "item/fileChange/requestApproval", it.ID, map[string]any{"reason": nil, "grantRoot": nil}); !allowed {
+	if allowed, _ := srv.gate(th, turn, "item/fileChange/requestApproval", it.ID, map[string]any{"reason": nil, "grantRoot": nil}); !allowed {
 		it.Status = "declined"
+	} else if th.Sandbox == "read-only" {
+		it.Status = "failed" // approved or not, the sandbox refuses the patch
 	} else if err := os.WriteFile(path, []byte("hi\n"), 0o600); err != nil {
 		it.Status = "failed"
 	} else {

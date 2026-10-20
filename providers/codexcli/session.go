@@ -231,14 +231,19 @@ func effectiveTrust(t provider.Trust) provider.Trust {
 //     outside its known-safe read-only list (captured: `touch a.txt` and an
 //     apply_patch add both asked; `ls` never does). Those asks go to the
 //     user; with no asker they are declined.
-//   - read_only: read-only, never — the OS sandbox (Seatbelt / Landlock)
-//     refuses every write, and nothing asks.
+//   - read_only: read-only, untrusted — the OS sandbox (Seatbelt /
+//     Landlock) refuses every write whatever anyone answers, and under a
+//     read-only sandbox codex asks before every command, `ls` included
+//     (captured, readonly-untrusted.jsonl); mads declines each ask itself,
+//     never forwarding it. So nothing runs. (read-only + never would run
+//     commands inside the sandbox without asking — reads, but still
+//     command execution, which read_only denies.)
 func trustPolicy(t provider.Trust) (sandbox, approval string) {
 	switch t {
 	case provider.TrustFull:
 		return "danger-full-access", "never"
 	case provider.TrustReadOnly:
-		return "read-only", "never"
+		return "read-only", "untrusted"
 	default:
 		return "workspace-write", "untrusted"
 	}

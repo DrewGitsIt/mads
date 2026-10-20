@@ -279,21 +279,65 @@ func TestLimitedAsksTheUser(t *testing.T) {
 	}
 }
 
-func TestReadOnlyNeverAsks(t *testing.T) {
+// read_only: codex asks before every command (and, here, the edit), and
+// mads answers decline itself — the user's asker is never consulted, and
+// it would have said yes, so a forwarded ask would have run.
+func TestReadOnlyDeclinesCodexsAsks(t *testing.T) {
+	for _, prompt := range []string{"attempt-shell", "attempt-write"} {
+		t.Run(prompt, func(t *testing.T) {
+			var mu sync.Mutex
+			asked := 0
+			asker := func(context.Context, provider.PermissionAsk) provider.PermissionDecision {
+				mu.Lock()
+				asked++
+				mu.Unlock()
+				return provider.PermissionDecision{Allow: true}
+			}
+			cwd := t.TempDir()
+			s := startSession(t, fakeProvider(t), provider.StartOptions{Trust: provider.TrustReadOnly, Permissions: asker, Cwd: cwd})
+			evs := sendTurn(t, s, prompt)
+			mu.Lock()
+			defer mu.Unlock()
+			if asked != 0 {
+				t.Errorf("read_only forwarded %d asks to the user", asked)
+			}
+			res := lastToolResult(evs)
+			if res == nil || !res.IsError || res.Tool.Status != provider.ToolStatusBlocked {
+				t.Errorf("tool result = %+v, want declined (blocked)", res)
+			}
+			for _, f := range []string{"fake-shell.txt", "fake-write.txt"} {
+				if _, err := os.Stat(filepath.Join(cwd, f)); err == nil {
+					t.Errorf("read_only let %s be written", f)
+				}
+			}
+		})
+	}
+}
+
+// full: an ask codex should never send under "never" is answered accept by
+// mads, not forwarded.
+func TestFullAnswersAnAskItself(t *testing.T) {
 	asked := false
 	asker := func(context.Context, provider.PermissionAsk) provider.PermissionDecision {
 		asked = true
-		return provider.PermissionDecision{Allow: true}
+		return provider.PermissionDecision{Allow: false}
 	}
 	cwd := t.TempDir()
-	s := startSession(t, fakeProvider(t), provider.StartOptions{Trust: provider.TrustReadOnly, Permissions: asker, Cwd: cwd})
-	sendTurn(t, s, "attempt-write")
-	if asked {
-		t.Error("read_only asked the user")
+	s := startSession(t, fakeProvider(t, "MADS_FAKE_CODEX_ASK_ALWAYS=1"), provider.StartOptions{Trust: provider.TrustFull, Permissions: asker, Cwd: cwd})
+	res := lastToolResult(sendTurn(t, s, "attempt-shell"))
+	if asked || res == nil || res.IsError {
+		t.Fatalf("asked=%v result=%+v, want accepted without asking", asked, res)
 	}
-	if _, err := os.Stat(filepath.Join(cwd, "fake-write.txt")); err == nil {
-		t.Error("read_only wrote the file")
+}
+
+func lastToolResult(evs []provider.Event) *provider.Event {
+	var res *provider.Event
+	for i := range evs {
+		if evs[i].Kind == provider.EventToolResult {
+			res = &evs[i]
+		}
 	}
+	return res
 }
 
 // TestSpawnShapePerTrust reads what the adapter actually sent: the codex
@@ -308,7 +352,7 @@ func TestSpawnShapePerTrust(t *testing.T) {
 		{provider.TrustFull, "danger-full-access", "never"},
 		{provider.TrustLimited, "workspace-write", "untrusted"},
 		{provider.TrustAutoReview, "workspace-write", "untrusted"}, // runs as limited
-		{provider.TrustReadOnly, "read-only", "never"},
+		{provider.TrustReadOnly, "read-only", "untrusted"},
 		{"something-new", "workspace-write", "untrusted"}, // never falls through to full
 	}
 	for _, tc := range cases {
@@ -332,6 +376,23 @@ func TestSpawnShapePerTrust(t *testing.T) {
 			turn := received(t, logPath, "turn/start")
 			if cid, _ := turn["clientUserMessageId"].(string); !strings.HasPrefix(cid, "mads-") || turn["effort"] != "low" {
 				t.Errorf("turn/start = %v", turn)
+			}
+
+			// Resume and fork carry the same trust shape, prompt and
+			// override as a fresh thread.
+			ref := s.Ref()
+			_ = s.Close()
+			startSession(t, p, provider.StartOptions{Trust: tc.trust, SystemPrompt: "be brief", Resume: ref})
+			startSession(t, p, provider.StartOptions{Trust: tc.trust, SystemPrompt: "be brief", Resume: ref, Fork: true})
+			for _, method := range []string{"thread/resume", "thread/fork"} {
+				got := received(t, logPath, method)
+				if got["threadId"] != ref || got["sandbox"] != tc.sandbox || got["approvalPolicy"] != tc.approval ||
+					got["developerInstructions"] != "be brief" || got["excludeTurns"] != true {
+					t.Errorf("%s = %v", method, got)
+				}
+				if projects, _ := got["config"].(map[string]any)["projects"].(map[string]any); len(projects) != 1 {
+					t.Errorf("%s config.projects = %v", method, projects)
+				}
 			}
 		})
 	}

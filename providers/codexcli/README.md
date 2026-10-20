@@ -48,7 +48,7 @@ survey's captures and this increment's probes, trimmed and scrubbed under
 | OneShot / OneShotStream / OneShotResume | **Emulated** | Ride an app-server thread like a session (full trust), not `codex exec` — see "One-shot". |
 | MCPServers | **Native** | `config.mcp_servers.<name>` on the thread — session-only, never written to the user's config (probed: codex started the named server). stdio and http; sse has no codex form and is dropped. |
 | TrustLimited | **Native** | codex's own sandbox + approval policy asks; mads forwards (below). |
-| TrustReadOnly | **Native** | codex's OS sandbox (Seatbelt / Landlock) refuses every write. |
+| TrustReadOnly | **Native** | Writes: codex's OS sandbox (Seatbelt / Landlock) refuses them whatever anyone answers. Commands: under a read-only sandbox with `untrusted` approvals codex asks before every one, `ls` included (`readonly-untrusted.jsonl`), and mads declines each ask itself — so nothing runs. (`never` would have run read commands inside the sandbox without asking: still command execution.) |
 | TrustAutoReview | **Unsupported** | codex has a reviewer (`approvalsReviewer: auto_review`), but what it does with a call it rejects — deny outright, or escalate to the user as mads' auto_review promises (`thread/approveGuardianDeniedAction` suggests the former) — is not captured. Such sessions run as limited, visibly (`provider.EffectiveTrust`). |
 | Compaction | **Native** | `thread/compact/start` (`steer-compact.jsonl`: context 4900 tokens after). |
 | CompactionFocus | **Unsupported** | `thread/compact/start` takes only a thread id. |
@@ -65,7 +65,7 @@ codex has two knobs; the adapter sets both on every thread (`trustPolicy`):
 | full (and unset) | `danger-full-access` | `never` | nobody asks — codex's own `--yolo` pair, claude-code's bypassPermissions |
 | limited | `workspace-write` | `untrusted` | codex asks before every edit and every command outside its known-safe read list (captured: `touch a.txt` and an apply_patch add asked; `ls` never does) → the user via `StartOptions.Permissions`; no asker → `decline`, so the turn never stalls |
 | auto_review | as limited | as limited | (row Unsupported) |
-| read_only | `read-only` | `never` | the OS sandbox; nothing asks, and an ask that came anyway is declined |
+| read_only | `read-only` | `untrusted` | the OS sandbox refuses writes; codex asks before every command and mads declines each one itself — the user is never asked |
 | anything else | as limited | as limited | never falls through to full |
 
 Answers are `accept` / `decline` per call — never `acceptForSession`: mads
@@ -141,6 +141,8 @@ rate-limit failure (`codexErrorInfo` `usageLimitExceeded` /
   totals. It refuses a writable-sandbox thread without the trust override
   (real codex would write the user's config), runs a gated tool only on
   `accept`, and lets the sandbox fail a read-only write.
+  `MADS_FAKE_CODEX_ASK_ALWAYS=1` makes it ask even under `never`, so the
+  tests prove read_only and full answer by trust and never forward.
 - `TestConformanceAgainstScriptedBinary` runs the full
   `providers/conformance` suite against it: every row above, no binary.
 - `wire_test.go` replays the real captures through a session with no

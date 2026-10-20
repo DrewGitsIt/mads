@@ -10,6 +10,7 @@ claim in this package. Model gpt-5.6-luna at low reasoning effort.
 | `run3-resume-items-list.json` | `thread/items/list` for a thread whose app-server was killed (`kill -9`) mid-command, then resumed: the in-flight command item is gone. | Survey run3-resume. |
 | `limited-decline.jsonl` | Limited trust (`workspace-write` + `untrusted`): `touch a.txt` asks (`item/started` commandExecution, then `item/commandExecution/requestApproval` with that item id); the client declines; the item completes `declined`; the model retries once, declined again. | Probe 2026-10-20 (P2d), ephemeral thread, client answered `{"decision":"decline"}`. |
 | `limited-filechange.jsonl` | Limited trust: an apply_patch add asks (`item/fileChange/requestApproval`); accepted; the item completes `completed`. | Probe 2026-10-20 (P2d), client answered `{"decision":"accept"}`. |
+| `readonly-untrusted.jsonl` | read_only trust (`read-only` sandbox + `untrusted` approvals): even `ls` asks; the client declines; the item completes `declined`. Why read_only uses `untrusted`, not `never` (which would run reads without asking). | Probe 2026-10-20 (P2d review), scratch `CODEX_HOME` with the login symlinked, ephemeral thread. |
 | `steer-compact.jsonl` | `turn/steer` mid-turn (one more userMessage item, same turn id, one `turn/completed`), then `thread/compact/start` (its own turn: a `contextCompaction` item, `tokenUsage.last.totalTokens` 4900). | Probe 2026-10-20 (P2d), read-only sandbox, ephemeral thread. |
 
 ## Trimming and scrubbing

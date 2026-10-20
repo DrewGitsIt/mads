@@ -128,7 +128,9 @@ func (p *Provider) Matrix() provider.Matrix {
 		// thread/start's config override: mcp_servers.<name>, session-only.
 		provider.BehaviorMCPServers: provider.Native,
 		// codex's own sandbox + approval policy (trustPolicy): limited's
-		// asks are codex's, forwarded; read_only is the OS sandbox.
+		// asks are codex's, forwarded; read_only's writes are refused by
+		// the OS sandbox and its commands by codex's ask, which mads
+		// declines — every command asks under a read-only sandbox.
 		provider.BehaviorTrustLimited:  provider.Native,
 		provider.BehaviorTrustReadOnly: provider.Native,
 		// codex has an approvals reviewer (approvalsReviewer

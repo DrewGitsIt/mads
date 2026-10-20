@@ -382,3 +382,30 @@ func TestInterruptWithoutATurnIDMarksNothing(t *testing.T) {
 		t.Fatalf("wrote %d lines", n)
 	}
 }
+
+// Real codex under read_only (read-only sandbox, untrusted approvals) asks
+// even before `ls`; mads declines it without consulting the user.
+func TestReplayReadOnlyDeclinesEvenLs(t *testing.T) {
+	forwarded := false
+	asker := func(context.Context, provider.PermissionAsk) provider.PermissionDecision {
+		forwarded = true
+		return provider.PermissionDecision{Allow: true}
+	}
+	evs, w := replay(t, "readonly-untrusted.jsonl", provider.TrustReadOnly, asker)
+	if forwarded {
+		t.Fatal("read_only forwarded codex's ask")
+	}
+	var decisions []string
+	for _, m := range w.lines() {
+		if r, ok := m["result"].(map[string]any); ok {
+			decisions = append(decisions, r["decision"].(string))
+		}
+	}
+	if strings.Join(decisions, ",") != "decline" {
+		t.Fatalf("replies = %v", decisions)
+	}
+	res := lastToolResult(evs)
+	if res == nil || res.Tool.Status != provider.ToolStatusBlocked {
+		t.Fatalf("the `ls` result = %+v, want blocked", res)
+	}
+}

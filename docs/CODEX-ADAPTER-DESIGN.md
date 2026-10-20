@@ -130,7 +130,7 @@ codex has the two knobs mads needs: an OS sandbox (`read-only`,
 | full / unset | danger-full-access | never |
 | limited | workspace-write | untrusted |
 | auto_review | as limited (row Unsupported) | |
-| read_only | read-only | never |
+| read_only | read-only | untrusted (every ask declined by mads) |
 | unknown | as limited | |
 
 `untrusted` asks before every edit and every command outside codex's
@@ -138,7 +138,12 @@ known-safe read list (captured: `touch a.txt` and an apply_patch add
 asked, `ls` never did) — the shape of mads' limited ("ask before risky
 things, reads don't ask"). Asks go to `StartOptions.Permissions` on a
 goroutine of their own; no asker → `decline`, so a headless turn never
-stalls; read_only declines anything that asks anyway; full accepts.
+stalls; read_only declines every ask itself (under a read-only sandbox
+codex asks before every command, `ls` included — `readonly-untrusted.jsonl`
+— so no command runs, and the sandbox refuses writes regardless); full
+accepts. read_only first rode `never`, which runs read commands inside the
+sandbox without asking: command execution all the same, which the
+read_only row denies.
 Decisions are per call (`accept`/`decline`), never `acceptForSession`.
 `on-request` was rejected for limited: there the model decides when to
 ask, which is not "codex asks before risky things".
