@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
@@ -12,5 +13,10 @@ export default defineConfig({
     include: ["src/**/*.test.{ts,tsx}", "electron/**/*.test.ts"],
     exclude: ["e2e/**", "node_modules/**"],
     setupFiles: ["./src/setupTests.ts"],
+    // Workers die with the main process instead of running on as orphans —
+    // see vitest.orphanGuard.cjs.
+    poolOptions: {
+      forks: { execArgv: ["--require", resolve(__dirname, "vitest.orphanGuard.cjs")] },
+    },
   },
 });
