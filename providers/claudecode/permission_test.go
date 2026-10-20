@@ -120,9 +120,14 @@ func TestWritePermissionSettingsPathScope(t *testing.T) {
 // hooks. The flat shape this package used to write fails this test: it
 // loads without complaint and no hook ever runs. claude may exit at once
 // or sit retrying the dead endpoint depending on its environment, so the
-// test watches for the marker and kills the process either way. Skipped
-// when claude isn't on PATH (CI).
+// test watches for the marker and kills the process either way. Opt-in
+// with MADS_CLAUDE_SMOKE=1, like the other real-binary tests: a plain
+// `go test ./...` must never start a real harness. Still zero-token.
+// MADS_CLAUDE_SMOKE=1 go test ./providers/claudecode -run SettingsShapeRealClaude
 func TestSettingsShapeRealClaude(t *testing.T) {
+	if os.Getenv("MADS_CLAUDE_SMOKE") != "1" {
+		t.Skip("set MADS_CLAUDE_SMOKE=1 to run against the real claude binary (zero tokens)")
+	}
 	bin, err := exec.LookPath("claude")
 	if err != nil {
 		t.Skip("claude not on PATH")

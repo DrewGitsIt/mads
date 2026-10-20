@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/drewkidwell/mads/pkg/binlocate"
 	"github.com/drewkidwell/mads/pkg/mergedriver"
 )
 
@@ -80,6 +81,10 @@ func TestRun_DataServiceUnhealthy(t *testing.T) {
 }
 
 func TestRun_HappyPath(t *testing.T) {
+	// Hermetic: an empty $MADS_AGENT_BIN_DIR hides every real claude, so the
+	// provider row must read not-installed and no real `claude --version`
+	// runs.
+	t.Setenv(binlocate.EnvAgentBinDir, t.TempDir())
 	c := New(Deps{
 		Data:      fakeData{},
 		Providers: fakeProviders{names: []string{"claude-code"}},
@@ -100,6 +105,29 @@ func TestRun_HappyPath(t *testing.T) {
 	disk := findCheck(t, checks, "disk_space")
 	if !disk.Healthy {
 		t.Errorf("disk_space check = %+v, want healthy", disk)
+	}
+	claude := findCheck(t, checks, "provider:claude-code")
+	if !claude.NotInstalled {
+		t.Errorf("provider:claude-code check = %+v, want not-installed under an empty $MADS_AGENT_BIN_DIR", claude)
+	}
+}
+
+// TestCheckProviderBinary_AgentBinDirStandIn: with $MADS_AGENT_BIN_DIR
+// set, the probe runs the stand-in there and ignores a same-named binary on
+// PATH.
+func TestCheckProviderBinary_AgentBinDirStandIn(t *testing.T) {
+	onPath, dir := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(onPath, "goose"), []byte("#!/bin/sh\necho ' 1.0.0'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "goose"), []byte("#!/bin/sh\necho ' 1.46.0'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", onPath)
+	t.Setenv(binlocate.EnvAgentBinDir, dir)
+	check := checkProviderBinary(context.Background(), "goose", knownProviderBinaries["goose"])
+	if !check.Healthy || check.Detail != "goose v1.46.0" {
+		t.Errorf("checkProviderBinary(goose) = %+v, want the stand-in's goose v1.46.0", check)
 	}
 }
 
