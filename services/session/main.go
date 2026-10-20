@@ -24,6 +24,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/claudecode"
+	"github.com/drewkidwell/mads/providers/codexcli"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/goosecli"
@@ -103,6 +104,18 @@ func buildProviderRegistry(mode agentenv.Mode, passthrough, credEnv []string) (*
 		Env:            credEnv,
 	})); err != nil {
 		return nil, fmt.Errorf("register goose provider: %w", err)
+	}
+	// codex reads $CODEX_HOME (default ~/.codex) for its ChatGPT login,
+	// config and sessions: HOME is on agentenv's base allowlist, CODEX_HOME
+	// is not, so isolated mode passes it through. No trust ExtraArgs: the
+	// adapter sets each thread's sandbox and approval policy per trust.
+	codexPassthrough := append([]string{"CODEX_HOME"}, passthrough...)
+	if err := registry.Register(codexcli.New(codexcli.Config{
+		EnvMode:        mode,
+		EnvPassthrough: codexPassthrough,
+		Env:            credEnv,
+	})); err != nil {
+		return nil, fmt.Errorf("register codex provider: %w", err)
 	}
 	if err := registry.Register(fake.New()); err != nil {
 		return nil, fmt.Errorf("register fake provider: %w", err)

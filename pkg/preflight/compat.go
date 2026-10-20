@@ -31,6 +31,14 @@ var compatMatrix = map[string]compatRange{
 	// listed in that re-verification note. Max is exclusive, so 1.48.x
 	// passes and 1.49+ warns as unproven.
 	"goose": {Min: "1.46.0", Max: "1.49.0", Note: "proven against goose 1.46.0 (binary probes) and 1.48.0 (captures + source re-verification) — docs/GOOSE-ADAPTER-DESIGN.md"},
+	// codex: proven against 0.154.0 only — the survey and probe captures
+	// (providers/codexcli/testdata/captures) and the real-binary smoke. The
+	// adapter speaks `codex app-server`, whose protocol codex versions with
+	// the CLI and marks partly experimental (clientUserMessageId,
+	// thread/items/list ride experimentalApi), so the window is the one
+	// minor line: 0.154.x passes, 0.155+ warns as unproven. The ChatGPT
+	// app's bundled CLI reports "0.154.0-alpha.N", which parses as 0.154.0.
+	"codex": {Min: "0.154.0", Max: "0.155.0", Note: "proven against codex 0.154.0 (captures + real-binary smoke) — docs/CODEX-ADAPTER-DESIGN.md"},
 }
 
 // evaluate reports whether version sits in the proven window. Below Min is

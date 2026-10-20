@@ -26,6 +26,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/pipelinerun"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/providers/claudecode"
+	"github.com/drewkidwell/mads/providers/codexcli"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/goosecli"
 	"github.com/drewkidwell/mads/providers/kirocli"
@@ -108,6 +109,18 @@ func buildProviderRegistry(madsHome string, mode agentenv.Mode, passthrough, cre
 		Env:            credEnv,
 	})); err != nil {
 		return nil, fmt.Errorf("register goose provider: %w", err)
+	}
+	// codex reads $CODEX_HOME (default ~/.codex) for its ChatGPT login,
+	// config and sessions: HOME is on agentenv's base allowlist, CODEX_HOME
+	// is not, so isolated mode passes it through. No trust ExtraArgs: the
+	// adapter sets each thread's sandbox and approval policy per trust.
+	codexPassthrough := append([]string{"CODEX_HOME"}, passthrough...)
+	if err := reg.Register(codexcli.New(codexcli.Config{
+		EnvMode:        mode,
+		EnvPassthrough: codexPassthrough,
+		Env:            credEnv,
+	})); err != nil {
+		return nil, fmt.Errorf("register codex provider: %w", err)
 	}
 	fakeOpt := fake.WithTranscriptDir(filepath.Join(madsHome, "fake-transcripts"))
 	fakeProv := fake.New(fakeOpt)

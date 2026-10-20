@@ -25,7 +25,7 @@ type providerBinary struct {
 
 // knownProviderBinaries is deliberately small and honest: one entry per
 // provider adapter this repo actually ships (providers/claudecode,
-// providers/kirocli, providers/goosecli).
+// providers/kirocli, providers/goosecli, providers/codexcli).
 var knownProviderBinaries = map[string]providerBinary{
 	"claude-code": {
 		Bin:            "claude",
@@ -53,6 +53,17 @@ var knownProviderBinaries = map[string]providerBinary{
 		InstallHint:    "install goose Desktop, or the goose CLI with `goose` on PATH",
 		InstallURL:     "https://goose-docs.ai/docs/getting-started/installation",
 		InstallCommand: "curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | bash",
+	},
+	"codex": {
+		Bin:         "codex",
+		VersionArgs: []string{"--version"},
+		// `codex --version` prints "codex-cli 0.154.0" (the ChatGPT app's
+		// bundled copy "codex-cli 0.154.0-alpha.6.2"); parseSemverish takes
+		// the first N.N.N.
+		ParseVersion:   parseSemverish,
+		InstallHint:    "install the Codex CLI and ensure `codex` is on PATH (signing in with ChatGPT happens in codex itself)",
+		InstallURL:     "https://github.com/openai/codex",
+		InstallCommand: "npm install -g @openai/codex",
 	},
 }
 

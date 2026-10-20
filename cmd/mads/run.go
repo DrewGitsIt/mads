@@ -20,6 +20,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/pipelinerun"
 	"github.com/drewkidwell/mads/providers/claudecode"
+	"github.com/drewkidwell/mads/providers/codexcli"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/goosecli"
 	"github.com/drewkidwell/mads/providers/kirocli"
@@ -33,7 +34,7 @@ func cmdRun(args []string, out io.Writer) error {
 	workspace := fs.String("workspace", ".", "workspace repo the run works in")
 	tplName := fs.String("template", "default-implementation", "pipeline template (registry name)")
 	exclude := fs.String("exclude", "", "comma-separated task IDs to leave out of the run (dependents stranded only by them are left out too; neither makes the run incomplete)")
-	providerName := fs.String("provider", "claude-code", "agent provider: claude-code, kiro-cli, goose, or fake")
+	providerName := fs.String("provider", "claude-code", "agent provider: claude-code, kiro-cli, goose, codex, or fake")
 	model := fs.String("model", "", "model override for agent stages")
 	concurrency := fs.Int("concurrency", 5, "simultaneous tasks — agent stages run in parallel up to "+
 		"this cap; dependencies express prerequisites, not anti-collision. Integration is always "+
@@ -47,6 +48,8 @@ func cmdRun(args []string, out io.Writer) error {
 		"extra args for every kiro-cli invocation (pipeline agents run autonomously; §13 permission profiles are a later wave)")
 	gooseArgs := fs.String("goose-args", "",
 		"extra args for every goose invocation (default empty: full trust rides ACP session mode \"auto\", which the engine sets itself — no trust flag exists to pass)")
+	codexArgs := fs.String("codex-args", "",
+		"extra args for `codex app-server` (e.g. -c key=value overrides; default empty: the adapter sets each thread's sandbox and approval policy itself, and an unset trust runs as full — danger-full-access, approvals never)")
 	fakeScenario := fs.String("fake-scenario", "", "scenario YAML for -provider fake (rehearsal runs)")
 	// The flag default here is only a last-resort fallback (Data Service
 	// unreachable before we can load the real default below) — it is not
@@ -95,7 +98,7 @@ func cmdRun(args []string, out io.Writer) error {
 
 	madsHome := defaultMadsHome()
 
-	prov, err := resolveProvider(*providerName, *claudeArgs, *kiroArgs, *gooseArgs, *fakeScenario, madsHome)
+	prov, err := resolveProvider(*providerName, *claudeArgs, *kiroArgs, *gooseArgs, *codexArgs, *fakeScenario, madsHome)
 	if err != nil {
 		return err
 	}
@@ -183,7 +186,7 @@ func cmdRun(args []string, out io.Writer) error {
 // resolveProvider maps the -provider flag onto a constructed provider. Last
 // hand-registration site of its kind: W7.9's providers/load collapses this
 // switch into descriptor loading — new providers go there, not here.
-func resolveProvider(name, claudeArgs, kiroArgs, gooseArgs, fakeScenario, madsHome string) (provider.Provider, error) {
+func resolveProvider(name, claudeArgs, kiroArgs, gooseArgs, codexArgs, fakeScenario, madsHome string) (provider.Provider, error) {
 	switch name {
 	case "fake":
 		// WithTranscriptDir makes an announced ref's history durable to
@@ -209,6 +212,12 @@ func resolveProvider(name, claudeArgs, kiroArgs, gooseArgs, fakeScenario, madsHo
 		// mode "auto", which the engine sets itself — there is no goose
 		// CLI trust flag to pass.
 		return goosecli.New(goosecli.Config{ExtraArgs: strings.Fields(gooseArgs)}), nil
+	case codexcli.Name:
+		// No trust ExtraArgs default: the adapter sets every thread's sandbox
+		// and approval policy itself (an unset trust is full —
+		// danger-full-access, approvals never); codex has no CLI flag that
+		// app-server threads would need on top.
+		return codexcli.New(codexcli.Config{ExtraArgs: strings.Fields(codexArgs)}), nil
 	default:
 		return nil, fmt.Errorf("unknown provider %q", name)
 	}
