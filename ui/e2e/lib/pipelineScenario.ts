@@ -14,8 +14,21 @@
 
 /** tasks-pipeline.spec: the task the journey zooms into. Review fails it once, so executor runs twice. */
 export const JOURNEY_LENS_TASK = "tp journey: lens task";
-/** tasks-pipeline.spec: left out of the first run, then the slow task the second run is cancelled under. */
+/** tasks-pipeline.spec: left out of the first run, then the slow task the second run is stopped under. */
 export const JOURNEY_ROOT_TASK = "tp journey: left-out root";
+
+/**
+ * tasks-stop-pickup.spec: its executor announces a session ref (so a later
+ * run can resume that session), leaves a file in the worktree, and streams
+ * slowly enough to Stop mid-turn.
+ */
+export const STOP_PICKUP_TASK = "sp journey: resumable task";
+export const STOP_PICKUP_FILE = "sp-interrupted-work.txt";
+export const STOP_PICKUP_LINES = Array.from({ length: 60 }, (_, i) => `sp first-run step ${i + 1}`);
+/** What the resumed executor says: proof the run resumed the session rather than starting a new one. */
+export const RESUMED_LINES = Array.from({ length: 6 }, (_, i) => `sp resumed step ${i + 1}`);
+/** The engine's prompt for a resumed agent session (services/pipeline/engine/progress.go resumePrompt). */
+const RESUME_PROMPT = "You were interrupted; continue where you left off.";
 
 export const ATTEMPT_ONE_LINES = Array.from({ length: 8 }, (_, i) => `attempt-one step ${i + 1}`);
 export const ATTEMPT_TWO_LINES = Array.from({ length: 8 }, (_, i) => `attempt-two step ${i + 1}`);
@@ -46,11 +59,24 @@ export const PIPELINE_SCENARIO = [
   ...chunks(ATTEMPT_ONE_LINES, 1000),
   `  - match: ${quote(loopBack("executor", JOURNEY_LENS_TASK))}`,
   ...chunks(ATTEMPT_TWO_LINES, 1000),
-  // Slow enough to reload the page and cancel it mid-stage.
+  // Slow enough to reload the page and stop the run mid-stage.
   `  - match: ${quote(`Pipeline stage: executor\nTask: ${JOURNEY_ROOT_TASK}\n`)}`,
   ...chunks(
     Array.from({ length: 40 }, (_, i) => `root step ${i + 1}`),
     500,
   ),
+  // A resumed one-shot (OneShotRequest.Resume) gets the resume prompt, not
+  // the task brief, so this can't key on a title: only tasks-stop-pickup
+  // resumes a session in this suite.
+  `  - match: ${quote(RESUME_PROMPT)}`,
+  "    resumed: true",
+  ...chunks(RESUMED_LINES, 1000),
+  `  - match: ${quote(`Pipeline stage: executor\nTask: ${STOP_PICKUP_TASK}\n`)}`,
+  "    announce_ref: true",
+  "    tools:",
+  "      - name: write_file",
+  `        path: ${quote(STOP_PICKUP_FILE)}`,
+  `        content: ${quote("half done\n")}`,
+  ...chunks(STOP_PICKUP_LINES, 500),
   "",
 ].join("\n");

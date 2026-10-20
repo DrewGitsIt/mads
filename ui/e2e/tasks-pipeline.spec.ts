@@ -23,7 +23,7 @@ import {
 // The pipeline runs inside the Tasks tab (docs/TASKS-PIPELINE-DESIGN.md):
 // plan a run, start it from the run bar, watch it on the metro, zoom into a
 // task, look back at an earlier attempt, use the graph's focus view, revisit
-// the finished run, and cancel a run after a reload. Runs are launched by the
+// the finished run, and stop a run after a reload. Runs are launched by the
 // UI itself (POST /pipelines → the real services/pipeline child), scripted by
 // the suite-wide fake scenario in lib/pipelineScenario.ts: the lens task's
 // executor streams slowly, and its code review fails once and loops back.
@@ -158,7 +158,7 @@ test.describe("tasks tab: pipeline journey", () => {
     await runButton.click();
     await expect(runTrigger(panel)).toContainText("Run 1");
     await expect(runTrigger(panel)).toContainText("running");
-    await expect(panel.getByRole("button", { name: "Cancel run" })).toBeEnabled();
+    await expect(panel.getByRole("button", { name: "Stop", exact: true })).toBeEnabled();
 
     const metro = panel.getByTestId("metro");
     const lensToken = metro.locator(`button[data-task="${lensId}"]`);
@@ -276,9 +276,9 @@ test.describe("tasks tab: pipeline journey", () => {
     await shot(page, "past-run");
   });
 
-  test("a run started here can be cancelled after a reload", async ({ page, routerURL }) => {
+  test("a run started here can be stopped after a reload", async ({ page, routerURL }) => {
     test.setTimeout(90_000);
-    // ── g. Cancel after reload ───────────────────────────────────────────
+    // ── g. Stop after reload ─────────────────────────────────────────────
     let panel = await openTasksTab(page, routerURL);
     await panel.getByRole("button", { name: "New run", exact: true }).click();
     await panel.getByRole("button", { name: "Run 2 tasks" }).click();
@@ -294,11 +294,19 @@ test.describe("tasks tab: pipeline journey", () => {
     panel = page.locator("#workspace-panel-tasks");
     await expect(runTrigger(panel)).toContainText("Run 2");
     await expect(runTrigger(panel)).toContainText("running");
-    const cancel = panel.getByRole("button", { name: "Cancel run" });
-    await expect(cancel).toBeEnabled();
-    await cancel.click();
-    await expect(runTrigger(panel)).toContainText("cancelled", { timeout: 30_000 });
+    const stop = panel.getByRole("button", { name: "Stop", exact: true });
+    await expect(stop).toBeEnabled();
+    await stop.click();
+    await expect(runTrigger(panel)).toContainText("stopped", { timeout: 30_000 });
     await expect(panel.getByRole("button", { name: "New run", exact: true })).toBeVisible();
+    // Stop keeps state: the root was mid-stage, so it is Interrupted (not
+    // Blocked), and its dependent never started.
+    await expect(group(panel, "Interrupted").locator(`li[data-task="${rootId}"]`)).toHaveAttribute(
+      "data-status",
+      "interrupted",
+    );
+    await expect(group(panel, "Not in this run").locator(`li[data-task="${dependentId}"]`)).toBeVisible();
+    await expect(panel.getByRole("region", { name: /^Blocked/ })).toHaveCount(0);
 
     // + Add task creates a draft and opens its sheet (it can't join a run
     // until it's confirmed).
