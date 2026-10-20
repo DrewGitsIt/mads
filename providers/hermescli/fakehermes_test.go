@@ -45,8 +45,11 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -435,6 +438,18 @@ func (f *fakeHermes) prompt(m fhMessage) {
 	case cmd == "ask-edit":
 		f.askEdit()
 		reply = "done"
+	case cmd == "detach" || cmd == "detach-slow":
+		// What hermes's tools do (process_registry.py:1246 etc.): a
+		// helper in a session of its own, plus one left in hermes-acp's
+		// group (the PM worker's case, pm/client.py:77). Both pids go to
+		// MADS_FAKE_HERMES_PIDS, announced as a tool call first.
+		f.update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "tc-" + randHex(6), "kind": "execute", "title": "terminal: sleep 300 &"})
+		f.spawnHelpers()
+		if cmd == "detach-slow" {
+			f.slow(m.ID, prompt, msgID)
+			return
+		}
+		reply = "started helpers"
 	case cmd == "ratelimit":
 		f.respondErr(m.ID, -32603, "Internal error: HTTP 429: rate limit exceeded")
 		return
@@ -446,6 +461,22 @@ func (f *fakeHermes) prompt(m fhMessage) {
 	f.in += 1000
 	f.out += 10
 	f.result(m.ID, "end_turn")
+}
+
+func (f *fakeHermes) spawnHelpers() {
+	detached := exec.Command("sleep", "300")
+	detached.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	grouped := exec.Command("sleep", "300")
+	var pids []string
+	for _, c := range []*exec.Cmd{detached, grouped} {
+		if err := c.Start(); err != nil {
+			fhFail("helper: %v", err)
+		}
+		pids = append(pids, strconv.Itoa(c.Process.Pid))
+	}
+	if path := os.Getenv("MADS_FAKE_HERMES_PIDS"); path != "" {
+		_ = os.WriteFile(path, []byte(strings.Join(pids, " ")), 0o644)
+	}
 }
 
 // tool is runc1's turn 2: tool call announced under a live tc- id, stored

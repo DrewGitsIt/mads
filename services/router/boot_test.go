@@ -298,6 +298,18 @@ func TestDigestwatchSubscribesAtBootAndDeliversDigest(t *testing.T) {
 	routerURL := "http://" + router.addr
 	bootWaitHealth(t, routerURL)
 
+	// Boot warms model discovery for every provider. hermes must refuse
+	// under this scratch HOME (no hermes dependency install there) rather
+	// than run hermes-acp, whose launcher would install ~600 MB into
+	// $HOME/.hermes and leave the installer running after the Router
+	// (pkg/hermesinstall). Either way the attempt is logged once warm ends.
+	bootEventually(t, 10*time.Second, func() bool {
+		return router.stderr.count("model discovery hermes") >= 1
+	})
+	if _, err := os.Stat(filepath.Join(homeDir, ".hermes")); !os.IsNotExist(err) {
+		t.Fatalf("booting the Router created %s/.hermes (%v): something ran hermes-acp", homeDir, err)
+	}
+
 	// Both watchers (turn-ended digests, run digests) must reach subscribed
 	// — this is the "no 422 at boot" acceptance criterion.
 	bootEventually(t, 5*time.Second, func() bool {

@@ -34,6 +34,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/agentenv"
 	"github.com/drewkidwell/mads/pkg/binlocate"
+	"github.com/drewkidwell/mads/pkg/hermesinstall"
 	"github.com/drewkidwell/mads/providers/acprpc"
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -102,13 +103,31 @@ func (p *Provider) env() []string {
 	return env
 }
 
+// childEnv is exactly the environment the engine hands hermes-acp: the
+// agentenv base, then Env (acprpc Engine.env; no EnvRemove here).
+func (p *Provider) childEnv() []string {
+	base := agentenv.Build(p.cfg.EnvMode, os.Environ(), nil, p.cfg.EnvPassthrough, nil)
+	return append(base, p.env()...)
+}
+
+// ready refuses before any spawn when launching hermes-acp would make
+// hermes install its dependencies into the home it would run under
+// (pkg/hermesinstall: a ~600 MB `uv sync` that outlives a killed
+// hermes-acp). Every spawn site — Start (and so OneShot) and Models —
+// calls it first; preflight asks the same question.
+func (p *Provider) ready() error {
+	if err := hermesinstall.Check(p.bin(), p.childEnv()); err != nil {
+		return fmt.Errorf("hermes-acp: %w", err)
+	}
+	return nil
+}
+
 // home is the HERMES_HOME the spawned hermes-acp resolves — computed from
 // exactly the environment the engine hands the child (base, then Env), so
 // the TranscriptReader always reads the store the agent writes.
 func (p *Provider) home() string {
-	base := agentenv.Build(p.cfg.EnvMode, os.Environ(), nil, p.cfg.EnvPassthrough, nil)
 	var home, suffix string
-	for _, kv := range append(base, p.env()...) {
+	for _, kv := range p.childEnv() {
 		if v, ok := strings.CutPrefix(kv, "HERMES_HOME="); ok {
 			home = strings.TrimSpace(v)
 		}
@@ -171,6 +190,11 @@ func (p *Provider) engineConfig() acprpc.Config {
 		// line 8), but no capture shows what a pass does to state.db or the
 		// session's ids, so mads does not drive it yet (README).
 		CompactCommand: "",
+		// hermes's helpers outlive it unless the whole tree is killed: the
+		// dependency bootstrap's PM worker shares its group
+		// (pm/client.py:77) and tools detach into their own sessions
+		// (process_registry.py:1246, mcp_tool.py:594, code_kernel.py:642).
+		OwnProcessTree: true,
 	}
 }
 
@@ -258,6 +282,9 @@ func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provi
 		return nil, fmt.Errorf("mode %q: %w", opts.Mode, provider.ErrUnsupported)
 	}
 	if err := fullTrustOnly(opts.Trust); err != nil {
+		return nil, err
+	}
+	if err := p.ready(); err != nil {
 		return nil, err
 	}
 	if opts.Resume != "" {
@@ -405,6 +432,9 @@ func rateLimit(msg string) *provider.RateLimitError {
 // (probe-emptynew), so discovery leaves nothing behind in the
 // user's store. Failures wrap provider.ErrDiscoveryUnavailable.
 func (p *Provider) Models(ctx context.Context) ([]provider.Model, error) {
+	if err := p.ready(); err != nil {
+		return nil, fmt.Errorf("%w: %w", err, provider.ErrDiscoveryUnavailable)
+	}
 	models, err := p.engine().DiscoverModels(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("hermes-acp: %w", err)
