@@ -5,6 +5,7 @@ import { FLAGS } from "../../featureFlags";
 import { foldToolResults } from "../../router/toolPairing";
 import type {
   BackgroundTask,
+  InboundSource,
   Link,
   PermissionRequest,
   ToolStatus,
@@ -31,6 +32,7 @@ import { Markdown } from "./markdown";
 import { CompactionMarker } from "./CompactionMarker";
 import { collapseFailedSends } from "./failedSends";
 import { formatMessageTime, parseMessageTime } from "./messageTime";
+import { InboundMessage } from "./InboundMessage";
 import { MessageAttachments } from "./MessageAttachments";
 import { PermissionCard } from "./PermissionCard";
 import { SendDelivery } from "./SendDelivery";
@@ -47,7 +49,9 @@ import styles from "./ChatRenderer.module.css";
 export type StreamItem =
   | { kind: "text"; text: string }
   | { kind: "tool"; tool: ToolUse; timestamp?: string }
-  | { kind: "thinking"; text: string };
+  | { kind: "thinking"; text: string }
+  // A message from outside MADS, live; transcript role "inbound" once persisted.
+  | { kind: "inbound"; text: string; inbound: InboundSource; timestamp?: string };
 
 export interface ChatRendererProps {
   messages: TranscriptMessage[];
@@ -168,6 +172,12 @@ export function ChatRenderer({
   for (const item of liveItems) {
     if (item.kind === "text") {
       entries.push({ type: "message", message: { role: "agent", text: item.text }, live: true });
+    } else if (item.kind === "inbound") {
+      entries.push({
+        type: "message",
+        message: { role: "inbound", text: item.text, inbound: item.inbound, timestamp: item.timestamp },
+        live: true,
+      });
     } else if (item.kind === "tool") {
       entries.push({ type: "tool", tool: item.tool, timestamp: item.timestamp, live: true });
     } else {
@@ -347,6 +357,26 @@ export function ChatRenderer({
               marker={message.compact ?? {}}
               summary={message.text}
               timestamp={message.timestamp}
+            />
+          );
+        }
+        if (message.role === "inbound" && message.inbound) {
+          // From outside MADS, not through a link: the link (when one
+          // resolves) only names the relationship, never the delivery.
+          const link = message.inbound.link_id ? linksById.get(message.inbound.link_id) : undefined;
+          const relation = link
+            ? link.subject_session_id === viewedSessionId
+              ? "your leader"
+              : "linked to this session"
+            : undefined;
+          return (
+            <InboundMessage
+              key={item.key}
+              text={message.text}
+              inbound={message.inbound}
+              timestamp={message.timestamp}
+              relation={relation}
+              findKey={item.key}
             />
           );
         }

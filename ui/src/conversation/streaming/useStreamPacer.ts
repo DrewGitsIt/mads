@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ToolUse } from "../../router/types";
+import type { InboundSource, ToolUse } from "../../router/types";
 import type { StreamItem } from "../ChatRenderer/ChatRenderer";
 import {
   applyToolResult as applyToolResultPure,
   drainAll,
   emptyPacer,
+  enqueueInbound as enqueueInboundPure,
   enqueueText as enqueueTextPure,
   enqueueThinking as enqueueThinkingPure,
   enqueueTool as enqueueToolPure,
@@ -27,6 +28,7 @@ export interface StreamPacer {
   enqueueText: (text: string) => void;
   enqueueTool: (tool: ToolUse, timestamp?: string) => void;
   enqueueThinking: (text: string) => void;
+  enqueueInbound: (text: string, inbound: InboundSource, timestamp?: string) => void;
   applyToolResult: (
     id: string | undefined,
     result: { text?: string; is_error?: boolean; timestamp?: string },
@@ -139,6 +141,18 @@ export function useStreamPacer(wordsPerMinute: number | null): StreamPacer {
     [commit, ensureLoop],
   );
 
+  const enqueueInbound = useCallback(
+    (text: string, inbound: InboundSource, timestamp?: string) => {
+      if (rateRef.current == null || !Number.isFinite(rateRef.current)) {
+        commit(drainAll(enqueueInboundPure(stateRef.current, text, inbound, timestamp)));
+        return;
+      }
+      stateRef.current = enqueueInboundPure(stateRef.current, text, inbound, timestamp);
+      ensureLoop();
+    },
+    [commit, ensureLoop],
+  );
+
   const enqueueThinking = useCallback(
     (text: string) => {
       if (rateRef.current == null || !Number.isFinite(rateRef.current)) {
@@ -208,6 +222,7 @@ export function useStreamPacer(wordsPerMinute: number | null): StreamPacer {
     enqueueText,
     enqueueTool,
     enqueueThinking,
+    enqueueInbound,
     applyToolResult,
     finish,
     revealAll,

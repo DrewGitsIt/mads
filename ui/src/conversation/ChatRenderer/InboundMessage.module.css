@@ -1,0 +1,73 @@
+/* A message from outside MADS — the notification family (a quiet system row),
+   but with its text readable. The dashed edge is what says "did not come
+   through a MADS link": linked messages get the solid chip/card treatment. */
+.inbound {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px dashed var(--line);
+  border-radius: var(--r);
+  padding: var(--space-2) var(--space-3);
+  font: var(--fs-sm) var(--sans);
+  color: var(--text2);
+}
+
+.header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: var(--text3);
+}
+
+.header b {
+  color: var(--text2);
+  font-weight: 600;
+}
+
+.hint {
+  opacity: 0.8;
+}
+
+.time {
+  flex: none;
+  margin-left: auto;
+  opacity: 0.75;
+}
+
+.prose {
+  max-width: none;
+}
+
+/* Long bodies show their first lines; the rest stays in the DOM for find. */
+.folded {
+  max-height: 9em;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 60%, transparent);
+}
+
+.held {
+  border-style: dotted;
+  color: var(--text3);
+}
+
+.held .header b {
+  color: inherit;
+}
+
+.disclose {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--info-fg);
+  font: 500 var(--fs-sm) var(--sans);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--info-fg) 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.disclose:hover {
+  text-decoration-color: currentColor;
+}

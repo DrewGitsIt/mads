@@ -608,15 +608,30 @@ export interface Attribution {
   source_name: string;
 }
 
+// mirrors pkg/contracts InboundSource — who an inbound message came from.
+export interface InboundSource {
+  channel: string; // provider-scoped channel id, e.g. "peer"
+  provider: string; // the RECIPIENT session's provider, e.g. "claude-code" — show its harness mark
+  from_name?: string; // the harness's own label for the sender, e.g. "repo-9c"
+  session_id?: string; // set when the sender is a MADS session
+  session_name?: string; // its current name
+  link_id?: string; // the link between sender and this session, if any
+  state?: "held"; // absent = delivered; "held" = the harness held it back
+  hold_reason?: string; // e.g. "mode-mismatch"
+}
+
 // mirrors providers/provider/event.go Message (TranscriptReader shape)
 export interface TranscriptMessage {
-  role: "user" | "agent" | "tool" | "tool_result" | "compact" | "notification";
+  role: "user" | "agent" | "tool" | "tool_result" | "compact" | "notification" | "inbound";
   // on role "compact", the summary the agent carried forward; on role
   // "notification" (a background task finished — the harness telling the
   // agent, not the human speaking), the harness's one-line summary
   text?: string;
   tool?: ToolUse;
   attribution?: Attribution;
+  // set on role "inbound": a message from outside MADS (another agent
+  // session via the harness's own tool); `text` is the body
+  inbound?: InboundSource;
   timestamp?: string; // RFC3339, when the provider recorded this entry
   /** On "tool_result": the call failed. On "agent": the harness reporting a failed turn in the agent's place (auth rejected, API unreachable, out of credits), not a reply. */
   is_error?: boolean;
@@ -900,6 +915,9 @@ export type StreamEvent = SubagentTag &
     | { kind: "tool_result"; tool?: ToolUse; text?: string; is_error?: boolean }
     | { kind: "permission_request"; permission: PermissionRequest }
     | { kind: "compact"; compact: CompactStatus }
+    // A message from outside MADS reached the agent — idle, it opens an
+    // unprompted turn; mid-turn, it lands inside the current one.
+    | { kind: "inbound"; text: string; inbound: InboundSource }
     // A spawned subagent task's lifecycle update (the harness's own
     // bookkeeping — spawn, progress counters, final status + summary).
     | { kind: "task"; task: SubagentTask }
