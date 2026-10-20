@@ -223,6 +223,10 @@ func (srv *fcServer) handle(line []byte) {
 	}
 	switch m.Method {
 	case "initialize":
+		if os.Getenv("MADS_FAKE_CODEX_INIT_FAIL") == "1" {
+			fmt.Fprintln(os.Stderr, "Error: not logged in. Run `codex login`.")
+			os.Exit(1)
+		}
 		srv.result(m.ID, map[string]any{"userAgent": "mads/0.154.0", "codexHome": "/home/user/.codex", "platformFamily": "unix", "platformOs": "macos"})
 	case "model/list":
 		srv.result(m.ID, map[string]any{"data": []map[string]any{
@@ -491,6 +495,9 @@ func (srv *fcServer) runTurn(th *fcThread, turn *fcTurn, text, clientID string) 
 			srv.item(th, turn, rs, true)
 		}
 		srv.reply(th, turn, "final_answer", "flooded")
+	case "crash":
+		fmt.Fprintln(os.Stderr, "fakecodex: thread panicked: boom")
+		os.Exit(3)
 	case "fail-limit":
 		status = "failed"
 		terr = map[string]any{"message": "You've hit your usage limit.", "codexErrorInfo": "usageLimitExceeded"}

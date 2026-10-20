@@ -437,12 +437,21 @@ func (s *session) Close() error {
 	return nil
 }
 
-// onExit runs on the read goroutine once the process is gone.
+// onExit runs on the read goroutine once the process is gone. A death
+// mads did not cause is reported with codex's stderr tail before the
+// stream closes (the close itself is the process-died signal).
 func (s *session) onExit() {
 	s.withdrawAsks(false)
 	s.mu.Lock()
-	ref := s.ref
+	ref, closed := s.ref, s.closed
 	s.mu.Unlock()
+	if !closed {
+		msg := "codex app-server exited"
+		if tail := s.c.stderr.String(); tail != "" {
+			msg += ": " + tail
+		}
+		s.emit(provider.Event{Kind: provider.EventError, Text: msg})
+	}
 	s.p.forget(ref, s)
 	close(s.events)
 }

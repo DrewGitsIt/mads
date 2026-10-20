@@ -600,3 +600,41 @@ func TestCloseWithAStalledConsumer(t *testing.T) {
 	for range s.Events() { // and the stream still ends
 	}
 }
+
+// A crash mads did not cause is reported with codex's own stderr before
+// the stream closes — and no turn end, the process-died signal.
+func TestCrashReportsStderr(t *testing.T) {
+	s := startSession(t, fakeProvider(t), provider.StartOptions{})
+	if err := s.Send(context.Background(), "crash"); err != nil {
+		t.Fatal(err)
+	}
+	var evs []provider.Event
+	for ev := range s.Events() {
+		evs = append(evs, ev)
+	}
+	last := evs[len(evs)-1]
+	if last.Kind != provider.EventError || !strings.Contains(last.Text, "boom") {
+		t.Fatalf("last event = %+v, want the stderr tail", last)
+	}
+	for _, ev := range evs {
+		if ev.Kind == provider.EventTurnEnd {
+			t.Fatal("a turn end before the crash's stream close")
+		}
+	}
+}
+
+func TestStartFailureCarriesStderr(t *testing.T) {
+	_, err := fakeProvider(t, "MADS_FAKE_CODEX_INIT_FAIL=1").Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Cwd: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "not logged in") {
+		t.Fatalf("err = %v, want codex's stderr in it", err)
+	}
+}
+
+func TestRingKeepsTheTail(t *testing.T) {
+	r := newRing(8)
+	_, _ = r.Write([]byte("0123456789"))
+	_, _ = r.Write([]byte("ab"))
+	if got := r.String(); got != "456789ab" {
+		t.Fatalf("tail = %q", got)
+	}
+}

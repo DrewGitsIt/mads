@@ -179,7 +179,7 @@ func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provi
 	c.start()
 	fail := func(step string, err error) (provider.Session, error) {
 		_ = s.Close()
-		return nil, fmt.Errorf("codex app-server %s: %w", step, err)
+		return nil, c.withStderr(fmt.Errorf("codex app-server %s: %w", step, err))
 	}
 	if err := c.initialize(ctx); err != nil {
 		return fail("initialize", err)
@@ -335,10 +335,11 @@ func (p *Provider) withServer(ctx context.Context, fn func(*conn) error) error {
 	c.start()
 	defer c.shutdown(time.Second)
 	if err := c.initialize(ctx); err != nil {
+		c.shutdown(time.Second) // let stderr drain into the tail
 		if errors.Is(err, errConnClosed) {
-			return fmt.Errorf("%w: %v", errUnavailable, err)
+			return c.withStderr(fmt.Errorf("%w: %v", errUnavailable, err))
 		}
-		return err
+		return c.withStderr(err)
 	}
 	return fn(c)
 }

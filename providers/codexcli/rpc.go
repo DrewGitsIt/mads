@@ -9,6 +9,7 @@ import (
 	"io"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -85,6 +86,50 @@ type conn struct {
 	waitOnce sync.Once
 
 	reaper *reaper
+	// stderr keeps the tail of what app-server wrote to stderr — codex logs
+	// its failures there (auth, config, panics) — for the error a crash or a
+	// failed start reports.
+	stderr     *ring
+	stderrDone chan struct{} // closed when the stderr copy hit EOF
+}
+
+// stderrTail bounds conn.stderr.
+const stderrTail = 8 * 1024
+
+// ring is a bounded byte tail: it keeps the last n bytes written.
+type ring struct {
+	mu  sync.Mutex
+	n   int
+	buf []byte
+}
+
+func newRing(n int) *ring { return &ring{n: n} }
+
+func (r *ring) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.buf = append(r.buf, p...)
+	if over := len(r.buf) - r.n; over > 0 {
+		r.buf = append(r.buf[:0:0], r.buf[over:]...)
+	}
+	return len(p), nil
+}
+
+func (r *ring) String() string {
+	if r == nil {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return strings.TrimSpace(string(r.buf))
+}
+
+// withStderr appends the stderr tail to err, when there is one.
+func (c *conn) withStderr(err error) error {
+	if tail := c.stderr.String(); tail != "" && err != nil {
+		return fmt.Errorf("%w; codex stderr: %s", err, tail)
+	}
+	return err
 }
 
 // spawn starts `bin args...` in dir with env, in its own process group.
@@ -103,17 +148,30 @@ func spawn(bin string, args []string, dir string, env []string) (*conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A pipe, not cmd.Stderr = ring: with a plain writer cmd.Wait would
+	// wait for every holder of the write end — an MCP server or tool codex
+	// left running with its stderr inherited — before returning.
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", bin, err)
 	}
 	c := &conn{
-		cmd:     cmd,
-		stdin:   stdin,
-		pending: map[int64]chan rpcMessage{},
-		done:    make(chan struct{}),
-		waited:  make(chan struct{}),
-		reaper:  newReaper(cmd.Process.Pid),
+		cmd:        cmd,
+		stdin:      stdin,
+		pending:    map[int64]chan rpcMessage{},
+		done:       make(chan struct{}),
+		waited:     make(chan struct{}),
+		reaper:     newReaper(cmd.Process.Pid),
+		stderr:     newRing(stderrTail),
+		stderrDone: make(chan struct{}),
 	}
+	go func() {
+		_, _ = io.Copy(c.stderr, stderr)
+		close(c.stderrDone)
+	}()
 	c.reader = stdout
 	return c, nil
 }
@@ -141,6 +199,13 @@ func (c *conn) read(stdout io.Reader) {
 		delete(c.pending, id)
 	}
 	c.mu.Unlock()
+	// Let stderr drain before Wait closes its pipe (a dying codex's last
+	// words are what the crash report needs) — but not for long: a tool or
+	// MCP server holding an inherited stderr would keep it open.
+	select {
+	case <-c.stderrDone:
+	case <-time.After(250 * time.Millisecond):
+	}
 	c.wait()
 	// The process is gone. Anything it started in a group of its own is
 	// now orphaned (reparented to init) and only the reaper's snapshot
