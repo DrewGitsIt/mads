@@ -1,4 +1,4 @@
-import type { ToolUse, TranscriptMessage } from "../../router/types";
+import type { InboundSource, ToolUse, TranscriptMessage } from "../../router/types";
 import type { StreamItem } from "../ChatRenderer/ChatRenderer";
 
 /**
@@ -20,7 +20,8 @@ import type { StreamItem } from "../ChatRenderer/ChatRenderer";
 type QueueEntry =
   | { kind: "text"; text: string }
   | { kind: "tool"; tool: ToolUse; timestamp?: string }
-  | { kind: "thinking"; text: string };
+  | { kind: "thinking"; text: string }
+  | { kind: "inbound"; text: string; inbound: InboundSource; timestamp?: string };
 
 export interface PacerState {
   /** Revealed items — exactly what ChatRenderer renders for the live turn. */
@@ -65,6 +66,11 @@ export function enqueueTool(s: PacerState, tool: ToolUse, timestamp?: string): P
 /** Queue a whole thinking block — reveals like a tool (pops for free, never paced char-by-char). */
 export function enqueueThinking(s: PacerState, text: string): PacerState {
   return { ...s, queue: [...s.queue, { kind: "thinking", text }] };
+}
+
+/** Queue a message from outside MADS — reveals whole, like a tool (nobody paces another session's words). */
+export function enqueueInbound(s: PacerState, text: string, inbound: InboundSource, timestamp?: string): PacerState {
+  return { ...s, queue: [...s.queue, { kind: "inbound", text, inbound, timestamp }] };
 }
 
 /** Attach a tool result to its card, whether already revealed or still queued (matched by id). */
@@ -289,6 +295,8 @@ export function revealedToMessages(items: StreamItem[]): TranscriptMessage[] {
       if (it.text) out.push({ role: "agent", text: it.text });
     } else if (it.kind === "tool") {
       out.push({ role: "tool", tool: it.tool, timestamp: it.timestamp });
+    } else if (it.kind === "inbound") {
+      out.push({ role: "inbound", text: it.text, inbound: it.inbound, timestamp: it.timestamp });
     }
   }
   return out;

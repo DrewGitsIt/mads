@@ -233,6 +233,7 @@ export function ConversationTab({
     enqueueText: pacerEnqueueText,
     enqueueTool: pacerEnqueueTool,
     enqueueThinking: pacerEnqueueThinking,
+    enqueueInbound: pacerEnqueueInbound,
     applyToolResult: pacerApplyToolResult,
     finish: pacerFinish,
     flush: pacerFlush,
@@ -1065,6 +1066,16 @@ export function ConversationTab({
           : "Thinking…",
       );
     };
+    // A message from outside MADS reaching the agent. Not a user send: idle,
+    // it opens an unprompted turn the way the first text/tool event does;
+    // mid-turn it lands in the stream after the tool call in flight. The
+    // turn-end refetch replaces it with the persisted role "inbound" row.
+    const onInbound = (ev: MessageEvent<string>) => {
+      const parsed = JSON.parse(ev.data) as StreamEvent;
+      if (parsed.kind !== "inbound" || parsed.parent_tool_use_id) return;
+      if (turnPhaseRef.current !== "live") beginTurn();
+      pacerEnqueueInbound(parsed.text, parsed.inbound, new Date().toISOString());
+    };
     const onTask = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
       if (parsed.kind !== "task") return;
@@ -1125,6 +1136,7 @@ export function ConversationTab({
     eventSource.addEventListener("tool_use", onTool);
     eventSource.addEventListener("tool_result", onToolResult);
     eventSource.addEventListener("thinking", onThinking);
+    eventSource.addEventListener("inbound", onInbound);
     eventSource.addEventListener("task", onTask);
     eventSource.addEventListener("background", onBackground);
     eventSource.addEventListener("permission_request", onPermissionRequest);
@@ -1136,6 +1148,7 @@ export function ConversationTab({
       eventSource.removeEventListener("tool_use", onTool);
       eventSource.removeEventListener("tool_result", onToolResult);
       eventSource.removeEventListener("thinking", onThinking);
+      eventSource.removeEventListener("inbound", onInbound);
       eventSource.removeEventListener("task", onTask);
       eventSource.removeEventListener("background", onBackground);
       eventSource.removeEventListener("permission_request", onPermissionRequest);
@@ -1151,6 +1164,7 @@ export function ConversationTab({
     pacerEnqueueText,
     pacerEnqueueTool,
     pacerEnqueueThinking,
+    pacerEnqueueInbound,
     pacerApplyToolResult,
     beginTurn,
     endTurn,

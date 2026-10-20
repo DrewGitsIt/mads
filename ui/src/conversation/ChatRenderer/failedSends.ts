@@ -15,7 +15,7 @@ export interface Delivery {
 }
 
 /** Entries that open a new exchange: the human's turn, or one nobody typed. */
-const BOUNDARY = new Set<TranscriptMessage["role"]>(["user", "notification", "compact"]);
+const BOUNDARY = new Set<TranscriptMessage["role"]>(["user", "notification", "inbound", "compact"]);
 
 /** The human's own message — not a linked session's or mads's inject. */
 const isOwnSend = (m: TranscriptMessage) => m.role === "user" && !m.attribution;

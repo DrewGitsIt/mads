@@ -623,7 +623,7 @@ export interface InboundSource {
   /** The link between sender and recipient, either direction, if one exists. */
   link_id?: string;
   /** "" / absent: delivered to the agent. "held": the harness held it back (hold_reason says why). */
-  state?: string;
+  state?: "held";
   hold_reason?: string;
 }
 
