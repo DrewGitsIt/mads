@@ -484,6 +484,13 @@ func (srv *fcServer) runTurn(th *fcThread, turn *fcTurn, text, clientID string) 
 		status = srv.slow(th, turn)
 	case "sleeper":
 		status = srv.sleeper(th, turn)
+	case "flood":
+		// Far more non-text events than the client's buffer holds.
+		for range 600 {
+			rs := threadItem{Type: "reasoning", ID: "rs_" + srv.newID(), Summary: []string{"**thinking**"}}
+			srv.item(th, turn, rs, true)
+		}
+		srv.reply(th, turn, "final_answer", "flooded")
 	case "fail-limit":
 		status = "failed"
 		terr = map[string]any{"message": "You've hit your usage limit.", "codexErrorInfo": "usageLimitExceeded"}

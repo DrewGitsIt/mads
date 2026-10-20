@@ -144,6 +144,8 @@ type session struct {
 	// Send sees the first one's turn as open, and lets Interrupt wait out a
 	// turn/start still in flight.
 	sendMu sync.Mutex
+	// closing is closed by Close: emit stops waiting for a consumer.
+	closing chan struct{}
 
 	mu     sync.Mutex
 	ref    string
@@ -191,13 +193,14 @@ type session struct {
 
 func newSession(p *Provider, c *conn, opts provider.StartOptions) *session {
 	return &session{
-		p:      p,
-		c:      c,
-		events: make(chan provider.Event, 256),
-		trust:  effectiveTrust(opts.Trust),
-		asker:  opts.Permissions,
-		effort: p.cfg.Effort,
-		asks:   map[string]*pendingAsk{},
+		p:       p,
+		c:       c,
+		events:  make(chan provider.Event, 256),
+		closing: make(chan struct{}),
+		trust:   effectiveTrust(opts.Trust),
+		asker:   opts.Permissions,
+		effort:  p.cfg.Effort,
+		asks:    map[string]*pendingAsk{},
 	}
 }
 
@@ -414,6 +417,7 @@ func (s *session) Close() error {
 	}
 	s.closed = true
 	ref := s.ref
+	close(s.closing)
 	s.mu.Unlock()
 	s.withdrawAsks(false)
 	s.c.shutdown(closeGrace)
@@ -431,7 +435,24 @@ func (s *session) onExit() {
 	close(s.events)
 }
 
-func (s *session) emit(ev provider.Event) { s.events <- ev }
+// emit delivers one event from the read goroutine, on acprpc's policy: a
+// text chunk is dropped rather than block the reader when the consumer is
+// 256 events behind (the stored transcript still has the whole reply);
+// every other event waits for room — but never past Close, so a consumer
+// that stopped reading cannot wedge the read loop and with it Close.
+func (s *session) emit(ev provider.Event) {
+	if ev.Kind == provider.EventText {
+		select {
+		case s.events <- ev:
+		default:
+		}
+		return
+	}
+	select {
+	case s.events <- ev:
+	case <-s.closing:
+	}
+}
 
 // --- notifications ---------------------------------------------------------
 

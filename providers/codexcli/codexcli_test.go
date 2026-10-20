@@ -575,3 +575,28 @@ func TestOneShotCancelReturnsPromptly(t *testing.T) {
 		t.Fatal("cancelled one-shot did not return")
 	}
 }
+
+// A consumer that stops reading cannot wedge Close: the read loop's
+// blocked emit gives way once the session is closing.
+func TestCloseWithAStalledConsumer(t *testing.T) {
+	s := startSession(t, fakeProvider(t), provider.StartOptions{})
+	if err := s.Send(context.Background(), "flood"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(s.Events()) < cap(s.Events()) {
+		if time.Now().After(deadline) {
+			t.Fatal("the buffer never filled")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	done := make(chan struct{})
+	go func() { _ = s.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(closeGrace + 2*time.Second):
+		t.Fatal("Close hung behind a full event buffer")
+	}
+	for range s.Events() { // and the stream still ends
+	}
+}
