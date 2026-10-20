@@ -21,7 +21,8 @@ the source of truth closest to the code.
 - The engine is **not a `provider.Provider`** — it has no Name, Matrix, or
   registration. Bindings wrap it and own those: `providers/goosecli` is
   the first instantiation, and `providers/kirocli` was migrated onto it
-  (deleting its hand-rolled ~430-line ACP layer).
+  (deleting its hand-rolled ~430-line ACP layer); `providers/hermescli`
+  is the third, kind-based binding.
 
 ## Engine invariants
 

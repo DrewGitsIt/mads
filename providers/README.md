@@ -55,6 +55,17 @@ agents — not services themselves.
   export` transcripts. Every claim is capture/source-pinned against goose
   1.48.0 (`goosecli/testdata/captures/`); CI runs the full conformance
   suite against a scripted stand-in, no goose binary needed.
+- `hermescli/` — the Hermes Agent adapter: `hermes-acp` on the acprpc
+  engine, offered at **full trust only** (hermes asks only about edits and
+  commands its own reviewer flags, so Start refuses every lower level),
+  the model per session via ACP `session/set_model` (never written to the
+  user's config), a session wrapper that makes hermes's cumulative usage
+  per-turn and strips its post-tool paragraph break, stdio MCP servers
+  (live-proven), and a TranscriptReader
+  over hermes's own `state.db` (read-only). Pinned against hermes 0.22.2
+  (`hermescli/testdata/captures/`); CI runs the full conformance suite
+  against a stand-in that writes a real state.db; `MADS_HERMES_SMOKE=1`
+  runs the real binary on Copilot in a scratch home.
 
 ## Test it
 
