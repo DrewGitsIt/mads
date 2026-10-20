@@ -21,6 +21,11 @@ function makeConfig(overrides: Partial<UseConfig> = {}): UseConfig {
   };
 }
 
+/** The picker opens on the saved palette's tone; most palette tests want every card. */
+function showAll() {
+  fireEvent.click(within(screen.getByRole("group", { name: "Filter palettes" })).getByRole("button", { name: "All" }));
+}
+
 describe("AppearanceSection", () => {
   beforeEach(() => {
     delete document.documentElement.dataset.theme;
@@ -69,6 +74,7 @@ describe("AppearanceSection", () => {
   it("switches palette live and persists only that field", () => {
     const config = makeConfig();
     render(<AppearanceSection config={config} />);
+    showAll();
 
     fireEvent.click(screen.getByRole("radio", { name: "Space" }));
 
@@ -82,6 +88,7 @@ describe("AppearanceSection", () => {
   it("draws a preview card per palette, ringed on the saved one", () => {
     document.documentElement.dataset.theme = "light";
     render(<AppearanceSection config={makeConfig()} />);
+    showAll();
     const group = screen.getByRole("radiogroup", { name: "Palette" });
     const cards = within(group).getAllByRole("radio");
     expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual(paletteInfo.map((p) => p.label));
@@ -94,6 +101,7 @@ describe("AppearanceSection", () => {
   it("tries a palette on while hovered, keeps the ring on the saved one, and reverts on leave", () => {
     const config = makeConfig();
     render(<AppearanceSection config={config} />);
+    showAll();
     const space = screen.getByRole("radio", { name: "Space" });
 
     fireEvent.mouseEnter(space);
@@ -108,6 +116,7 @@ describe("AppearanceSection", () => {
 
   it("reverts a try-on if Settings unmounts mid-hover", () => {
     const { unmount } = render(<AppearanceSection config={makeConfig()} />);
+    showAll();
     fireEvent.mouseEnter(screen.getByRole("radio", { name: "Glacier" }));
     expect(document.documentElement.dataset.palette).toBe("glacier");
     unmount();
@@ -117,6 +126,7 @@ describe("AppearanceSection", () => {
   it("doesn't try a palette on from keyboard focus; arrow keys choose and save", () => {
     const config = makeConfig();
     render(<AppearanceSection config={config} />);
+    showAll();
     const clay = screen.getByRole("radio", { name: "Clay" });
     document.documentElement.dataset.palette = "clay";
 
@@ -126,6 +136,23 @@ describe("AppearanceSection", () => {
     fireEvent.keyDown(clay, { key: "ArrowRight" });
     expect(document.activeElement).toBe(screen.getByRole("radio", { name: paletteInfo[1].label }));
     expect(config.saveFields).toHaveBeenCalledWith({ palette: paletteInfo[1].name });
+  });
+
+  it("opens on the saved palette's tone", () => {
+    const pressed = () =>
+      within(screen.getByRole("group", { name: "Filter palettes" }))
+        .getAllByRole("button")
+        .filter((b) => b.getAttribute("aria-pressed") === "true")
+        .map((b) => b.textContent);
+    const { unmount } = render(<AppearanceSection config={makeConfig()} />);
+    expect(pressed()).toEqual(["Warm"]);
+    expect(screen.queryByRole("radio", { name: "Space" })).toBeNull();
+    unmount();
+
+    const space = { ...fixtureConfig, palette: "space" as const };
+    render(<AppearanceSection config={makeConfig({ saved: space, draft: space })} />);
+    expect(pressed()).toEqual(["Cool"]);
+    expect(screen.getByRole("radio", { name: "Space" }).getAttribute("aria-checked")).toBe("true");
   });
 
   it("filters the cards by tag; arrow keys move among the cards shown", () => {
@@ -154,6 +181,7 @@ describe("AppearanceSection", () => {
   it("reverts a clicked palette whose save fails", async () => {
     const config = makeConfig({ saveFields: vi.fn().mockResolvedValue(false) });
     render(<AppearanceSection config={config} />);
+    showAll();
     fireEvent.click(screen.getByRole("radio", { name: "Glacier" }));
     expect(document.documentElement.dataset.palette).toBe("glacier");
     await waitFor(() => expect(document.documentElement.dataset.palette).toBe("clay"));

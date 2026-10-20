@@ -17,6 +17,12 @@ const FILTERS: { value: PaletteTag | "all"; label: string }[] = [
   { value: "high-contrast", label: "High contrast" },
 ];
 
+/** Open on the saved palette's tone (the first chip it carries), so the grid starts short. */
+function initialFilter(palette: PaletteName): PaletteTag | "all" {
+  const tags = paletteInfo.find((p) => p.name === palette)?.tags ?? [];
+  return FILTERS.find((f) => f.value !== "all" && tags.includes(f.value))?.value ?? "all";
+}
+
 export interface PalettePickerProps {
   /** The saved palette: the only card that reads checked, hover or not. */
   value: PaletteName;
@@ -37,7 +43,7 @@ export interface PalettePickerProps {
  */
 export function PalettePicker({ value, onChoose, onPreview, id, ...aria }: PalettePickerProps) {
   const theme = useAppliedTheme();
-  const [filter, setFilter] = useState<PaletteTag | "all">("all");
+  const [filter, setFilter] = useState<PaletteTag | "all">(() => initialFilter(value));
   const shown = filter === "all" ? paletteInfo : paletteInfo.filter((p) => p.tags.includes(filter));
   const buttonsRef = useRef<(HTMLButtonElement | null)[]>([]);
   const selectedIndex = shown.findIndex((p) => p.name === value);
