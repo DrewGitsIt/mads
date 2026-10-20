@@ -57,14 +57,29 @@ func TestRunVersionTimeoutKillsTheGroup(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 300 &\necho $! > "+pidFile+"\nwait\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	// Cancel only once the probe has started its child: a fixed timeout
+	// could fire before the shell wrote the pid under a loaded full-suite
+	// run, leaving nothing to check.
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if _, err := runVersion(ctx, script); err == nil {
-		t.Fatal("hung probe returned no error")
+	probeErr := make(chan error, 1)
+	go func() {
+		_, err := runVersion(ctx, script)
+		probeErr <- err
+	}()
+	var b []byte
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if raw, err := os.ReadFile(pidFile); err == nil && strings.TrimSpace(string(raw)) != "" {
+			b = raw
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the probe never started its child")
+		}
 	}
-	b, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatal(err)
+	cancel()
+	if err := <-probeErr; err == nil {
+		t.Fatal("hung probe returned no error")
 	}
 	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
