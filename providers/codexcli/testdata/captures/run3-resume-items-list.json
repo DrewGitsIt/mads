@@ -1,0 +1,33 @@
+{
+ "data": [
+  {
+   "turnId": "01a15a3d-1c3d-7cf1-b3f6-bab282c0efd0",
+   "item": {
+    "type": "userMessage",
+    "id": "01a15a3d-20c3-7b50-8acd-fec1dc2af321",
+    "clientId": "mads-k",
+    "content": [
+     {
+      "type": "text",
+      "text": "Say one sentence, then run `sleep 20 && echo done` in the shell, then say one sentence.",
+      "text_elements": []
+     }
+    ]
+   }
+  },
+  {
+   "turnId": "01a15a3d-1c3d-7cf1-b3f6-bab282c0efd0",
+   "item": {
+    "type": "agentMessage",
+    "id": "msg_01a11b8daf578b00016ad79cf6951c819e8254cfe7bed7d9f9",
+    "text": "I’ll run the requested shell command now and report back when it finishes.",
+    "phase": "commentary",
+    "memoryCitation": null,
+    "delivery": null,
+    "questions": null
+   }
+  }
+ ],
+ "nextCursor": null,
+ "backwardsCursor": "{\"requestedThreadId\":\"01a15a3d-1be2-7880-826d-32288ee81b70\",\"rolloutOrdinal\":7,\"includeAnchor\":true,\"scope\":{\"kind\":\"itemsByCreatedAtOrdinal\"}}"
+}
