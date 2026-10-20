@@ -25,7 +25,7 @@ type providerBinary struct {
 
 // knownProviderBinaries is deliberately small and honest: one entry per
 // provider adapter this repo actually ships (providers/claudecode,
-// providers/kirocli, providers/goosecli).
+// providers/kirocli, providers/goosecli, providers/hermescli).
 var knownProviderBinaries = map[string]providerBinary{
 	"claude-code": {
 		Bin:            "claude",
@@ -53,6 +53,17 @@ var knownProviderBinaries = map[string]providerBinary{
 		InstallHint:    "install goose Desktop, or the goose CLI with `goose` on PATH",
 		InstallURL:     "https://goose-docs.ai/docs/getting-started/installation",
 		InstallCommand: "curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | bash",
+	},
+	"hermes": {
+		// The adapter spawns hermes-acp, not the `hermes` CLI, so that is
+		// the binary probed. `hermes-acp --version` prints the bare version
+		// ("0.22.2", acp_adapter/entry.py _print_version).
+		Bin:            "hermes-acp",
+		VersionArgs:    []string{"--version"},
+		ParseVersion:   parseSemverish,
+		InstallHint:    "install Hermes Agent and ensure `hermes-acp` is on PATH (the installer puts it in ~/.local/bin)",
+		InstallURL:     "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+		InstallCommand: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
 	},
 }
 

@@ -38,16 +38,16 @@ func TestHealth(t *testing.T) {
 }
 
 // TestBuildProviderRegistryIncludesGoose pins the registration set main()
-// boots with — goose alongside the pre-existing three — and that building
-// goose's HOME/XDG_CONFIG_HOME passthrough never mutates the caller's
-// passthrough slice.
+// boots with — goose and hermes alongside the pre-existing three — and that
+// building goose's and hermes's passthrough lists never mutates the
+// caller's passthrough slice.
 func TestBuildProviderRegistryIncludesGoose(t *testing.T) {
 	passthrough := []string{"CUSTOM_VAR"}
 	reg, err := buildProviderRegistry(agentenv.ModeIsolated, passthrough, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"claude-code", "kiro-cli", "goose", "fake"} {
+	for _, name := range []string{"claude-code", "kiro-cli", "goose", "hermes", "fake"} {
 		if _, err := reg.Get(name); err != nil {
 			t.Fatalf("Get(%q): %v", name, err)
 		}

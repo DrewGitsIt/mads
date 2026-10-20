@@ -52,14 +52,14 @@ func TestHealth(t *testing.T) {
 }
 
 // TestBuildProviderRegistryIncludesGoose pins the registration set main()
-// boots with: goose alongside the pre-existing three, proving the
+// boots with: goose and hermes alongside the pre-existing three, proving the
 // extraction out of main() was lossless.
 func TestBuildProviderRegistryIncludesGoose(t *testing.T) {
 	reg, err := buildProviderRegistry(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"claude-code", "kiro-cli", "goose", "fake"} {
+	for _, name := range []string{"claude-code", "kiro-cli", "goose", "hermes", "fake"} {
 		p, err := reg.Get(name)
 		if err != nil {
 			t.Fatalf("Get(%q): %v", name, err)

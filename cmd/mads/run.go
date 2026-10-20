@@ -22,6 +22,7 @@ import (
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/goosecli"
+	"github.com/drewkidwell/mads/providers/hermescli"
 	"github.com/drewkidwell/mads/providers/kirocli"
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -33,7 +34,7 @@ func cmdRun(args []string, out io.Writer) error {
 	workspace := fs.String("workspace", ".", "workspace repo the run works in")
 	tplName := fs.String("template", "default-implementation", "pipeline template (registry name)")
 	exclude := fs.String("exclude", "", "comma-separated task IDs to leave out of the run (dependents stranded only by them are left out too; neither makes the run incomplete)")
-	providerName := fs.String("provider", "claude-code", "agent provider: claude-code, kiro-cli, goose, or fake")
+	providerName := fs.String("provider", "claude-code", "agent provider: claude-code, kiro-cli, goose, hermes, or fake")
 	model := fs.String("model", "", "model override for agent stages")
 	concurrency := fs.Int("concurrency", 5, "simultaneous tasks — agent stages run in parallel up to "+
 		"this cap; dependencies express prerequisites, not anti-collision. Integration is always "+
@@ -209,6 +210,12 @@ func resolveProvider(name, claudeArgs, kiroArgs, gooseArgs, fakeScenario, madsHo
 		// mode "auto", which the engine sets itself — there is no goose
 		// CLI trust flag to pass.
 		return goosecli.New(goosecli.Config{ExtraArgs: strings.Fields(gooseArgs)}), nil
+	case "hermes":
+		// No -hermes-args: hermes-acp takes no session-shaping flags, and
+		// pipeline stages run as one-shots, which are always full trust —
+		// the only level hermes is offered at. The model rides
+		// session/set_model; the user's own ~/.hermes supplies auth.
+		return hermescli.New(hermescli.Config{}), nil
 	default:
 		return nil, fmt.Errorf("unknown provider %q", name)
 	}
