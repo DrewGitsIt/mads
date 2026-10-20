@@ -1,0 +1,354 @@
+// Package hermescli is the Hermes Agent provider adapter (spec §11): Nous
+// Research's hermes, driven through its native ACP server `hermes-acp` on
+// the generic engine at providers/acprpc. Like goosecli, this binding owns
+// the knob values — every one cites a survey capture or a hermes 0.22.2
+// source line (docs/HERMES-ADAPTER-DESIGN.md "Knob table") — while every
+// wire behavior stays in the engine.
+//
+// What this binding adds over the bare engine, each forced by a hermes fact:
+//   - full trust only (Start refuses anything else): hermes asks permission
+//     only for edits and for commands its own reviewer flags, and its asks
+//     carry synthetic tool ids, so no lower trust level can be enforced by
+//     answering them (design doc "Trust");
+//   - a session wrapper (session.go) that turns hermes's per-process
+//     cumulative usage into per-turn usage, strips the paragraph break
+//     hermes injects before the first text after a tool, and drops tool
+//     results for those synthetic approval ids;
+//   - a resume guard: hermes answers session/load of an unknown id with an
+//     empty success, so the ref is checked against state.db first;
+//   - a TranscriptReader over hermes's own SQLite store (transcript.go).
+//
+// The model is chosen per session with ACP session/set_model
+// ("provider:model" picker ids), which hermes stores on the session row and
+// never writes to config.yaml — so sessions run against the user's real
+// HERMES_HOME (their auth, their state.db) without mads touching it.
+package hermescli
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/drewkidwell/mads/pkg/agentenv"
+	"github.com/drewkidwell/mads/pkg/binlocate"
+	"github.com/drewkidwell/mads/providers/acprpc"
+	"github.com/drewkidwell/mads/providers/provider"
+)
+
+// Config adapts the binary to its surroundings. The zero value targets a
+// stock install against the user's own ~/.hermes.
+type Config struct {
+	// Bin is the hermes-acp executable. Empty resolves it per invocation via
+	// pkg/binlocate — PATH, then ~/.local/bin where hermes's installer puts
+	// it (setup-hermes.sh:216) — so preflight's verdict matches what gets
+	// spawned. Tests point this at a scripted stand-in.
+	Bin string
+	// ExtraArgs are appended to every hermes-acp spawn. hermes-acp has no
+	// flags that shape a session (acp_adapter/entry.py:94-104: only
+	// --version/--check/--setup*), so this is empty in production.
+	ExtraArgs []string
+	// Home, when set, is the HERMES_HOME every spawn gets and the directory
+	// the TranscriptReader reads state.db from. Empty follows the child's
+	// own environment — HERMES_HOME if it carries one, else hermes's
+	// platform default ~/.hermes plus any HERMES_DATA_DIR_SUFFIX
+	// (hermes_constants.py:51-58,160-169). Tests and
+	// the smoke use a scratch home; production leaves it empty so sessions
+	// land in the user's real store.
+	Home string
+	// Env carries mads-injected KEY=VALUE pairs added on top of the base
+	// environment for every spawn.
+	Env []string
+	// EnvMode controls how much of the process environment hermes-acp sees
+	// (pkg/agentenv). Empty behaves as inherit. HOME is on the isolated
+	// base allowlist; HERMES_HOME is not and must ride EnvPassthrough (the
+	// service registration sites do this).
+	EnvMode agentenv.Mode
+	// EnvPassthrough lists parent env var NAMES let through in isolated mode.
+	EnvPassthrough []string
+}
+
+// Provider is the hermes adapter. Registry name "hermes".
+type Provider struct {
+	cfg Config
+}
+
+func New(cfg Config) *Provider { return &Provider{cfg: cfg} }
+
+func (p *Provider) Name() string { return "hermes" }
+
+// bin is the executable every spawn runs: Config.Bin if set, else
+// binlocate's answer, else the bare name so exec's "not found" reads as
+// usual.
+func (p *Provider) bin() string {
+	if p.cfg.Bin != "" {
+		return p.cfg.Bin
+	}
+	if path, err := binlocate.Find("hermes-acp"); err == nil {
+		return path
+	}
+	return "hermes-acp"
+}
+
+// env is the mads-side additions every spawn gets: Config.Env, then
+// HERMES_HOME when Config.Home pins one (last wins in the child).
+func (p *Provider) env() []string {
+	env := append([]string(nil), p.cfg.Env...)
+	if p.cfg.Home != "" {
+		env = append(env, "HERMES_HOME="+p.cfg.Home)
+	}
+	return env
+}
+
+// home is the HERMES_HOME the spawned hermes-acp resolves — computed from
+// exactly the environment the engine hands the child (base, then Env), so
+// the TranscriptReader always reads the store the agent writes.
+func (p *Provider) home() string {
+	base := agentenv.Build(p.cfg.EnvMode, os.Environ(), nil, p.cfg.EnvPassthrough, nil)
+	var home, suffix string
+	for _, kv := range append(base, p.env()...) {
+		if v, ok := strings.CutPrefix(kv, "HERMES_HOME="); ok {
+			home = strings.TrimSpace(v)
+		}
+		if v, ok := strings.CutPrefix(kv, "HERMES_DATA_DIR_SUFFIX="); ok {
+			suffix = v
+		}
+	}
+	if home != "" {
+		if rest, ok := strings.CutPrefix(home, "~/"); ok {
+			if uh, err := os.UserHomeDir(); err == nil {
+				home = filepath.Join(uh, rest)
+			}
+		}
+		return home
+	}
+	uh, err := os.UserHomeDir()
+	if err != nil {
+		return ".hermes" + suffix
+	}
+	return filepath.Join(uh, ".hermes"+suffix)
+}
+
+// engineConfig materializes the knob values. Captures cited by run name
+// ("runc1 line 4") live under testdata/captures/ (see its README); hermes
+// source lines are against hermes-agent 0.22.2.
+func (p *Provider) engineConfig() acprpc.Config {
+	return acprpc.Config{
+		Bin: p.bin(),
+		// hermes-acp takes no session-shaping flags (entry.py:94-104).
+		SpawnArgs: append([]string(nil), p.cfg.ExtraArgs...),
+		BaseEnv:   agentenv.Build(p.cfg.EnvMode, os.Environ(), nil, p.cfg.EnvPassthrough, nil),
+		Env:       p.env(),
+		// Full trust only (Start refuses the rest). "dont_ask" is hermes's
+		// least-asking mode — "Auto-allow file edits for this session
+		// except sensitive paths" (session/new modes, runc1 line 4). It is
+		// set explicitly so a session never sits in "default" (ask before
+		// every edit); whatever hermes still asks (sensitive paths, commands
+		// its reviewer flags) the engine allows at full trust.
+		TrustModes:           map[provider.Trust]string{provider.TrustFull: "dont_ask"},
+		SendModeAtSessionNew: true,
+		// hermes ships ACP's models selector and no configOptions at all
+		// (runc1 line 4: 66 "provider:model" ids, currentModelId
+		// "copilot:gpt-4.1"); the engine reads and sets the selector itself
+		// (session/set_model, server.py:1022-1056), so no option id.
+		ModelConfigOptionID: "",
+		// No system-prompt surface: hermes has no extension method, so the
+		// engine's default first-send prefix applies — never drop a persona.
+		SystemPrompt: acprpc.SystemPromptStrategy{Mode: acprpc.SystemPromptFirstSendPrefix},
+		// Tool calls carry the spec kind ("execute", "edit") and a
+		// "<tool>: <preview>" title, no _meta namespace (runc1 line 21,
+		// run9 line 12; acp_adapter/tools.py:20-31,192-198).
+		ToolIdentity: acprpc.ToolIdentity{Mode: acprpc.ToolIdentityKindBased},
+		// hermes judges risk itself: it asks for edits and for commands its
+		// reviewer flags, and auto-approved `rm -rf` (run9 lines 13, 23-24).
+		PermissionAsksEveryCall: false,
+		// hermes advertises "compress" (available_commands_update, runc1
+		// line 8), but no capture shows what a pass does to state.db or the
+		// session's ids, so mads does not drive it yet (README).
+		CompactCommand: "",
+	}
+}
+
+func (p *Provider) engine() *acprpc.Engine { return acprpc.New(p.engineConfig()) }
+
+// Matrix is the honest §11 declaration; per-row evidence is in README.md.
+func (p *Provider) Matrix() provider.Matrix {
+	return provider.Matrix{
+		provider.BehaviorInteractive: provider.Native,
+		// session/cancel resolves stopReason "cancelled" in 40-225 ms
+		// (survey runc1 line 323, run2).
+		provider.BehaviorInterrupt: provider.Native,
+		// session/load replays and keeps the conversation (run2, run3, and
+		// the smoke's recall after resume); guarded against hermes's empty
+		// success on unknown ids.
+		provider.BehaviorResume: provider.Native,
+		provider.BehaviorACP:    provider.Native,
+		// No adapter for hermes's TUI.
+		provider.BehaviorPTY: provider.Unsupported,
+		// The engine's one-shot over ACP, through this binding's wrapper.
+		provider.BehaviorOneShot:       provider.Emulated,
+		provider.BehaviorOneShotStream: provider.Emulated,
+		provider.BehaviorOneShotResume: provider.Emulated,
+		// The models selector on session/new — no LLM call, no static list.
+		provider.BehaviorModelDiscovery: provider.Native,
+		// session/prompt results carry usage (runc1 line 18), cumulative per
+		// process; session.go differences it per turn.
+		provider.BehaviorCostReporting: provider.Native,
+		// Full trust only — see Start.
+		provider.BehaviorTrustLimited:    provider.Unsupported,
+		provider.BehaviorTrustReadOnly:   provider.Unsupported,
+		provider.BehaviorTrustAutoReview: provider.Unsupported,
+		// session/new's ref is synchronous.
+		provider.BehaviorRefAnnounce: provider.Native,
+		// state.db, hermes's own store (transcript.go).
+		provider.BehaviorTranscript: provider.Native,
+		// The engine sends mcpServers on session/new and hermes's source
+		// registers them (server.py _register_session_mcp_servers), but no
+		// live probe has shown a hermes session calling one — kirocli's
+		// precedent: unsupported until a smoke says otherwise.
+		provider.BehaviorMCPServers: provider.Unsupported,
+		// Not driven yet (CompactCommand above).
+		provider.BehaviorCompaction:      provider.Unsupported,
+		provider.BehaviorCompactionFocus: provider.Unsupported,
+		// hermes has background delegations, but nothing about them reaches
+		// the ACP wire this adapter reads.
+		provider.BehaviorDelegateLifecycle:  provider.Unsupported,
+		provider.BehaviorDelegateTranscript: provider.Unsupported,
+		provider.BehaviorDelegateSteer:      provider.Unsupported,
+		provider.BehaviorDelegateStop:       provider.Unsupported,
+		// hermes has session/fork, but mads has no branching surface for
+		// ACP yet; no cwd reroot at all.
+		provider.BehaviorBranching: provider.Unsupported,
+		provider.BehaviorCwdReroot: provider.Unsupported,
+	}
+}
+
+// IntentMatrix: hermes runs at full trust only, so no portable permission
+// intent is enforced — not even require_approval, since hermes decides for
+// itself which calls to ask about.
+func (p *Provider) IntentMatrix() provider.IntentMatrix {
+	return provider.IntentMatrix{
+		provider.IntentDenyCommands:    provider.Unsupported,
+		provider.IntentPathScope:       provider.Unsupported,
+		provider.IntentReadOnly:        provider.Unsupported,
+		provider.IntentRequireApproval: provider.Unsupported,
+	}
+}
+
+// fullTrustOnly refuses every level but full ("" is full by contract).
+// Refused, never clamped: running a limited session at full would loosen
+// what the user asked for without telling them.
+func fullTrustOnly(t provider.Trust) error {
+	if t == "" || t == provider.TrustFull {
+		return nil
+	}
+	return fmt.Errorf("hermes runs at full trust only: it asks permission only for edits and commands its own reviewer flags, so trust %q cannot be enforced: %w", t, provider.ErrUnsupported)
+}
+
+func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provider.Session, error) {
+	if opts.Fork && opts.Resume != "" {
+		return nil, fmt.Errorf("fork on resume: %w", provider.ErrUnsupported)
+	}
+	if opts.Mode != provider.ModeACP {
+		return nil, fmt.Errorf("mode %q: %w", opts.Mode, provider.ErrUnsupported)
+	}
+	if err := fullTrustOnly(opts.Trust); err != nil {
+		return nil, err
+	}
+	if opts.Resume != "" {
+		if err := p.requireStoredSession(ctx, opts.Resume); err != nil {
+			return nil, err
+		}
+	}
+	sess, err := p.engine().Start(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return wrapSession(sess), nil
+}
+
+// OneShot is the engine's ACP emulation (spawn, session/new or guarded
+// session/load, one prompt, exit), run through this binding's Start so the
+// one-shot gets the same per-turn usage and text normalization as an
+// interactive turn. It mirrors acprpc.Engine.OneShot step for step.
+func (p *Provider) OneShot(ctx context.Context, req provider.OneShotRequest) (*provider.OneShotResult, error) {
+	sess, err := p.Start(ctx, provider.StartOptions{
+		Mode:         provider.ModeACP,
+		Model:        req.Model,
+		Cwd:          req.Cwd,
+		Resume:       req.Resume,
+		SystemPrompt: req.System,
+		Trust:        provider.TrustFull,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = sess.Close() }()
+	emit := func(ev provider.Event) {
+		if req.OnEvent != nil {
+			req.OnEvent(ev)
+		}
+	}
+	emit(provider.Event{Kind: provider.EventSessionRef, Ref: sess.Ref()})
+	if err := sess.Send(ctx, req.Prompt); err != nil {
+		return nil, err
+	}
+	var text strings.Builder
+	var errText string
+	for {
+		select {
+		case ev, ok := <-sess.Events():
+			if !ok {
+				return nil, fmt.Errorf("hermes-acp: agent exited before the turn ended")
+			}
+			emit(ev)
+			switch ev.Kind {
+			case provider.EventText:
+				text.WriteString(ev.Text)
+			case provider.EventError:
+				errText = ev.Text
+			case provider.EventTurnEnd:
+				if errText != "" {
+					if rle := rateLimit(errText); rle != nil {
+						return nil, rle
+					}
+					return nil, fmt.Errorf("hermes-acp: %s", errText)
+				}
+				res := &provider.OneShotResult{Text: text.String(), Ref: sess.Ref()}
+				if ev.Usage != nil {
+					res.Usage = *ev.Usage
+				}
+				return res, nil
+			}
+		case <-ctx.Done():
+			_ = sess.Interrupt(context.Background())
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// rateLimit turns a rate-limited failure into the typed error (§11.9).
+// Guess-grade, like goosecli's: no hermes rate-limit failure has been
+// captured; hermes retries and fails over internally before anything
+// escapes, so the phrase list stays conservative.
+func rateLimit(msg string) *provider.RateLimitError {
+	low := strings.ToLower(msg)
+	if strings.Contains(low, "rate limit") || strings.Contains(low, "rate-limit") || strings.Contains(low, "too many requests") {
+		return &provider.RateLimitError{Message: strings.TrimSpace(msg)}
+	}
+	return nil
+}
+
+// Models reads the live agent's models selector through the engine (spawn,
+// initialize, session/new in a temp dir, read availableModels, close).
+// hermes creates no state.db row for a session that never prompts
+// (probe-emptynew), so discovery leaves nothing behind in the
+// user's store. Failures wrap provider.ErrDiscoveryUnavailable.
+func (p *Provider) Models(ctx context.Context) ([]provider.Model, error) {
+	models, err := p.engine().DiscoverModels(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("hermes-acp: %w", err)
+	}
+	return models, nil
+}
