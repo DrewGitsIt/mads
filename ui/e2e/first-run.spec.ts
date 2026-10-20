@@ -10,7 +10,6 @@ test.describe.configure({ mode: "serial" });
 
 let fastModel: FastModelFixture;
 let topology: Topology;
-const originalPath = process.env.PATH;
 
 /** One Claude Code conversation as it sits on disk: a user line, then an assistant reply. */
 function writeClaudeConversation(home: string, project: string, id: string, cwd: string, prompt: string): void {
@@ -22,18 +21,16 @@ function writeClaudeConversation(home: string, project: string, id: string, cwd:
 }
 
 test.beforeAll(async () => {
-  // The Router only offers to import a harness's history when preflight finds
-  // that harness installed, so put a stub `claude` on the PATH the Router is
-  // booted with (bootTopology copies process.env). Only `--version` is run.
-  const binDir = mkdtempSync(path.join(tmpdir(), "mads-ui-smoke-claude-bin-"));
-  const stub = path.join(binDir, "claude");
-  writeFileSync(stub, "#!/bin/sh\necho '2.1.5 (Claude Code)'\n");
-  chmodSync(stub, 0o755);
-  process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
-
   fastModel = await startFastModelFixture();
   topology = await bootTopology({ fastModelURL: fastModel.url });
-  process.env.PATH = originalPath;
+  // The Router only offers to import a harness's history when preflight finds
+  // that harness installed, so put a stub `claude` in the topology's
+  // $MADS_AGENT_BIN_DIR, the only place the services look for one. Preflight
+  // looks it up per request, so dropping it in after boot is fine. Only
+  // `--version` is run.
+  const stub = path.join(topology.agentBinDir, "claude");
+  writeFileSync(stub, "#!/bin/sh\necho '2.1.5 (Claude Code)'\n");
+  chmodSync(stub, 0o755);
 });
 
 test.afterAll(async () => {
