@@ -90,7 +90,23 @@ The conformance suite's own correctness is proven in `conformance/` against
 an in-memory stub: an honest stub passes (full and partial matrices, ACP-only
 and PTY-only), and every lie class is caught (`TestMismatchesAreCaught`).
 
+A plain `go test ./...` never starts a real harness. Real-binary tests are
+opt-in (`MADS_CLAUDE_SMOKE=1`), and every harness that boots a service or
+runs preflight/model discovery against the registered adapters (the router
+boot test, `scripts/e2esmoke`, `ui/e2e/lib/topology.ts`) sets
+`MADS_AGENT_BIN_DIR` to a stand-in dir — see the contract note below. New
+harnesses must do the same.
+
 ## Contract notes
+
+- Binary lookup: an adapter's default binary is `binlocate.Resolve(name)`,
+  never a bare name. With `$MADS_AGENT_BIN_DIR` set, `pkg/binlocate` answers
+  only `$MADS_AGENT_BIN_DIR/<name>` (PATH and known install locations are
+  ignored) and `Resolve` returns that path even when it's missing, so exec
+  fails fast instead of searching PATH; `pkg/preflight` reports the row
+  not-installed. A test that needs a harness drops a stand-in script there.
+  The router boot test traps same-named scripts on PATH to catch an adapter
+  that bypasses this.
 
 - A `Session` turn: one `Send`, streamed `Event`s, closed by `EventTurnEnd`.
   The events channel closing **without** a turn end is the process-died signal

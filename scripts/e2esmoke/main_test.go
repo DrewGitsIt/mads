@@ -46,6 +46,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/binlocate"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/testleakcheck"
@@ -194,7 +195,10 @@ func (p *listeningProc) terminate(t *testing.T, grace time.Duration) {
 // cleanEnv builds a process environment rooted at an isolated home dir, with
 // no leaked MADS_HOME/MADS_DATA_DIR from the outer test process's own
 // environment — mirrors scripts/smoketest/install_test.go's cleanEnv, so
-// this test never touches the real ~/.mads.
+// this test never touches the real ~/.mads. $MADS_AGENT_BIN_DIR points at
+// an empty stand-in dir (pkg/binlocate), so the router's boot model
+// discovery and its /preflight probes find no harness and never start a
+// real claude, goose or kiro-cli from PATH or a known install location.
 func cleanEnv(home string) []string {
 	env := make([]string, 0, len(os.Environ()))
 	for _, e := range os.Environ() {
@@ -203,7 +207,8 @@ func cleanEnv(home string) []string {
 		}
 		env = append(env, e)
 	}
-	return append(env, "HOME="+home, "MADS_HOME="+home)
+	return append(env, "HOME="+home, "MADS_HOME="+home,
+		binlocate.EnvAgentBinDir+"="+filepath.Join(home, "agent-bin-standins"))
 }
 
 func waitHealth(t *testing.T, base string) {

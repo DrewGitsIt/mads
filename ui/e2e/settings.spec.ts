@@ -10,6 +10,9 @@ test("settings journey: appearance persists, preflight reports live data service
   const palette = page.getByRole("radiogroup", { name: "Palette" });
   const theme = page.getByRole("radiogroup", { name: "Theme" });
 
+  // The palette filter opens on the saved palette's tone (Clay, Warm), and
+  // Space is Cool: show All first.
+  await page.getByRole("group", { name: "Filter palettes" }).getByRole("button", { name: "All" }).click();
   await Promise.all([
     page.waitForResponse((r) => r.request().method() === "PUT" && r.url().endsWith("/config")),
     palette.getByRole("radio", { name: "Space" }).click(),

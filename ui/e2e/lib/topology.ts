@@ -156,6 +156,15 @@ export interface Topology {
    * are plain git by default whatever the machine has installed.
    */
   mergirafPath: string;
+  /**
+   * The services' $MADS_AGENT_BIN_DIR (pkg/binlocate): the only place they
+   * look for an agent harness (claude, goose, kiro-cli, ...), never PATH or
+   * a known install location. Nothing is there unless a spec drops a
+   * stand-in script in, so the router's boot model discovery, /preflight's
+   * version probes and any session spawn can't start a real harness: the
+   * provider rows read not-installed. Every hermetic harness must set it.
+   */
+  agentBinDir: string;
   teardown(): Promise<void>;
 }
 
@@ -202,6 +211,9 @@ export async function bootTopology(opts: BootTopologyOptions): Promise<Topology>
   const env = cleanEnv(homeDir);
   const mergirafPath = path.join(tmpDir, "mergiraf-standin", "mergiraf");
   env.MADS_MERGIRAF = mergirafPath;
+  const agentBinDir = path.join(tmpDir, "agent-bin-standins");
+  mkdirSync(agentBinDir, { recursive: true });
+  env.MADS_AGENT_BIN_DIR = agentBinDir;
 
   // The real Pipeline Engine child, so the Tasks tab's Run button (POST
   // /pipelines) launches a real run like `mads run` does.
@@ -249,5 +261,5 @@ export async function bootTopology(opts: BootTopologyOptions): Promise<Topology>
     rmSync(tmpDir, { recursive: true, force: true });
   };
 
-  return { dataURL, routerURL, madsBin, sessionBin, tmpDir, homeDir, mergirafPath, teardown };
+  return { dataURL, routerURL, madsBin, sessionBin, tmpDir, homeDir, mergirafPath, agentBinDir, teardown };
 }
