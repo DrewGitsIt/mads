@@ -23,6 +23,7 @@ import { FolderPill, recentDirs } from "../pills/FolderPill";
 import { AgentPill } from "../pills/AgentPill";
 import { ModelPill } from "../pills/ModelPill";
 import { TrustPill } from "../pills/TrustPill";
+import { fullAccessOnly } from "../pills/trustLevels";
 import { IsolationPill } from "../pills/IsolationPill";
 import type { StagedConfig } from "../pills/stagedConfig";
 import { AttachmentChips } from "../../../components/Attachments/AttachmentChips";
@@ -188,7 +189,7 @@ export function Launchpad({
   useEffect(() => {
     let cancelled = false;
     routerClient
-      .getSessionDefaults(staged.workspace, staged.dir)
+      .getSessionDefaults(staged.workspace, staged.dir, staged.provider)
       .then((r) => {
         if (!cancelled) setResolved(r);
       })
@@ -199,7 +200,7 @@ export function Launchpad({
       cancelled = true;
     };
     // savedConfig: saving new defaults changes what an unstaged pill resolves to.
-  }, [routerClient, staged.workspace, staged.dir, savedConfig]);
+  }, [routerClient, staged.workspace, staged.dir, staged.provider, savedConfig]);
 
   useEffect(() => {
     let cancelled = false;
@@ -252,6 +253,9 @@ export function Launchpad({
         buildCreateSessionPayload(trimmed, staged, {
           resolvedAgent: resolved?.agent?.value,
           links: stagedLinks,
+          fullTrustOnly: fullAccessOnly(
+            providers.find((p) => p.name === (staged.provider ?? resolved?.provider?.value))?.matrix,
+          ),
           attachmentDraft: hasFiles && "draft" in draft ? draft.draft : undefined,
         }),
       );

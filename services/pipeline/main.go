@@ -28,6 +28,7 @@ import (
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/goosecli"
+	"github.com/drewkidwell/mads/providers/hermescli"
 	"github.com/drewkidwell/mads/providers/kirocli"
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -108,6 +109,18 @@ func buildProviderRegistry(madsHome string, mode agentenv.Mode, passthrough, cre
 		Env:            credEnv,
 	})); err != nil {
 		return nil, fmt.Errorf("register goose provider: %w", err)
+	}
+	// hermes-acp reads its home from HERMES_HOME (default ~/.hermes, which
+	// HOME on the isolated base allowlist already reaches); HERMES_HOME is
+	// not on the allowlist, so a non-default home must pass through. Fresh
+	// slice, as above.
+	hermesPassthrough := append([]string{"HERMES_HOME", "HERMES_DATA_DIR_SUFFIX"}, passthrough...)
+	if err := reg.Register(hermescli.New(hermescli.Config{
+		EnvMode:        mode,
+		EnvPassthrough: hermesPassthrough,
+		Env:            credEnv,
+	})); err != nil {
+		return nil, fmt.Errorf("register hermes provider: %w", err)
 	}
 	fakeOpt := fake.WithTranscriptDir(filepath.Join(madsHome, "fake-transcripts"))
 	fakeProv := fake.New(fakeOpt)

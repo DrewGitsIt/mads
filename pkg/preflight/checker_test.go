@@ -234,3 +234,41 @@ func TestRun_MergirafRowIsOptional(t *testing.T) {
 		t.Errorf("mergiraf row = %+v", m)
 	}
 }
+
+// TestCheckProviderBinary_Hermes proves the hermes row end to end with a
+// stand-in: the probed binary is hermes-acp (what the adapter spawns), whose
+// --version prints the bare version.
+func TestCheckProviderBinary_Hermes(t *testing.T) {
+	bin := t.TempDir()
+	script := filepath.Join(bin, "hermes-acp")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 0.22.2\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	check := checkProviderBinary(context.Background(), "hermes", knownProviderBinaries["hermes"])
+	if !check.Healthy || check.Detail != "hermes v0.22.2" {
+		t.Errorf("checkProviderBinary(hermes) = %+v, want healthy with Detail %q", check, "hermes v0.22.2")
+	}
+}
+
+// TestHermesCompatRange pins the proven 0.22.x window.
+func TestHermesCompatRange(t *testing.T) {
+	r, known := compatMatrix["hermes"]
+	if !known {
+		t.Fatal("no hermes row in compatMatrix")
+	}
+	for version, want := range map[string]struct{ ok, unproven bool }{
+		"0.21.1": {false, false},
+		"0.22.0": {true, false},
+		"0.22.2": {true, false},
+		"0.23.0": {false, true},
+	} {
+		ok, unproven, guidance := r.evaluate(version)
+		if ok != want.ok || unproven != want.unproven {
+			t.Errorf("hermes compat evaluate(%s) = ok %v unproven %v, want %+v", version, ok, unproven, want)
+		}
+		if !ok && guidance == "" {
+			t.Errorf("hermes compat evaluate(%s) rejected without guidance", version)
+		}
+	}
+}

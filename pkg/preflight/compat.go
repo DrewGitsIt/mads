@@ -34,6 +34,16 @@ var compatMatrix = map[string]compatRange{
 	// are listed in the design doc. Max is exclusive, so 1.50.x passes and
 	// 1.51+ warns as unproven.
 	"goose": {Min: "1.46.0", Max: "1.51.0", Note: "proven against goose 1.46.0 (binary probes), 1.48.0 (source re-verification) and 1.50.1 (captures re-verified 2026-10-20) — docs/GOOSE-ADAPTER-DESIGN.md"},
+	// hermes: proven 0.22.x — the survey captures, the source citations and
+	// the MADS_HERMES_SMOKE run are all 0.22.2. The version-sensitive
+	// surfaces are state.db's schema (the TranscriptReader reads it
+	// directly), the cumulative prompt-result usage, the injected "\n\n"
+	// after a tool, and session/load's empty success on an unknown id
+	// (docs/HERMES-ADAPTER-DESIGN.md). 0.21.1, the older acprpc captures,
+	// already behaves differently on a cancelled turn (it dropped the turn
+	// from replay — providers/acprpc/testdata/captures/README.md), so the
+	// floor is the line actually proven.
+	"hermes": {Min: "0.22.0", Max: "0.23.0", Note: "proven against hermes 0.22.2 (survey captures, source, real-binary smoke) — docs/HERMES-ADAPTER-DESIGN.md"},
 }
 
 // evaluate reports whether version sits in the proven window. Below Min is

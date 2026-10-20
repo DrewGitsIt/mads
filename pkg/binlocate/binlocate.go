@@ -24,6 +24,13 @@ var knownLocations = map[string][]string{
 		"/Applications/Goose.app/Contents/Resources/bin/goose",
 		"~/Applications/Goose.app/Contents/Resources/bin/goose",
 	},
+	// hermes-acp: hermes's installer links its entry points into
+	// ~/.local/bin (setup-hermes.sh:216, bin_dir="$HOME/.local/bin") and
+	// only offers to add that to the shell's PATH — a desktop-launched mads
+	// often doesn't have it.
+	"hermes-acp": {
+		"~/.local/bin/hermes-acp",
+	},
 	// mergiraf (pkg/mergedriver): Homebrew's documented prefixes (Apple
 	// silicon, Intel macOS, Linuxbrew) and cargo's install directory. An
 	// app launched from the desktop often has none of them on PATH.

@@ -131,3 +131,25 @@ func TestEffectiveTrust(t *testing.T) {
 		}
 	}
 }
+
+// TestFullTrustOnly: only a matrix with every restricted level not working
+// is full-trust-only; one working level (even emulated) is enough to offer
+// a choice.
+func TestFullTrustOnly(t *testing.T) {
+	restricted := map[Behavior]Support{
+		BehaviorTrustLimited: Unsupported, BehaviorTrustReadOnly: Unsupported, BehaviorTrustAutoReview: Unsupported,
+	}
+	if !FullTrustOnly(fullMatrix(restricted)) {
+		t.Error("all three unsupported: want full trust only")
+	}
+	for _, b := range []Behavior{BehaviorTrustLimited, BehaviorTrustReadOnly, BehaviorTrustAutoReview} {
+		m := fullMatrix(restricted)
+		m[b] = Emulated
+		if FullTrustOnly(m) {
+			t.Errorf("%s emulated: want a choice of levels", b)
+		}
+	}
+	if FullTrustOnly(fullMatrix(nil)) {
+		t.Error("all native: want a choice of levels")
+	}
+}

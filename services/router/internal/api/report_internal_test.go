@@ -6,6 +6,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/goosecli"
+	"github.com/drewkidwell/mads/providers/hermescli"
 	"github.com/drewkidwell/mads/providers/kirocli"
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -18,6 +19,7 @@ func TestCanCompactFollowsMatrix(t *testing.T) {
 	for _, p := range []provider.Provider{
 		claudecode.New(claudecode.Config{}),
 		goosecli.New(goosecli.Config{}),
+		hermescli.New(hermescli.Config{}),
 		kirocli.New(kirocli.Config{}),
 	} {
 		if err := reg.Register(p); err != nil {
@@ -28,6 +30,7 @@ func TestCanCompactFollowsMatrix(t *testing.T) {
 	for name, want := range map[string]bool{
 		"claude-code": true,
 		"goose":       true,
+		"hermes":      false,
 		"kiro-cli":    false,
 		"nonesuch":    false,
 		"":            false,

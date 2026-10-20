@@ -1,0 +1,24 @@
+user: Fix the flaky login test
+agent: On it.
+user: carry on
+agent: Carrying on.
+agent: Ready.
+user: next
+user: <mads-system-prompt bytes="3">
+abcd
+</mads-system-prompt>
+
+hi
+user: <mads-system-prompt>
+be nice
+</mads-system-prompt>
+
+hi
+user: <mads-system-prompt bytes="4">
+abcd
+</mads-system-prompt>hi
+user:  <mads-system-prompt bytes="1">
+x
+</mads-system-prompt>
+
+hi
