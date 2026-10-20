@@ -552,3 +552,26 @@ func TestPTYUnsupported(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A cancelled one-shot returns promptly and leaves no process behind,
+// even mid-turn.
+func TestOneShotCancelReturnsPromptly(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := fakeProvider(t).OneShot(ctx, provider.OneShotRequest{Prompt: "slow", Cwd: t.TempDir(), OnEvent: func(ev provider.Event) {
+			if ev.Kind == provider.EventText {
+				cancel()
+			}
+		}})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(closeGrace + 2*time.Second):
+		t.Fatal("cancelled one-shot did not return")
+	}
+}

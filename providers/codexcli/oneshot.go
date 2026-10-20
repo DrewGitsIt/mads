@@ -67,7 +67,9 @@ func (p *Provider) OneShot(ctx context.Context, req provider.OneShotRequest) (*p
 				req.OnEvent(ev)
 			}
 		case <-ctx.Done():
-			_ = s.Interrupt(context.Background())
+			// Straight to the deferred Close: an Interrupt could wait out
+			// awaitTurnID and an unanswered turn/interrupt, and the thread is
+			// discarded either way. Close's own wait is bounded (closeGrace).
 			return nil, ctx.Err()
 		}
 	}
