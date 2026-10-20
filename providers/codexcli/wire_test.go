@@ -362,3 +362,23 @@ func TestInterruptAbortsEachAskKind(t *testing.T) {
 		})
 	}
 }
+
+// An Interrupt that never learned the running turn's id does not mark the
+// turn interrupted: that turn (or the next) would end mislabelled.
+func TestInterruptWithoutATurnIDMarksNothing(t *testing.T) {
+	w := &bufWC{}
+	c := &conn{stdin: w, pending: map[int64]chan rpcMessage{}, reaper: newReaper(0)}
+	s := newSession(New(Config{}), c, provider.StartOptions{})
+	s.ref, s.turnOpen = "th", true // turn/start answered, turn/started not yet read
+	if err := s.Interrupt(context.Background()); err == nil {
+		t.Fatal("Interrupt without a turn id reported success")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.interrupted {
+		t.Fatal("interrupted set although no turn/interrupt was sent")
+	}
+	if n := len(w.lines()); n != 0 {
+		t.Fatalf("wrote %d lines", n)
+	}
+}

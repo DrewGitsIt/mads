@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -346,22 +347,33 @@ func (s *session) Interrupt(ctx context.Context) error {
 	s.sendMu.Lock() // a turn/start in flight lands first
 	s.mu.Lock()
 	open, ref := s.turnOpen, s.ref
-	if open {
-		s.interrupted = true
-	}
 	s.mu.Unlock()
 	s.sendMu.Unlock()
 	if !open {
 		return nil
 	}
 	turnID := s.awaitTurnID(2 * time.Second)
-	if turnID == "" {
-		return nil // the turn ended meanwhile
+	// Only now, with the turn named and still running, is it this call's to
+	// mark: a flag set before giving up would mislabel whichever turn
+	// ended next.
+	s.mu.Lock()
+	switch {
+	case !s.turnOpen:
+		s.mu.Unlock()
+		return nil // it ended meanwhile
+	case turnID == "" || s.turnID != turnID:
+		s.mu.Unlock()
+		return errors.New("turn/interrupt: the running turn's id never arrived")
 	}
+	s.interrupted = true
+	s.mu.Unlock()
 	s.withdrawAsks(true)
 	if _, err := s.c.request(ctx, "turn/interrupt", map[string]any{"threadId": ref, "turnId": turnID}); err != nil {
 		s.mu.Lock()
 		still := s.turnOpen && s.turnID == turnID
+		if still {
+			s.interrupted = false // codex never took it: the turn runs on
+		}
 		s.mu.Unlock()
 		if !still {
 			return nil // it finished before codex saw the interrupt
