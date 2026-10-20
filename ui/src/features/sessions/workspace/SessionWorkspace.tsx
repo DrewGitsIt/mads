@@ -24,6 +24,7 @@ import { requestStreamReattach } from "../../../conversation/streamReattachSigna
 import type { ChangesFocus } from "../../../files/changesModel";
 import { toWorkspaceTabId, WORKSPACE_TABS, type WorkspaceTabId } from "./tabRegistry";
 import { RUN_EVENT_TYPES } from "./usePipelineRunning";
+import { useLiveRunTaskCount } from "./useLiveRunTaskCount";
 import styles from "./SessionWorkspace.module.css";
 
 export interface SessionWorkspaceProps {
@@ -110,6 +111,7 @@ export function SessionWorkspace({
   const [focusTask, setFocusTask] = useState<{ id: string }>();
   const [focusRun, setFocusRun] = useState<{ run: number | "new" }>();
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
+  const runTaskCount = useLiveRunTaskCount(sessionId, pipelineClient, running);
 
   const refetchSession = useCallback(() => {
     void routerClient.getSession(sessionId).then(setSession);
@@ -279,15 +281,21 @@ export function SessionWorkspace({
               {tab.label}
               {tab.id === "tasks" && running ? (
                 // While a pipeline run is live the badge is the run: a
-                // spinner and how many tasks it is working on right now.
+                // spinner and how many tasks it is working on right now
+                // (its own, not someone's in-progress work it never
+                // touches); just the spinner until that count is known.
                 <span
                   className={[styles.badge, styles.runBadge].join(" ")}
                   aria-hidden="true"
-                  title={`Pipeline running · ${openTaskBreakdown.running} ${openTaskBreakdown.running === 1 ? "task" : "tasks"} in progress`}
+                  title={
+                    runTaskCount === undefined
+                      ? "Pipeline running"
+                      : `Pipeline running · ${runTaskCount} ${runTaskCount === 1 ? "task" : "tasks"} running`
+                  }
                   data-testid="tasks-run-badge"
                 >
                   <span className={styles.spin} />
-                  {openTaskBreakdown.running}
+                  {runTaskCount}
                 </span>
               ) : (
                 tab.id === "tasks" &&

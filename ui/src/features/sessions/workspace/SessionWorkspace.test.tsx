@@ -6,6 +6,8 @@ import { FakePipelineClient } from "../../../pipeline/client/fixtures";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import { makeFakeShellHost } from "../../../conversation/ShellDock/fakeShellHost";
 import { resetShellDockCache } from "../../../conversation/ShellDock/dockState";
+import { task } from "../../../tasks/Metro/testTasks";
+import type { Envelope } from "../../../router/types";
 
 const SESSION_ID = "session-active";
 
@@ -122,27 +124,65 @@ describe("SessionWorkspace", () => {
     expect(screen.getByRole("tab", { name: "Tasks" }).textContent).toBe("Tasks");
   });
 
-  it("swaps the Tasks badge for a spinner and the running count while a run is in flight", async () => {
-    renderWorkspace({ openTaskBreakdown: { running: 2, ready: 3, blocked: 0 } });
+  it("swaps the Tasks badge for a spinner and the run's own running count while a run is in flight", async () => {
+    // Two tasks in progress: one the run claimed, one a person set in
+    // progress themselves (the run never touches it). A third is ready.
+    const tasks = [
+      task("claimed", { session_id: SESSION_ID, status: "in_progress" }),
+      task("mine", { session_id: SESSION_ID, status: "in_progress" }),
+      task("next", { session_id: SESSION_ID }),
+    ];
+    const pipelineClient = new FakePipelineClient(tasks);
+    const env = (seq: number, type: string, extra: Partial<Envelope> = {}): Envelope => ({
+      seq,
+      timestamp: "2026-10-19T10:00:00Z",
+      type,
+      session_id: SESSION_ID,
+      actor: "pipeline",
+      ...extra,
+    });
+    const claim = (seq: number, taskId: string) =>
+      env(seq, "task.status_changed", { task_id: taskId, payload: { from: "ready", to: "in_progress" } });
+    pipelineClient.runs = [
+      {
+        session_id: SESSION_ID,
+        run_seq: 10,
+        run_id: "r1",
+        started_at: "2026-10-19T10:00:00Z",
+        outcome: "running",
+        tasks_done: 0,
+        tasks_blocked: 0,
+        tasks_skipped: 0,
+        cost_usd: 0,
+      },
+    ];
+    pipelineClient.runEvents = [env(10, "pipeline.started", { payload: { run_id: "r1" } }), claim(11, "claimed")];
+
+    const routerClient = new FakeRouterClient(undefined, undefined, undefined, undefined, tasks);
+    renderWorkspace({ routerClient, pipelineClient, openTaskBreakdown: { running: 2, ready: 3, blocked: 0 } });
     const tasksTab = await screen.findByRole("tab", { name: "Tasks" });
     expect(tasksTab.textContent).toBe("Tasks5");
 
     const source = FakeEventSource.instances.find((s) => s.url.includes("pipeline.started"));
     act(() => {
-      source?.emit(
-        "pipeline.started",
-        JSON.stringify({ seq: 1, type: "pipeline.started", actor: "user", session_id: SESSION_ID }),
-      );
+      source?.emit("pipeline.started", JSON.stringify(env(10, "pipeline.started", { payload: { run_id: "r1" } })));
+    });
+    await waitFor(() => expect(within(tasksTab).getByTestId("tasks-run-badge").textContent).toBe("1"));
+    expect(within(tasksTab).getByTestId("tasks-run-badge").getAttribute("title")).toBe(
+      "Pipeline running · 1 task running",
+    );
+
+    // The run claims the next task: it counts once the task list says so.
+    tasks[2].status = "in_progress";
+    act(() => {
+      source?.emit("task.status_changed", JSON.stringify(claim(12, "next")));
     });
     await waitFor(() => expect(within(tasksTab).getByTestId("tasks-run-badge").textContent).toBe("2"));
-    expect(within(tasksTab).getByTestId("tasks-run-badge").getAttribute("title")).toBe(
-      "Pipeline running · 2 tasks in progress",
-    );
 
     act(() => {
       source?.emit(
         "pipeline.completed",
-        JSON.stringify({ seq: 2, type: "pipeline.completed", actor: "user", session_id: SESSION_ID }),
+        JSON.stringify({ seq: 13, type: "pipeline.completed", actor: "user", session_id: SESSION_ID }),
       );
     });
     await waitFor(() => expect(within(tasksTab).queryByTestId("tasks-run-badge")).toBeNull());
