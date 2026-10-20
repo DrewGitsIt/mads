@@ -19,7 +19,7 @@ import (
 // Copilot credential itself from the gh CLI (`gh auth token`, recorded in
 // the scratch auth.json as a "gh_cli" pool entry with a fingerprint, no
 // secret copied). Turns are kept short: a one-liner, one `ls`, an
-// interrupted count, a recall after resume.
+// interrupted count, a recall after resume, one MCP tool call.
 func TestRealHermesSmoke(t *testing.T) {
 	if os.Getenv("MADS_HERMES_SMOKE") != "1" {
 		t.Skip("set MADS_HERMES_SMOKE=1 to run against the real hermes-acp (uses Copilot via gh)")
@@ -157,7 +157,50 @@ func TestRealHermesSmoke(t *testing.T) {
 	if _, err := p.Start(ctx, provider.StartOptions{Mode: provider.ModeACP, Cwd: cwd, Resume: "00000000-0000-4000-8000-000000000000"}); err == nil {
 		t.Error("resume of an unknown ref succeeded")
 	}
+
+	// MCPServers: a stdio server handed over on session/new must be callable.
+	// Its marker exists nowhere but in the tool's result.
+	server := filepath.Join(t.TempDir(), "mcpprobe.py")
+	if err := os.WriteFile(server, []byte(mcpProbeServer), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	withMCP, err := p.Start(ctx, provider.StartOptions{Mode: provider.ModeACP, Cwd: cwd,
+		MCPServers: []provider.MCPServerRef{{Name: "madsprobe", Command: "python3 " + server}}})
+	if err != nil {
+		t.Fatalf("Start with MCPServers: %v", err)
+	}
+	defer func() { _ = withMCP.Close() }()
+	if err := withMCP.Send(ctx, "Call the MCP tool mads_probe_ping (it may be listed with a server prefix) and reply with exactly the text it returned."); err != nil {
+		t.Fatal(err)
+	}
+	if got := turnText(drainTurnWithin(t, withMCP, turnTimeout)); !strings.Contains(got, "marker-QX7731") {
+		t.Errorf("MCP turn text = %q, want the tool's marker", got)
+	}
 }
+
+// mcpProbeServer is a minimal stdio MCP server with one tool,
+// mads_probe_ping, whose result is a marker the model can't guess.
+const mcpProbeServer = `#!/usr/bin/env python3
+import json, sys
+def send(o):
+    sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+for line in sys.stdin:
+    try:
+        m = json.loads(line)
+    except Exception:
+        continue
+    mid, meth = m.get("id"), m.get("method")
+    if meth == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": m["params"].get("protocolVersion", "2024-11-05"),
+              "capabilities": {"tools": {}}, "serverInfo": {"name": "madsprobe", "version": "0"}}})
+    elif meth == "tools/list":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"tools": [{"name": "mads_probe_ping",
+              "description": "Returns the probe marker.", "inputSchema": {"type": "object", "properties": {}}}]}})
+    elif meth == "tools/call":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"content": [{"type": "text", "text": "marker-QX7731"}]}})
+    elif mid is not None:
+        send({"jsonrpc": "2.0", "id": mid, "result": {}})
+`
 
 func fileSum(t *testing.T, path string) [32]byte {
 	t.Helper()

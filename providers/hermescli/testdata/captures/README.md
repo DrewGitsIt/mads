@@ -22,7 +22,9 @@ Every run used a scratch `HERMES_HOME` — never `~/.hermes`:
 - `runc1`: GitHub Copilot `gpt-4.1` (scratch `config.yaml` naming only
   `provider: copilot`; hermes resolved the credential itself from
   `gh auth token` and recorded a fingerprint, no secret).
-- `probe-*`: Copilot `gpt-4.1`/`gpt-4o`, written for this adapter.
+- `probe-*`: Copilot `gpt-4.1`/`gpt-4o`, written for this adapter;
+  `probe-mcp` used a 20-line stdio MCP server (the same one
+  `smoke_test.go` embeds).
 
 ## Files
 
@@ -37,6 +39,7 @@ Every run used a scratch `HERMES_HOME` — never `~/.hermes`:
 | `probe-setmodel.wire.jsonl` | `session/set_model` `copilot:gpt-4o` succeeding; `config.yaml` sha256 and mtime identical before and after (the probe's stdout, recorded in the design doc); the session row stores the model |
 | `probe-load.wire.jsonl` | reloading that session restores `currentModelId` `copilot:gpt-4o` — the choice lives on the session, not in config |
 | `probe-loadunknown.wire.jsonl` | session/load of an unknown id answered `{"result": {}}`, and a prompt on it `stopReason: "refusal"` |
+| `probe-mcp.wire.jsonl` | a stdio MCP server passed in session/new's `mcpServers`: the model finds it (`tool_search`), calls `mcp__madsprobe__mads_probe_ping`, and replies with the marker only the tool returns |
 | `probe-emptynew.wire.jsonl` | session/new with no prompt leaves no `sessions` row (model discovery deposits nothing) |
 
 ## Sanitization

@@ -203,11 +203,11 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorRefAnnounce: provider.Native,
 		// state.db, hermes's own store (transcript.go).
 		provider.BehaviorTranscript: provider.Native,
-		// The engine sends mcpServers on session/new and hermes's source
-		// registers them (server.py _register_session_mcp_servers), but no
-		// live probe has shown a hermes session calling one — kirocli's
-		// precedent: unsupported until a smoke says otherwise.
-		provider.BehaviorMCPServers: provider.Unsupported,
+		// The engine sends mcpServers on session/new; hermes registers them
+		// on the session (server.py:427) and the model calls them as
+		// mcp__<server>__<tool> (probe-mcp: a stdio server's marker came
+		// back through the call; re-proven by the smoke).
+		provider.BehaviorMCPServers: provider.Native,
 		// Not driven yet (CompactCommand above).
 		provider.BehaviorCompaction:      provider.Unsupported,
 		provider.BehaviorCompactionFocus: provider.Unsupported,
