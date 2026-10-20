@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/toolstatus"
@@ -64,7 +65,7 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 	if sess != nil {
 		if lt, ok := sess.(transcripter); ok {
 			if msgs := lt.Transcript(); len(msgs) > 0 {
-				return renderTranscript(msgs, attrs)
+				return renderTranscript(msgs, attrs, r.inboundSourcer(ctx))
 			}
 		}
 	}
@@ -84,7 +85,14 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 		log.Printf("runner: transcript: read %s: %v", r.sessionID, err)
 		return out
 	}
-	return renderTranscript(msgs, attrs)
+	return renderTranscript(msgs, attrs, r.inboundSourcer(ctx))
+}
+
+// inboundSourcer is renderTranscript's inbound resolution for this session.
+func (r *Runner) inboundSourcer(ctx context.Context) func(*provider.Inbound, time.Time) *contracts.InboundSource {
+	return func(in *provider.Inbound, at time.Time) *contracts.InboundSource {
+		return r.inboundSource(ctx, in, at)
+	}
 }
 
 // renderTranscript maps normalized provider messages to wire TranscriptMessages,
@@ -93,7 +101,11 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 // status from its recorded result; calls with no result stay honestly open (a
 // refetch has no turn-end signal to distinguish "still running" from
 // "interrupted" — see conversation.go).
-func renderTranscript(msgs []provider.Message, attrs map[int]contracts.Attribution) []contracts.TranscriptMessage {
+//
+// An inbound message (Role "inbound") gets its resolved source from inbound
+// (nil leaves it unresolved) and is not a user turn: it never takes a user
+// ordinal, so the attributions of the turns after it stay put.
+func renderTranscript(msgs []provider.Message, attrs map[int]contracts.Attribution, inbound func(*provider.Inbound, time.Time) *contracts.InboundSource) []contracts.TranscriptMessage {
 	out := make([]contracts.TranscriptMessage, len(msgs))
 	var userIdx int
 	for i, m := range msgs {
@@ -103,6 +115,9 @@ func renderTranscript(msgs []provider.Message, attrs map[int]contracts.Attributi
 			tm.Compact = &c
 		}
 		tm.Tool = contractsToolUse(m.Tool) // full enriched mapping — kind/title/status/locations/server
+		if m.Inbound != nil && inbound != nil {
+			tm.Inbound = inbound(m.Inbound, m.Timestamp)
+		}
 		if m.Role == "user" {
 			userIdx++
 			if a, ok := attrs[userIdx]; ok {

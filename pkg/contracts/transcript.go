@@ -47,7 +47,7 @@ type ToolLocation struct {
 // TranscriptMessage mirrors providers/provider/event.go Message — one
 // normalized transcript entry, as returned by GET /sessions/{id}/transcript.
 type TranscriptMessage struct {
-	Role        string       `json:"role"` // "user", "agent", "tool", "tool_result", "compact", or "notification"
+	Role        string       `json:"role"` // "user", "agent", "tool", "tool_result", "compact", "notification", or "inbound"
 	Text        string       `json:"text,omitempty"`
 	Tool        *ToolUse     `json:"tool,omitempty"`
 	Attribution *Attribution `json:"attribution,omitempty"`
@@ -62,6 +62,57 @@ type TranscriptMessage struct {
 	// Compact describes a Role "compact" entry (a compaction pass); Text is
 	// then the summary carried forward. Mirrors provider.CompactMarker.
 	Compact *CompactMarker `json:"compact,omitempty"`
+	// Inbound describes a Role "inbound" entry: a message that reached the
+	// agent from outside mads, over a channel its harness runs (claude-code's
+	// cross-session peer messages). Text is the message body. Not a user
+	// turn: it carries no Attribution and doesn't count as one.
+	Inbound *InboundSource `json:"inbound,omitempty"`
+}
+
+// InboundSource says where an inbound message (TranscriptMessage Role
+// "inbound", the live stream's "inbound" event) came from. Built by the
+// session layer from providers/provider's Inbound: the harness-level fields
+// pass through, and the sender is resolved to a mads session when its
+// address matches one (session.peer_address). The sender's raw address is
+// deliberately not carried: it is opaque, and only ever matched.
+type InboundSource struct {
+	// Channel is the harness's channel id ("peer" for claude-code).
+	Channel string `json:"channel"`
+	// Provider is the RECIPIENT session's provider name ("claude-code"):
+	// the harness whose channel carried the message.
+	Provider string `json:"provider"`
+	// FromName is the harness's own label for the sender — what to show
+	// when the sender isn't a mads session.
+	FromName string `json:"from_name,omitempty"`
+	// SessionID and SessionName are set only when the sender resolved to a
+	// mads session; SessionName is its current name.
+	SessionID   string `json:"session_id,omitempty"`
+	SessionName string `json:"session_name,omitempty"`
+	// LinkID is the link between sender and recipient, either direction,
+	// when one exists.
+	LinkID string `json:"link_id,omitempty"`
+	// State is "" for a message delivered to the agent, "held" when the
+	// harness held it back; HoldReason is the harness's reason then.
+	State      string `json:"state,omitempty"`
+	HoldReason string `json:"hold_reason,omitempty"`
+}
+
+// StreamInbound is the live stream's (GET /output) "inbound" event kind:
+// {"kind": "inbound", "text": <body>, "inbound": InboundSource}.
+const StreamInbound = "inbound"
+
+// InboundStreamEvent is the body of the live stream's "inbound" event — a
+// message from outside mads arrived (see InboundSource). Text is empty for
+// a held message the harness reported without its body.
+type InboundStreamEvent struct {
+	Kind    string         `json:"kind"`
+	Text    string         `json:"text"`
+	Inbound *InboundSource `json:"inbound"`
+}
+
+// PeerAddress is the payload of SessionPeerAddress.
+type PeerAddress struct {
+	Address string `json:"address"`
 }
 
 // CompactMarker mirrors providers/provider's CompactMarker.

@@ -1,0 +1,53 @@
+{
+  "peer_address": {
+    "address": "uds:/tmp/cc-socks/77585.sock"
+  },
+  "stream": {
+    "kind": "inbound",
+    "text": "Rulings on your questions.",
+    "inbound": {
+      "channel": "peer",
+      "provider": "claude-code",
+      "from_name": "repo-9c",
+      "session_id": "ses_leader",
+      "session_name": "Leader",
+      "link_id": "lnk_1"
+    }
+  },
+  "stream_held": {
+    "kind": "inbound",
+    "text": "",
+    "inbound": {
+      "channel": "peer",
+      "provider": "claude-code",
+      "from_name": "a-6f",
+      "state": "held",
+      "hold_reason": "mode-mismatch"
+    }
+  },
+  "transcript": [
+    {
+      "role": "inbound",
+      "text": "Rulings on your questions.",
+      "timestamp": "2026-10-19T05:22:06Z",
+      "inbound": {
+        "channel": "peer",
+        "provider": "claude-code",
+        "from_name": "repo-9c",
+        "session_id": "ses_leader",
+        "session_name": "Leader",
+        "link_id": "lnk_1"
+      }
+    },
+    {
+      "role": "inbound",
+      "text": "hello",
+      "timestamp": "0001-01-01T00:00:00Z",
+      "inbound": {
+        "channel": "peer",
+        "provider": "claude-code",
+        "from_name": "a-3c"
+      }
+    }
+  ]
+}

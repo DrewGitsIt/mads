@@ -27,6 +27,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/delegates"
 	"github.com/drewkidwell/mads/pkg/githook"
+	"github.com/drewkidwell/mads/pkg/inbound"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/pkg/toolstatus"
 	"github.com/drewkidwell/mads/pkg/vault"
@@ -222,7 +223,7 @@ type Runner struct {
 	mu           sync.Mutex
 	sess         provider.Session
 	providerName string // sess's provider name, set alongside sess so Transcript can look the provider back up
-	busy         bool   // a turn is in flight (Send called, no EventTurnEnd yet)
+	busy         bool   // a turn is in flight (Send called, or an inbound message woke the agent; no EventTurnEnd yet)
 	closing      bool   // Shutdown has started tearing this session down
 
 	// landing is set while Land runs (worktreeops.go): no turn may start,
@@ -263,6 +264,12 @@ type Runner struct {
 	// a second request while one is already queued replaces it, since only
 	// the last model asked for is the one the user wants. Guarded by mu.
 	pendingModel string
+
+	// inbound resolves inbound messages' senders (inbound.go), built on
+	// first use once providerName is known. peerAddr is the last
+	// session.peer_address this runner recorded. Both guarded by mu.
+	inbound  *inbound.Resolver
+	peerAddr string
 
 	// sentTurns counts every turn sent so far (Send and Inject alike),
 	// 1-indexed — the ordinal Transcript correlates against turnAttributions
@@ -1781,6 +1788,10 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 // session.crashed), which fires independently when this OS process exits.
 func (r *Runner) pump(sess provider.Session) {
 	for ev := range sess.Events() {
+		r.notePeerAddress(sess)
+		if ev.Kind == provider.EventInbound {
+			ev = r.onInbound(ev)
+		}
 		r.observeShell(ev, time.Now())
 		if ev.Kind == provider.EventTurnEnd {
 			// Before onTurnEnd: it can start a queued next turn, whose

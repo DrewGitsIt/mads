@@ -608,9 +608,28 @@ export interface Attribution {
   source_name: string;
 }
 
+// mirrors pkg/contracts/transcript.go InboundSource — where an inbound
+// message (a message that reached the agent from outside mads, over a channel
+// its harness runs: claude-code's cross-session peer messages) came from.
+// session_id/session_name/link_id are set only when the sender resolved to a
+// mads session; otherwise from_name (the harness's own label) is all there is.
+export interface InboundSource {
+  channel: string;
+  /** The RECIPIENT session's provider ("claude-code") — the harness whose channel carried it. */
+  provider: string;
+  from_name?: string;
+  session_id?: string;
+  session_name?: string;
+  /** The link between sender and recipient, either direction, if one exists. */
+  link_id?: string;
+  /** "" / absent: delivered to the agent. "held": the harness held it back (hold_reason says why). */
+  state?: string;
+  hold_reason?: string;
+}
+
 // mirrors providers/provider/event.go Message (TranscriptReader shape)
 export interface TranscriptMessage {
-  role: "user" | "agent" | "tool" | "tool_result" | "compact" | "notification";
+  role: "user" | "agent" | "tool" | "tool_result" | "compact" | "notification" | "inbound";
   // on role "compact", the summary the agent carried forward; on role
   // "notification" (a background task finished — the harness telling the
   // agent, not the human speaking), the harness's one-line summary
@@ -621,6 +640,7 @@ export interface TranscriptMessage {
   /** On "tool_result": the call failed. On "agent": the harness reporting a failed turn in the agent's place (auth rejected, API unreachable, out of credits), not a reply. */
   is_error?: boolean;
   compact?: CompactMarker; // set on role "compact": one compaction pass, where it happened
+  inbound?: InboundSource; // set on role "inbound" (text is the message body; not a user turn) — mirrors pkg/contracts/transcript.go TranscriptMessage.Inbound
 }
 
 // mirrors pkg/contracts/transcript.go CompactMarker. Zero/absent fields mean
@@ -910,6 +930,11 @@ export type StreamEvent = SubagentTag &
     // The running background processes that aren't subagents, whole, on
     // every change and first on connect; absent means none. Live-only.
     | { kind: "background"; background?: BackgroundTask[] }
+    // A message reached the agent from outside mads (mirrors
+    // pkg/contracts/transcript.go InboundStreamEvent). A delivered one that
+    // lands while the agent is idle opens a turn of its own, which ends with
+    // an ordinary turn_end; text is "" for a held one reported without its body.
+    | { kind: "inbound"; text: string; inbound: InboundSource }
   );
 
 // mirrors providers/provider/event.go BackgroundTask: one running background

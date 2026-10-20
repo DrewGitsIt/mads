@@ -123,8 +123,15 @@ type transcriptLine struct {
 	// Origin marks a user-role line the CLI wrote itself: kind
 	// "task-notification" is the <task-notification> block it feeds the
 	// model when a background task finishes.
+	// Kind "peer" is a cross-session message from another claude process
+	// that arrived while the session was idle (isMeta, content the CLI's
+	// wrapper; the origin carries the sender and the bare body).
 	Origin  *wireOrigin  `json:"origin"`
 	Message *wireMessage `json:"message"`
+	// Attachment is an "attachment" line's payload. Only the queued_command
+	// kind is read: a peer message that arrived mid-turn is recorded as one
+	// (peerAttachment).
+	Attachment *transcriptAttachment `json:"attachment"`
 	// Cwd is the session's working directory, stamped on every line —
 	// candidateTranscripts's filter, not read by normalizeTranscript.
 	Cwd string `json:"cwd"`
@@ -141,6 +148,78 @@ type transcriptLine struct {
 	// Timestamp is claude-code's own RFC3339 stamp on every conversation
 	// line. Unparseable or absent leaves the zero time.Time.
 	Timestamp string `json:"timestamp"`
+}
+
+// transcriptAttachment is an "attachment" line's payload. A queued_command's
+// Prompt is input the CLI took in while a turn ran; for a peer message it is
+// the <cross-session-message …>body</cross-session-message> block, and
+// Origin (when the CLI wrote one) the same peer origin an idle arrival
+// carries.
+type transcriptAttachment struct {
+	Type   string      `json:"type"`
+	Prompt string      `json:"prompt"`
+	Origin *wireOrigin `json:"origin"`
+}
+
+var (
+	crossSessionTag  = regexp.MustCompile(`(?s)^\s*<cross-session-message\b([^>]*)>\n?(.*?)\n?</cross-session-message>`)
+	crossSessionAttr = regexp.MustCompile(`([a-z-]+)="([^"]*)"`)
+)
+
+// peerAttachment reads a mid-turn peer message out of a queued_command
+// attachment: from its origin when the CLI wrote one, otherwise from the
+// <cross-session-message> block's from/from-name attributes and body. nil
+// for any other attachment.
+func peerAttachment(a *transcriptAttachment) (in *provider.Inbound, body, msgID string) {
+	if a == nil || a.Type != "queued_command" {
+		return nil, "", ""
+	}
+	if a.Origin.isPeer() {
+		return a.Origin.inbound(), a.Origin.Body, a.Origin.MsgID
+	}
+	m := crossSessionTag.FindStringSubmatch(a.Prompt)
+	if m == nil {
+		return nil, "", ""
+	}
+	in = &provider.Inbound{Channel: peerChannel}
+	for _, kv := range crossSessionAttr.FindAllStringSubmatch(m[1], -1) {
+		switch kv[1] {
+		case "from":
+			in.From = html.UnescapeString(kv[2])
+		case "from-name":
+			in.FromName = html.UnescapeString(kv[2])
+		}
+	}
+	return in, m[2], ""
+}
+
+// peerSeen dedupes peer messages across the shapes one can be recorded in,
+// so a message written both ways renders once. Two records that both carry
+// a msg_id are the same message only if the ids match — a sender can send
+// the same words twice. A record without one (a queued_command the CLI
+// wrote no origin for) can only be matched on sender and body.
+type peerSeen struct {
+	ids map[string]bool
+	// bodies maps sender+body to whether any record of it lacked a msg_id.
+	bodies map[string]bool
+}
+
+// repeat reports whether this message was already rendered, and marks it.
+func (p *peerSeen) repeat(in *provider.Inbound, body, msgID string) bool {
+	if p.ids == nil {
+		p.ids, p.bodies = map[string]bool{}, map[string]bool{}
+	}
+	key := in.From + "\x00" + strings.TrimSpace(body)
+	idless, bodySeen := p.bodies[key]
+	var dup bool
+	if msgID == "" {
+		dup = bodySeen
+	} else {
+		dup = p.ids[msgID] || idless
+		p.ids[msgID] = true
+	}
+	p.bodies[key] = idless || msgID == ""
+	return dup
 }
 
 type compactMetadata struct {
@@ -243,6 +322,7 @@ func normalizeTranscript(r io.Reader) ([]provider.Message, error) {
 func normalizeLines(r io.Reader, sidechain bool) ([]provider.Message, error) {
 	var msgs []provider.Message
 	seen := map[string]struct{}{}
+	var peers peerSeen
 	sc := newLineReader(r)
 	for sc.Scan() {
 		raw := strings.TrimSpace(sc.Text())
@@ -278,6 +358,22 @@ func normalizeLines(r io.Reader, sidechain bool) ([]provider.Message, error) {
 				*marker = provider.CompactMarker{Trigger: md.Trigger, PreTokens: md.PreTokens, PostTokens: md.PostTokens, DurationMS: md.DurationMS}
 			}
 			msgs = append(msgs, provider.Message{Role: "compact", Compact: marker, Timestamp: ts})
+			continue
+		}
+		// A message from another claude process is neither the human nor
+		// the CLI: it becomes an "inbound" entry with the bare body. Idle
+		// arrival: an isMeta user line with a peer origin. Mid-turn: a
+		// queued_command attachment.
+		if l.Type == "attachment" {
+			if in, body, id := peerAttachment(l.Attachment); in != nil && !peers.repeat(in, body, id) {
+				msgs = append(msgs, provider.Message{Role: "inbound", Inbound: in, Text: body, Timestamp: ts})
+			}
+			continue
+		}
+		if l.Type == "user" && l.Origin.isPeer() {
+			if !peers.repeat(l.Origin.inbound(), l.Origin.Body, l.Origin.MsgID) {
+				msgs = append(msgs, provider.Message{Role: "inbound", Inbound: l.Origin.inbound(), Text: l.Origin.Body, Timestamp: ts})
+			}
 			continue
 		}
 		if l.Message == nil {

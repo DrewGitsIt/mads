@@ -129,7 +129,7 @@ func (s *server) turnsFor(ctx context.Context, sess contracts.Session, ref strin
 	if err != nil {
 		return out
 	}
-	return normalizeTurns(msgs)
+	return normalizeTurns(msgs, s.inboundSources(ctx, sess))
 }
 
 // findAttemptRef looks up the provider-native session ref the engine

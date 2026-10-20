@@ -24,7 +24,14 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 	// --include-partial-messages surfaces token-level content_block_delta lines
 	// so the UI streams text as it arrives instead of one whole message block
 	// per turn (see wire.go's events/streamDeltaEvents).
-	args := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages"}
+	//
+	// --replay-user-messages echoes every user message the process takes in
+	// back onto stdout. mads's own sends say nothing new there, but a
+	// cross-session message from another claude process arrives the same
+	// way, and that echo is the only live sign of it (wire.go
+	// isPeerReplay) — without the flag such a message never reached the
+	// conversation.
+	args := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--replay-user-messages"}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
 	}
@@ -144,8 +151,8 @@ type streamSession struct {
 	forkFrom    string // original's id on a fork: never adopted as ref
 	model       string
 	interrupted bool // an interrupt was requested this turn
-	// turnOpen is set from Send until the turn's own (origin-less) result
-	// line; unprompted records main-agent output seen while no turn was
+	// turnOpen is set from Send (or an idle peer message's arrival) until
+	// the turn's own result line; unprompted records main-agent output seen while no turn was
 	// open. Together they tell handleLine what a task-notification result
 	// closes. Inside a turn it closes an internal continuation and must stay
 	// silent (see wire.go). After the turn it may close an unprompted turn
@@ -200,6 +207,9 @@ type streamSession struct {
 	// stripped: a subagent's own lines name its model but never its window.
 	windows  map[string]int
 	refFired bool // guards announced against a double-send
+	// peerAddr is this process's own cross-session address, "uds:" + the
+	// init line's messaging_socket_path (PeerAddress).
+	peerAddr string
 
 	// launchMCP holds the servers this process was started with
 	// (--mcp-config), by name. mcp_set_servers manages a separate, "dynamic"
@@ -286,6 +296,9 @@ func (s *streamSession) handleLine(raw []byte) {
 	if m := l.model(); m != "" {
 		s.model = m
 	}
+	if l.Type == "system" && l.Subtype == "init" && l.MessagingSocketPath != "" {
+		s.peerAddr = "uds:" + l.MessagingSocketPath
+	}
 	model := s.model
 	interrupted := s.interrupted
 	closesUnprompted := false
@@ -319,6 +332,15 @@ func (s *streamSession) handleLine(raw []byte) {
 		s.turnOpen = false
 		s.unprompted = false
 		compactedTo, s.compactedTo = s.compactedTo, 0
+	case l.isPeerReplay() && !s.turnOpen && !s.unprompted:
+		// A peer message that arrived while nothing ran: the CLI runs a
+		// turn for it, and that turn closes with an ordinary result line
+		// (stamped origin "peer", which isTaskNotificationResult leaves
+		// alone). It is open from here exactly as a Send's would be, so a
+		// background-task continuation inside it stays the silent in-turn
+		// kind. One arriving inside an unprompted turn is absorbed into it,
+		// and that turn keeps its own ending.
+		s.turnOpen = true
 	case l.Type == "assistant" && l.ParentToolUseID == "" && !s.turnOpen:
 		s.unprompted = true
 	}
@@ -504,6 +526,15 @@ func (s *streamSession) SetRef(ref string) {
 }
 
 func (s *streamSession) Mode() provider.Mode { return provider.ModeACP }
+
+// PeerAddress implements provider.PeerAddresser: the address other claude
+// processes send this one cross-session messages on, in the form their
+// messages' origin.from uses. Empty until the init line arrives.
+func (s *streamSession) PeerAddress() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.peerAddr
+}
 
 // RefAnnounced implements provider.RefAnnouncer — see announced's doc comment.
 func (s *streamSession) RefAnnounced() <-chan string { return s.announced }

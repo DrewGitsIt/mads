@@ -111,7 +111,38 @@ const (
 	// its billing stays unknown. Live-only as an event: the runner persists
 	// the latest snapshot on the session record (contracts.SessionBilling).
 	EventAccount EventKind = "account"
+	// EventInbound — a message reached the agent from OUTSIDE mads, over a
+	// channel the harness itself runs (claude-code's cross-session peer
+	// messages): Inbound says where from, Text is the message body with no
+	// harness wrapper markup. A delivered message (Inbound.State "") that
+	// lands while no turn is open makes the harness run an unprompted turn,
+	// which ends with an ordinary EventTurnEnd; one that lands mid-turn is
+	// absorbed into it. A held one (State "held") reached the harness but
+	// was not given to the agent, and opens nothing. A harness with no such
+	// channel never emits it.
+	EventInbound EventKind = "inbound"
 )
+
+// Inbound describes where an EventInbound / Role "inbound" message came
+// from, in the harness's own terms. Nothing above the provider layer parses
+// From: it is only ever compared against another session's PeerAddress.
+type Inbound struct {
+	// Channel is the provider-scoped channel id ("peer" for claude-code's
+	// cross-session messages).
+	Channel string `json:"channel"`
+	// From is the sender's opaque provider-scoped address.
+	From string `json:"from,omitempty"`
+	// FromName is the harness's own label for the sender.
+	FromName string `json:"from_name,omitempty"`
+	// State is "" for a message delivered to the agent, or "held" when the
+	// harness held it back.
+	State string `json:"state,omitempty"`
+	// HoldReason is the harness's reason when State is "held".
+	HoldReason string `json:"hold_reason,omitempty"`
+}
+
+// InboundHeld is Inbound.State for a message the harness held back.
+const InboundHeld = "held"
 
 // Event is one entry in a session's normalized stream.
 type Event struct {
@@ -160,6 +191,14 @@ type Event struct {
 	// TaskDescription is the spawning tool call's short description on a
 	// parent-tagged event.
 	TaskDescription string `json:"task_description,omitempty"`
+	// Inbound for EventInbound: where the message came from.
+	Inbound *Inbound `json:"inbound,omitempty"`
+	// Wire, when set, is this event's live-stream body exactly as the layer
+	// above rendered it, and a serializer sends it in place of the event's
+	// own fields. The session runner sets it on EventInbound, whose stream
+	// form carries the sender resolved to a mads session — something no
+	// provider can know. Adapters never set it.
+	Wire json.RawMessage `json:"-"`
 }
 
 // Billing modes for AccountStatus.BillingMode — contracts.BillingPlan and
@@ -419,7 +458,7 @@ type Usage struct {
 // Message is one normalized transcript entry (TranscriptReader). Synthesis
 // and retro (spec §4, §7) read this shape regardless of harness.
 type Message struct {
-	Role string   `json:"role"` // "user", "agent", "tool", "tool_result", "compact", or "notification"
+	Role string   `json:"role"` // "user", "agent", "tool", "tool_result", "compact", "notification", or "inbound"
 	Text string   `json:"text,omitempty"`
 	Tool *ToolUse `json:"tool,omitempty"`
 	// Timestamp is when the provider recorded this entry, when the wire
@@ -434,6 +473,11 @@ type Message struct {
 	// where it happened. Its Text is the summary the agent carried forward
 	// (empty if the provider recorded none) — never a user message.
 	Compact *CompactMarker `json:"compact,omitempty"`
+	// Inbound describes a Role "inbound" entry: a message that reached the
+	// agent from outside mads (EventInbound's transcript form). Its Text is
+	// the message body, never the harness's wrapper — and it is not a user
+	// turn.
+	Inbound *Inbound `json:"inbound,omitempty"`
 }
 
 // CompactMarker is one completed compaction pass as a transcript records

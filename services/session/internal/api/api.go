@@ -254,9 +254,14 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	var seq int64
 	writeEvent := func(ev provider.Event) bool {
-		data, err := json.Marshal(ev)
-		if err != nil {
-			return false
+		// An event the runner rendered for the stream itself (an "inbound"
+		// event, its sender resolved) goes out as rendered.
+		data := []byte(ev.Wire)
+		if len(data) == 0 {
+			var err error
+			if data, err = json.Marshal(ev); err != nil {
+				return false
+			}
 		}
 		seq++
 		if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", seq, ev.Kind, data); err != nil {

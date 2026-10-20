@@ -45,6 +45,14 @@ func (d *digestAccumulator) recordUser(text string, digestAttributed bool) {
 	}
 }
 
+// recordInbound records a message that reached the agent from outside mads
+// (inbound.go) as a user-kind entry naming its sender — what prompted the
+// turn when it woke the agent. It counts as a real message for digestOnly,
+// like an ordinary user turn's.
+func (d *digestAccumulator) recordInbound(from, text string) {
+	d.recordUser("(message from "+from+") "+text, false)
+}
+
 func (d *digestAccumulator) recordEvent(ev provider.Event) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

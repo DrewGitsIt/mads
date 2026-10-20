@@ -24,7 +24,7 @@ func TestNormalizeTurnsCarriesEnrichment(t *testing.T) {
 			Server: "gh", Title: "gh:search",
 		}},
 	}
-	out := normalizeTurns(msgs)
+	out := normalizeTurns(msgs, nil)
 	if len(out) != 3 {
 		t.Fatalf("len = %d, want 3", len(out))
 	}

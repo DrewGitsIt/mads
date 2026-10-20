@@ -181,6 +181,47 @@ Links are directed edges; nothing is 1:1 by design:
    applies to would be unusable. Real fast-follow, gated on giving tasks a
    `RunID` (or equivalent scoping) and a task-listing capability first.
 
+## Inbound messages (2026-10-19)
+
+Agents can receive messages from OUTSIDE mads — today Claude Code's
+cross-session peer messages (one claude process's native `SendMessage` to
+another over a local socket). Before this, a leader's peer message to its
+follower never appeared in the follower's conversation. "A message arrived
+from outside" is now a first-class, provider-neutral conversation item, the
+same kind of thing as a background task's completion notice: a timeline entry
+that may open an unprompted turn. Three layers:
+
+1. **Provider (neutral contract, `providers/provider`).** `provider.Inbound`
+   {channel, from, from_name, state, hold_reason}; `EventInbound` live and
+   transcript Role `"inbound"`, Text = the bare body; optional
+   `PeerAddresser` = the session's own address in the same opaque format its
+   senders' `From` uses. A held message (`state: "held"`) reached the
+   harness but not the agent and opens nothing.
+2. **Session layer (`services/session/internal/runner`, `pkg/inbound`).**
+   Records `session.peer_address` after each provider (re)start (on change
+   only). Resolves `From` to the session whose most recent address at or
+   before the message equals it (addresses are reused after a process
+   exits), then the link between the two (either direction) and the sender's
+   current name → `contracts.InboundSource`, on the transcript
+   (`TranscriptMessage.inbound`, live and dormant alike) and the live
+   stream's `"inbound"` event. A delivered message that lands with no turn in
+   flight is a turn the runner didn't start: busy (so Send/Inject queue
+   behind it) and agent working until its turn end, its digest opening with
+   the message. It takes no user-turn ordinal (attributions don't shift) and
+   writes no `link.message_injected` — that event means mads delivered it.
+3. **Claude Code adapter (`providers/claudecode`).** The only place the
+   specifics live: `--replay-user-messages` on the stream-json transport
+   (a peer message is echoed as an `isReplay` user line with an `origin`
+   of kind `"peer"`; mads's own echoed sends produce nothing), the
+   `peer_message_hold` system line, `messaging_socket_path` on init, and the
+   two transcript shapes (idle arrival: an `isMeta` user line with the
+   origin; mid-turn: a `queued_command` attachment).
+
+**Neutrality rule:** nothing above the provider layer knows about sockets,
+`isMeta`, `command_lifecycle`, or Claude Code; an address is only ever
+compared, never parsed. A harness with no such channel implements nothing
+and nothing changes.
+
 ## Unchanged from §1.12
 
 - Link creation UX, two paths:

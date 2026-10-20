@@ -18,6 +18,7 @@
   "session.usage_updated",
   "session.delegate_changed",
   "session.trust_changed",
+  "session.peer_address",
   "task.created",
   "task.updated",
   "task.status_changed",

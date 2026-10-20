@@ -36,6 +36,27 @@ type wireLine struct {
 	// claude-code 2.1.285, testdata/stream-auto-mode.jsonl.
 	Model        string `json:"model"`
 	APIKeySource string `json:"apiKeySource"`
+	// MessagingSocketPath is the local socket other claude processes reach
+	// this one on (cross-session peer messages); PeerAddress is it with the
+	// "uds:" prefix the senders' origin.from carries — verified against
+	// claude-code 2.1.285, testdata/stream-peer-idle.jsonl.
+	MessagingSocketPath string `json:"messaging_socket_path"`
+
+	// IsReplay marks a "user" line the CLI echoes back because the process
+	// runs with --replay-user-messages: every user message it takes in,
+	// mads's own sends included (those carry no Origin and say nothing new).
+	// One with Origin.Kind "peer" is a cross-session message from another
+	// claude process — the only live sign one arrived.
+	IsReplay bool `json:"isReplay"`
+
+	// peer_message_hold system-line fields: the CLI held a peer message back
+	// instead of handing it to the model (State "held", Cause e.g.
+	// "mode-mismatch"), and later says what became of it (State "dropped").
+	// From/FromName are the sender, as on a delivered message's origin.
+	State    string `json:"state"`
+	From     string `json:"from"`
+	FromName string `json:"from_name"`
+	Cause    string `json:"cause"`
 
 	// rate_limit_event field: the plan's rate-limit standing, sent around
 	// each model call on a subscription login.
@@ -104,11 +125,40 @@ type wireLine struct {
 	Event json.RawMessage `json:"event"`
 }
 
-// wireOrigin is a result line's origin marker. Only the "task-notification"
-// kind is known today — the re-invocation that delivers a background
-// subagent's completion closes with a second result line stamped with it.
+// wireOrigin is the origin marker on a line the CLI produced itself rather
+// than from mads's stdin. Kind "task-notification": the re-invocation that
+// delivers a background subagent's completion closes with a second result
+// line stamped with it. Kind "peer": a cross-session message from another
+// claude process — on its replayed user line, its transcript user line or
+// queued_command attachment, and the result of the turn it opened — where
+// the rest of the fields say who sent it and what it said. Verified against
+// claude-code 2.1.285 (testdata/stream-peer-*.jsonl, transcript_peer.jsonl).
 type wireOrigin struct {
 	Kind string `json:"kind"`
+	// From is the sender's socket address ("uds:/tmp/cc-socks/N.sock"),
+	// Name the CLI's label for the sender ("a-3c"), Body the message text
+	// without the <cross-session-message> wrapper, MsgID its id.
+	From  string `json:"from"`
+	Name  string `json:"name"`
+	Body  string `json:"body"`
+	MsgID string `json:"msg_id"`
+}
+
+// peerChannel is the Inbound.Channel of claude-code's cross-session messages.
+const peerChannel = "peer"
+
+// isPeer reports whether o marks a cross-session peer message.
+func (o *wireOrigin) isPeer() bool { return o != nil && o.Kind == "peer" }
+
+// inbound is the neutral form of a peer origin.
+func (o *wireOrigin) inbound() *provider.Inbound {
+	return &provider.Inbound{Channel: peerChannel, From: o.From, FromName: o.Name}
+}
+
+// isPeerReplay reports whether this is the replayed user line of a
+// cross-session message (see IsReplay).
+func (l *wireLine) isPeerReplay() bool {
+	return l.Type == "user" && l.IsReplay && l.Origin.isPeer()
 }
 
 // isTaskNotificationResult reports whether this is the result line that
@@ -504,6 +554,16 @@ func (l *wireLine) events(interrupted bool, partial bool) []provider.Event {
 		}
 		return []provider.Event{ev}
 	case "user":
+		if l.isPeerReplay() {
+			// A message from another claude process, arrived idle (it opens
+			// a turn of its own) or mid-turn (absorbed after the running
+			// tool call). Its body rides on the origin; the content is the
+			// CLI's wrapper around it.
+			return []provider.Event{{Kind: provider.EventInbound, Inbound: l.Origin.inbound(), Text: l.Origin.Body}}
+		}
+		// Any other replayed user line is mads's own send echoed back: text
+		// blocks only, which nothing below reads.
+		//
 		// claude-code feeds a tool's outcome back into the model's context
 		// as a "user" role message — the same shape normalizeTranscript
 		// reads from disk — including permission denials, which otherwise
@@ -572,6 +632,14 @@ func (l *wireLine) systemEvents() []provider.Event {
 		return []provider.Event{{Kind: provider.EventTask, Task: l.taskStatus()}}
 	case l.Type == "system" && l.Subtype == "background_tasks_changed":
 		return []provider.Event{{Kind: provider.EventTaskRoster, TaskRoster: l.agentRoster()}}
+	case l.Subtype == "peer_message_hold" && l.State == provider.InboundHeld:
+		// A peer message the CLI held back (the sender's permission mode
+		// doesn't match this one's, ...). The model never sees it, so it
+		// opens no turn. The follow-up line saying what became of it (state
+		// "dropped") is the CLI's bookkeeping, not another message.
+		return []provider.Event{{Kind: provider.EventInbound, Inbound: &provider.Inbound{
+			Channel: peerChannel, From: l.From, FromName: l.FromName, State: provider.InboundHeld, HoldReason: l.Cause,
+		}}}
 	case l.Subtype == "thinking_tokens":
 		return []provider.Event{{Kind: provider.EventThinking, ThinkingTokens: l.EstimatedTokens}}
 	case l.Subtype == "init":

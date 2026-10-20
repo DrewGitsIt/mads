@@ -4,8 +4,10 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/inbound"
 	"github.com/drewkidwell/mads/pkg/toolstatus"
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -42,7 +44,21 @@ func (s *server) transcriptFor(ctx context.Context, sess contracts.Session) []co
 		log.Printf("api: transcript: read session %s: %v", sess.ID, err)
 		return out
 	}
-	return normalizeTurns(msgs)
+	return normalizeTurns(msgs, s.inboundSources(ctx, sess))
+}
+
+// inboundSources resolves the senders of inbound messages (Role "inbound")
+// in sess's transcript the same way the live session does (pkg/inbound), so
+// a dormant session's history names them too.
+func (s *server) inboundSources(ctx context.Context, sess contracts.Session) func(*provider.Inbound, time.Time) *contracts.InboundSource {
+	var data inbound.Data
+	if s.data != nil {
+		data = s.data
+	}
+	res := inbound.New(data, sess.ID, sess.Provider)
+	return func(in *provider.Inbound, at time.Time) *contracts.InboundSource {
+		return res.Source(ctx, in, at)
+	}
 }
 
 // normalizeTurns maps provider-native transcript messages onto the
@@ -51,13 +67,19 @@ func (s *server) transcriptFor(ctx context.Context, sess contracts.Session) []co
 // two callers. Enrichment (kind/title/locations/server) is carried through
 // and statuses are resolved with the same rule engine the live child uses,
 // so a dormant session's transcript renders identically to a live refetch.
-func normalizeTurns(msgs []provider.Message) []contracts.TranscriptMessage {
+//
+// src resolves an inbound message's source (inboundSources); nil leaves
+// Inbound unset.
+func normalizeTurns(msgs []provider.Message, src func(*provider.Inbound, time.Time) *contracts.InboundSource) []contracts.TranscriptMessage {
 	result := make([]contracts.TranscriptMessage, len(msgs))
 	for i, m := range msgs {
 		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp, IsError: m.IsError}
 		if m.Compact != nil {
 			c := contracts.CompactMarker(*m.Compact)
 			tm.Compact = &c
+		}
+		if m.Inbound != nil && src != nil {
+			tm.Inbound = src(m.Inbound, m.Timestamp)
 		}
 		if m.Tool != nil {
 			tm.Tool = &contracts.ToolUse{

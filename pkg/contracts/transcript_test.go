@@ -82,3 +82,41 @@ func TestTranscriptMessageConsumerParsesGolden(t *testing.T) {
 		}
 	}
 }
+
+// The inbound-message contract the UI codes against (ui/src/router/types.ts
+// InboundSource): a transcript entry from a sender that resolved to a mads
+// session, one that didn't (only the harness's label), a held one, and the
+// live stream's "inbound" event.
+func TestInboundShapesMatchGolden(t *testing.T) {
+	resolved := &contracts.InboundSource{
+		Channel: "peer", Provider: "claude-code", FromName: "repo-9c",
+		SessionID: "ses_leader", SessionName: "Leader", LinkID: "lnk_1",
+	}
+	shapes := map[string]any{
+		"transcript": []contracts.TranscriptMessage{
+			{Role: "inbound", Text: "Rulings on your questions.", Inbound: resolved, Timestamp: time.Date(2026, 10, 19, 5, 22, 6, 0, time.UTC)},
+			{Role: "inbound", Text: "hello", Inbound: &contracts.InboundSource{Channel: "peer", Provider: "claude-code", FromName: "a-3c"}},
+		},
+		"stream": contracts.InboundStreamEvent{Kind: contracts.StreamInbound, Text: "Rulings on your questions.", Inbound: resolved},
+		"stream_held": contracts.InboundStreamEvent{Kind: contracts.StreamInbound, Inbound: &contracts.InboundSource{
+			Channel: "peer", Provider: "claude-code", FromName: "a-6f", State: "held", HoldReason: "mode-mismatch",
+		}},
+		"peer_address": contracts.PeerAddress{Address: "uds:/tmp/cc-socks/77585.sock"},
+	}
+	got, err := json.MarshalIndent(shapes, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden.Assert(t, "inbound.json", append(got, '\n'))
+
+	var back struct {
+		Transcript []contracts.TranscriptMessage `json:"transcript"`
+		Stream     contracts.InboundStreamEvent  `json:"stream"`
+	}
+	if err := json.Unmarshal(got, &back); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(back.Stream.Inbound, resolved) || !reflect.DeepEqual(back.Transcript[0].Inbound, resolved) {
+		t.Errorf("round trip lost fields: %+v", back)
+	}
+}

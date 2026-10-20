@@ -87,7 +87,7 @@ func (s *server) delegateTranscriptFor(ctx context.Context, sess contracts.Sessi
 			continue
 		}
 		if found {
-			return contracts.DelegateTranscript{Available: true, Messages: normalizeTurns(msgs)}
+			return contracts.DelegateTranscript{Available: true, Messages: normalizeTurns(msgs, s.inboundSources(ctx, sess))}
 		}
 	}
 	return out

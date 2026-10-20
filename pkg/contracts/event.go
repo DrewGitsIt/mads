@@ -150,6 +150,17 @@ const (
 	// (ui/src/conversation/Worktree/worktreeCards.ts), so a trust change is
 	// durable in the history instead of a toast that's gone on reload.
 	SessionTrustChanged EventType = "session.trust_changed"
+	// SessionPeerAddress fires when a session's live harness process
+	// reports its own address on an inbound channel other processes can
+	// message it on (providers/provider.PeerAddresser — claude-code's
+	// cross-session socket): after each provider (re)start, and only when
+	// the address changed. Payload: contracts.PeerAddress, {"address":
+	// string} — opaque, in the format the harness's inbound senders carry.
+	// It is how an inbound message's sender resolves to a session: the
+	// session whose most recent address at or before the message equals the
+	// sender's. Addresses are reused once a process exits (claude-code's are
+	// pid-based), which is why the time matters.
+	SessionPeerAddress EventType = "session.peer_address"
 
 	TaskCreated       EventType = "task.created"
 	TaskUpdated       EventType = "task.updated"
@@ -468,7 +479,7 @@ var EventTypes = []EventType{
 	SessionCreated, SessionProvisioning, SessionRenamed, SessionActivityChanged, SessionUpdated, SessionDeleted, SessionCrashed,
 	SessionPermissionRequested, SessionPermissionResolved,
 	SessionSubagentEvent, SessionSubagentTask, SessionThinking, SessionToolStatusChanged, SessionCompact, SessionQueueChanged, SessionAgentState, SessionUsageUpdated, SessionDelegateChanged,
-	SessionTrustChanged,
+	SessionTrustChanged, SessionPeerAddress,
 	TaskCreated, TaskUpdated, TaskStatusChanged, TaskConfirmed, TaskDiscarded,
 	NoteCreated, NoteConfirmed, NoteDiscarded,
 	FileChanged,

@@ -450,6 +450,17 @@ type RefSetter interface {
 	SetRef(ref string)
 }
 
+// PeerAddresser is implemented by a live session whose harness has an
+// inbound channel other processes can message it on (claude-code's
+// cross-session peer socket). PeerAddress is this session's own address on
+// that channel, in the same opaque format its Inbound.From values use, so
+// the layer above can match a sender to a session by plain string equality
+// — never by parsing it. Empty until the harness has announced one. A
+// harness with no such channel doesn't implement this.
+type PeerAddresser interface {
+	PeerAddress() string
+}
+
 // MCPHotSetter is implemented by a live session that can change its MCP
 // server set on the running process, without a restart and without losing
 // the conversation: new tools are visible from the next turn. The Runner
