@@ -127,7 +127,7 @@ func TestRealCodexSmoke(t *testing.T) {
 	if !evs[len(evs)-1].Interrupted {
 		t.Errorf("interrupted turn end = %+v", evs[len(evs)-1])
 	}
-	t.Logf("turn 3 interrupted after %d chars", len(textOf(evs)))
+	t.Logf("turn 3 interrupted mid-stream: first text chunk seen before Interrupt, %d more chars after", len(textOf(evs)))
 
 	// Turn 4: a long command, then Close while it runs — the command must
 	// not outlive the session (codex runs it in a group of its own).
