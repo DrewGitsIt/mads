@@ -263,6 +263,8 @@ func (c *conn) initialize(ctx context.Context) error {
 
 func (c *conn) wait() {
 	c.waitOnce.Do(func() {
+		// From here the pid may be reused: the reaper must never walk it again.
+		c.reaper.markExited()
 		_ = c.cmd.Wait()
 		close(c.waited)
 	})
@@ -275,13 +277,18 @@ func (c *conn) wait() {
 // command.
 func (c *conn) shutdown(grace time.Duration) {
 	// Snapshot first: once app-server is gone its children reparent to
-	// init and the tree that ties them to this session is lost.
+	// init and the tree that ties them to this session is lost. (A no-op
+	// once app-server has been waited — its pid may be reused.)
 	c.reaper.snapshot()
 	_ = c.stdin.Close()
 	select {
 	case <-c.done:
 	case <-time.After(grace):
-		_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
+		select {
+		case <-c.waited: // already reaped: its pid (and group id) may be anyone's now
+		default:
+			_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
+		}
 		<-c.done
 	}
 	c.reaper.reap()
