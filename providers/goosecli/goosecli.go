@@ -273,8 +273,12 @@ func (p *Provider) Matrix() provider.Matrix {
 		// (engineConfig Keys) and in sessions.db (store.go). User rows are
 		// keyed by goose's own id — goose stores no caller id, so no
 		// KeyedSender.
-		provider.BehaviorStableKeys:     provider.Native,
-		provider.BehaviorStoredThinking: provider.Unsupported, // C2: flipped with each reader's thinking rows
+		provider.BehaviorStableKeys: provider.Native,
+		// goose stores thinking, but moves a tool-calling model call's
+		// thinking onto its tool-call rows (a later created, generated
+		// ids for parallel calls), so the stored key isn't the live one
+		// (README "Stored thinking: unsupported").
+		provider.BehaviorStoredThinking: provider.Unsupported,
 		// `goose session` under a pty (pty.go).
 		provider.BehaviorPTY: provider.Native,
 		// goose's own sessions.db, read-only and incrementally (store.go),

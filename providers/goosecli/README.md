@@ -201,6 +201,25 @@ wire of five turns next to every row goose inserted into its store).
 | Tool call / result | `toolCallId` | Live, a tool call's `_meta` carries the *preceding text's* messageId; stored, the call is a row of its own (`msg_<uuid>`, sometimes a chatcmpl id), so only the call id is the same on both sides. |
 | User message | `user:<stored message id>` | goose doesn't echo the prompt and stores no caller id (no `KeyedSender`), but stores the text byte-identical; the session child matches mads's send to this row on settle. |
 
+**Stored thinking: unsupported.** goose does store thinking (a
+`{"type":"thinking","thinking":…}` block; 1.48.0 replays it on load), but
+not where the live key says. Live, a model call's thought chunks carry
+its `messageId` and the first chunk's `created`. Stored, a call that ends
+in tool calls has its thinking moved onto the tool-call messages
+(goose 1.48.0 `agents/agent.rs`, "Thinking/reasoning belongs on the
+tool-call messages"): the first carries the call's `messageId` but is a
+new `Message::assistant()` with a later `created` — the 1.48.0 capture's
+`chatcmpl-846` thinks from 1788032672, its tool call is stamped
+1788032675 — and further parallel calls get generated ids and a copy of
+the same thinking. So a thinking row would come back under a key nothing
+streamed (and twice for parallel calls); only a reply message's thinking
+(thinking then text, no tools) stays on its own row. The same move strips
+thinking from a text-then-tool message's text row, so with a thinking
+model that text's stored `run` is 0 where live said 1: a stable_keys gap
+for thinking models only (the probe's model, `qwen3.8-coder-nothink`,
+thinks never). Live thinking stays unsaved; `session.thinking` is its
+record.
+
 Filtered: the hidden `<turn-context>` row goose writes after every prompt
 (`userVisible:false`) — as is anything goose marks `userVisible:false`,
 the same rule the export reader always had.
