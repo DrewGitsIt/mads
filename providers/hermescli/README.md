@@ -151,10 +151,10 @@ Limits, each an honest one-sided key rather than a wrong one:
   streams but doesn't store (or the reverse) would shift that turn's later
   text keys. None seen in the survey or smokes.
 - hermes can write a tool-call row a few ms *before* the `tool_call` frame
-  (Copilot, −5..−15 ms). A read in that window sees the row native;
-  `TranscriptSince` holds back rows of the in-flight turn that have nothing
-  live to match yet, so an incremental reader never sees a key change. A
-  full `Transcript` in that window can.
+  (Copilot, −5..−15 ms). `Transcript` and `TranscriptSince` both hold back
+  the in-flight turn's rows from the first one with nothing live to match
+  yet, so while the child lives no reader sees a row under two keys; those
+  rows just land a few ms later.
 - `failed_turn` rows are never streamed: they are `Notice` rows keyed by
   their `message_uid`.
 
@@ -164,7 +164,7 @@ session's rows again with fresh ids and deletes the old (survey
 `TranscriptSince` returns the display rows after that uid's *current* row.
 A uid that's gone (compaction) is `ErrCursorStale`.
 
-**Settle hints** (`EventSettle`, only with `SettleHints`): on the
+**Settle hints** (`EventSettle`, only with `Keyed`): on the
 `tool_call` frame (the assistant row with that call is written within
 ~15 ms of it) and at the prompt response (the last row lands before it).
 

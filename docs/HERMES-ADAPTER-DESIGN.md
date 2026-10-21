@@ -207,8 +207,9 @@ or just before its tools run), so no chunk can carry it; live tool ids are
 - **Cursor**: the last served row's `message_uid`; rows after that uid's
   current row (load rewrites row ids: insert-new-then-delete-old, run2);
   uid gone (compaction) → `ErrCursorStale`. Rows of the in-flight turn with
-  nothing live to match yet are held back from incremental reads (hermes
-  may write a tool-call row before the `tool_call` frame).
+  nothing live to match yet are held back from full and incremental reads
+  alike (hermes may write a tool-call row before the `tool_call` frame), so
+  no reader sees a row under two keys while the child lives.
 - `failed_turn` rows: `Notice`, keyed by their uid.
 
 Considered and rejected: an upstream `_meta` patch to make hermes put the

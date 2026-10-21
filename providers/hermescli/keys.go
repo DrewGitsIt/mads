@@ -43,9 +43,10 @@ import (
 //     rest of that turn's text keys;
 //   - an in-flight turn's stored row that has nothing live to match yet
 //     (hermes can write a tool-call row a few ms before the tool_call frame)
-//     reads native; TranscriptSince holds such rows back until the turn ends
-//     or the live item arrives, so an incremental reader never sees a row's
-//     key change.
+//     is held back, with the rows after it, by Transcript and TranscriptSince
+//     alike until the turn ends or the live item arrives, so while the child
+//     lives no reader sees a row's key change; the cost is a few ms of
+//     store lag on those rows.
 
 // ledger is one session child's record of its turns.
 type ledger struct {

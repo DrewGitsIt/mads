@@ -87,13 +87,21 @@ func (p *Provider) requireStoredSession(ctx context.Context, ref string) error {
 
 // Transcript implements provider.TranscriptReader over state.db, keyed:
 // rows this binding's live child matched to what it streamed carry the live
-// keys, the rest their own (keys.go).
+// keys, the rest their own (keys.go). While that child lives, the in-flight
+// turn's rows from the first one with nothing live to match yet onward are
+// held back, exactly as TranscriptSince holds them: served now under their
+// own keys, they would be re-keyed a moment later when the live item
+// arrives, and a reader would hold the same row under two keys.
 func (p *Provider) Transcript(ctx context.Context, ref string) ([]provider.Message, error) {
 	rows, err := p.readRows(ctx, ref)
 	if err != nil {
 		return nil, fmt.Errorf("transcript: %w", err)
 	}
-	return normalizeRows(rows, p.aliasesFor(ref, rows)), nil
+	al := p.aliasesFor(ref, rows)
+	if al.hold < len(rows) {
+		rows = rows[:al.hold]
+	}
+	return normalizeRows(rows, al), nil
 }
 
 // TranscriptSince implements provider.IncrementalTranscriptReader. Row ids

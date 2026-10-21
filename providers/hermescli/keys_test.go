@@ -196,7 +196,7 @@ func TestReplaySurveyKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := New(Config{Bin: exe, Home: t.TempDir(), Env: []string{"MADS_FAKE_HERMES=1", "MADS_FAKE_HERMES_REPLAY=" + prefix}})
-	sess := startSession(t, p, provider.StartOptions{SettleHints: true})
+	sess := startSession(t, p, provider.StartOptions{Keyed: true})
 	prompts := []string{
 		"Reply with exactly one line: Hello from hermes.",
 		"Do this in order: first write one short sentence saying you will list the directory. Then call your terminal tool to run: ls. After the tool returns, write one short sentence about what files you found.",
@@ -282,7 +282,7 @@ func TestReplaySurveyKeys(t *testing.T) {
 	}
 }
 
-// Without the keyed opt-in (StartOptions.SettleHints) a hermes session
+// Without the keyed opt-in (StartOptions.Keyed) a hermes session
 // streams exactly as before C1: a tool keeps the engine's title as its
 // name, and its result keeps the live text hermes streamed, not the row it
 // stored. Only a keyed consumer gets both swapped for the stored ones.
@@ -297,7 +297,7 @@ func TestUnkeyedSessionStreamsAsBefore(t *testing.T) {
 	}
 	toolTurn := func(keyed bool) (name, title, result string) {
 		p := New(Config{Bin: exe, Home: t.TempDir(), Env: []string{"MADS_FAKE_HERMES=1", "MADS_FAKE_HERMES_REPLAY=" + prefix}})
-		sess := startSession(t, p, provider.StartOptions{SettleHints: keyed})
+		sess := startSession(t, p, provider.StartOptions{Keyed: keyed})
 		defer func() { _ = sess.Close() }()
 		for i, prompt := range []string{ // the capture's own prompts: the stand-in stores them as sent
 			"Reply with exactly one line: Hello from hermes.",
@@ -317,7 +317,7 @@ func TestUnkeyedSessionStreamsAsBefore(t *testing.T) {
 					result += ev.Text
 				case provider.EventSettle:
 					if !keyed {
-						t.Fatal("EventSettle without SettleHints")
+						t.Fatal("EventSettle without Keyed")
 					}
 				}
 			}
@@ -334,5 +334,40 @@ func TestUnkeyedSessionStreamsAsBefore(t *testing.T) {
 	}
 	if result == kResult {
 		t.Errorf("unkeyed and keyed results are both %.60q: the capture can't tell the swap apart", result)
+	}
+}
+
+// hermes writes a turn's tool-call row a few ms before the tool_call frame.
+// A full Transcript read in that gap must not serve the row under its own
+// call id, because once the frame arrives the same row reads under the live
+// key; no stored item may ever appear under two keys while the child lives.
+func TestFullTranscriptHoldsBackTheGap(t *testing.T) {
+	rows := surveyRows()[:5] // turn 1; turn 2's user row, tool-call row, tool row
+	p := buildStore(t, []fixtureSession{{id: surveySession, started: 1}}, rows)
+	led := p.live.add(surveySession)
+	led.begin(1, rows[2].content) // turn 2 is in flight; no live item yet
+
+	gap := transcriptOf(t, p, surveySession)
+	if got := keysOf(gap); strings.Contains(got, "call_vUPzt6Ph1NWbTkTHFxaLsssR") {
+		t.Fatalf("a full read in the gap served the tool-call row under its own id:\n%s", got)
+	}
+
+	led.tool("tc-live-1") // the tool_call frame arrives
+	matched := transcriptOf(t, p, surveySession)
+	if got := keysOf(matched); !strings.Contains(got, "tool tc-live-1") || strings.Contains(got, "call_vUPzt6Ph1NWbTkTHFxaLsssR") {
+		t.Fatalf("after the frame, want the row under the live key only:\n%s", got)
+	}
+
+	// Across both reads, each stored item has one key.
+	names := map[string]string{} // role+text -> key
+	for _, m := range append(gap, matched...) {
+		id := m.Role + "\x00" + m.Text
+		if m.Tool != nil {
+			id += "\x00" + m.Tool.Name
+		}
+		if prev, ok := names[id]; ok && prev != m.Key {
+			t.Errorf("%s %.40q appeared as %q and %q", m.Role, m.Text, prev, m.Key)
+		}
+		names[id] = m.Key
 	}
 }
