@@ -512,12 +512,13 @@ func (s *server) handleCommits(w http.ResponseWriter, r *http.Request) {
 // the answer is the whole transcript as a bare array, as it always was. The
 // Router's stored-ref fallback pages through the same transcriptpage.Respond.
 //
-// ?v=2 reads the agent's own store for a provider with stable keys, never a
-// session's live buffer (runner.KeyedTranscript) — what a keyed v2 viewer
+// ?v=2 (or any paging parameter: transcriptpage.Keyed) reads the agent's
+// own store for a provider with stable keys, never a session's live buffer,
+// stored thinking included (runner.KeyedTranscript) — what a keyed v2 viewer
 // merges with the stream's tail. Either read settles the tail first.
 func (s *server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 	rows := s.runner.Transcript
-	if r.URL.Query().Get("v") == "2" {
+	if transcriptpage.Keyed(r.URL.Query()) {
 		rows = s.runner.KeyedTranscript
 	}
 	status, body := transcriptpage.Respond(r.URL.Query(), rows(r.Context()))

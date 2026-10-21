@@ -178,6 +178,28 @@ func TestSessionTranscriptProxyAndFallbackPageAlike(t *testing.T) {
 		}
 	}
 
+	// ?v=2, the keyed form a v2 viewer reads, is alike on both paths too:
+	// the same rows (stored thinking included, where the provider keeps
+	// it), every one keyed.
+	keyedRows := func(id string) string {
+		status, b := getRaw(t, srv.URL+"/sessions/"+id+"/transcript?v=2")
+		var rows []contracts.TranscriptMessage
+		if err := json.Unmarshal(b, &rows); err != nil || status != http.StatusOK {
+			t.Fatalf("%s ?v=2: %d %v %s", id, status, err, b)
+		}
+		desc := make([]string, len(rows))
+		for i, m := range rows {
+			if m.Key == "" {
+				t.Errorf("%s ?v=2: row without a key: %+v", id, m)
+			}
+			desc[i] = m.Role + ":" + m.Text
+		}
+		return strings.Join(desc, "|")
+	}
+	if l, s := keyedRows(live), keyedRows(stored); l != s || l == "" {
+		t.Errorf("?v=2:\nlive:   %s\nstored: %s", l, s)
+	}
+
 	for _, q := range []string{"before=nope&limit=2", "limit=0", "before="} {
 		ls, lb := getRaw(t, srv.URL+"/sessions/"+live+"/transcript?"+q)
 		ss, sb := getRaw(t, srv.URL+"/sessions/"+stored+"/transcript?"+q)

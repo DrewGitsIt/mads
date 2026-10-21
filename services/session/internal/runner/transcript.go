@@ -42,9 +42,10 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 }
 
 // KeyedTranscript is Transcript as a keyed (v2) consumer reads it
-// (GET /transcript?v=2): for a provider with stable keys, always the
-// agent's own store through its TranscriptReader, never a session's live
-// buffer — the buffer (acprpc's, goose) holds in-flight items the v2 stream
+// (GET /transcript?v=2, or paged): for a provider with stable keys, always
+// the agent's own store — its KeyedTranscriptReader where it has one, so
+// stored thinking comes as keyed Role "thinking" rows — never a session's
+// live buffer, which (acprpc's, goose) holds in-flight items the v2 stream
 // carries itself, mostly without keys (docs/CHAT-STREAM-DESIGN.md §3,
 // "ACP"). Elsewhere it is Transcript.
 func (r *Runner) KeyedTranscript(ctx context.Context) []contracts.TranscriptMessage {
@@ -80,12 +81,14 @@ func (r *Runner) transcript(ctx context.Context, keyed bool) []contracts.Transcr
 	if !ok {
 		return out
 	}
-	msgs, err := reader.Transcript(ctx, ref)
+	// Only the keyed form settles the tail: thinking rows are in it.
+	fromStore := keyed && storeKeyed
+	msgs, err := readStore(ctx, reader, ref, fromStore)
 	if err != nil {
 		log.Printf("runner: transcript: read %s: %v", r.sessionID, err)
 		return out
 	}
-	return r.renderRows(ctx, msgs, storeKeyed)
+	return r.renderRows(ctx, msgs, fromStore)
 }
 
 // renderRows renders a transcript read, which is also a settle point

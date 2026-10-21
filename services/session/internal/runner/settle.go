@@ -55,6 +55,16 @@ func (r *Runner) chatReader() (provider.TranscriptReader, bool) {
 	return reader, ok
 }
 
+// readStore reads the whole store: keyed, the keyed form
+// (provider.KeyedTranscriptReader: stored thinking included) where the
+// provider has one.
+func readStore(ctx context.Context, reader provider.TranscriptReader, ref string, keyed bool) ([]provider.Message, error) {
+	if kr, ok := reader.(provider.KeyedTranscriptReader); ok && keyed {
+		return kr.KeyedTranscript(ctx, ref)
+	}
+	return reader.Transcript(ctx, ref)
+}
+
 // transcriptRef is the ref this session's transcript reads from, and the
 // live session (nil mid-switch).
 func (r *Runner) transcriptRef() (string, string, provider.Session) {
@@ -165,7 +175,7 @@ func (r *Runner) settleNow(ctx context.Context) {
 			return
 		}
 	}
-	rows, err := reader.Transcript(ctx, ref)
+	rows, err := readStore(ctx, reader, ref, true)
 	if err != nil {
 		log.Printf("runner: settle: read %s: %v", r.sessionID, err)
 		return

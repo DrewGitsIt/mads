@@ -36,6 +36,16 @@ func (e errBadParam) Error() string { return e.msg }
 // ParseQuery reads ?before and ?limit. paged is false when neither is
 // present: the caller answers the legacy bare array then. Other parameters
 // (the old, never-implemented ?page) are ignored.
+// Keyed reports whether q asks for the keyed form of the transcript
+// (docs/CHAT-STREAM-DESIGN.md §4): ?v=2, or any paging parameter — a client
+// that pages by key is a keyed client. The keyed form reads the agent's own
+// store (provider.KeyedTranscriptReader where implemented, so stored
+// thinking appears as keyed Role "thinking" rows); without it the answer is
+// the legacy transcript, unchanged.
+func Keyed(q url.Values) bool {
+	return q.Get("v") == "2" || q.Has("before") || q.Has("limit")
+}
+
 func ParseQuery(q url.Values) (query Query, paged bool, err error) {
 	if !q.Has("before") && !q.Has("limit") {
 		return Query{}, false, nil

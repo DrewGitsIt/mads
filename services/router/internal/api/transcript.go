@@ -27,7 +27,11 @@ import (
 // process, not the Router's own provider.Registry. This path serves sessions
 // with no running child, where the durable ProviderRef read here is all
 // there is.
-func (s *server) transcriptFor(ctx context.Context, sess contracts.Session) []contracts.TranscriptMessage {
+//
+// keyed is the keyed form (transcriptpage.Keyed: ?v=2 or paging): the
+// provider's KeyedTranscriptReader where it has one, so stored thinking
+// rows appear by key, exactly as the live child serves them.
+func (s *server) transcriptFor(ctx context.Context, sess contracts.Session, keyed bool) []contracts.TranscriptMessage {
 	out := []contracts.TranscriptMessage{}
 	if sess.ProviderRef == "" {
 		return out // pipeline-only session (e.g. "Wave 7"): no interactive conversation ever started
@@ -41,7 +45,12 @@ func (s *server) transcriptFor(ctx context.Context, sess contracts.Session) []co
 	if !ok {
 		return out
 	}
-	msgs, err := reader.Transcript(ctx, sess.ProviderRef)
+	var msgs []provider.Message
+	if kr, ok := reader.(provider.KeyedTranscriptReader); ok && keyed {
+		msgs, err = kr.KeyedTranscript(ctx, sess.ProviderRef)
+	} else {
+		msgs, err = reader.Transcript(ctx, sess.ProviderRef)
+	}
 	if err != nil {
 		log.Printf("api: transcript: read session %s: %v", sess.ID, err)
 		return out
@@ -125,6 +134,7 @@ func (s *server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		s.proxyTo(w, r, addr, "/transcript")
 		return
 	}
-	status, body := transcriptpage.Respond(r.URL.Query(), s.transcriptFor(r.Context(), sess))
+	q := r.URL.Query()
+	status, body := transcriptpage.Respond(q, s.transcriptFor(r.Context(), sess, transcriptpage.Keyed(q)))
 	writeJSON(w, status, body)
 }
