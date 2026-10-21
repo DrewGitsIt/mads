@@ -359,8 +359,21 @@ func fgServe() {
 	// (captures/keys run.wire.jsonl): every chunk carries the messageId
 	// and _meta.goose.created, later chunks a second later. It returns the
 	// row goose would store for it.
+	//
+	// MADS_FAKE_GOOSE_THINKING=1 plays a thinking model (the 1.48.0
+	// capture, acp-transcript-1.48.0.jsonl: chatcmpl-773 thinks, then
+	// answers under the same messageId): a thought chunk opens every
+	// message, and the stored row keeps it ahead of the text.
+	thinking := os.Getenv("MADS_FAKE_GOOSE_THINKING") == "1"
 	say := func(chunks ...string) fgRow {
 		msgID, created := nextMessage()
+		var content []map[string]any
+		if thinking {
+			notifyUpdate(map[string]any{"sessionUpdate": "agent_thought_chunk", "messageId": msgID,
+				"content": map[string]any{"type": "text", "text": "Thinking it over."},
+				"_meta":   map[string]any{"goose": map[string]any{"created": created, "messageId": msgID}}})
+			content = append(content, map[string]any{"type": "thinking", "thinking": "Thinking it over.", "signature": ""})
+		}
 		for i, c := range chunks {
 			stamp := created
 			if i > 0 {
@@ -370,7 +383,8 @@ func fgServe() {
 				"content": map[string]any{"type": "text", "text": c},
 				"_meta":   map[string]any{"goose": map[string]any{"created": stamp, "messageId": msgID}}})
 		}
-		return fgRow{id: msgID, role: "assistant", created: created, content: fgText(strings.Join(chunks, "")), meta: fgVisible}
+		content = append(content, fgText(strings.Join(chunks, ""))...)
+		return fgRow{id: msgID, role: "assistant", created: created, content: content, meta: fgVisible}
 	}
 	// lastMsg is the latest message's id and created, which goose puts on
 	// a tool call's _meta (the preceding text's).
@@ -687,8 +701,19 @@ func fgServe() {
 						"sequence": 1, "chunks": []map[string]any{{"stream": "stdout", "output": "alpha.txt\n"}}}}}})
 				time.Sleep(50 * time.Millisecond)
 				toolDone(callID, "completed", "alpha.txt\nbeta.txt")
+				tools := toolRows(callID, a.name, a.input, "completed", "alpha.txt\nbeta.txt")
+				if thinking {
+					// goose 1.48.0 agents/agent.rs ("Thinking/reasoning belongs
+					// on the tool-call messages"): the model call's thinking
+					// leaves its text row for the tool-call row, which takes the
+					// call's messageId and a later created.
+					tools[0].id = before.id
+					tools[0].created = before.created + 3
+					tools[0].content = append([]map[string]any{before.content[0]}, tools[0].content...)
+					before.content = before.content[1:]
+				}
 				insert(before)
-				insert(toolRows(callID, a.name, a.input, "completed", "alpha.txt\nbeta.txt")...)
+				insert(tools...)
 				insert(say("Two files: ", "alpha.txt and beta.txt."))
 				userHistory = append(userHistory, prompt)
 				endTurn()

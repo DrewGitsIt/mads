@@ -450,6 +450,9 @@ type itemState struct {
 	id    string // the key's message part
 	kind  string
 	run   int
+	// Under KeyStrategy.ThinkingApart: the message's text and thinking
+	// runs so far, each counted on its own.
+	texts, thoughts int
 }
 
 // read is the sole owner of the events channel: it decodes stdout lines
@@ -1065,6 +1068,7 @@ func (s *streamSession) chunkKey(kind string, u *sessionUpdate) string {
 		if it.kind != kind {
 			it.run++
 			it.kind = kind
+			it.countRun()
 		}
 	default:
 		id := u.MessageID
@@ -1077,8 +1081,24 @@ func (s *streamSession) chunkKey(kind string, u *sessionUpdate) string {
 			}
 		}
 		*it = itemState{open: true, msgID: u.MessageID, id: id, kind: kind}
+		it.countRun()
+	}
+	if s.cfg.Keys.ThinkingApart {
+		if kind == "thinking" {
+			return it.id + ":thinking:" + strconv.Itoa(it.thoughts-1)
+		}
+		return it.id + ":" + strconv.Itoa(it.texts-1)
 	}
 	return it.id + ":" + strconv.Itoa(it.run)
+}
+
+// countRun counts the run just opened for KeyStrategy.ThinkingApart.
+func (it *itemState) countRun() {
+	if it.kind == "thinking" {
+		it.thoughts++
+	} else {
+		it.texts++
+	}
 }
 
 // toolKey is Event.Key for a tool call and its result: the toolCallId,

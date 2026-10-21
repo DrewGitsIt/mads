@@ -20,6 +20,9 @@ import (
 // what streamed and what was stored, key by key.
 //
 //	MADS_GOOSE_SMOKE=1 go test ./providers/goosecli -run RealGooseStableKeys -v
+//
+// MADS_GOOSE_SMOKE_MODEL overrides the model (GOOSE_MODEL), e.g. a thinking
+// model such as qwen3.8 to exercise thinking around tool calls.
 func TestRealGooseStableKeys(t *testing.T) {
 	skipUnlessRealGooseSmoke(t)
 	root := t.TempDir()
@@ -42,7 +45,11 @@ func TestRealGooseStableKeys(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cwd, "alpha.txt"), []byte("a\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p := &recordingProvider{Provider: New(Config{Env: []string{"GOOSE_PATH_ROOT=" + root, "GOOSE_TELEMETRY_ENABLED=false"}}), cwd: cwd}
+	env := []string{"GOOSE_PATH_ROOT=" + root, "GOOSE_TELEMETRY_ENABLED=false"}
+	if m := os.Getenv("MADS_GOOSE_SMOKE_MODEL"); m != "" {
+		env = append(env, "GOOSE_MODEL="+m)
+	}
+	p := &recordingProvider{Provider: New(Config{Env: env}), cwd: cwd}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()

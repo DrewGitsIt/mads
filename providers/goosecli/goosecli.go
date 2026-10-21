@@ -197,8 +197,11 @@ func (p *Provider) engineConfig() acprpc.Config {
 		// message_id and created_timestamp (testdata/captures/keys:
 		// run.wire.jsonl lines 15-16 vs run.store.jsonl row 3); ollama's
 		// ids repeat (chatcmpl-0..999, 27 repeats in a real store), so the
-		// created stamp is part of the key. store.go derives the same keys.
-		Keys: acprpc.KeyStrategy{Mode: acprpc.KeyModeMessageRun, CreatedNamespace: "goose"},
+		// created stamp is part of the key. A message's text runs are
+		// numbered apart from its thinking: goose moves the thinking of a
+		// call that ends in tool calls onto the tool-call rows, so the
+		// stored text row may have lost it. store.go derives the same keys.
+		Keys: acprpc.KeyStrategy{Mode: acprpc.KeyModeMessageRun, CreatedNamespace: "goose", ThinkingApart: true},
 		// goose writes a tool call, its result and the text before it only
 		// once the tool finishes (lag.txt: 6025 ms for `sleep 6`), and the
 		// turn's last message before the prompt response (4-37 ms after
