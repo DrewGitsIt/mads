@@ -439,6 +439,32 @@ func (c *checker) collect(sess provider.Session) (string, *provider.Event, error
 	}
 }
 
+// collectInterrupted reads an interrupted turn through its end. Unlike
+// collect, an EventError is no failure here: some agents close an
+// interrupted turn with an error-flavoured result (claude's empty
+// error_during_execution), which is the interrupt working.
+func (c *checker) collectInterrupted(sess provider.Session) error {
+	deadline := time.After(c.s.timeout())
+	for {
+		select {
+		case ev, ok := <-sess.Events():
+			if !ok {
+				return errors.New("event stream closed before turn end (process died mid-turn?)")
+			}
+			switch ev.Kind {
+			case provider.EventSettle:
+				c.unaskedSettle = true
+			case provider.EventTurnEnd:
+				return nil
+			}
+		case <-deadline:
+			return fmt.Errorf("no turn end within %s", c.s.timeout())
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		}
+	}
+}
+
 // turnTermination drives a turn that keeps talking after it ends, then
 // watches the stream settle. Anything the adapter emits as the main agent
 // past the turn's end must itself be ended; the settle window is what
@@ -542,7 +568,7 @@ func (c *checker) interrupt() error {
 	if err := sess.Interrupt(c.ctx); err != nil {
 		return fmt.Errorf("Interrupt: %w", err)
 	}
-	if _, _, err := c.collect(sess); err != nil {
+	if err := c.collectInterrupted(sess); err != nil {
 		return fmt.Errorf("turn did not end after interrupt: %w", err)
 	}
 	// The session must survive the interrupt.
