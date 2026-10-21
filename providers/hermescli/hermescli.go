@@ -258,8 +258,13 @@ func (p *Provider) Matrix() provider.Matrix {
 		// hermes stores none of its live ids: live items carry provisional
 		// keys and the readers match stored rows to them by position while
 		// the child lives (keys.go, README "Conversation keys").
-		provider.BehaviorStableKeys:     provider.Emulated,
-		provider.BehaviorStoredThinking: provider.Unsupported, // C2: flipped with each reader's thinking rows
+		provider.BehaviorStableKeys: provider.Emulated,
+		// hermes stores each model call's reasoning in the assistant row's
+		// reasoning columns and streams it as agent_thought_chunk under the
+		// call's messageId; KeyedTranscript returns it, aliased to the live
+		// key by position like text (keys.go). No survey model emitted
+		// reasoning: proven on the stand-in, from hermes's source.
+		provider.BehaviorStoredThinking: provider.Native,
 		// hermes has session/fork, but mads has no branching surface for
 		// ACP yet; no cwd reroot at all.
 		provider.BehaviorBranching: provider.Unsupported,

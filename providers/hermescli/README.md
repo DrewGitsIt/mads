@@ -27,6 +27,7 @@ Evidence: [`testdata/captures/`](testdata/captures/README.md) (hermes 0.22.2).
 | ref_announce | Native | session/new returns the id synchronously |
 | transcript | Native | state.db, hermes's own store; incremental by `message_uid` (`TranscriptSince`) |
 | stable_keys | **Emulated** | hermes stores none of its live ids; live items carry provisional keys and the readers match stored rows to them by position while the child lives (below) |
+| stored_thinking | **Native** | reasoning columns, as keyed `thinking` rows from `KeyedTranscript`, aliased like text ("Transcript" below) |
 | trust_limited, trust_read_only, trust_auto_review | **Unsupported** | full trust only (below) |
 | mcp_servers | Native | ACP-provided stdio servers are registered on the session and the model calls them as `mcp__<server>__<tool>` (probe-mcp; the smoke re-proves it) |
 | compaction, compaction_focus | Unsupported | hermes has `/compress`, but no capture shows what a pass does to state.db and the session's ids |
@@ -194,7 +195,18 @@ active or compacted rows minus `model_only`; generations collapsed by
   live `tc-…` ones); **tool rows** → `tool_result` (`IsError` when the JSON
   envelope's `error` is a non-empty string).
 - **compaction summaries** (`_compressed_summary`) → a `compact` marker.
-- **reasoning columns** are skipped, as every adapter skips thinking.
+- **reasoning columns** are skipped by `Transcript`. `KeyedTranscript` and
+  `TranscriptSince` (`stored_thinking: native`) put a `thinking` row before
+  the row's text: the first non-blank of `reasoning_content` and
+  `reasoning` (hermes's replay order; a lone `" "` is its thinking-mode pad),
+  unstripped — `reasoning_content` is the streamed reasoning deltas joined
+  (`chat_completion_helpers.py` `_finish_chat_stream`), so it equals the
+  live `agent_thought_chunk`s. Keyed like text: the live `<messageId>:<run>`
+  while the child lives (the k-th stored row with reasoning is the turn's
+  k-th live thinking item), else `<message_uid>:thinking`. No survey model
+  emitted reasoning (run7/8): proven on the stand-in from hermes's source.
+  Reasoning a provider delivers through `reasoning_details` only is shown
+  live from the details and stored from the plain field, which can differ.
 - **the persona**: the first-send prefix is written as
   `<mads-system-prompt bytes="N">\n…\n</mads-system-prompt>` and removed
   exactly (byte count, not a pattern) from the user row it opens; a message

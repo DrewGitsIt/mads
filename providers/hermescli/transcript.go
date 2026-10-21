@@ -93,11 +93,25 @@ func (p *Provider) requireStoredSession(ctx context.Context, ref string) error {
 // own keys, they would be re-keyed a moment later when the live item
 // arrives, and a reader would hold the same row under two keys.
 func (p *Provider) Transcript(ctx context.Context, ref string) ([]provider.Message, error) {
+	return p.transcript(ctx, ref, false)
+}
+
+// KeyedTranscript implements provider.KeyedTranscriptReader: Transcript
+// plus a Role "thinking" row before each assistant row's text for the
+// reasoning hermes stored with it (reasoning_content, else reasoning: the
+// first non-blank, as hermes's own replay reads them), keyed like text —
+// the live thinking item's key while this child lives and its thinking was
+// matched by position, else "<message_uid>:thinking".
+func (p *Provider) KeyedTranscript(ctx context.Context, ref string) ([]provider.Message, error) {
+	return p.transcript(ctx, ref, true)
+}
+
+func (p *Provider) transcript(ctx context.Context, ref string, thinking bool) ([]provider.Message, error) {
 	rows, err := p.readRows(ctx, ref)
 	if err != nil {
 		return nil, fmt.Errorf("transcript: %w", err)
 	}
-	al := p.aliasesFor(ref, rows)
+	al := p.aliasesFor(ref, rows, thinking)
 	if al.hold < len(rows) {
 		rows = rows[:al.hold]
 	}
@@ -109,7 +123,8 @@ func (p *Provider) Transcript(ctx context.Context, ref string) ([]provider.Messa
 // load — so the cursor is the message_uid of the last row served, and the
 // answer is the display rows after that uid's current row. A uid that's
 // gone (compaction) is provider.ErrCursorStale. Rows of the turn in flight
-// that have nothing live to match yet are held back (keys.go).
+// that have nothing live to match yet are held back (keys.go). Rows are
+// the keyed form, thinking included (KeyedTranscript).
 func (p *Provider) TranscriptSince(ctx context.Context, ref string, cursor provider.TranscriptCursor) ([]provider.Message, provider.TranscriptCursor, error) {
 	rows, err := p.readRows(ctx, ref)
 	if err != nil {
@@ -123,7 +138,7 @@ func (p *Provider) TranscriptSince(ctx context.Context, ref string, cursor provi
 		}
 		from = i + 1
 	}
-	al := p.aliasesFor(ref, rows)
+	al := p.aliasesFor(ref, rows, true)
 	to := len(rows)
 	if al.hold < to {
 		to = al.hold
@@ -239,8 +254,27 @@ type storedRow struct {
 	id                                      int64
 	role, content, toolCalls, toolCallID    string
 	toolName, displayKind, displayMeta, uid string
-	timestamp                               float64
-	active, summary                         bool
+	// reasoning and reasoningContent: an assistant row's reasoning columns
+	// (empty where the schema has none).
+	reasoning, reasoningContent string
+	timestamp                   float64
+	active, summary             bool
+}
+
+// thinking is the row's stored reasoning as hermes replays it
+// (_history_reasoning_text, acp_adapter/server.py): the first of
+// reasoning_content and reasoning that isn't blank — a lone " " is the pad
+// hermes writes for thinking-mode providers, not reasoning. Unlike the
+// replay it isn't trimmed: reasoning_content is the streamed reasoning
+// deltas joined ("".join(reasoning_parts), chat_completion_helpers.py), so
+// as stored it equals the live thought chunks.
+func (r storedRow) thinking() string {
+	for _, s := range []string{r.reasoningContent, r.reasoning} {
+		if t := decodeContent(s); strings.TrimSpace(t) != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 func readDisplayRows(ctx context.Context, db *sql.DB, ref string) ([]storedRow, error) {
@@ -248,24 +282,29 @@ func readDisplayRows(ctx context.Context, db *sql.DB, ref string) ([]storedRow, 
 	if err != nil {
 		return nil, err
 	}
+	reasoningCols := "NULL, NULL"
+	if hasColumns(ctx, db, "messages", "reasoning", "reasoning_content") {
+		reasoningCols = "reasoning, reasoning_content"
+	}
 	var all []storedRow
 	for _, id := range ids {
 		rows, err := db.QueryContext(ctx, `SELECT id, role, content, tool_calls, tool_call_id, tool_name,
-			display_kind, display_metadata, message_uid, timestamp, active, _compressed_summary
+			display_kind, display_metadata, message_uid, timestamp, active, _compressed_summary, `+reasoningCols+`
 			FROM messages WHERE session_id = ? AND (active = 1 OR compacted = 1) ORDER BY id`, id)
 		if err != nil {
 			return nil, err
 		}
 		for rows.Next() {
 			var r storedRow
-			var content, toolCalls, toolCallID, toolName, kind, meta, uid sql.NullString
+			var content, toolCalls, toolCallID, toolName, kind, meta, uid, reasoning, reasoningContent sql.NullString
 			if err := rows.Scan(&r.id, &r.role, &content, &toolCalls, &toolCallID, &toolName,
-				&kind, &meta, &uid, &r.timestamp, &r.active, &r.summary); err != nil {
+				&kind, &meta, &uid, &r.timestamp, &r.active, &r.summary, &reasoning, &reasoningContent); err != nil {
 				_ = rows.Close()
 				return nil, err
 			}
 			r.content, r.toolCalls, r.toolCallID, r.toolName = content.String, toolCalls.String, toolCallID.String, toolName.String
 			r.displayKind, r.displayMeta, r.uid = kind.String, meta.String, uid.String
+			r.reasoning, r.reasoningContent = reasoning.String, reasoningContent.String
 			if !modelOnly(r.displayMeta) {
 				all = append(all, r)
 			}
@@ -276,6 +315,29 @@ func readDisplayRows(ctx context.Context, db *sql.DB, ref string) ([]storedRow, 
 		}
 	}
 	return dedupeGenerations(all), nil
+}
+
+// hasColumns reports whether table has every one of cols (a hermes schema
+// without them reads them as NULL rather than failing the whole read).
+func hasColumns(ctx context.Context, db *sql.DB, table string, cols ...string) bool {
+	rows, err := db.QueryContext(ctx, "SELECT name FROM pragma_table_info(?)", table)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = rows.Close() }()
+	have := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) == nil {
+			have[name] = true
+		}
+	}
+	for _, c := range cols {
+		if !have[c] {
+			return false
+		}
+	}
+	return true
 }
 
 // modelOnly is DISPLAY_VISIBLE_SQL's test: display_metadata.model_only
@@ -358,7 +420,9 @@ const (
 // normalizeRows maps display rows to Messages, keyed (keys.go): user rows
 // "user:"+message_uid; assistant text by its live key when al matched it,
 // else its message_uid; tool calls and results by the live tool key when
-// matched, else the stored call id.
+// matched, else the stored call id. In the keyed form (al.thinking) an
+// assistant row's reasoning comes first as a thinking row, keyed by its
+// matched live key, else "<message_uid>:thinking".
 func normalizeRows(rows []storedRow, al aliases) []provider.Message {
 	var msgs []provider.Message
 	for _, r := range rows {
@@ -384,6 +448,13 @@ func normalizeRows(rows []storedRow, al aliases) []provider.Message {
 				// agent knows. Never streamed: a notice, keyed by its row.
 				msgs = append(msgs, provider.Message{Role: "agent", Text: strings.TrimSpace(text), IsError: true, Notice: true, Timestamp: ts, Key: key})
 				continue
+			}
+			if thought := r.thinking(); al.thinking && thought != "" {
+				tkey := key + ":thinking"
+				if live, ok := al.thought[r.uid]; ok {
+					tkey = live
+				}
+				msgs = append(msgs, provider.Message{Role: "thinking", Text: thought, Timestamp: ts, Key: tkey})
 			}
 			if text != "" {
 				if live, ok := al.text[r.uid]; ok {

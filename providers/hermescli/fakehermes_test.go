@@ -294,6 +294,12 @@ func (f *fakeHermes) update(fields map[string]any) {
 	fhSend(fhMessage{Method: "session/update", Params: params})
 }
 
+// thought streams reasoning as hermes does: agent_thought_chunk under the
+// model call's messageId, before its text.
+func (f *fakeHermes) thought(text, messageID string) {
+	f.update(map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": text}, "messageId": messageID})
+}
+
 func (f *fakeHermes) chunk(text, messageID string) {
 	u := map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}}
 	if messageID != "" {
@@ -311,6 +317,13 @@ func (f *fakeHermes) ensureSessionRow() {
 }
 
 func (f *fakeHermes) addRow(role, content, toolCalls, toolCallID, toolName, displayMeta string) {
+	f.addRowReasoning(role, content, toolCalls, toolCallID, toolName, displayMeta, "")
+}
+
+// addRowReasoning is addRow with the reasoning hermes stores with an
+// assistant row: reasoning_content as streamed, and reasoning the same text
+// stripped (build_assistant_message, chat_completion_helpers.py).
+func (f *fakeHermes) addRowReasoning(role, content, toolCalls, toolCallID, toolName, displayMeta, reasoning string) {
 	null := func(s string) any {
 		if s == "" {
 			return nil
@@ -318,8 +331,9 @@ func (f *fakeHermes) addRow(role, content, toolCalls, toolCallID, toolName, disp
 		return s
 	}
 	_, err := f.db.Exec(`INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, tool_name,
-		display_metadata, timestamp, message_uid, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-		f.id, role, content, null(toolCalls), null(toolCallID), null(toolName), null(displayMeta), nowFloat(), randHex(16))
+		display_metadata, timestamp, message_uid, active, reasoning, reasoning_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+		f.id, role, content, null(toolCalls), null(toolCallID), null(toolName), null(displayMeta), nowFloat(), randHex(16),
+		null(strings.TrimSpace(reasoning)), null(reasoning))
 	if err != nil {
 		fhFail("insert message: %v", err)
 	}
@@ -437,10 +451,11 @@ func (f *fakeHermes) load(m fhMessage) {
 	}
 	type row struct {
 		role, content, toolCalls, toolCallID, toolName, meta, uid string
+		reasoning, reasoningContent                               sql.NullString
 		ts                                                        float64
 	}
 	rs, err := f.db.Query(`SELECT role, COALESCE(content,''), COALESCE(tool_calls,''), COALESCE(tool_call_id,''),
-		COALESCE(tool_name,''), COALESCE(display_metadata,''), message_uid, timestamp
+		COALESCE(tool_name,''), COALESCE(display_metadata,''), message_uid, timestamp, reasoning, reasoning_content
 		FROM messages WHERE session_id = ? AND active = 1 ORDER BY id`, f.id)
 	if err != nil {
 		fhFail("load: %v", err)
@@ -448,7 +463,7 @@ func (f *fakeHermes) load(m fhMessage) {
 	var rows []row
 	for rs.Next() {
 		var r row
-		_ = rs.Scan(&r.role, &r.content, &r.toolCalls, &r.toolCallID, &r.toolName, &r.meta, &r.uid, &r.ts)
+		_ = rs.Scan(&r.role, &r.content, &r.toolCalls, &r.toolCallID, &r.toolName, &r.meta, &r.uid, &r.ts, &r.reasoning, &r.reasoningContent)
 		rows = append(rows, r)
 	}
 	_ = rs.Close()
@@ -457,6 +472,10 @@ func (f *fakeHermes) load(m fhMessage) {
 		case "user":
 			f.update(map[string]any{"sessionUpdate": "user_message_chunk", "content": map[string]any{"type": "text", "text": r.content}})
 		case "assistant":
+			// Replayed thought before text, stripped (_history_reasoning_text).
+			if t := strings.TrimSpace(r.reasoningContent.String); t != "" {
+				f.update(map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": t}})
+			}
 			if r.content != "" {
 				f.chunk(r.content, "")
 			}
@@ -478,8 +497,8 @@ func (f *fakeHermes) load(m fhMessage) {
 			return s
 		}
 		_, _ = f.db.Exec(`INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, tool_name,
-			display_metadata, timestamp, message_uid, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-			f.id, r.role, r.content, null(r.toolCalls), null(r.toolCallID), null(r.toolName), null(r.meta), r.ts, r.uid)
+			display_metadata, timestamp, message_uid, active, reasoning, reasoning_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+			f.id, r.role, r.content, null(r.toolCalls), null(r.toolCallID), null(r.toolName), null(r.meta), r.ts, r.uid, r.reasoning, r.reasoningContent)
 	}
 }
 
@@ -619,7 +638,9 @@ func (f *fakeHermes) tool(firstMsgID string) {
 }
 
 // toolText is the stable_keys probe's turn, written by position as hermes
-// writes it (survey runc1, run2 rows 5-8): model call 1 streams a sentence
+// writes it (survey runc1, run2 rows 5-8): model call 1 streams its
+// reasoning (stored in the row's reasoning columns; no survey model emitted
+// any, so this follows hermes's source) and a sentence
 // under its messageId, then its assistant row — that text plus the
 // tool_calls under the stored call_ id — lands just before the tool_call
 // frame (Copilot's order, −5..−15 ms); the tool runs, its row lands after
@@ -628,11 +649,13 @@ func (f *fakeHermes) tool(firstMsgID string) {
 // response.
 func (f *fakeHermes) toolText(firstMsgID string) {
 	live, stored := "tc-"+randHex(6), "call_"+randHex(8)
+	f.thought("The user wants ", firstMsgID)
+	f.thought("a listing.\n", firstMsgID)
 	f.chunk("I'll list ", firstMsgID)
 	f.chunk("the files.", firstMsgID)
 	calls, _ := json.Marshal([]map[string]any{{"id": stored, "call_id": stored, "type": "function",
 		"function": map[string]any{"name": "terminal", "arguments": `{"command":"ls"}`}}})
-	f.addRow("assistant", "I'll list the files.", string(calls), "", "", "")
+	f.addRowReasoning("assistant", "I'll list the files.", string(calls), "", "", "", "The user wants a listing.\n")
 	f.update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": live, "kind": "execute", "title": "terminal: ls",
 		"locations": []any{}, "content": []map[string]any{{"type": "content", "content": map[string]any{"type": "text", "text": "$ ls"}}}})
 	f.update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": live, "kind": "execute", "status": "completed",
