@@ -145,26 +145,102 @@ than merging by key across it (the tail is gone then anyway, §3). Limits: a
 turn whose stored user row doesn't read back as the text sent isn't matched
 (its rows keep native keys), and text rows are matched by count.
 
-### 2. Frame contract on `/output`
+### 2. Frame contract on `/output?v=2`
 
-Chat frames gain structure; PTY and the other existing kinds are unchanged.
+*Built (C2); this section is the contract C4 builds on.* The keyed stream is
+opt-in: `GET /output?v=2` on the session child, or through the Router's
+`GET /sessions/{id}/output?v=2`, which forwards `?v=`, `?after=` and the
+`Last-Event-ID` header and flushes every frame as the child writes it.
+`GET /output` with no `v` is the legacy stream, unchanged (same kinds, data,
+per-connection numeric ids and text-join shim; settle hints never reach it).
+Terminal (PTY) bytes stay on the legacy stream only.
 
-- `user_message {key, text, attribution?, queued?}`: emitted by the runner the
-  moment a send is accepted (direct send, mid-turn send, queue delivery,
-  linked-session inject, background-task notification). This replaces the
-  UI's optimistic bubble and the `queue_changed` "delivered" bubble path.
-- `item_start {key, kind: text|thinking|tool_use|notice}`
-- `text_delta {key, text}`, `thinking_delta {key, text}` (claude streams
-  thinking deltas when summaries are on; codex streams reasoning summaries)
-- `item_stop {key}`
-- `tool_use {key, tool}`; `tool_result {key, text (preview), is_error}`
-- `notice {key, kind, text}`: synthetic rows the agent shows (claude's
-  interrupt markers), rendered as small system lines, not bubbles
-- `turn_end`, `error`, etc. as today.
+**Framing.** Every frame is SSE:
 
-Every frame is sent as SSE with `id: <epoch>:<seq>`. `seq` counts up for the
-child's life; `epoch` is minted at child start, so a cursor from a previous
-child is recognisably stale.
+```
+id: <epoch>:<seq>
+event: <kind>
+data: <one-line JSON, always with "kind">
+```
+
+`epoch` is 8 hex characters minted when the session child starts (any
+restart is a new epoch); `seq` is one counter per child, shared by every
+subscriber, so the same frame has the same id on every connection. Two frames
+carry **no `id:` line**, so they never move the client's `Last-Event-ID`:
+`hello` and `resync`.
+
+**`hello`** is the first frame of every connection:
+
+```json
+{"kind":"hello","epoch":"1f3a9c0e","seq":412,"provider":"claude-code",
+ "keyed":true,"resume":"fresh",
+ "turn":{"active":true,"started_at":"2026-10-21T12:00:00Z","interrupted":false},
+ "queued":[{"id":"q_…","text":"…","queued_at":"…"}]}
+```
+
+- `seq`: the journal head when the connection attached; the replay brings the
+  client up to it.
+- `keyed`: false when the provider's matrix doesn't declare `stable_keys`
+  working (kiro). Keys are then runner-local (`local:<n>`, `tool:<call id>`),
+  each `turn_end` is followed by `resync{reason:"unkeyed"}`, and the client
+  refetches the transcript at turn end instead of merging by key.
+- `resume`: `fresh`, `resumed` or `resync` (§5).
+- `turn`: whether a turn (a send, an inbound wake, a compaction pass) is in
+  flight; `started_at` when it began; `interrupted` once Interrupt was asked
+  of it. `queued`: the user's queue, the shape of `contracts.QueueChanged.Queued`
+  (changes still arrive as `session.queue_changed` events).
+
+**Conversation frames.** Keys are opaque (§1); compare only for equality.
+
+| kind | data | when |
+|---|---|---|
+| `user_message` | `{key, text, attribution?, queued?, ts}` | a send is accepted: direct send, queue delivery (`queued:true`), linked-session inject, mads's notice and digest injections. Before the provider sees it, so it precedes the turn's frames (and follows the previous `turn_end`). |
+| `item_start` | `{key, item:"text"\|"thinking"\|"tool_use"\|"notice", parent_tool_use_id?, subagent_type?, task_description?}` | once per key, ever |
+| `text_delta` / `thinking_delta` | `{key, text}` | text as the adapter keyed it (before the legacy join shim) |
+| `item_stop` | `{key}` | a text or thinking item ends: the key changes, a tool starts, or the turn ends (also when the child exits mid-turn) |
+| `tool_use` | `{key, tool}` | `tool` is today's ToolUse JSON with its synthesized status; a repeat for the same key is an update |
+| `tool_result` | `{key, text, is_error, tool, truncated?}` | live: the full text. Replayed from the journal: a 2 KB preview with `truncated:true` |
+| `notice` | `{key, notice_kind, text}` | reserved: no live producer yet (stored notices arrive as `/transcript` rows with `notice:true`) |
+| `inbound` | today's rendered inbound body plus `key` when the provider gave one | a peer message reached the agent |
+
+`user_message` keys: mads mints a UUID when it accepts a send (for a queued
+message, when it is queued) and the key is `"user:"+id`; a provider that
+implements `provider.KeyedSender` (claude, codex, the fake) stores the row
+under that same key. `text` and `attribution` are exactly what `/transcript`
+renders for the stored row: the wire the runner hands the provider, through
+`linkwrap.Expand`. A send Expand splits into n > 1 segments (a coalesced
+digest run, a re-root note ahead of its block) is one frame per segment,
+keyed `linkwrap.SegmentKey("user:"+id, i, n)` = `"user:<id>#<i>"` (0-based,
+in Parse order, the outside-the-wrapper notice included) — the same rule as
+the stored rows.
+
+A tool's call and result share its key; `item_start` comes before the
+`tool_use`, and there is no `item_stop` for a tool. Frames of a subagent
+(`parent_tool_use_id` on their `item_start`) are live and resumable but never
+in the tail: the main store doesn't hold them (they come from the event log
+as today).
+
+**Tail bookkeeping frames.**
+
+| kind | data | meaning |
+|---|---|---|
+| `settled` | `{keys:[…]}` | the store now has these keys: render them from `/transcript`, drop the live copies. Never in a replay of the tail again. |
+| `unsaved` | `{keys:[…]}` | the agent will never store these: keep showing the live copy (the agent's own UI loses them on a restart too). Sent ~1 s after a turn ends for its unstored items (not user messages, which wait for their row), for every in-flight item when the child's provider process exits mid-turn, and for a send that failed. |
+| `tail_truncated` | `{dropped, keys}` | in a replay only: the cap evicted these items (whole); fetch the transcript for them |
+| `resync` | `{reason:"epoch"\|"gap"\|"unkeyed"}` | refetch the last `/transcript` page and replace items by key; no `id:` |
+| `replay_end` | `{}` | the replay is over; everything after is live (pace only from here) |
+
+**Status frames** keep today's data (the `provider.Event` JSON) and are
+numbered like the rest: `turn_end, error, permission_request, task,
+task_roster, background, compact, account, subagent_usage`, plus the
+thinking-token tick (`thinking` with `thinking_tokens` and no text) and any
+other kind the legacy stream carries, except `pty_output` and `settle`.
+
+**The keyed start option.** Sessions start with `StartOptions.Keyed` (settle
+hints) where the provider's `stable_keys` is `native` (claude, codex, goose,
+fake). Not hermes (`emulated`): under Keyed it swaps tool names and results
+for the stored ones, which the legacy stream would show; it settles at turn
+end and on `/transcript` serves instead, until C4 turns Keyed on for it.
 
 ### 3. The unsettled tail (session service, memory only)
 
@@ -225,17 +301,63 @@ the agent's store doesn't have yet**.
 
 ### 5. Connecting, reconnecting, switching
 
+*Built (C2), the replay rules:*
+
+- **Fresh** (no `Last-Event-ID`, no `?after`): `hello{resume:"fresh"}`; the
+  whole unsettled tail, oldest first, with each run of one item's deltas
+  coalesced into one frame (it carries the last delta's id) and a
+  `tail_truncated` where evicted items were; an `unsaved{keys}` naming tail
+  items already declared so; then state snapshots — open permission requests,
+  background processes, the task roster, each its latest status frame;
+  `replay_end`; live. Snapshots, the `unsaved` and `replay_end` carry the head
+  id (`<epoch>:<hello.seq>`).
+- **Resumed** (`Last-Event-ID`, or `?after=<epoch>:<seq>` for a client that
+  can't set the header, in this epoch and still in the journal):
+  `hello{resume:"resumed"}`, exactly the frames after that seq as journaled
+  (tool results as previews), `replay_end`, live.
+- **Resync** (another epoch, or a seq the journal no longer covers):
+  `hello{resume:"resync"}`, `resync{reason:"epoch"|"gap"}`, then as fresh.
+- A subscriber too slow for the live stream (1024 frames behind) is
+  disconnected rather than skipped; it reconnects with its `Last-Event-ID`.
+
+**The journal** (memory only, per child): unsettled frames stay until their
+key is stored, capped at 4 MiB (evicting whole items, oldest first); every
+other frame (settled, status) is retained for 60 s or a 4 MiB ring, so a
+reconnect within that resumes without a gap.
+
+**Settling** (`runner/settle.go`): ~250 ms after a settle hint (one read per
+burst), after each `user_message`, at turn end (and again ~1 s later, before
+declaring `unsaved`), and whenever `/transcript` is served, the child reads
+the store with `TranscriptSince` (a stale cursor re-reads the whole store;
+an adapter that can't read incrementally is read whole, at turn end and on
+`/transcript` only). An item settles when its row is stored (`agent` for
+text, `tool` for a call and `tool_result` for its result — or no result
+before the turn ended — `user`, `inbound`). A `/transcript` read settles the
+tail *before* it is answered, so no row it serves shares a key with a frame
+still in the tail. `GET /transcript?v=2` is the read a keyed client makes:
+always the agent's store (for goose, never acprpc's live buffer, whose rows
+mostly have no keys); plain `/transcript` keeps today's source.
+
+**User-row labels** (no `KeyedSender`: goose, hermes): on each settle read,
+the next unlabelled stored user row after the previous labelled one takes the
+oldest unmatched send's key; text equality is only a sanity check (logged on
+mismatch). `/transcript` serves labelled rows under the `user_message` key
+(segments get sub-keys of it). Labels live as long as the child; rows from
+before it, or from a session resumed outside mads, keep native keys.
+
+The client side, for C4:
+
 - **Mount** (first open, or switching to a session): fetch the last page of
-  `/transcript`; open `/output`. With no `Last-Event-ID`, the child replays the
-  **whole unsettled tail**, then a `replay_end` marker, then live frames.
-- **Reconnect after a drop:** EventSource resends `Last-Event-ID`; same epoch →
-  the child sends only frames after that seq (if still buffered; otherwise the
-  whole tail with `tail_truncated`). Different epoch → the whole tail.
+  `/transcript?v=2`; open `/output?v=2` without a cursor and apply the replay.
+- **Reconnect after a drop:** EventSource resends `Last-Event-ID` itself;
+  follow `hello.resume`. On `resync`, refetch the last page and replace items
+  by key before applying the tail that follows.
 - **The UI merges by key.** A frame whose key is already rendered from the
   transcript is skipped (or, for an in-progress item, its deltas continue the
   same item); a transcript row whose key is rendered live replaces it in place,
   same React key, same text. Order is the transcript's for settled items, then
-  the tail's.
+  the tail's. `settled` says which live items to hand over; `unsaved` which to
+  keep.
 - Replayed frames render instantly; the pacer paces only frames after
   `replay_end`.
 

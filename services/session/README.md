@@ -80,6 +80,15 @@ One process, one session — no `:id` in any path.
   lets a UI reattaching to a session mid-turn (or after missing PTY output entirely) restore
   terminal scrollback instead of losing it. Chat events (`text`, `tool_use`, `turn_end`,
   `error`) never go through this buffer and stay purely ephemeral.
+  - **`?v=2`: the keyed chat stream** (`docs/CHAT-STREAM-DESIGN.md` §2 and §5 are the
+    contract). Opt-in; the legacy stream above is byte-for-byte what it was (pinned by
+    `internal/api/legacy_golden_test.go`), except that settle hints never reach it. Every
+    frame has `id: <epoch>:<seq>` (one counter per child, a new epoch per child) except the
+    leading `hello` and a `resync`. Keyed items (`user_message`, `item_start`, deltas,
+    `item_stop`, `tool_use`, `tool_result`, `inbound`) and today's status kinds; a memory-only
+    journal (`runner/chatstream.go`) keeps the unsettled tail (until the agent's store holds
+    each key; `runner/settle.go`) for a fresh viewer and recent frames for a reconnect with
+    `Last-Event-ID` (or `?after=`). Chat transport only.
 - `POST /transport` — switches this session between its `chat` and `terminal` transports.
   Body `{"mode": "chat" | "terminal"}`. Chat and Terminal are two transports over one
   provider conversation, not simultaneous mirrors: the old transport's provider process is
@@ -108,6 +117,10 @@ One process, one session — no `:id` in any path.
   `provider.Registry` has no visibility into this process's provider session, so this is
   the only place a live turn's history can be read from. Never errors outward: degrades to
   `[]` the same way the Router's own durable-transcript fallback does.
+  - **`?v=2`** reads the agent's own store for a provider with stable keys (for goose, not
+    acprpc's live buffer), as a keyed client merging with the `/output?v=2` tail must. Any
+    read settles that tail first; stored user rows a provider can't key itself (goose,
+    hermes) are served under the key of the `user_message` that sent them.
   - **Keys.** Every row carries `key`, the provider's `Message.Key` (the same key the live
     stream uses for the item; `docs/CHAT-STREAM-DESIGN.md` §1), and `notice: true` on a
     synthetic row the agent wrote itself. A tool call and its result share a key; every
