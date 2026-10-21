@@ -49,10 +49,11 @@ func TestMatricesValidate(t *testing.T) {
 
 func script() conformance.Script {
 	return conformance.Script{
-		Echo:    func(marker string) string { return "echo " + marker },
-		Slow:    func() string { return "slow" },
-		Recall:  func() string { return "recall" },
-		Timeout: 10 * time.Second, // every probe spawns a real subprocess
+		Echo:     func(marker string) string { return "echo " + marker },
+		Slow:     func() string { return "slow" },
+		Recall:   func() string { return "recall" },
+		ToolTurn: func() string { return "tool-text" },
+		Timeout:  10 * time.Second, // every probe spawns a real subprocess
 	}
 }
 

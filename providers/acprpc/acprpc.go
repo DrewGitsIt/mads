@@ -180,9 +180,10 @@ type Config struct {
 	// _meta.goose.created, and the store keeps both (survey 2026-10-20,
 	// goosecli testdata/captures/keys/run.wire.jsonl lines 15-16 and
 	// run.store.jsonl rows 3, 6); hermes stamps a UUID4 messageId per
-	// model call that it never stores (hermescli testdata/captures/keys/
-	// runc1.wire.jsonl); kiro-cli is uncaptured. The zero value emits no
-	// keys — the honest reading where the wire's ids are unverified.
+	// model call that it never stores (hermescli testdata/captures/
+	// runc1.wire.jsonl vs runc1.db.jsonl); kiro-cli is uncaptured. The
+	// zero value emits no keys — the honest reading where the wire's ids
+	// are unverified.
 	Keys KeyStrategy
 	// Settle names where the agent's own store has likely caught up, for
 	// EventSettle (emitted only for a session started with

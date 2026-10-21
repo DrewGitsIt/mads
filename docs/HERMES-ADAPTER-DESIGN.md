@@ -25,7 +25,8 @@ probe used a scratch `HERMES_HOME`; `~/.hermes` was never written.
 2. **No new conversation keys or frames yet.** The chat-stream design is
    being revised (docs/CHAT-STREAM-DESIGN.md); this adapter does only what
    the existing provider contract asks. `message_uid` is used inside the
-   reader for collapsing generations, not exposed.
+   reader for collapsing generations, not exposed. *Superseded by C1
+   (2026-10-21): keys are emulated, see "Conversation keys (C1)".*
 3. **History after a restart comes from state.db**, not acprpc's memory.
 
 ## Shape of the work
@@ -33,7 +34,7 @@ probe used a scratch `HERMES_HOME`; `~/.hermes` was never written.
 | Piece | Where | Notes |
 |---|---|---|
 | Transport | acprpc engine | knob values in `engineConfig`, each cited |
-| Session wrapper | `session.go` | three hermes facts the engine can't know |
+| Session wrapper | `session.go` | hermes facts the engine can't know, and the key ledger |
 | Trust gate | `Start` | refuse below full, before spawning |
 | Resume guard | `transcript.go` | state.db row check before `session/load` |
 | TranscriptReader | `transcript.go` | hermes's display projection over state.db |
@@ -57,8 +58,10 @@ adapted), and session/new returns the ref synchronously.
 | `ToolIdentity` | kind-based | `kind` + `"<tool>: <preview>"` title, no `_meta` namespace (runc1 line 21; tools.py:20-31,192-198) |
 | `PermissionAsksEveryCall` | false | hermes judges risk itself (run9 lines 13, 23-24) |
 | `CompactCommand` | "" | `compress` is advertised (runc1 line 8) but unprobed |
+| `Keys` | `KeyModeMessageRun`, no created namespace | provisional live keys from the UUID4 `messageId` and `tc-…` ids; matched to stored rows by position (C1, "Conversation keys") |
+| `Settle` | tool_call frame + prompt response | the assistant row with its tool calls lands within ~15 ms of the frame; the last row before the response (survey §4) |
 
-The engine's knob set stays closed: the three corrections below are hermes
+The engine's knob set stays closed: the corrections below are hermes
 quirks, not ACP variations, so they live in a binding-side wrapper.
 
 ## Trust (full only)
@@ -160,12 +163,60 @@ though hermes doesn't advertise `session/delete`.
    for a call never announced. The wrapper drops results whose id no
    `tool_call` introduced; the real call's result follows (line 16).
 
+4. **Tool names.** The engine names a kind-based call by its title, and
+   hermes titles are `"<tool>: <preview>"` (acp_adapter/tools.py
+   `build_tool_title`, the bare name when there's no preview); the wrapper
+   cuts the name back to the tool's, the one `tool_calls` stores.
+5. **Keys** (C1): it records what each turn streamed for the readers'
+   position match, and swaps a tool result's live rendering for the stored
+   text — next section.
+
 The wrapper deliberately does not implement the runner's live
 `Transcript()` (decision 3), so the runner reads history through the
 TranscriptReader. Cost: a mid-turn transcript refetch shows only completed
 model calls; the in-flight text rides the live event stream. hermes writes
 the final assistant row 10-200 ms after the last chunk and always before
 the prompt response (survey §4), so at turn end the store is complete.
+
+## Conversation keys (C1, keys.go)
+
+The chat-stream contract (docs/CHAT-STREAM-DESIGN.md §1) keys every item
+the same live and stored. hermes keeps no id on both sides: the live
+`messageId` (UUID4 per model call) is never stored; the stored
+`message_uid` exists only once its row is written (end of the model call,
+or just before its tools run), so no chunk can carry it; live tool ids are
+`tc-…`, stored `call_…`. The matrix row is therefore **Emulated**:
+
+- **Live**: provisional keys from live ids (acprpc `KeyModeMessageRun`:
+  `<messageId>:<run>`, `tc-…`). Settle hints on the `tool_call` frame and
+  the prompt response.
+- **Ledger**: per ref, held by the provider while the child lives — per
+  prompt, the user row's index (the store's user-row count just before the
+  prompt goes out), the text sent, and the live text and tool keys in
+  order.
+- **Readers** (`Transcript`, `TranscriptSince`) match by position: the
+  turn's user row (checked against the text sent); the k-th assistant row
+  with text ↔ the k-th live text item; stored tool calls in order across
+  the turn ↔ live tool calls in order (results follow their call). Matched
+  rows read with the live key while the child lives; everything else, and
+  everything after the child exits, with `message_uid` / the stored call
+  id. A user row is `user:<message_uid>`.
+- **Text**: `"\n\n"` stripped live (wrapper 2); a tool result's live text is
+  hermes's rendering for ACP, not reversible, so the wrapper waits (≤500
+  ms; the row lands 3-23 ms after) and emits the stored text instead.
+- **Cursor**: the last served row's `message_uid`; rows after that uid's
+  current row (load rewrites row ids: insert-new-then-delete-old, run2);
+  uid gone (compaction) → `ErrCursorStale`. Rows of the in-flight turn with
+  nothing live to match yet are held back from incremental reads (hermes
+  may write a tool-call row before the `tool_call` frame).
+- `failed_turn` rows: `Notice`, keyed by their uid.
+
+Considered and rejected: an upstream `_meta` patch to make hermes put the
+`message_uid` (or a client id) on its chunks — not ours to ship, and a
+uid doesn't exist yet when the chunks stream; content matching — hermes
+rewrites user text and the store strips whitespace, so position with a
+text sanity check is the sturdier rule. Limits are listed in the README
+("Conversation keys").
 
 ## Transcript normalization (transcript.go)
 

@@ -12,8 +12,9 @@
 //     answering them (design doc "Trust");
 //   - a session wrapper (session.go) that turns hermes's per-process
 //     cumulative usage into per-turn usage, strips the paragraph break
-//     hermes injects before the first text after a tool, and drops tool
-//     results for those synthetic approval ids;
+//     hermes injects before the first text after a tool, drops tool
+//     results for those synthetic approval ids, and records what each turn
+//     streamed for the conversation keys (keys.go);
 //   - a resume guard: hermes answers session/load of an unknown id with an
 //     empty success, so the ref is checked against state.db first;
 //   - a TranscriptReader over hermes's own SQLite store (transcript.go).
@@ -74,6 +75,9 @@ type Config struct {
 // Provider is the hermes adapter. Registry name "hermes".
 type Provider struct {
 	cfg Config
+	// live holds each running session child's ledger of what it streamed,
+	// by ref — what the readers match stored rows against (keys.go).
+	live liveSessions
 }
 
 func New(cfg Config) *Provider { return &Provider{cfg: cfg} }
@@ -191,6 +195,16 @@ func (p *Provider) engineConfig() acprpc.Config {
 		// (pm/client.py:77) and tools detach into their own sessions
 		// (process_registry.py:1246, mcp_tool.py:594, code_kernel.py:642).
 		OwnProcessTree: true,
+		// Provisional live keys from the live ids: a UUID4 messageId per
+		// model call (agent/events.py:185-236; runc1 lines 9-13) and tc-…
+		// tool ids (tools.py:67). Never stored, so keys.go matches them to
+		// the stored rows by position.
+		Keys: acprpc.KeyStrategy{Mode: acprpc.KeyModeMessageRun},
+		// hermes writes the assistant row with its tool calls just as the
+		// tool_call frame goes out (−15..+15 ms, survey) and the turn's
+		// last row before the prompt response (10-202 ms after its last
+		// chunk).
+		Settle: acprpc.SettlePoints{ToolCall: true, PromptResponse: true},
 	}
 }
 
@@ -241,8 +255,10 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorDelegateTranscript: provider.Unsupported,
 		provider.BehaviorDelegateSteer:      provider.Unsupported,
 		provider.BehaviorDelegateStop:       provider.Unsupported,
-		// C1 in progress: each adapter declares its real stance with its keys.
-		provider.BehaviorStableKeys: provider.Unsupported,
+		// hermes stores none of its live ids: live items carry provisional
+		// keys and the readers match stored rows to them by position while
+		// the child lives (keys.go, README "Conversation keys").
+		provider.BehaviorStableKeys: provider.Emulated,
 		// hermes has session/fork, but mads has no branching surface for
 		// ACP yet; no cwd reroot at all.
 		provider.BehaviorBranching: provider.Unsupported,
@@ -297,7 +313,7 @@ func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provi
 	if err != nil {
 		return nil, err
 	}
-	return wrapSession(sess), nil
+	return wrapSession(sess, p), nil
 }
 
 // The first-send prefix lands inside hermes's stored user row (hermes has

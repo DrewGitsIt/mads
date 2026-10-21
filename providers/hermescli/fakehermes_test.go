@@ -47,6 +47,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -146,7 +147,122 @@ func fhMain() {
 		fhFail("store: %v", err)
 	}
 	defer func() { _ = db.Close() }()
+	if prefix := os.Getenv("MADS_FAKE_HERMES_REPLAY"); prefix != "" {
+		fhReplay(db, prefix)
+		return
+	}
 	(&fakeHermes{db: db, model: "copilot:gpt-4.1", mode: "default"}).serve()
+}
+
+// fhReplay serves a survey capture pair — <prefix>.wire.jsonl (the client's
+// stdio log: "out" lines it sent, "in" lines hermes sent) and
+// <prefix>.db.jsonl (the state.db inserts a 25 ms poll saw) — merged by
+// timestamp: hermes's lines go out verbatim (response ids rewritten to the
+// live request's), and each captured row is inserted into the store when
+// its turn in the timeline comes, so rows land by position exactly as
+// hermes wrote them. Each captured client line waits for the live client's
+// next line of the same method; a live request the capture never made (the
+// engine's session/set_mode) is answered with an empty result.
+func fhReplay(db *sql.DB, prefix string) {
+	type entry struct {
+		T   int64           `json:"t"`
+		Dir string          `json:"dir"`
+		Msg json.RawMessage `json:"msg"`
+		Ev  string          `json:"ev"`
+		Row map[string]any  `json:"row"`
+	}
+	var entries []entry
+	for _, path := range []string{prefix + ".wire.jsonl", prefix + ".db.jsonl"} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			fhFail("replay: %v", err)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+			var e entry
+			if json.Unmarshal([]byte(line), &e) == nil && (e.Dir == "in" || e.Dir == "out" || e.Ev == "insert") {
+				entries = append(entries, e)
+			}
+		}
+	}
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].T < entries[j].T })
+
+	var sid string // the captured session id, which every update carries
+	for _, e := range entries {
+		var m fhMessage
+		if e.Dir == "in" && json.Unmarshal(e.Msg, &m) == nil && m.Method == "session/update" {
+			var p struct {
+				SessionID string `json:"sessionId"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			sid = p.SessionID
+			break
+		}
+	}
+	in := bufio.NewScanner(os.Stdin)
+	in.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	ids := map[string]json.RawMessage{}
+	sessionRow := false
+	for _, e := range entries {
+		switch {
+		case e.Ev == "insert":
+			str := func(k string) any {
+				if v, ok := e.Row[k].(string); ok {
+					return v
+				}
+				return nil
+			}
+			if !sessionRow {
+				if _, err := db.Exec(`INSERT INTO sessions (id, source, started_at) VALUES (?, 'acp', ?)`, sid, e.Row["ts"]); err != nil {
+					fhFail("replay session: %v", err)
+				}
+				sessionRow = true
+			}
+			if _, err := db.Exec(`INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, tool_name,
+				display_kind, timestamp, message_uid, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+				sid, e.Row["role"], str("content"), str("tool_calls"), str("tool_call_id"), str("tool_name"),
+				str("display_kind"), e.Row["ts"], e.Row["message_uid"]); err != nil {
+				fhFail("replay insert: %v", err)
+			}
+		case e.Dir == "in":
+			var m fhMessage
+			_ = json.Unmarshal(e.Msg, &m)
+			out := e.Msg
+			if m.Method == "" && len(m.ID) > 0 {
+				if live, ok := ids[string(m.ID)]; ok {
+					m.ID = live
+					out, _ = json.Marshal(m)
+				}
+			}
+			fmt.Println(string(out))
+		case e.Dir == "out":
+			var want fhMessage
+			_ = json.Unmarshal(e.Msg, &want)
+			for {
+				if !in.Scan() {
+					fhFail("replay: client closed before sending %s", want.Method)
+				}
+				var live fhMessage
+				if err := json.Unmarshal(in.Bytes(), &live); err != nil {
+					fhFail("replay: undecodable client line: %v", err)
+				}
+				if live.Method == want.Method {
+					if len(want.ID) > 0 {
+						ids[string(want.ID)] = live.ID
+					}
+					break
+				}
+				if len(live.ID) > 0 {
+					fhSend(fhMessage{ID: live.ID, Result: json.RawMessage(`{}`)})
+				}
+			}
+		}
+	}
+	for in.Scan() { // after the capture: answer anything, until the client goes
+		var live fhMessage
+		if json.Unmarshal(in.Bytes(), &live) == nil && len(live.ID) > 0 && live.Method != "" {
+			fhSend(fhMessage{ID: live.ID, Result: json.RawMessage(`{}`)})
+		}
+	}
 }
 
 type fakeHermes struct {
@@ -429,6 +545,12 @@ func (f *fakeHermes) prompt(m fhMessage) {
 		reply = "earlier you said: " + strings.Join(users, "; ")
 	case cmd == "whoami":
 		reply = fmt.Sprintf("model %s mode %s first %q", f.model, f.mode, prompt)
+	case cmd == "tool-text":
+		f.toolText(msgID)
+		f.in += 3000
+		f.out += 30
+		f.result(m.ID, "end_turn")
+		return
 	case cmd == "tool":
 		f.tool(msgID)
 		f.in += 2000
@@ -494,6 +616,33 @@ func (f *fakeHermes) tool(firstMsgID string) {
 	_ = firstMsgID
 	f.chunk("\n\nI found alpha.txt.", randHex(8))
 	f.addRow("assistant", "I found alpha.txt.", "", "", "", "")
+}
+
+// toolText is the stable_keys probe's turn, written by position as hermes
+// writes it (survey runc1, run2 rows 5-8): model call 1 streams a sentence
+// under its messageId, then its assistant row — that text plus the
+// tool_calls under the stored call_ id — lands just before the tool_call
+// frame (Copilot's order, −5..−15 ms); the tool runs, its row lands after
+// the completed frame; model call 2 streams under a new messageId with the
+// injected "\n\n", and its row (without it) lands before the prompt
+// response.
+func (f *fakeHermes) toolText(firstMsgID string) {
+	live, stored := "tc-"+randHex(6), "call_"+randHex(8)
+	f.chunk("I'll list ", firstMsgID)
+	f.chunk("the files.", firstMsgID)
+	calls, _ := json.Marshal([]map[string]any{{"id": stored, "call_id": stored, "type": "function",
+		"function": map[string]any{"name": "terminal", "arguments": `{"command":"ls"}`}}})
+	f.addRow("assistant", "I'll list the files.", string(calls), "", "", "")
+	f.update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": live, "kind": "execute", "title": "terminal: ls",
+		"locations": []any{}, "content": []map[string]any{{"type": "content", "content": map[string]any{"type": "text", "text": "$ ls"}}}})
+	f.update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": live, "kind": "execute", "status": "completed",
+		"content": []map[string]any{{"type": "content", "content": map[string]any{"type": "text", "text": "terminal result\n- **output:** alpha.txt\n- **exit_code:** 0"}}}})
+	time.Sleep(10 * time.Millisecond)
+	f.addRow("tool", `{"output": "alpha.txt", "exit_code": 0, "error": null}`, "", stored, "terminal", "")
+	second := randHex(8)
+	f.chunk("\n\nOne file: ", second)
+	f.chunk("alpha.txt.", second)
+	f.addRow("assistant", "One file: alpha.txt.", "", "", "", "")
 }
 
 // askEdit is run9's turn 1: the edit is announced under its live id, the
