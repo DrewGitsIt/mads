@@ -163,8 +163,10 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorDelegateTranscript: provider.Native,
 		provider.BehaviorDelegateSteer:      provider.Emulated,
 		provider.BehaviorDelegateStop:       provider.Unsupported,
-		// C1 in progress: each adapter declares its real stance with its keys.
-		provider.BehaviorStableKeys: provider.Unsupported,
+		// Keys are claude's own ids, written the same on stdout and in the
+		// JSONL: message id + block index, tool_use id, the user line's
+		// uuid (stdin "uuid" through SendKeyed) — keys.go, README.
+		provider.BehaviorStableKeys: provider.Native,
 	}
 }
 
@@ -354,6 +356,7 @@ func (p *Provider) oneShotStream(ctx context.Context, req provider.OneShotReques
 
 	var resultLine []byte
 	var refAnnounced bool
+	var keys liveKeys
 	r := bufio.NewReaderSize(stdout, 64*1024)
 	for {
 		raw, rerr := r.ReadBytes('\n')
@@ -369,7 +372,7 @@ func (p *Provider) oneShotStream(ctx context.Context, req provider.OneShotReques
 				}
 				switch l.Type {
 				case "assistant":
-					for _, ev := range l.events(false, false) {
+					for _, ev := range l.keyedEvents(false, false, keys.line(&l)) {
 						req.OnEvent(ev)
 					}
 				case "result":

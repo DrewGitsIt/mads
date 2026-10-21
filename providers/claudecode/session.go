@@ -102,6 +102,7 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 		asker:            opts.Permissions,
 		asks:             map[string]context.CancelFunc{},
 		hasAgentFile:     p.hasDelegateFile,
+		settle:           opts.SettleHints,
 	}
 	s.askCtx, s.askStop = context.WithCancel(context.Background())
 	for _, srv := range opts.MCPServers {
@@ -231,6 +232,12 @@ type streamSession struct {
 	// agentParents maps a subagent's agent_id to the Agent tool call it
 	// runs under, learned from task_started lines (noteSubagent).
 	agentParents map[string]string
+
+	// keys follows the stream to key its items (keys.go).
+	keys liveKeys
+	// settle: the session asked for EventSettle (StartOptions.SettleHints;
+	// settleAfter).
+	settle bool
 }
 
 // controlReply is the part of a control_response line a waiter needs.
@@ -350,14 +357,19 @@ func (s *streamSession) handleLine(raw []byte) {
 	if u := l.Message.callUsage(); l.ParentToolUseID != "" && u != nil {
 		subagentWindow = s.windows[baseModel(u.Model)]
 	}
+	keys := s.keys.line(&l)
+	settle := s.settle
 	s.mu.Unlock()
 
-	evs := l.events(interrupted, true)
+	evs := l.keyedEvents(interrupted, true, keys)
 	if closesUnprompted {
 		evs = l.notificationTurnEnd()
 	}
 	if dropTask {
 		evs = nil
+	}
+	if settle {
+		evs = settleAfter(&l, evs)
 	}
 	for _, ev := range evs {
 		if ev.Kind == provider.EventSubagentUsage {
@@ -542,13 +554,31 @@ func (s *streamSession) RefAnnounced() <-chan string { return s.announced }
 func (s *streamSession) Events() <-chan provider.Event { return s.events }
 
 func (s *streamSession) Send(_ context.Context, text string) error {
-	line, err := json.Marshal(map[string]any{
+	return s.send(text, "")
+}
+
+// SendKeyed implements provider.KeyedSender: id rides the stdin line as
+// its top-level "uuid", which claude keeps as the stored user line's uuid
+// (or, sent mid-turn, as its queued_command's source_uuid), so the stored
+// row's key is "user:"+id (keys.go). Verified against 2.1.285 (the
+// 2026-10-20 survey: the JSONL line and the --replay-user-messages echo
+// both carried the caller's uuid).
+func (s *streamSession) SendKeyed(_ context.Context, text, id string) error {
+	return s.send(text, id)
+}
+
+func (s *streamSession) send(text, id string) error {
+	msg := map[string]any{
 		"type": "user",
 		"message": map[string]any{
 			"role":    "user",
 			"content": []map[string]any{{"type": "text", "text": text}},
 		},
-	})
+	}
+	if id != "" {
+		msg["uuid"] = id
+	}
+	line, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}

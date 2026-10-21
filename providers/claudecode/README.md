@@ -25,6 +25,7 @@ history.
 | TrustAutoReview | **Native** | `--permission-mode auto`: claude's own auto mode, whose server-side classifier approves routine calls and blocks risky ones; after 3 consecutive (or 20 total) blocks claude stops trusting it and asks — over `--permission-prompt-tool stdio` on chat, claude's own UI on the terminal. Probed against 2.1.285; see "Auto-review: claude's auto mode" below. |
 | MCPServers | **Native** | `--mcp-config <file> --strict-mcp-config` threads `StartOptions.MCPServers` into a real launch on both transports — see "MCP servers" below. |
 | RefAnnounce | **Emulated** | The structured transport's `system`/`init` line carries `session_id` at connect, before any turn (Native-strength). The terminal transport prints nothing, and a structured session's own announcement can itself be dropped or delayed past its window; either way the Runner falls back to `LocateSession` (`providers/provider.SessionLocator`), a weaker best-effort mechanism — see "Ref announcement, transport by transport" below. Emulated is the honest one-row summary across both. |
+| StableKeys | **Native** | Every item's key is an id claude writes the same on stdout and in the JSONL: `<message id>:<block index>` for text and thinking, the `tool_use` id for a call and its result, `user:<line uuid>` for a user message (mads's id, sent as the stdin `uuid` by `SendKeyed`). Settle hints and an incremental reader (`TranscriptSince`) come with it. See "Conversation keys" below. |
 
 ## Ref announcement, transport by transport
 
@@ -417,6 +418,44 @@ input. Interactive consumers that need lower latency should configure the
 OpenAI-compatible endpoint backend (`fastmodel.DynamicConfig.BaseURL`)
 instead of relying on the zero-config provider default.
 
+## Conversation keys
+
+`docs/CHAT-STREAM-DESIGN.md` §1: a key identifies one item of the
+conversation, the same on the live event (`Event.Key`) and the stored row
+(`Message.Key`), with the same text. `keys.go` derives them; all from
+claude's own ids, verified against 2.1.285 (`testdata/keys-*`, real
+captures; `TestCapturedKeysLiveEqualStored`):
+
+| Item | Live | Stored |
+|---|---|---|
+| Assistant text / thinking | `message_start.message.id` + the block's `content_block_start` index | the line's `message.id` + its block's position among that id's lines, counted after the uuid de-dupe and over every block type (signature-only thinking included; claude writes one block per line) |
+| Tool call / result | `tool_use` id | `tool_use` id (on both rows) |
+| User message | — (the runner owns it) | `user:` + the line uuid: mads's id when sent with `SendKeyed` (stdin `"uuid"`); a mid-turn send is a `queued_command` attachment, keyed by its `source_uuid` |
+| Interrupt marker, "No response requested.", API-error line, task notification | — | the line's own uuid, `Notice` set |
+| Peer message (`inbound`) | unkeyed | unkeyed: no capture shows the replayed line's uuid equal to the stored one |
+
+Thinking stays out of transcript rows; its live events are keyed. An
+interrupted message has no `message_stop`, and its partial text is
+stored as streamed, cut wherever the abort landed.
+
+**Settle hints** (`StartOptions.SettleHints` only): an `EventSettle` after
+each main-agent `message_stop` (a message's JSONL lines are written
+together ~30 ms after it), after each tool result (~100 ms), and just
+before each turn end.
+
+**`TranscriptSince`** keeps the file's identity, the byte offset past the
+last whole line, and the reader's state (seen uuids, per-message block
+counts, peer de-dupe) in its cursor, so chained reads key every row as a
+full `Transcript` does. A half-written last line waits for the next read;
+a compaction boundary waits for its summary line. A file that shrank or
+was replaced (different inode) is `ErrCursorStale`.
+
+**Interrupts**: claude closes an interrupted turn with an `is_error`
+`error_during_execution` result that has no text. The adapter still emits
+the empty `EventError` it always has before the `Interrupted` turn end, so
+consumers are unchanged; the stable_keys probe tolerates an error after the
+interrupt it asked for.
+
 ## Testing without claude installed
 
 `fakeclaude_test.go` re-execs the test binary as a scripted stream-json
@@ -432,3 +471,9 @@ MADS_CLAUDE_SMOKE=1 go test ./providers/claudecode -run Smoke
 ```
 
 It skips cleanly if `claude` isn't on `PATH`.
+
+`TestRealClaudeStableKeysSmoke` (same switch, `-run StableKeysSmoke`) runs
+the conformance stable_keys probe on haiku: a plain reply, text / Bash `ls`
+/ text, and a count to 300 interrupted mid-text, comparing every item's
+key and text live against the session's JSONL. Its scratch project dir is
+removed afterwards.

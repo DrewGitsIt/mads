@@ -2,12 +2,14 @@
   {
     "role": "user",
     "text": "add a login endpoint",
-    "timestamp": "2026-07-11T21:59:23Z"
+    "timestamp": "2026-07-11T21:59:23Z",
+    "key": "user:a1"
   },
   {
     "role": "agent",
     "text": "I'll add the endpoint now.",
-    "timestamp": "2026-07-11T21:59:24Z"
+    "timestamp": "2026-07-11T21:59:24Z",
+    "key": "msg_01:1"
   },
   {
     "role": "tool",
@@ -29,7 +31,8 @@
         }
       ]
     },
-    "timestamp": "2026-07-11T21:59:25Z"
+    "timestamp": "2026-07-11T21:59:25Z",
+    "key": "toolu_01"
   },
   {
     "role": "tool_result",
@@ -38,12 +41,14 @@
       "id": "toolu_01",
       "name": ""
     },
-    "timestamp": "2026-07-11T21:59:26Z"
+    "timestamp": "2026-07-11T21:59:26Z",
+    "key": "toolu_01"
   },
   {
     "role": "user",
     "text": "looks good, run the tests",
-    "timestamp": "2026-07-11T21:59:30Z"
+    "timestamp": "2026-07-11T21:59:30Z",
+    "key": "user:a5"
   },
   {
     "role": "tool",
@@ -56,11 +61,13 @@
       "kind": "execute",
       "title": "go test ./..."
     },
-    "timestamp": "2026-07-11T21:59:31Z"
+    "timestamp": "2026-07-11T21:59:31Z",
+    "key": "toolu_02"
   },
   {
     "role": "agent",
     "text": "Tests pass.",
-    "timestamp": "2026-07-11T21:59:40Z"
+    "timestamp": "2026-07-11T21:59:40Z",
+    "key": "a9"
   }
 ]

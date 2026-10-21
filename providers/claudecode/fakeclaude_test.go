@@ -330,23 +330,6 @@ func fcAssistantText(id, text string) map[string]any {
 	}
 }
 
-// fcEmitText mirrors claude --include-partial-messages on the interactive
-// transport: a token-level stream_event delta (what the live UI renders) then
-// the whole-message assistant line (what the transcript keeps). The one-shot
-// fake path stays whole-block only, matching its non-partial invocation.
-func fcEmitText(id, text string) {
-	fcEmit(map[string]any{
-		"type":       "stream_event",
-		"session_id": id,
-		"event": map[string]any{
-			"type":  "content_block_delta",
-			"index": 0,
-			"delta": map[string]any{"type": "text_delta", "text": text},
-		},
-	})
-	fcEmit(fcAssistantText(id, text))
-}
-
 // fcLine is a stdin line as the fake reads it: the adapter's own wireLine
 // (which models the OUTPUT stream) plus the two control_request fields that
 // only ever appear on input, so the fake can answer a request by id.
@@ -488,7 +471,9 @@ func fcEmitListModels(requestID string) {
 
 // fcStream mimics the persistent stream-json session: init line, then one
 // turn per user message, closed by a result line. A control_request
-// interrupt lands mid-"slow"-turn.
+// interrupt lands mid-"slow"-turn. Its stdout and JSONL take the shapes
+// claude 2.1.285 writes (fcConv), ids included, so the adapter's keys are
+// exercised exactly as on the real binary.
 func fcStream(a fcArgs) {
 	dir := os.Getenv("MADS_FAKE_CLAUDE_DIR")
 	id := fcSessionID(a)
@@ -498,6 +483,7 @@ func fcStream(a fcArgs) {
 		transcript = filepath.Join(dir, "proj", id+".jsonl")
 		history = fcLoadHistory(filepath.Join(dir, "proj", a.resume+".jsonl"))
 	}
+	f := &fcConv{id: id, transcript: transcript}
 
 	fcEmit(map[string]any{
 		"type": "system", "subtype": "init", "session_id": id, "model": "fake-sonnet",
@@ -517,13 +503,12 @@ func fcStream(a fcArgs) {
 		}
 	}()
 
-	result := func(text string, interrupted bool) {
+	result := func(text string) {
 		fcEmit(map[string]any{
 			"type": "result", "subtype": "success", "is_error": false,
 			"result": text, "session_id": id,
 			"usage": map[string]any{"input_tokens": 7, "output_tokens": len(text)/4 + 1},
 		})
-		_ = interrupted // claude reports interrupted turns as plain results too
 	}
 
 	// dynamic mirrors claude's mcp_set_servers-managed server set.
@@ -564,13 +549,12 @@ func fcStream(a fcArgs) {
 		}
 		history = append(history, prompt)
 		fcForkSeed(dir, a)
-		fcAppendTranscript(transcript, "user", prompt, "")
+		f.user(prompt, l.UUID)
 
 		if prompt == "fork-echo" {
 			reply := fcForkEcho(a)
-			fcEmitText(id, reply)
-			fcAppendTranscript(transcript, "assistant", reply, "")
-			result(reply, false)
+			f.say(reply)
+			result(reply)
 			continue
 		}
 		if prompt == "mcp-echo" {
@@ -579,35 +563,32 @@ func fcStream(a fcArgs) {
 				raw, _ := json.Marshal(dynamic)
 				reply += " dynamic=" + string(raw)
 			}
-			fcEmitText(id, reply)
-			fcAppendTranscript(transcript, "assistant", reply, "")
-			result(reply, false)
+			f.say(reply)
+			result(reply)
 			continue
 		}
 		if prompt == "permission-echo" {
 			reply := fcPermissionEcho(a)
-			fcEmitText(id, reply)
-			fcAppendTranscript(transcript, "assistant", reply, "")
-			result(reply, false)
+			f.say(reply)
+			result(reply)
 			continue
 		}
 		if prompt == "ask" || prompt == "ask-subagent" || prompt == "ask-cancel" {
 			reply := fcAskTool(id, a, prompt, lines)
-			fcEmitText(id, reply)
-			result(reply, false)
+			f.say(reply)
+			result(reply)
 			continue
 		}
 		if prompt == "control-bogus" {
 			reply := fcControlBogus(lines)
-			fcEmitText(id, reply)
-			result(reply, false)
+			f.say(reply)
+			result(reply)
 			continue
 		}
 		if prompt == "settings-echo" {
 			reply := fcSettingsEcho(a)
-			fcEmitText(id, reply)
-			fcAppendTranscript(transcript, "assistant", reply, "")
-			result(reply, false)
+			f.say(reply)
+			result(reply)
 			continue
 		}
 		// The 2026-09-30 wire shape: the user's turn ends normally, then a
@@ -618,13 +599,11 @@ func fcStream(a fcArgs) {
 		// only end that turn will ever get.
 		if prompt == "unprompted" {
 			reply := "ok"
-			fcEmitText(id, reply)
-			fcAppendTranscript(transcript, "assistant", reply, "")
-			result(reply, false)
+			f.say(reply)
+			result(reply)
 
 			late := "the background task finished"
-			fcEmitText(id, late)
-			fcAppendTranscript(transcript, "assistant", late, "")
+			f.say(late)
 			fcEmit(map[string]any{
 				"type": "result", "subtype": "success", "is_error": false,
 				"result": late, "session_id": id,
@@ -634,18 +613,16 @@ func fcStream(a fcArgs) {
 			continue
 		}
 		if prompt == "slow" {
-			interrupted := false
-			for i := 0; i < 400 && !interrupted; i++ {
-				fcEmitText(id, fmt.Sprintf("tick %d ", i))
-				select {
-				case l, ok := <-lines:
-					if ok && l.Type == "control_request" {
-						interrupted = true
-					}
-				case <-time.After(5 * time.Millisecond):
-				}
-			}
-			result("", interrupted)
+			f.slow(lines)
+			continue
+		}
+		// The stable_keys probe's text, tool, text turn: two API messages
+		// with a Bash call and its result between them.
+		if prompt == "tool-text" {
+			f.message(fcText("Looking at the directory."), fcToolUse(f.next("toolu_fc"), "Bash", map[string]any{"command": "ls"}))
+			f.toolResult("a.txt\nb.txt")
+			f.say("Two files.")
+			result("Two files.")
 			continue
 		}
 		if prompt == "attempt-write" || prompt == "attempt-command" {
@@ -655,9 +632,8 @@ func fcStream(a fcArgs) {
 			}
 			if fcToolDenied(name, a.disallowedTools) {
 				reply := fmt.Sprintf("cannot use %s: disallowed by --disallowedTools", name)
-				fcEmitText(id, reply)
-				fcAppendTranscript(transcript, "assistant", reply, "")
-				result(reply, false)
+				f.say(reply)
+				result(reply)
 				continue
 			}
 			fcEmit(map[string]any{
@@ -670,9 +646,8 @@ func fcStream(a fcArgs) {
 				},
 			})
 			reply := "used " + name
-			fcEmitText(id, reply)
-			fcAppendTranscript(transcript, "assistant", reply, "")
-			result(reply, false)
+			f.say(reply)
+			result(reply)
 			continue
 		}
 		if strings.HasPrefix(prompt, "edit ") {
@@ -691,13 +666,263 @@ func fcStream(a fcArgs) {
 		}
 		reply, crash := fcReply(prompt, history[:len(history)-1])
 		if crash {
-			fcEmitText(id, "uh o") // dies mid-turn, no result line
+			f.start()
+			f.textDeltas(1, "uh o") // dies mid-turn: no message_stop, no result line
 			os.Exit(1)
 		}
-		fcEmitText(id, reply)
-		fcAppendTranscript(transcript, "assistant", reply, "")
-		result(reply, false)
+		f.say(reply)
+		result(reply)
 	}
+}
+
+// fcConv writes one stream-json conversation the way claude 2.1.285 does
+// (the 2026-10-20 survey captures): each API message opens with a
+// message_start carrying its msg_ id; each content block streams between
+// content_block_start and content_block_stop under its index, with the
+// whole-block "assistant" line (its own uuid, the message's id) just
+// before the stop; the message closes with message_delta and
+// message_stop, and only then are its JSONL lines written, one block per
+// line, the same uuids. Every message opens with a signature-only thinking
+// block, as haiku's do by default. User lines keep the stdin "uuid" when
+// one was sent.
+type fcConv struct {
+	id, transcript string
+	seq            int
+	msgID          string
+	pending        []map[string]any // the open message's JSONL lines
+	written        []map[string]any // every line stored so far
+}
+
+// next is a fresh id with the given prefix.
+func (f *fcConv) next(prefix string) string {
+	f.seq++
+	return fmt.Sprintf("%s_%d_%d", prefix, os.Getpid(), f.seq)
+}
+
+func (f *fcConv) uuid() string {
+	f.seq++
+	return fmt.Sprintf("00000000-0000-4000-8000-%06d%06d", os.Getpid()%1000000, f.seq)
+}
+
+// fcBlock is one content block of an assistant message.
+type fcBlock map[string]any
+
+func fcText(text string) fcBlock { return fcBlock{"type": "text", "text": text} }
+
+func fcToolUse(id, name string, input map[string]any) fcBlock {
+	return fcBlock{"type": "tool_use", "id": id, "name": name, "input": input}
+}
+
+func (f *fcConv) stream(event map[string]any) {
+	fcEmit(map[string]any{"type": "stream_event", "session_id": f.id, "parent_tool_use_id": nil, "event": event})
+}
+
+// user records a user message (JSONL, then the --replay-user-messages
+// echo), under uuid when the stdin line carried one.
+func (f *fcConv) user(text, uuid string) {
+	if uuid == "" {
+		uuid = f.uuid()
+	}
+	line := map[string]any{
+		"type": "user", "uuid": uuid,
+		"message": map[string]any{"role": "user", "content": []map[string]any{{"type": "text", "text": text}}},
+	}
+	f.store(line)
+	echo := map[string]any{"session_id": f.id, "parent_tool_use_id": nil, "isReplay": true}
+	for k, v := range line {
+		echo[k] = v
+	}
+	fcEmit(echo)
+}
+
+// start opens a message with its thinking block.
+func (f *fcConv) start() {
+	f.msgID = f.next("msg_fc")
+	f.stream(map[string]any{"type": "message_start", "message": map[string]any{
+		"id": f.msgID, "type": "message", "role": "assistant", "model": "fake-sonnet", "content": []any{},
+	}})
+	f.stream(map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "thinking", "thinking": "", "signature": ""}})
+	f.stream(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "thinking_delta", "thinking": ""}})
+	f.stream(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "signature_delta", "signature": "c2ln"}})
+	f.block(fcBlock{"type": "thinking", "thinking": "", "signature": "c2ln"})
+	f.stream(map[string]any{"type": "content_block_stop", "index": 0})
+}
+
+// block writes one finished block's assistant line and queues its JSONL
+// line.
+func (f *fcConv) block(b fcBlock) {
+	line := map[string]any{
+		"type": "assistant", "uuid": f.uuid(),
+		"message": map[string]any{
+			"id": f.msgID, "type": "message", "role": "assistant", "model": "fake-sonnet",
+			"content": []fcBlock{b},
+		},
+	}
+	f.pending = append(f.pending, line)
+	out := map[string]any{"session_id": f.id, "parent_tool_use_id": nil}
+	for k, v := range line {
+		out[k] = v
+	}
+	fcEmit(out)
+}
+
+// textDeltas streams text at index word by word.
+func (f *fcConv) textDeltas(index int, text string) {
+	f.stream(map[string]any{"type": "content_block_start", "index": index, "content_block": map[string]any{"type": "text", "text": ""}})
+	for _, chunk := range fcChunks(text) {
+		f.stream(map[string]any{"type": "content_block_delta", "index": index, "delta": map[string]any{"type": "text_delta", "text": chunk}})
+	}
+}
+
+// fcChunks splits text into word-sized deltas that join back exactly.
+func fcChunks(text string) []string {
+	var out []string
+	for text != "" {
+		i := strings.IndexByte(text[1:], ' ')
+		if i < 0 {
+			return append(out, text)
+		}
+		out = append(out, text[:i+1])
+		text = text[i+1:]
+	}
+	return out
+}
+
+// message streams one whole API message: thinking, then blocks.
+func (f *fcConv) message(blocks ...fcBlock) {
+	f.start()
+	for i, b := range blocks {
+		index := i + 1
+		if b["type"] == "text" {
+			f.textDeltas(index, b["text"].(string))
+		} else {
+			f.stream(map[string]any{"type": "content_block_start", "index": index, "content_block": b})
+		}
+		f.block(b)
+		f.stream(map[string]any{"type": "content_block_stop", "index": index})
+	}
+	f.stop()
+}
+
+// stop closes the open message and writes its JSONL lines.
+func (f *fcConv) stop() {
+	f.stream(map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn"}})
+	f.stream(map[string]any{"type": "message_stop"})
+	f.flush()
+}
+
+func (f *fcConv) flush() {
+	for _, line := range f.pending {
+		f.store(line)
+	}
+	f.pending = nil
+}
+
+// say is a one-text-block reply.
+func (f *fcConv) say(text string) { f.message(fcText(text)) }
+
+// toolResult answers the last message's tool call, live and stored.
+func (f *fcConv) toolResult(text string) {
+	var toolID string
+	for _, l := range f.lastStored(1) {
+		for _, b := range l["message"].(map[string]any)["content"].([]fcBlock) {
+			if id, ok := b["id"].(string); ok {
+				toolID = id
+			}
+		}
+	}
+	line := map[string]any{
+		"type": "user", "uuid": f.uuid(),
+		"message": map[string]any{"role": "user", "content": []map[string]any{{
+			"type": "tool_result", "tool_use_id": toolID, "content": text, "is_error": false,
+		}}},
+	}
+	out := map[string]any{"session_id": f.id, "parent_tool_use_id": nil}
+	for k, v := range line {
+		out[k] = v
+	}
+	fcEmit(out)
+	f.store(line)
+}
+
+// lastStored is the last n assistant lines written, newest last.
+func (f *fcConv) lastStored(n int) []map[string]any {
+	var out []map[string]any
+	for _, l := range f.written {
+		if l["type"] == "assistant" {
+			out = append(out, l)
+		}
+	}
+	if len(out) > n {
+		out = out[len(out)-n:]
+	}
+	return out
+}
+
+// slow streams "tick N " deltas until an interrupt arrives, then closes
+// the way claude does: the partial block's assistant line, no
+// message_stop, the interrupt marker, and an error_during_execution result
+// with no text.
+func (f *fcConv) slow(lines <-chan fcLine) {
+	f.start()
+	f.stream(map[string]any{"type": "content_block_start", "index": 1, "content_block": map[string]any{"type": "text", "text": ""}})
+	var text strings.Builder
+	interrupted := false
+	for i := 0; i < 400 && !interrupted; i++ {
+		chunk := fmt.Sprintf("tick %d ", i)
+		f.stream(map[string]any{"type": "content_block_delta", "index": 1, "delta": map[string]any{"type": "text_delta", "text": chunk}})
+		text.WriteString(chunk)
+		select {
+		case l, ok := <-lines:
+			if ok && l.Type == "control_request" {
+				interrupted = true
+			}
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	f.block(fcText(text.String()))
+	if !interrupted {
+		f.stream(map[string]any{"type": "content_block_stop", "index": 1})
+		f.stop()
+		fcEmit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": text.String(), "session_id": f.id})
+		return
+	}
+	f.flush()
+	marker := map[string]any{
+		"type": "user", "uuid": f.uuid(),
+		"message": map[string]any{"role": "user", "content": []map[string]any{{"type": "text", "text": "[Request interrupted by user]"}}},
+	}
+	out := map[string]any{"session_id": f.id, "parent_tool_use_id": nil}
+	for k, v := range marker {
+		out[k] = v
+	}
+	fcEmit(out)
+	f.store(marker)
+	fcEmit(map[string]any{
+		"type": "result", "subtype": "error_during_execution", "is_error": true, "session_id": f.id,
+		"terminal_reason": "aborted_streaming", "usage": map[string]any{"input_tokens": 0, "output_tokens": 0},
+	})
+}
+
+// store appends line to the session's JSONL (stamped with cwd, as
+// discoverRef's candidate filter reads it back) and remembers it.
+func (f *fcConv) store(line map[string]any) {
+	f.written = append(f.written, line)
+	if f.transcript == "" {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(f.transcript), 0o755)
+	fh, err := os.OpenFile(f.transcript, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	defer func() { _ = fh.Close() }()
+	cwd, _ := os.Getwd()
+	stored := map[string]any{"cwd": cwd, "sessionId": f.id, "isSidechain": false}
+	for k, v := range line {
+		stored[k] = v
+	}
+	_ = json.NewEncoder(fh).Encode(stored)
 }
 
 // fcTerminal mimics the interactive UI for PTY probes: prompt, echo, prompt.
