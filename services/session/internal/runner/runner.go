@@ -1113,7 +1113,13 @@ func (r *Runner) recordInjectionAudit(ctx context.Context, attribution contracts
 // (docs/LINKED-SESSIONS-DESIGN.md decision 4) before clearing busy, so a
 // concurrent Send/Inject for the next turn can never record into this
 // turn's buffer.
-func (r *Runner) onTurnEnd() {
+func (r *Runner) onTurnEnd() { r.endTurn(nil) }
+
+// endTurn is onTurnEnd for the provider's turn-end event ev (nil when there
+// is none to show): the v2 turn_end goes out once the turn is over — busy
+// cleared, so a viewer that sends on it isn't refused — and before a queued
+// next turn's user_message.
+func (r *Runner) endTurn(ev *provider.Event) {
 	r.pushTurnEnded()
 	// Ahead of the lock, so this lands before the queued-injection drain
 	// below reports the NEXT turn working: appended the other way round, a
@@ -1123,6 +1129,10 @@ func (r *Runner) onTurnEnd() {
 	r.mu.Lock()
 	r.busy = false
 	r.turnStartedAt, r.interrupted = time.Time{}, false
+	if ev != nil {
+		turn := r.chat.turnEnd(*ev)
+		defer r.afterTurnEnd(turn) // outside r.mu: it reads the runner's state
+	}
 	if len(r.pending) > 0 && !r.landing {
 		r.deliverNextLocked()
 		return
@@ -1901,10 +1911,7 @@ func (r *Runner) pump(sess provider.Session) {
 			// tools must not blur which turn deleted a touched file.
 			r.sweepDeletedFiles()
 			r.shadowStore.CommitTurnAsync()
-			// The v2 turn_end goes out before onTurnEnd can start a queued
-			// turn, whose user_message must follow it.
-			r.chatTurnEnd(ev)
-			r.onTurnEnd()
+			r.endTurn(&ev)
 			r.syncProviderRef(context.Background(), sess)
 			r.persistTurnEnd(context.Background(), ev.Usage)
 			r.refreshCountsAsync()
@@ -2012,8 +2019,7 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 				if ev.Kind == provider.EventTurnEnd {
 					r.sweepDeletedFiles()
 					r.shadowStore.CommitTurnAsync()
-					r.chatTurnEnd(ev)
-					r.onTurnEnd()
+					r.endTurn(&ev)
 					r.syncProviderRef(context.Background(), sess)
 					r.persistTurnEnd(context.Background(), ev.Usage)
 					r.refreshCountsAsync()

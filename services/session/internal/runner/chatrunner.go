@@ -81,13 +81,6 @@ func (r *Runner) startLabelling(ctx context.Context, p provider.Provider, sess p
 	r.labeler.activate(existing)
 }
 
-// chatTurnEnd ends the v2 turn: open items stop, turn_end goes out, and
-// settling takes the turn from there.
-func (r *Runner) chatTurnEnd(ev provider.Event) {
-	turn := r.chat.turnEnd(ev)
-	r.afterTurnEnd(turn)
-}
-
 // chatProcessExit: the provider process ended mid-turn (a crash, or
 // Shutdown). One last look at the store, then every item still unsettled
 // is declared unsaved — the agent will never store what it hadn't.
