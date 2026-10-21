@@ -102,6 +102,7 @@ func (p *Provider) TranscriptSince(_ context.Context, ref string, cursor provide
 	}
 	var offset int64
 	st := newTranscriptState(false)
+	st.thinking = true // the keyed form (provider.KeyedTranscriptReader)
 	if c != nil {
 		if !os.SameFile(c.file, info) || info.Size() < c.offset {
 			return nil, cursor, provider.ErrCursorStale
@@ -456,12 +457,41 @@ func normalizeTranscript(r io.Reader) ([]provider.Message, error) {
 	return normalizeLines(r, false)
 }
 
+// KeyedTranscript implements provider.KeyedTranscriptReader: Transcript's
+// rows plus a Role "thinking" row for every thinking block claude stored
+// with text (showThinkingSummaries on), keyed "<message.id>:<index>" like
+// the live EventThinking. Signature-only blocks (the default, no
+// summaries) make no row, as they make no live item.
+func (p *Provider) KeyedTranscript(_ context.Context, ref string) ([]provider.Message, error) {
+	path, err := p.transcriptPath(ref)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return normalizeKeyed(f)
+}
+
+// normalizeKeyed is normalizeTranscript with the thinking rows.
+func normalizeKeyed(r io.Reader) ([]provider.Message, error) {
+	st := newTranscriptState(false)
+	st.thinking = true
+	return st.readAll(r)
+}
+
 // normalizeLines is normalizeTranscript with the choice of chain: the main
 // conversation's lines, or (sidechain) a subagent's own file's, which are all
 // sidechain lines (DelegateTranscript).
 func normalizeLines(r io.Reader, sidechain bool) ([]provider.Message, error) {
+	return newTranscriptState(sidechain).readAll(r)
+}
+
+// readAll normalizes every line of r.
+func (st *transcriptState) readAll(r io.Reader) ([]provider.Message, error) {
 	var msgs []provider.Message
-	st := newTranscriptState(sidechain)
 	sc := newLineReader(r)
 	for sc.Scan() {
 		msgs = st.add(sc.line, msgs)
@@ -480,9 +510,12 @@ func normalizeLines(r io.Reader, sidechain bool) ([]provider.Message, error) {
 // read keys and filters exactly as a full one.
 type transcriptState struct {
 	sidechain bool
-	seen      map[string]struct{}
-	peers     peerSeen
-	blocks    map[string]int
+	// thinking: emit Role "thinking" rows (the keyed form only; plain
+	// Transcript never carries thinking).
+	thinking bool
+	seen     map[string]struct{}
+	peers    peerSeen
+	blocks   map[string]int
 }
 
 func newTranscriptState(sidechain bool) *transcriptState {
@@ -491,7 +524,7 @@ func newTranscriptState(sidechain bool) *transcriptState {
 
 // clone is a deep copy, so a cursor stays valid after a read from it.
 func (st *transcriptState) clone() *transcriptState {
-	c := &transcriptState{sidechain: st.sidechain, seen: maps.Clone(st.seen), blocks: maps.Clone(st.blocks)}
+	c := &transcriptState{sidechain: st.sidechain, thinking: st.thinking, seen: maps.Clone(st.seen), blocks: maps.Clone(st.blocks)}
 	if st.peers.ids != nil {
 		c.peers = peerSeen{ids: maps.Clone(st.peers.ids), bodies: maps.Clone(st.peers.bodies)}
 	}
@@ -641,6 +674,10 @@ func (st *transcriptState) add(line []byte, msgs []provider.Message) []provider.
 			case "text":
 				if b.Text != "" {
 					msgs = append(msgs, provider.Message{Role: "agent", Text: b.Text, Timestamp: ts, IsError: l.IsAPIErrorMessage, Key: key(i), Notice: synthetic})
+				}
+			case "thinking":
+				if st.thinking && b.Thinking != "" {
+					msgs = append(msgs, provider.Message{Role: "thinking", Text: b.Thinking, Timestamp: ts, Key: key(i)})
 				}
 			case "tool_use":
 				msgs = append(msgs, provider.Message{Role: "tool", Tool: newToolUse(b.ID, b.Name, b.Input), Timestamp: ts, Key: b.ID})

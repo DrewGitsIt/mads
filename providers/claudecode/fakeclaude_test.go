@@ -619,6 +619,7 @@ func fcStream(a fcArgs) {
 		// The stable_keys probe's text, tool, text turn: two API messages
 		// with a Bash call and its result between them.
 		if prompt == "tool-text" {
+			f.think = "The user wants a listing, so run ls first."
 			f.message(fcText("Looking at the directory."), fcToolUse(f.next("toolu_fc"), "Bash", map[string]any{"command": "ls"}))
 			f.toolResult("a.txt\nb.txt")
 			f.say("Two files.")
@@ -683,12 +684,14 @@ func fcStream(a fcArgs) {
 // before the stop; the message closes with message_delta and
 // message_stop, and only then are its JSONL lines written, one block per
 // line, the same uuids. Every message opens with a signature-only thinking
-// block, as haiku's do by default. User lines keep the stdin "uuid" when
+// block, as haiku's do by default, or (think set) one with text, as with
+// showThinkingSummaries on: thinking deltas, then the whole block. User lines keep the stdin "uuid" when
 // one was sent.
 type fcConv struct {
 	id, transcript string
 	seq            int
 	msgID          string
+	think          string           // the next message's thinking text, once
 	pending        []map[string]any // the open message's JSONL lines
 	written        []map[string]any // every line stored so far
 }
@@ -742,9 +745,16 @@ func (f *fcConv) start() {
 		"id": f.msgID, "type": "message", "role": "assistant", "model": "fake-sonnet", "content": []any{},
 	}})
 	f.stream(map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "thinking", "thinking": "", "signature": ""}})
-	f.stream(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "thinking_delta", "thinking": ""}})
+	think := f.think
+	f.think = ""
+	if think == "" {
+		f.stream(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "thinking_delta", "thinking": ""}})
+	}
+	for _, chunk := range fcChunks(think) {
+		f.stream(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "thinking_delta", "thinking": chunk}})
+	}
 	f.stream(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "signature_delta", "signature": "c2ln"}})
-	f.block(fcBlock{"type": "thinking", "thinking": "", "signature": "c2ln"})
+	f.block(fcBlock{"type": "thinking", "thinking": think, "signature": "c2ln"})
 	f.stream(map[string]any{"type": "content_block_stop", "index": 0})
 }
 
