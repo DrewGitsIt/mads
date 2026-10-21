@@ -151,6 +151,8 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorDelegateTranscript: provider.Unsupported,
 		provider.BehaviorDelegateSteer:      provider.Unsupported,
 		provider.BehaviorDelegateStop:       provider.Unsupported,
+		// C1 in progress: each adapter declares its real stance with its keys.
+		provider.BehaviorStableKeys: provider.Unsupported,
 	}
 }
 

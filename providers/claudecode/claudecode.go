@@ -163,6 +163,8 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorDelegateTranscript: provider.Native,
 		provider.BehaviorDelegateSteer:      provider.Emulated,
 		provider.BehaviorDelegateStop:       provider.Unsupported,
+		// C1 in progress: each adapter declares its real stance with its keys.
+		provider.BehaviorStableKeys: provider.Unsupported,
 	}
 }
 

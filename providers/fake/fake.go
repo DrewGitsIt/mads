@@ -240,6 +240,9 @@ func (f *Fake) Matrix() provider.Matrix {
 		provider.BehaviorDelegateTranscript: provider.Unsupported,
 		provider.BehaviorDelegateSteer:      provider.Unsupported,
 		provider.BehaviorDelegateStop:       provider.Unsupported,
+		// Every item is keyed live and in the in-memory store, and
+		// TranscriptSince reads the store by row index.
+		provider.BehaviorStableKeys: provider.Native,
 	}
 }
 
@@ -307,7 +310,7 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 	}
 	s := &fakeSession{
 		f: f, ref: ref, mode: opts.Mode, cwd: opts.Cwd, trust: trust,
-		announced: announced, refAnnounce: timing, refCh: refCh,
+		announced: announced, refAnnounce: timing, refCh: refCh, settle: opts.SettleHints,
 		events:    make(chan provider.Event, 256),
 		interrupt: make(chan struct{}, 1),
 	}
@@ -532,6 +535,20 @@ func (f *Fake) Transcript(_ context.Context, ref string) ([]provider.Message, er
 	return readTranscriptFile(dir, ref)
 }
 
+// TranscriptSince implements provider.IncrementalTranscriptReader over the
+// in-memory store: the cursor is a row index.
+func (f *Fake) TranscriptSince(ctx context.Context, ref string, cursor provider.TranscriptCursor) ([]provider.Message, provider.TranscriptCursor, error) {
+	all, err := f.Transcript(ctx, ref)
+	if err != nil {
+		return nil, cursor, err
+	}
+	from, _ := cursor.(int)
+	if from > len(all) {
+		return nil, cursor, provider.ErrCursorStale
+	}
+	return all[from:], len(all), nil
+}
+
 // unwrap is prompt with any MADS wrappers taken off: the block bodies,
 // joined as the runner joins a coalesced run.
 func unwrap(prompt string) string {
@@ -559,6 +576,11 @@ type turnPlan struct {
 	usage     *UsageOverride
 	// announceRef: the rule's AnnounceRef (one-shots only).
 	announceRef bool
+	// blocks, userLag, hold: the rule's Blocks, UserLagMs and
+	// HoldUntilToolDone.
+	blocks  [][]string
+	userLag time.Duration
+	hold    bool
 }
 
 func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) turnPlan {
@@ -580,6 +602,8 @@ func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) tur
 		if len(p.chunks) == 0 && r.Reply != "" {
 			p.chunks = []string{r.Reply}
 		}
+		p.blocks, p.hold = r.Blocks, r.HoldUntilToolDone
+		p.userLag = time.Duration(r.UserLagMs) * time.Millisecond
 		return p
 	}
 	switch {
@@ -635,6 +659,12 @@ func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) tur
 		return turnPlan{
 			tools:  []ToolStep{{Name: "write_file", Path: path, Content: content + "\n"}},
 			chunks: []string{"wrote " + path},
+		}
+	case prompt == "tool-text":
+		// The stable_keys probe's text, tool, text turn.
+		return turnPlan{
+			blocks: [][]string{{"Looking. "}, {"One file."}},
+			tools:  []ToolStep{{Name: "ls", Result: "a.txt"}},
 		}
 	case prompt == "attempt-command":
 		return turnPlan{
@@ -771,9 +801,33 @@ type fakeSession struct {
 	// refAnnounce is RefAnnounceNever — see RefAnnounced.
 	refCh chan string
 
+	// settle: the session asked for EventSettle (StartOptions.SettleHints).
+	settle bool
+
 	mu        sync.Mutex
 	closed    bool
 	announced bool // see Start's construction comment
+}
+
+// itemKey is the fake's native id for one item of a turn: unique within
+// the session (turn numbers keep counting across a resume), and the same
+// on the live event and the stored row.
+func (s *fakeSession) itemKey(turn int, item string) string {
+	return fmt.Sprintf("%s:t%d:%s", s.ref, turn, item)
+}
+
+// store records msg and, for a session that asked, says the store caught up.
+func (s *fakeSession) store(msg provider.Message) {
+	s.f.record(s.ref, msg)
+	if s.settle {
+		s.emit(provider.Event{Kind: provider.EventSettle, Key: msg.Key})
+	}
+}
+
+// SendKeyed implements provider.KeyedSender: the user row is stored under
+// "user:"+id.
+func (s *fakeSession) SendKeyed(ctx context.Context, text, id string) error {
+	return s.send(ctx, text, id)
 }
 
 // toolAllowed reports whether ts is permitted at the session's trust level,
@@ -892,7 +946,11 @@ func (s *fakeSession) die() {
 	}
 }
 
-func (s *fakeSession) Send(_ context.Context, text string) error {
+func (s *fakeSession) Send(ctx context.Context, text string) error {
+	return s.send(ctx, text, "")
+}
+
+func (s *fakeSession) send(_ context.Context, text, id string) error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -915,22 +973,43 @@ func (s *fakeSession) Send(_ context.Context, text string) error {
 	}
 
 	history := s.f.history(s.ref)
-	s.f.record(s.ref, provider.Message{Role: "user", Text: text})
-	go s.respond(text, s.f.plan(text, history, false))
+	turn := 1
+	for _, m := range history {
+		if m.Role == "user" {
+			turn++
+		}
+	}
+	if id == "" {
+		id = s.itemKey(turn, "user")
+	}
+	user := provider.Message{Role: "user", Text: text, Key: "user:" + id}
+	plan := s.f.plan(text, history, false)
+	if plan.userLag == 0 {
+		s.f.record(s.ref, user)
+	}
+	go s.respond(text, plan, turn, user)
 	return nil
 }
 
-func (s *fakeSession) respond(prompt string, plan turnPlan) {
+func (s *fakeSession) respond(prompt string, plan turnPlan, turn int, user provider.Message) {
+	if plan.userLag > 0 {
+		time.Sleep(plan.userLag)
+		s.store(user)
+	}
 	if plan.rateLimit {
 		rle := provider.RateLimitError{RetryAfter: time.Second, Message: "scripted rate limit"}
 		// Recorded the way claude-code's transcript keeps an API error: an
 		// agent entry marked IsError, in place of a reply.
-		s.f.record(s.ref, provider.Message{Role: "agent", Text: rle.Error(), IsError: true})
+		s.f.record(s.ref, provider.Message{Role: "agent", Text: rle.Error(), IsError: true, Key: s.itemKey(turn, "error")})
 		s.emit(provider.Event{Kind: provider.EventError, Text: rle.Error()})
 		s.emit(provider.Event{Kind: provider.EventTurnEnd})
 		return
 	}
-	for _, ts := range plan.tools {
+	if plan.blocks != nil {
+		s.respondBlocks(prompt, plan, turn)
+		return
+	}
+	for i, ts := range plan.tools {
 		if allowed, reason := s.toolAllowed(ts); !allowed {
 			s.emit(provider.Event{Kind: provider.EventError, Text: reason})
 			s.emit(provider.Event{Kind: provider.EventTurnEnd})
@@ -941,9 +1020,7 @@ func (s *fakeSession) respond(prompt string, plan turnPlan) {
 			s.emit(provider.Event{Kind: provider.EventTurnEnd})
 			return
 		}
-		ev := toolEvent(ts)
-		s.f.record(s.ref, provider.Message{Role: "tool", Tool: ev.Tool})
-		if !s.emit(ev) {
+		if !s.runTool(ts, s.itemKey(turn, fmt.Sprintf("tool%d", i)), nil) {
 			return
 		}
 	}
@@ -954,7 +1031,7 @@ func (s *fakeSession) respond(prompt string, plan turnPlan) {
 				s.emit(provider.Event{Kind: provider.EventTurnEnd, Interrupted: true})
 				return
 			case <-time.After(5 * time.Millisecond):
-				if !s.emit(provider.Event{Kind: provider.EventText, Text: fmt.Sprintf("tick %d ", i)}) {
+				if !s.emit(provider.Event{Kind: provider.EventText, Key: s.itemKey(turn, "slow"), Text: fmt.Sprintf("tick %d ", i)}) {
 					return
 				}
 			}
@@ -962,23 +1039,24 @@ func (s *fakeSession) respond(prompt string, plan turnPlan) {
 	}
 
 	var streamed strings.Builder
+	key := s.itemKey(turn, "reply")
 	for _, chunk := range plan.chunks {
 		if plan.delay > 0 {
 			select {
 			case <-s.interrupt:
-				s.finish(prompt, streamed.String(), true)
+				s.finish(prompt, key, streamed.String(), true)
 				return
 			case <-time.After(plan.delay):
 			}
 		} else {
 			select {
 			case <-s.interrupt:
-				s.finish(prompt, streamed.String(), true)
+				s.finish(prompt, key, streamed.String(), true)
 				return
 			default:
 			}
 		}
-		if !s.emit(provider.Event{Kind: provider.EventText, Text: chunk}) {
+		if !s.emit(provider.Event{Kind: provider.EventText, Key: key, Text: chunk}) {
 			return
 		}
 		streamed.WriteString(chunk)
@@ -992,12 +1070,107 @@ func (s *fakeSession) respond(prompt string, plan turnPlan) {
 		s.mu.Unlock()
 		return
 	}
-	s.finish(prompt, streamed.String(), false)
+	s.finish(prompt, key, streamed.String(), false)
+}
+
+// runTool emits one scripted tool call (and, when the step has a Result,
+// its result after DurationMs). held, when non-nil, collects the rows
+// instead of storing them (hold_until_tool_done) and stores them all once
+// the result is in; false means the session closed.
+func (s *fakeSession) runTool(ts ToolStep, key string, held *[]provider.Message) bool {
+	ev := toolEvent(ts)
+	ev.Key = key
+	call := provider.Message{Role: "tool", Tool: ev.Tool, Key: key}
+	if held != nil {
+		*held = append(*held, call)
+	} else {
+		s.store(call)
+	}
+	if !s.emit(ev) {
+		return false
+	}
+	if ts.Result == "" && ts.DurationMs == 0 {
+		return true
+	}
+	time.Sleep(time.Duration(ts.DurationMs) * time.Millisecond)
+	result := provider.Message{Role: "tool_result", Text: ts.Result, Tool: &provider.ToolUse{Name: ts.Name}, Key: key}
+	if !s.emit(provider.Event{Kind: provider.EventToolResult, Key: key, Text: ts.Result, Tool: result.Tool}) {
+		return false
+	}
+	if held != nil {
+		*held = append(*held, result)
+		for _, m := range *held {
+			s.store(m)
+		}
+		*held = nil
+	} else {
+		s.store(result)
+	}
+	return true
+}
+
+// respondBlocks streams a Blocks reply: one keyed item and one stored row
+// per block, any tools between the first block and the rest, and with
+// hold, the first block and the tool stored only once the tool is done.
+func (s *fakeSession) respondBlocks(prompt string, plan turnPlan, turn int) {
+	var all strings.Builder
+	var held []provider.Message
+	for bi, block := range plan.blocks {
+		key := s.itemKey(turn, fmt.Sprintf("b%d", bi))
+		var text strings.Builder
+		for _, chunk := range block {
+			select {
+			case <-s.interrupt:
+				s.finish(prompt, key, text.String(), true)
+				return
+			case <-time.After(plan.delay):
+			}
+			if !s.emit(provider.Event{Kind: provider.EventText, Key: key, Text: chunk}) {
+				return
+			}
+			text.WriteString(chunk)
+		}
+		all.WriteString(text.String())
+		row := provider.Message{Role: "agent", Text: text.String(), Key: key, Timestamp: time.Now()}
+		if bi == 0 && plan.hold && len(plan.tools) > 0 {
+			held = append(held, row)
+		} else {
+			s.store(row)
+		}
+		if bi != 0 {
+			continue
+		}
+		for i, ts := range plan.tools {
+			if allowed, reason := s.toolAllowed(ts); !allowed {
+				s.emit(provider.Event{Kind: provider.EventError, Text: reason})
+				s.emit(provider.Event{Kind: provider.EventTurnEnd})
+				return
+			}
+			if err := executeTool(ts, s.cwd); err != nil {
+				s.emit(provider.Event{Kind: provider.EventError, Text: err.Error()})
+				s.emit(provider.Event{Kind: provider.EventTurnEnd})
+				return
+			}
+			var h *[]provider.Message
+			if plan.hold {
+				h = &held
+			}
+			if !s.runTool(ts, s.itemKey(turn, fmt.Sprintf("tool%d", i)), h) {
+				return
+			}
+		}
+		for _, m := range held { // a held call that never got a result still lands
+			s.store(m)
+		}
+		held = nil
+	}
+	u := usage(prompt, all.String())
+	s.emit(provider.Event{Kind: provider.EventTurnEnd, Usage: &u})
 }
 
 // finish records the reply and closes the turn.
-func (s *fakeSession) finish(prompt, reply string, interrupted bool) {
-	s.f.record(s.ref, provider.Message{Role: "agent", Text: reply})
+func (s *fakeSession) finish(prompt, key, reply string, interrupted bool) {
+	s.store(provider.Message{Role: "agent", Text: reply, Key: key})
 	u := usage(prompt, reply)
 	s.emit(provider.Event{Kind: provider.EventTurnEnd, Usage: &u, Interrupted: interrupted})
 	if s.ptyW != nil {
@@ -1012,6 +1185,14 @@ func (s *fakeSession) emit(ev provider.Event) bool {
 	defer s.mu.Unlock()
 	if s.closed {
 		return false
+	}
+	if ev.Kind == provider.EventTurnEnd && s.settle {
+		// The turn's end is a settle point too (claude's result line, an
+		// ACP prompt response): everything the turn stored is in.
+		select {
+		case s.events <- provider.Event{Kind: provider.EventSettle}:
+		default:
+		}
 	}
 	select {
 	case s.events <- ev:

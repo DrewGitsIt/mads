@@ -121,6 +121,14 @@ const (
 	// was not given to the agent, and opens nothing. A harness with no such
 	// channel never emits it.
 	EventInbound EventKind = "inbound"
+	// EventSettle — a settle hint: the agent's own store has likely caught
+	// up through the events before it, so a reader of the store (provider.
+	// IncrementalTranscriptReader) will find what was streamed so far. Key,
+	// when set, names the item it settles. Opt-in: an adapter emits it only
+	// for a session started with StartOptions.SettleHints, so consumers that
+	// never asked never see one. Carries no conversation content; a
+	// consumer that doesn't know the kind can ignore it.
+	EventSettle EventKind = "settle"
 )
 
 // Inbound describes where an EventInbound / Role "inbound" message came
@@ -147,6 +155,21 @@ const InboundHeld = "held"
 // Event is one entry in a session's normalized stream.
 type Event struct {
 	Kind EventKind `json:"kind"`
+	// Key identifies the conversation item this event belongs to: an opaque
+	// string, unique within the session, derived by the adapter from the
+	// agent's own ids, and equal to the Key the adapter's TranscriptReader
+	// puts on the stored row for the same item (docs/CHAT-STREAM-DESIGN.md
+	// §1). Set on EventText, EventThinking, EventToolUse, EventToolResult and
+	// EventInbound by an adapter whose matrix declares BehaviorStableKeys
+	// working; empty otherwise. Above the provider layer keys are only
+	// compared for equality.
+	//
+	// Invariant: the chunks of one item are contiguous. A new key starts a
+	// new item, and a key never reappears after a different text or
+	// thinking key has started. A tool's call and its result share the
+	// tool's key (one item in two parts), so its EventToolResult may come
+	// after other events.
+	Key string `json:"key,omitempty"`
 	// Text for EventText: the chunk. For EventError: the message.
 	Text string `json:"text,omitempty"`
 	// Tool for EventToolUse.
@@ -478,6 +501,19 @@ type Message struct {
 	// the message body, never the harness's wrapper — and it is not a user
 	// turn.
 	Inbound *Inbound `json:"inbound,omitempty"`
+	// Key is the item's identity, equal to the Key on the live events for
+	// the same item (see Event.Key). A Role "tool" row and its Role
+	// "tool_result" row share the tool's key, so a key is unique per
+	// (Key, Role) within a transcript. A user row's key is "user:"+id, where
+	// id is the one a KeyedSender was given, or the agent's own id for a
+	// row mads didn't send. Empty from an adapter without BehaviorStableKeys.
+	Key string `json:"key,omitempty"`
+	// Notice marks a synthetic row the agent itself writes and shows (an
+	// interrupt marker, claude's "No response requested.", hermes's
+	// failed-turn row) rather than a message anyone sent. Role is left as
+	// the agent stored it, so consumers that don't read Notice render the
+	// row as they always have.
+	Notice bool `json:"notice,omitempty"`
 }
 
 // CompactMarker is one completed compaction pass as a transcript records

@@ -255,6 +255,8 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorDelegateTranscript: provider.Unsupported,
 		provider.BehaviorDelegateSteer:      provider.Unsupported,
 		provider.BehaviorDelegateStop:       provider.Unsupported,
+		// C1 in progress: each adapter declares its real stance with its keys.
+		provider.BehaviorStableKeys: provider.Unsupported,
 		// `goose session` under a pty (pty.go).
 		provider.BehaviorPTY: provider.Native,
 		// `session export --format json` (transcript.go) — richer than

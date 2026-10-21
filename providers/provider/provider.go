@@ -147,6 +147,10 @@ type StartOptions struct {
 	// Nil means nobody answers: an adapter must then let the harness refuse
 	// whatever would have asked, never stall on it. See PermissionAsker.
 	Permissions PermissionAsker
+	// SettleHints opts the session into EventSettle (see that kind): the
+	// adapter marks where its agent's store has likely caught up with the
+	// stream. Off by default, so no consumer that didn't ask sees the kind.
+	SettleHints bool
 	// ToolIntents is the persona-level allow/deny policy expressed as a
 	// closed-set intent vocabulary (agent-concept redesign §2). Allowed
 	// is the persona's Allowlist (empty == allow-all, the harness's
@@ -321,6 +325,34 @@ type ModelDiscoverer interface {
 // history in normalized form, by provider-native ref.
 type TranscriptReader interface {
 	Transcript(ctx context.Context, ref string) ([]Message, error)
+}
+
+// TranscriptCursor is an adapter's opaque position in its agent's store,
+// for IncrementalTranscriptReader. Nil is the start. It lives in memory
+// with whoever holds it (the session child) and is never persisted or
+// serialised, so an adapter may keep whatever state its reader needs in it.
+type TranscriptCursor any
+
+// IncrementalTranscriptReader is the optional strategy for reading a
+// session's store as it grows (docs/CHAT-STREAM-DESIGN.md §3): the rows
+// stored after cursor, in conversation order, each with the same Key a full
+// Transcript gives it, and the cursor after them. Chained calls from nil
+// add up to exactly Transcript. ErrCursorStale means the store was
+// rewritten under the cursor; the caller re-reads with Transcript.
+type IncrementalTranscriptReader interface {
+	TranscriptSince(ctx context.Context, ref string, cursor TranscriptCursor) ([]Message, TranscriptCursor, error)
+}
+
+// ErrCursorStale is IncrementalTranscriptReader's "start over" answer.
+var ErrCursorStale = errors.New("provider: transcript cursor stale")
+
+// KeyedSender is the optional strategy for a send whose user message the
+// agent stores under a caller-supplied id (claude-code's stdin uuid,
+// codex's clientUserMessageId): id is minted by mads (a UUID), and the
+// stored user row's Key is "user:"+id. A mid-turn send keeps the same id.
+// Callers without an id, or adapters without the strategy, use Send.
+type KeyedSender interface {
+	SendKeyed(ctx context.Context, text, id string) error
 }
 
 // DelegateInspector is the optional strategy for BehaviorDelegateTranscript:
