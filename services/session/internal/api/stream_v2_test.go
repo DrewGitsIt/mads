@@ -874,3 +874,116 @@ func TestDrainStreamsBeforeExit(t *testing.T) {
 	}
 	legacy.waitCount(t, "event: error\n", 1)
 }
+
+// The cap evicts other items before the head of one still streaming; when
+// only that one is left to go, its later frames replay behind a stand-in
+// item_start (no id: it isn't a journaled frame).
+func TestV2CapKeepsInProgressHead(t *testing.T) {
+	script := func(n int) []provider.Event {
+		evs := []provider.Event{{Kind: provider.EventText, Key: "k0", Text: strings.Repeat("a", 800)}}
+		for range n {
+			evs = append(evs, provider.Event{Kind: provider.EventText, Key: "k1", Text: strings.Repeat("b", 100)})
+		}
+		return evs
+	}
+	for _, tc := range []struct {
+		name   string
+		deltas int
+		forced bool
+	}{{"head kept", 8, false}, {"forced", 40, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newScriptProvider("scripted", map[string][]provider.Event{"go": script(tc.deltas)})
+			limits := fastSettle
+			limits.TailCap = 2000
+			srv, _ := startRunner(t, p, limits)
+			live := openV2(t, srv.URL, "", "")
+			postMessage(t, srv, "go")
+			live.wait(t, "every delta", func(fs []v2Frame) bool { return count(fs, "text_delta") == tc.deltas+1 })
+			c := openV2(t, srv.URL, "", "")
+			rp := c.replay(t)
+			c.close()
+			starts := slices.DeleteFunc(ofKind(rp, "item_start"), func(f v2Frame) bool { return keyOf(f) != "k1" })
+			marker := ofKind(rp, "tail_truncated")
+			if len(starts) != 1 || len(marker) != 1 || !slices.Contains(marker[0].keys(), "k0") {
+				t.Fatalf("replay:\n%s", dump(rp))
+			}
+			if got := starts[0].ID == ""; got != tc.forced {
+				t.Fatalf("k1's item_start id %q (stand-in: %v, want %v):\n%s", starts[0].ID, got, tc.forced, dump(rp))
+			}
+			if slices.Contains(marker[0].keys(), "k1") != tc.forced {
+				t.Fatalf("marker %s", marker[0].Raw)
+			}
+			if i := slices.IndexFunc(rp, func(f v2Frame) bool { return keyOf(f) == "k1" }); rp[i].Kind != "item_start" {
+				t.Fatalf("k1's first replayed frame isn't its start:\n%s", dump(rp))
+			}
+		})
+	}
+}
+
+// A subagent's items replay to a fresh viewer like the main agent's, under
+// their own keys and tagged with the spawning call, so switching back to a
+// session mid-turn keeps delegate activity.
+func TestV2SubagentFramesReplay(t *testing.T) {
+	p := newScriptProvider("scripted", map[string][]provider.Event{"go": {
+		{Kind: provider.EventToolUse, Key: "toolu_a", Tool: &provider.ToolUse{ID: "toolu_a", Name: "Agent"}},
+		{Kind: provider.EventText, Key: "sub:0", Text: "digging", ParentToolUseID: "toolu_a", SubagentType: "general-purpose", TaskDescription: "dig"},
+		{Kind: provider.EventToolUse, Key: "toolu_s", ParentToolUseID: "toolu_a", Tool: &provider.ToolUse{ID: "toolu_s", Name: "Grep"}},
+		{Kind: provider.EventText, Key: "main:0", Text: "waiting"},
+	}})
+	srv, _ := startRunner(t, p, fastSettle)
+	live := openV2(t, srv.URL, "", "")
+	postMessage(t, srv, "go")
+	live.wait(t, "the turn so far", func(fs []v2Frame) bool { return count(fs, "text_delta") == 2 })
+
+	c := openV2(t, srv.URL, "", "")
+	rp := c.replay(t)
+	parent := func(key string) string {
+		i := slices.IndexFunc(rp, func(f v2Frame) bool { return f.Kind == "item_start" && keyOf(f) == key })
+		if i < 0 {
+			t.Fatalf("no item_start for %s:\n%s", key, dump(rp))
+		}
+		return rp[i].str("parent_tool_use_id")
+	}
+	if parent("sub:0") != "toolu_a" || parent("toolu_s") != "toolu_a" || parent("main:0") != "" ||
+		!slices.ContainsFunc(rp, func(f v2Frame) bool {
+			return f.Kind == "text_delta" && keyOf(f) == "sub:0" && f.str("text") == "digging"
+		}) {
+		t.Fatalf("fresh replay mid-turn:\n%s", dump(rp))
+	}
+}
+
+// Unsaved items don't pile up: a fresh viewer gets the latest finished
+// turn's and the current turn's, not older ones — which a resume still has.
+func TestV2UnsavedPrunedAfterNextTurn(t *testing.T) {
+	turn := func(key string) []provider.Event {
+		return []provider.Event{{Kind: provider.EventThinking, Key: key, Text: "hmm " + key}, {Kind: provider.EventTurnEnd}}
+	}
+	p := newScriptProvider("scripted", map[string][]provider.Event{"one": turn("th1"), "two": turn("th2")})
+	srv, _ := startRunner(t, p, fastSettle)
+	live := openV2(t, srv.URL, "", "")
+	cursor := lastID(live.replay(t))
+	postMessage(t, srv, "one")
+	live.wait(t, "th1 unsaved", func(fs []v2Frame) bool { return count(fs, "unsaved") == 1 })
+	replayKeys := func(last string) []string {
+		c := openV2(t, srv.URL, "", last)
+		defer c.close()
+		var keys []string
+		for _, f := range c.replay(t) {
+			if f.Kind == "item_start" {
+				keys = append(keys, keyOf(f))
+			}
+		}
+		return keys
+	}
+	if got := replayKeys(""); !slices.Equal(got, []string{"th1"}) {
+		t.Fatalf("after turn one the tail starts %v, want th1", got)
+	}
+	postMessage(t, srv, "two")
+	live.wait(t, "th2 unsaved", func(fs []v2Frame) bool { return count(fs, "unsaved") == 2 })
+	if got := replayKeys(""); !slices.Equal(got, []string{"th2"}) {
+		t.Fatalf("after turn two the tail starts %v, want th2 only", got)
+	}
+	if got := replayKeys(cursor); !slices.Equal(got, []string{"th1", "th2"}) {
+		t.Fatalf("a resume from before both turns got %v", got)
+	}
+}

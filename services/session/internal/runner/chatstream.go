@@ -203,6 +203,12 @@ type chatStream struct {
 	items   map[string]*tailItem // unsettled, by frame key
 	settled map[string]bool      // keys that have left the tail for the store
 	started map[string]bool      // keys that have had their item_start
+	// startData is each tail key's item_start, for a replay to stand in
+	// for one the cap evicted (tailReplayLocked).
+	startData map[string][]byte
+	// lastEnded is the last turn that ended: unsaved items of turns
+	// before it leave the tail.
+	lastEnded int
 
 	// Derivation state: the open text/thinking item per stream (the main
 	// agent's is ""; a subagent's is its spawning call's id), tool ids'
@@ -226,14 +232,15 @@ func newChatStream() *chatStream {
 	var b [4]byte
 	_, _ = rand.Read(b[:])
 	return &chatStream{
-		epoch:    hex.EncodeToString(b[:]),
-		limits:   ChatLimits{}.withDefaults(),
-		subs:     map[chan ChatFrame]*delivery{},
-		items:    map[string]*tailItem{},
-		settled:  map[string]bool{},
-		started:  map[string]bool{},
-		open:     map[string]openItem{},
-		toolKeys: map[string]string{},
+		epoch:     hex.EncodeToString(b[:]),
+		limits:    ChatLimits{}.withDefaults(),
+		subs:      map[chan ChatFrame]*delivery{},
+		items:     map[string]*tailItem{},
+		settled:   map[string]bool{},
+		started:   map[string]bool{},
+		startData: map[string][]byte{},
+		open:      map[string]openItem{},
+		toolKeys:  map[string]string{},
 	}
 }
 
@@ -371,10 +378,12 @@ func (c *chatStream) localKeyLocked() string {
 	return "local:" + strconv.Itoa(c.localSeq)
 }
 
-// inTailLocked: frames of this key go in the tail — the main agent's
-// items, until their key has settled.
-func (c *chatStream) inTailLocked(key, parent string) bool {
-	return parent == "" && !c.settled[key]
+// inTailLocked: frames of this key go in the tail until their key has
+// settled — a subagent's items too, so a viewer switching back mid-turn
+// keeps delegate activity. The main store never holds a subagent's items:
+// they end unsaved and leave with their turn (pruneUnsavedLocked).
+func (c *chatStream) inTailLocked(key string) bool {
+	return !c.settled[key]
 }
 
 // itemLocked is key's tail item, made on first use.
@@ -389,9 +398,9 @@ func (c *chatStream) itemLocked(key, storeKey, item string) *tailItem {
 
 // contentLocked journals one content frame of key, in the tail when it
 // belongs there.
-func (c *chatStream) contentLocked(kind, key, item, parent string, live, stored []byte) *jframe {
+func (c *chatStream) contentLocked(kind, key, item string, live, stored []byte) *jframe {
 	var it *tailItem
-	if c.inTailLocked(key, parent) {
+	if c.inTailLocked(key) {
 		it = c.itemLocked(key, key, item)
 	}
 	return c.appendLocked(kind, key, it != nil, live, stored, it)
@@ -445,7 +454,8 @@ func (c *chatStream) startLocked(key, item string, ev provider.Event) {
 	c.started[key] = true
 	data, _ := json.Marshal(itemStartData{Kind: frameItemStart, Key: key, Item: item,
 		ParentToolUseID: ev.ParentToolUseID, SubagentType: ev.SubagentType, TaskDescription: ev.TaskDescription})
-	c.contentLocked(frameItemStart, key, item, ev.ParentToolUseID, data, nil)
+	c.startData[key] = data
+	c.contentLocked(frameItemStart, key, item, data, nil)
 }
 
 // stopLocked closes the open text/thinking item of one stream.
@@ -456,7 +466,7 @@ func (c *chatStream) stopLocked(parent string) {
 	}
 	delete(c.open, parent)
 	data, _ := json.Marshal(keyData{Kind: frameItemStop, Key: o.key})
-	c.contentLocked(frameItemStop, o.key, o.item, parent, data, nil)
+	c.contentLocked(frameItemStop, o.key, o.item, data, nil)
 }
 
 func (c *chatStream) stopAllLocked() {
@@ -488,7 +498,7 @@ func (c *chatStream) deltaLocked(ev provider.Event, item, kind string) {
 		c.open[parent] = openItem{key: key, item: item}
 	}
 	data, _ := json.Marshal(deltaData{Kind: kind, Key: key, Text: ev.Text})
-	if f := c.contentLocked(kind, key, item, parent, data, nil); f != nil {
+	if f := c.contentLocked(kind, key, item, data, nil); f != nil {
 		f.text = ev.Text
 	}
 }
@@ -521,7 +531,7 @@ func (c *chatStream) toolUseLocked(ev provider.Event) {
 	c.stopLocked(ev.ParentToolUseID)
 	c.startLocked(key, itemToolUse, ev)
 	data, _ := json.Marshal(toolUseData{Kind: frameToolUse, Key: key, Tool: ev.Tool})
-	c.contentLocked(frameToolUse, key, itemToolUse, ev.ParentToolUseID, data, nil)
+	c.contentLocked(frameToolUse, key, itemToolUse, data, nil)
 }
 
 func (c *chatStream) toolResultLocked(ev provider.Event) {
@@ -536,7 +546,7 @@ func (c *chatStream) toolResultLocked(ev provider.Event) {
 		cut.Truncated = true
 		stored, _ = json.Marshal(cut)
 	}
-	c.contentLocked(frameToolResult, key, itemToolUse, ev.ParentToolUseID, live, stored)
+	c.contentLocked(frameToolResult, key, itemToolUse, live, stored)
 	if it := c.items[key]; it != nil {
 		it.hasResult = true
 	}
@@ -577,7 +587,7 @@ func (c *chatStream) inboundLocked(ev provider.Event) {
 	}
 	c.stopLocked("")
 	c.started[ev.Key] = true
-	c.contentLocked(frameInbound, ev.Key, itemInbound, "", data, nil)
+	c.contentLocked(frameInbound, ev.Key, itemInbound, data, nil)
 }
 
 // beginTurn counts a turn that opens without a user_message (an inbound
@@ -639,6 +649,8 @@ func (c *chatStream) turnEnd(ev provider.Event) int {
 			it.turnEnded = true
 		}
 	}
+	c.lastEnded = c.turn
+	c.pruneUnsavedLocked()
 	if !c.keyed {
 		// Nothing to settle against: the viewer refetches, and the turn
 		// leaves the tail.
@@ -691,6 +703,7 @@ func (c *chatStream) dropFromTailLocked(keys []string, settled bool) []string {
 			continue
 		}
 		delete(c.items, k)
+		delete(c.startData, k)
 		if settled {
 			c.settled[k] = true
 		}
@@ -753,7 +766,24 @@ func (c *chatStream) markUnsaved(turn int, all bool) []string {
 	}
 	c.sortByTailLocked(keys)
 	c.appendJSONLocked(frameUnsaved, "", false, keysData{Kind: frameUnsaved, Keys: keys})
+	c.pruneUnsavedLocked()
 	return keys
+}
+
+// pruneUnsavedLocked keeps unsaved items from piling up: once a later turn
+// has ended, an earlier turn's unsaved items leave the tail (into the
+// retained journal, so a resume still has them). A fresh viewer gets the
+// latest finished turn's unsaved items and the current turn's, no more.
+func (c *chatStream) pruneUnsavedLocked() {
+	var keys []string
+	for k, it := range c.items {
+		if it.unsaved && it.turn < c.lastEnded {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) > 0 {
+		c.dropFromTailLocked(keys, false)
+	}
 }
 
 // sendFailed: a send announced by userMessage never reached the agent.
@@ -813,18 +843,39 @@ func (c *chatStream) enforceLocked() {
 
 // evictOldestLocked drops the oldest tail item's frames, folding them into
 // the marker that stands where they were.
+//
+// An item still streaming (open) is passed over while anything else can go,
+// so its head — the item_start and the text so far — survives. If the cap
+// forces it out anyway, its later frames start a new tail item and the
+// replay stands in an item_start for the evicted one.
 func (c *chatStream) evictOldestLocked() bool {
-	var victim *tailItem
+	open := map[string]bool{}
+	for _, o := range c.open {
+		open[o.key] = true
+	}
+	var victim, forced *tailItem
 	for _, f := range c.frames {
-		if f.tail {
+		if !f.tail {
+			continue
+		}
+		if !open[f.key] {
 			victim = c.items[f.key]
 			break
 		}
+		if forced == nil {
+			forced = c.items[f.key]
+		}
+	}
+	if victim == nil {
+		victim = forced
 	}
 	if victim == nil {
 		return false
 	}
 	delete(c.items, victim.key)
+	if !open[victim.key] {
+		delete(c.startData, victim.key) // nothing more will come for it
+	}
 	drop := map[*jframe]bool{}
 	var last int64
 	for _, f := range victim.frames {
@@ -855,7 +906,9 @@ func (c *chatStream) evictOldestLocked() bool {
 	}
 	m.seq = max(m.seq, last)
 	m.marker.dropped += len(drop)
-	m.marker.keys = append(m.marker.keys, victim.key)
+	if !slices.Contains(m.marker.keys, victim.key) {
+		m.marker.keys = append(m.marker.keys, victim.key)
+	}
 	c.frames = slices.DeleteFunc(c.frames, func(f *jframe) bool { return drop[f] })
 	return true
 }
@@ -991,7 +1044,27 @@ func (c *chatStream) tailReplayLocked() []ChatFrame {
 		run = nil
 		runText.Reset()
 	}
+	// A key whose item_start the cap evicted gets a stand-in, without an
+	// id: it isn't a journaled frame, and must not move the cursor.
+	startedHere := map[string]bool{}
+	standIn := func(f *jframe) {
+		if f.key == "" || startedHere[f.key] {
+			return
+		}
+		startedHere[f.key] = true
+		switch f.kind {
+		case frameItemStart, frameUserMessage, frameInbound:
+			return
+		}
+		if data := c.startData[f.key]; data != nil {
+			flush()
+			out = append(out, ChatFrame{Kind: frameItemStart, Data: data})
+		}
+	}
 	for _, f := range c.frames {
+		if f.tail {
+			standIn(f)
+		}
 		switch {
 		case f.marker != nil:
 			flush()
