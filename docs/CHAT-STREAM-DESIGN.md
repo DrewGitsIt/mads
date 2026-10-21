@@ -237,10 +237,10 @@ thinking-token tick (`thinking` with `thinking_tokens` and no text) and any
 other kind the legacy stream carries, except `pty_output` and `settle`.
 
 **The keyed start option.** Sessions start with `StartOptions.Keyed` (settle
-hints) where the provider's `stable_keys` is `native` (claude, codex, goose,
-fake). Not hermes (`emulated`): under Keyed it swaps tool names and results
-for the stored ones, which the legacy stream would show; it settles at turn
-end and on `/transcript` serves instead, until C4 turns Keyed on for it.
+hints) where the provider's `stable_keys` works: claude, codex, goose and the
+fake (`native`), and hermes (`emulated`; since C4a). Under Keyed hermes
+streams tool names and results as it stores them, so the live and stored
+items are identical; the legacy stream shows that too.
 
 ### 3. The unsettled tail (session service, memory only)
 
@@ -393,8 +393,7 @@ Accepted as they stand (C2 review, 2026-10-21), for C4 to build around:
   `hello.queued` is only the snapshot at connect.
 - A send that failed (the HTTP caller got the error) is reported as
   `unsaved` for its `user_message` keys: drop the bubble.
-- hermes runs without `StartOptions.Keyed` until C4 (no settle hints; it
-  settles at turn end and on `/transcript` reads).
+- hermes ran without `StartOptions.Keyed` until C4a, which turned it on.
 
 Consequences:
 

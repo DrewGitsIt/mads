@@ -751,13 +751,13 @@ func TestV2UnkeyedResyncsAtTurnEnd(t *testing.T) {
 	}
 }
 
-// Sessions start Keyed only where the provider's keys are its own; an
-// emulated provider (hermes) stays as it was.
+// Sessions start Keyed wherever stable_keys works, native or emulated
+// (hermes); never where it doesn't (kiro).
 func TestV2KeyedStartOption(t *testing.T) {
 	for _, tc := range []struct {
 		support provider.Support
 		keyed   bool
-	}{{provider.Native, true}, {provider.Emulated, false}, {provider.Unsupported, false}} {
+	}{{provider.Native, true}, {provider.Emulated, true}, {provider.Unsupported, false}} {
 		p := newScriptProvider("scripted", nil)
 		p.matrix = provider.Matrix{}
 		for b, s := range fake.New().Matrix() {
