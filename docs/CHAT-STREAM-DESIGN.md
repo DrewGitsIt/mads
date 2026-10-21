@@ -409,6 +409,16 @@ Accepted as they stand (C2 review, 2026-10-21), for C4 to build around:
   `unsaved` for its `user_message` keys: drop the bubble.
 - hermes ran without `StartOptions.Keyed` until C4a, which turned it on.
 
+Accepted in the C4 review (2026-10-21), follow-up:
+
+- hermes stored tool rows carry the kind but no title (`stored_tool_display`
+  unsupported): hermes builds titles in Python and stores none. A reloaded
+  hermes history shows the UI's own tool summary; rows the tab streamed keep
+  the live title (with a dev-console warning). Follow-up if reloaded titles
+  matter: ask hermes's own Python (`acp_adapter.tools.build_tool_title`) for
+  them from the reader — exact and version-matched, but it has to locate
+  hermes's installed runtime.
+
 Consequences:
 
 - Several turns in a row: each turn's items settle as the agent stores them; a
