@@ -23,6 +23,8 @@ func script() conformance.Script {
 		Recall:         func() string { return "recall" },
 		AttemptWrite:   func() string { return "attempt-write" },
 		AttemptCommand: func() string { return "attempt-command" },
+		ToolTurn:       func() string { return "tool-text" },
+		StoreWait:      time.Second,
 		Timeout:        2 * time.Second,
 	}
 }

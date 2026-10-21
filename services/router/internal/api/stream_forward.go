@@ -236,6 +236,8 @@ func (s *server) proxyTo(w http.ResponseWriter, r *http.Request, addr, childPath
 // byte-transparently proxying r — some routes (e.g. link inject) need the
 // Router to transform the request server-side (resolving Attribution)
 // before it reaches the child, which proxyTo's pass-through can't do.
+//
+//nolint:unused // no caller since links-land; orchestrate.go and job/digest.go still name it as the POST counterpart, so its owner removes or reuses it
 func (s *server) postJSONToChild(w http.ResponseWriter, r *http.Request, addr, path string, body any) {
 	raw, err := json.Marshal(body)
 	if err != nil {

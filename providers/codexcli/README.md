@@ -20,16 +20,17 @@ survey's captures and this increment's probes, trimmed and scrubbed under
 |---|---|
 | `Start` | spawn `codex app-server`, `initialize` (experimentalApi) + `initialized`, then `thread/start` — or `thread/resume` (Resume) / `thread/fork` (Resume+Fork) — with `cwd`, `sandbox`, `approvalPolicy`, `model`, `developerInstructions` (the system prompt, added to codex's own) and a `config` override |
 | `Ref()` | the thread id, from the `thread/start` response — known at Start-return |
-| `Send` | `turn/start` with `clientUserMessageId` (and `effort` when `Config.Effort` is set); **while a turn runs**, `turn/steer` with `expectedTurnId` — the message joins the running turn and that turn still ends once, the way a mid-turn claude-code message is absorbed |
+| `Send` / `SendKeyed` | `turn/start` with `clientUserMessageId` — the caller's id for `SendKeyed`, a minted one for `Send` — (and `effort` when `Config.Effort` is set); **while a turn runs**, `turn/steer` with `expectedTurnId` and the same `clientUserMessageId` — the message joins the running turn and that turn still ends once, the way a mid-turn claude-code message is absorbed |
 | `Interrupt` | `turn/interrupt` → `turn/completed` status `interrupted` → `EventTurnEnd{Interrupted}`; open asks answered `cancel` |
 | `Compact` | `thread/compact/start` — a turn of its own with a `contextCompaction` item → `EventCompact` start/done, then `EventTurnEnd`; instructions refused (`ErrUnsupported`) |
-| `item/agentMessage/delta` | `EventText` (commentary and final answer alike; two messages back to back get a paragraph break) |
-| `item/completed` reasoning | `EventThinking` with the summary (raw reasoning never reaches a client) |
+| `item/agentMessage/delta` | `EventText` keyed by the item (commentary and final answer alike, each its own item with exactly its stored text — nothing joined between two back to back) |
+| `item/completed` reasoning | `EventThinking` with the summary, whole, keyed by the item (raw reasoning never reaches a client) |
 | `item/started` / `item/completed` commandExecution, fileChange, mcpToolCall, dynamicToolCall, imageView | `EventToolUse` / `EventToolResult`, `Tool.ID` = codex's item id (`exec-…`) — the id approvals and the transcript use, never the model-level `call_…` |
 | webSearch | announced at completion, when its query is known (item/started carries an empty one) |
 | `thread/tokenUsage/updated` | `Usage` on the turn end: the turn's own tokens (codex's per-process totals differenced), cache reads split out, `ContextTokens` = the last call's `totalTokens`, `ContextWindow` = `modelContextWindow` |
 | `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `item/permissions/requestApproval` | decided by trust (below); forwarded asks become `PermissionAsk{ToolUseID: itemId, Tool: "shell"/"apply_patch", Input, Reason}` |
 | other server requests | answered at once (elicitation declined, user input empty, unknown methods `-32601`) — nothing is left waiting |
+| `item/completed` (any), `turn/completed` | with `StartOptions.Keyed` only: `EventSettle` keyed to the item, and an unkeyed one before `EventTurnEnd` |
 | other threads' notifications | ignored: a multi-agent run streams sub-agent threads on the same connection |
 
 ## Matrix, row by row
@@ -50,6 +51,7 @@ survey's captures and this increment's probes, trimmed and scrubbed under
 | TrustLimited | **Native** | codex's own sandbox + approval policy asks; mads forwards (below). |
 | TrustReadOnly | **Native** | Writes: codex's OS sandbox (Seatbelt / Landlock) refuses them whatever anyone answers. Commands: under a read-only sandbox with `untrusted` approvals codex asks before every one, `ls` included (`readonly-untrusted.jsonl`), and mads declines each ask itself — so nothing runs. (`never` would have run read commands inside the sandbox without asking: still command execution.) |
 | TrustAutoReview | **Unsupported** | codex has a reviewer (`approvalsReviewer: auto_review`), but what it does with a call it rejects — deny outright, or escalate to the user as mads' auto_review promises (`thread/approveGuardianDeniedAction` suggests the former) — is not captured. Such sessions run as limited, visibly (`provider.EffectiveTrust`). |
+| StableKeys | **Native** | Key = codex's item id, live and in `thread/items/list` (below); user rows `user:<clientUserMessageId>`. The stable_keys probe passes against the stand-in and the real binary (smoke). |
 | Compaction | **Native** | `thread/compact/start` (`steer-compact.jsonl`: context 4900 tokens after). |
 | CompactionFocus | **Unsupported** | `thread/compact/start` takes only a thread id. |
 | PTY | **Unsupported** | codex's TUI could back a terminal transport; not built in this increment. |
@@ -119,6 +121,31 @@ list has none of that and the same ids the live stream used. It has no
 timestamps, so `Message.Timestamp` stays zero. An interrupted turn's partial
 reply is in neither — codex stores an item only once it completes.
 
+`TranscriptSince` reads incrementally on the live session's app-server only
+(no live session: `ErrUnsupported`; use `Transcript`). Its cursor is the last
+item read plus a codex cursor anchored on it — the `backwardsCursor` of a
+one-item descending page, which reads ascending from that item and stays
+valid as the thread grows; `nextCursor` is null on the page that reaches the
+end, so it can't continue from there. Evidence in `transcript.go`
+(`itemsCursor`).
+
+## Conversation keys (chat stream C1)
+
+Every live item event and every transcript row carries `Key`
+(docs/CHAT-STREAM-DESIGN.md §1):
+
+| Item | Key |
+|---|---|
+| agentMessage (commentary, final answer), reasoning, every tool item, contextCompaction | codex's item id (`msg_…`, `rs_…`, `exec-…`) — a tool's use and result share it; never the model-level `call_…`/`ctc_…` |
+| userMessage | `user:<clientId>` — the `clientUserMessageId` mads sent on `turn/start` or `turn/steer`; `user:<item id>` when it was sent without one |
+
+Live text is per item and equals the stored item text: two agentMessages in a
+row (commentary, then the final answer) are two keyed runs with nothing
+inserted between them — the UI's join rule (C4) decides how adjacent text
+items read, the same way live and stored. An interrupted partial message is
+live only (codex never stores it). Thinking arrives whole at the reasoning
+item's completion, so one item's chunks can't interleave with another's.
+
 ## One-shot
 
 `OneShot` starts a thread at full trust, sends one turn, returns the
@@ -147,7 +174,11 @@ rate-limit failure (`codexErrorInfo` `usageLimitExceeded` /
   `providers/conformance` suite against it: every row above, no binary.
 - `wire_test.go` replays the real captures through a session with no
   process behind it — events out, approval replies written back.
-- `transcript_test.go` normalizes the real `thread/items/list` captures.
+- `transcript_test.go` normalizes the real `thread/items/list` captures;
+  `keys_test.go` replays the real streams (`run1`, `toolturn`) against
+  their items lists — same keys and text on both sides — and covers
+  `SendKeyed`, `TranscriptSince`, stale cursors and settle hints. The
+  stand-in pages `thread/items/list` with codex's cursor rules.
 
 ## Real-binary smoke (opt-in)
 
@@ -166,19 +197,22 @@ turn, an approved write, an interrupt, a mid-command Close that must reap a
 real `sleep 41`, the transcript through a fresh app-server, a resume that
 recalls the marker, a fork, and a one-shot — and the user's
 `~/.codex/config.toml` byte-for-byte unchanged at the end.
+`TestRealCodexSmokeStableKeys` runs the conformance stable_keys probe
+(`conformance.CheckStableKeys`) against the real binary: a marker reply, a
+sentence / `ls` / sentence turn, and an interrupted count to 300, on one
+settle-hinted session, from a scratch repo at the probe's default (full)
+trust.
 
 ## Open seams
 
-- **Kept for C1 (chat-stream keys), not yet wired.** codex item ids ride
-  `ToolUse.ID` live and on transcript tool rows — the only id field the
-  current event and message types have; text, thinking and user rows have
-  none, so their item ids are not carried, and no fields were added. Every
-  send's `clientUserMessageId` is recorded (`session.SentClientIDs`), and
-  codex stores it as the user item's `clientId`.
-- **Live text merges agent messages.** Consecutive agentMessage items
-  (commentary, then the final answer) stream as one text run joined by
-  `"\n\n"`, while the transcript keeps them as separate agent rows. C1's
-  per-item keys will replace that join.
+- Tool-result text: when a completed commandExecution carries no
+  `aggregatedOutput`, the live result falls back to the collected
+  `outputDelta`s while the stored row has none. Every capture so far
+  carries `aggregatedOutput` (or no output at all), so live and stored
+  agree; a capture of the other shape would need the fallback dropped.
+- Text chunks are dropped, not waited for, when the consumer is 256 events
+  behind (acprpc's policy); live text then falls short of the stored item
+  until it settles.
 - auto_review: capture what codex's reviewer does with a rejected call.
 - `turn/plan/updated` (codex's checklist) and `turn/diff/updated` are not
   mapped; `account/rateLimits/updated` could feed `EventAccount`.

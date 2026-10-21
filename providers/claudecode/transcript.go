@@ -5,9 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
+	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,22 +25,117 @@ import (
 // directory is found by glob — the ref is globally unique, and callers don't
 // know claude's cwd-mangling scheme.
 func (p *Provider) Transcript(_ context.Context, ref string) ([]provider.Message, error) {
-	if ref == "" {
-		return nil, fmt.Errorf("transcript: empty session ref")
-	}
-	matches, err := filepath.Glob(filepath.Join(p.cfg.TranscriptDir, "*", ref+".jsonl"))
+	path, err := p.transcriptPath(ref)
 	if err != nil {
 		return nil, err
 	}
-	if len(matches) == 0 {
-		return nil, fmt.Errorf("no transcript for session %s under %s", ref, p.cfg.TranscriptDir)
-	}
-	f, err := os.Open(matches[0])
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
 	return normalizeTranscript(f)
+}
+
+func (p *Provider) transcriptPath(ref string) (string, error) {
+	if ref == "" {
+		return "", fmt.Errorf("transcript: empty session ref")
+	}
+	matches, err := filepath.Glob(filepath.Join(p.cfg.TranscriptDir, "*", ref+".jsonl"))
+	if err != nil {
+		return "", err
+	}
+	if len(matches) == 0 {
+		return "", fmt.Errorf("no transcript for session %s under %s", ref, p.cfg.TranscriptDir)
+	}
+	return matches[0], nil
+}
+
+// transcriptCursor is TranscriptSince's position in a session's JSONL: the
+// file (path, and its identity, so a replaced file is noticed), the byte
+// offset just past the last line read, and the reader's state at that
+// point (seen uuids, peer messages, per-message block counts), so rows
+// read incrementally carry exactly the keys a full Transcript gives them.
+// A read never changes the cursor it was given.
+type transcriptCursor struct {
+	path   string
+	file   os.FileInfo
+	offset int64
+	state  *transcriptState
+}
+
+// TranscriptSince implements provider.IncrementalTranscriptReader: the rows
+// written after cursor (nil: the start). Only whole lines are read; a line
+// claude is still writing waits for the next call. ErrCursorStale when the
+// file shrank below the cursor or is no longer the file it was (claude's
+// JSONL is append-only, so either means it was replaced).
+//
+// One hold-back: a compact_boundary whose summary line hasn't been read yet
+// stays unread, because a full read folds the summary into the boundary's
+// row (normalizeTranscript). Claude writes the two together, so the window
+// in which the chained rows lag a full read for it is a write's width.
+func (p *Provider) TranscriptSince(_ context.Context, ref string, cursor provider.TranscriptCursor) ([]provider.Message, provider.TranscriptCursor, error) {
+	c, _ := cursor.(*transcriptCursor)
+	if cursor != nil && c == nil {
+		return nil, cursor, provider.ErrCursorStale // not one of ours
+	}
+	path := ""
+	if c != nil {
+		path = c.path
+	} else {
+		var err error
+		if path, err = p.transcriptPath(ref); err != nil {
+			return nil, cursor, err
+		}
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		if c != nil && errors.Is(err, fs.ErrNotExist) {
+			return nil, cursor, provider.ErrCursorStale
+		}
+		return nil, cursor, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, cursor, err
+	}
+	var offset int64
+	st := newTranscriptState(false)
+	if c != nil {
+		if !os.SameFile(c.file, info) || info.Size() < c.offset {
+			return nil, cursor, provider.ErrCursorStale
+		}
+		if info.Size() == c.offset {
+			return nil, c, nil
+		}
+		offset, st = c.offset, c.state.clone()
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return nil, cursor, err
+	}
+
+	var msgs []provider.Message
+	// held: the state, offset and row count just before the latest
+	// compact_boundary line, to rewind to if its row ends the read.
+	var held *transcriptCursor
+	heldRows := 0
+	r := bufio.NewReaderSize(f, 64*1024)
+	for {
+		line, err := r.ReadBytes('\n')
+		if err != nil {
+			break // EOF, or a line claude is still writing: read it next time
+		}
+		if bytes.Contains(line, []byte(`"compact_boundary"`)) {
+			held, heldRows = &transcriptCursor{offset: offset, state: st.clone()}, len(msgs)
+		}
+		msgs = st.add(line, msgs)
+		offset += int64(len(line))
+	}
+	if held != nil && len(msgs) == heldRows+1 && msgs[heldRows].Role == "compact" && msgs[heldRows].Text == "" {
+		msgs, offset, st = msgs[:heldRows], held.offset, held.state
+	}
+	return msgs, &transcriptCursor{path: path, file: info, offset: offset, state: st}, nil
 }
 
 // restoredCostTotal is the running cost a `claude --resume ref` process
@@ -162,6 +260,9 @@ type transcriptAttachment struct {
 	CommandMode string      `json:"commandMode"`
 	Prompt      promptText  `json:"prompt"`
 	Origin      *wireOrigin `json:"origin"`
+	// SourceUUID is the uuid of the stdin line the input came in on: for
+	// a send through SendKeyed, mads's id (keys.go).
+	SourceUUID string `json:"source_uuid"`
 }
 
 // promptText is a queued_command's prompt. claude writes it as a bare string
@@ -360,136 +461,193 @@ func normalizeTranscript(r io.Reader) ([]provider.Message, error) {
 // sidechain lines (DelegateTranscript).
 func normalizeLines(r io.Reader, sidechain bool) ([]provider.Message, error) {
 	var msgs []provider.Message
-	seen := map[string]struct{}{}
-	var peers peerSeen
+	st := newTranscriptState(sidechain)
 	sc := newLineReader(r)
 	for sc.Scan() {
-		raw := strings.TrimSpace(sc.Text())
-		if raw == "" {
-			continue
-		}
-		var l transcriptLine
-		if err := json.Unmarshal([]byte(raw), &l); err != nil {
-			continue // tolerate unknown lines; the format is claude's, not ours
-		}
-		if l.IsSidechain != sidechain {
-			continue
-		}
-		if l.UUID != "" {
-			if _, dup := seen[l.UUID]; dup {
-				continue
-			}
-			seen[l.UUID] = struct{}{}
-		}
-		var ts time.Time
-		if l.Timestamp != "" {
-			if parsed, err := time.Parse(time.RFC3339Nano, l.Timestamp); err == nil {
-				ts = parsed
-			}
-		}
-		// A compaction becomes one "compact" entry where it happened: the
-		// boundary line supplies the metadata, the summary line after it
-		// the text. A summary with no boundary before it (older CLIs) still
-		// gets its own entry, so it never renders as a user message.
-		if l.Type == "system" && l.Subtype == "compact_boundary" {
-			marker := &provider.CompactMarker{}
-			if md := l.CompactMetadata; md != nil {
-				*marker = provider.CompactMarker{Trigger: md.Trigger, PreTokens: md.PreTokens, PostTokens: md.PostTokens, DurationMS: md.DurationMS}
-			}
-			msgs = append(msgs, provider.Message{Role: "compact", Compact: marker, Timestamp: ts})
-			continue
-		}
-		// A message from another claude process is neither the human nor
-		// the CLI: it becomes an "inbound" entry with the bare body. Idle
-		// arrival: an isMeta user line with a peer origin. Mid-turn: a
-		// queued_command attachment.
-		if l.Type == "attachment" {
-			if in, body, id := peerAttachment(l.Attachment); in != nil {
-				if !peers.repeat(in, body, id) {
-					msgs = append(msgs, provider.Message{Role: "inbound", Inbound: in, Text: body, Timestamp: ts})
-				}
-			} else if text := queuedPrompt(l.Attachment); text != "" {
-				msgs = append(msgs, provider.Message{Role: "user", Text: text, Timestamp: ts})
-			}
-			continue
-		}
-		if l.Type == "user" && l.Origin.isPeer() {
-			if !peers.repeat(l.Origin.inbound(), l.Origin.Body, l.Origin.MsgID) {
-				msgs = append(msgs, provider.Message{Role: "inbound", Inbound: l.Origin.inbound(), Text: l.Origin.Body, Timestamp: ts})
-			}
-			continue
-		}
-		if l.Message == nil {
-			continue
-		}
-		if l.IsCompactSummary {
-			var parts []string
-			for _, b := range l.Message.blocks() {
-				if b.Type == "text" && b.Text != "" {
-					parts = append(parts, b.Text)
-				}
-			}
-			summary := strings.Join(parts, "\n")
-			if n := len(msgs); n > 0 && msgs[n-1].Role == "compact" && msgs[n-1].Text == "" {
-				msgs[n-1].Text = summary
-			} else {
-				msgs = append(msgs, provider.Message{Role: "compact", Compact: &provider.CompactMarker{}, Text: summary, Timestamp: ts})
-			}
-			continue
-		}
-		// A background task's completion notice is the CLI talking to the
-		// model, not the human: as a user bubble it showed up as a wall of
-		// raw <task-notification> XML in the human's voice (2026-09-30), and
-		// it can open a whole unprompted turn with no explanation. It becomes
-		// a "notification" entry the conversation draws as a system line.
-		if l.Type == "user" && (l.Origin != nil && l.Origin.Kind == "task-notification") {
-			msgs = append(msgs, provider.Message{Role: "notification", Text: taskNotificationText(l.Message), Timestamp: ts})
-			continue
-		}
-		switch l.Type {
-		case "user":
-			var texts []string
-			for _, b := range l.Message.blocks() {
-				switch b.Type {
-				case "text":
-					// Harness-injected lines (isMeta) and the CLI's
-					// slash-command bookkeeping (<command-name>,
-					// <local-command-stdout>) are not something the human
-					// typed — rendering them as user bubbles misattributes
-					// them. Tool results on such lines still flow below.
-					if b.Text != "" && !l.IsMeta && !isCommandMarkup(b.Text) {
-						texts = append(texts, b.Text)
-					}
-				case "tool_result":
-					msgs = append(msgs, provider.Message{
-						Role:      "tool_result",
-						Text:      toolResultText(b.Content),
-						Tool:      &provider.ToolUse{ID: b.ToolUseID},
-						Timestamp: ts,
-						IsError:   b.IsError,
-					})
-				}
-			}
-			if len(texts) > 0 {
-				msgs = append(msgs, provider.Message{Role: "user", Text: strings.Join(texts, "\n"), Timestamp: ts})
-			}
-		case "assistant":
-			for _, b := range l.Message.blocks() {
-				switch b.Type {
-				case "text":
-					if b.Text != "" {
-						msgs = append(msgs, provider.Message{Role: "agent", Text: b.Text, Timestamp: ts, IsError: l.IsAPIErrorMessage})
-					}
-				case "tool_use":
-					msgs = append(msgs, provider.Message{Role: "tool", Tool: newToolUse(b.ID, b.Name, b.Input), Timestamp: ts})
-				}
-			}
-		}
+		msgs = st.add(sc.line, msgs)
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
 	return msgs, nil
+}
+
+// transcriptState is what reading a transcript carries from one line to
+// the next: the uuids already read (the CLI can append verbatim copies of
+// earlier entries, same uuid), the peer messages already rendered, and
+// each assistant message's blocks counted so far (its keys' indices,
+// keys.go). TranscriptSince keeps one in its cursor, so an incremental
+// read keys and filters exactly as a full one.
+type transcriptState struct {
+	sidechain bool
+	seen      map[string]struct{}
+	peers     peerSeen
+	blocks    map[string]int
+}
+
+func newTranscriptState(sidechain bool) *transcriptState {
+	return &transcriptState{sidechain: sidechain, seen: map[string]struct{}{}, blocks: map[string]int{}}
+}
+
+// clone is a deep copy, so a cursor stays valid after a read from it.
+func (st *transcriptState) clone() *transcriptState {
+	c := &transcriptState{sidechain: st.sidechain, seen: maps.Clone(st.seen), blocks: maps.Clone(st.blocks)}
+	if st.peers.ids != nil {
+		c.peers = peerSeen{ids: maps.Clone(st.peers.ids), bodies: maps.Clone(st.peers.bodies)}
+	}
+	return c
+}
+
+// add normalizes one JSONL line onto msgs.
+func (st *transcriptState) add(line []byte, msgs []provider.Message) []provider.Message {
+	raw := bytes.TrimSpace(line)
+	if len(raw) == 0 {
+		return msgs
+	}
+	var l transcriptLine
+	if err := json.Unmarshal(raw, &l); err != nil {
+		return msgs // tolerate unknown lines; the format is claude's, not ours
+	}
+	if l.IsSidechain != st.sidechain {
+		return msgs
+	}
+	if l.UUID != "" {
+		if _, dup := st.seen[l.UUID]; dup {
+			return msgs
+		}
+		st.seen[l.UUID] = struct{}{}
+	}
+	var ts time.Time
+	if l.Timestamp != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, l.Timestamp); err == nil {
+			ts = parsed
+		}
+	}
+	// A compaction becomes one "compact" entry where it happened: the
+	// boundary line supplies the metadata, the summary line after it
+	// the text. A summary with no boundary before it (older CLIs) still
+	// gets its own entry, so it never renders as a user message.
+	if l.Type == "system" && l.Subtype == "compact_boundary" {
+		marker := &provider.CompactMarker{}
+		if md := l.CompactMetadata; md != nil {
+			*marker = provider.CompactMarker{Trigger: md.Trigger, PreTokens: md.PreTokens, PostTokens: md.PostTokens, DurationMS: md.DurationMS}
+		}
+		return append(msgs, provider.Message{Role: "compact", Compact: marker, Timestamp: ts, Key: l.UUID})
+	}
+	// A message from another claude process is neither the human nor
+	// the CLI: it becomes an "inbound" entry with the bare body. Idle
+	// arrival: an isMeta user line with a peer origin. Mid-turn: a
+	// queued_command attachment. Unkeyed: its live event carries the
+	// replayed line's uuid, which no capture has shown to equal the
+	// stored line's (or the attachment's source_uuid).
+	if l.Type == "attachment" {
+		if in, body, id := peerAttachment(l.Attachment); in != nil {
+			if !st.peers.repeat(in, body, id) {
+				msgs = append(msgs, provider.Message{Role: "inbound", Inbound: in, Text: body, Timestamp: ts})
+			}
+		} else if text := queuedPrompt(l.Attachment); text != "" {
+			// A mid-turn send: keyed by the stdin uuid it was sent with.
+			id := l.Attachment.SourceUUID
+			if id == "" {
+				id = l.UUID
+			}
+			msgs = append(msgs, provider.Message{Role: "user", Text: text, Timestamp: ts, Key: userKey(id)})
+		}
+		return msgs
+	}
+	if l.Type == "user" && l.Origin.isPeer() {
+		if !st.peers.repeat(l.Origin.inbound(), l.Origin.Body, l.Origin.MsgID) {
+			msgs = append(msgs, provider.Message{Role: "inbound", Inbound: l.Origin.inbound(), Text: l.Origin.Body, Timestamp: ts})
+		}
+		return msgs
+	}
+	if l.Message == nil {
+		return msgs
+	}
+	if l.IsCompactSummary {
+		var parts []string
+		for _, b := range l.Message.blocks() {
+			if b.Type == "text" && b.Text != "" {
+				parts = append(parts, b.Text)
+			}
+		}
+		summary := strings.Join(parts, "\n")
+		if n := len(msgs); n > 0 && msgs[n-1].Role == "compact" && msgs[n-1].Text == "" {
+			msgs[n-1].Text = summary
+		} else {
+			msgs = append(msgs, provider.Message{Role: "compact", Compact: &provider.CompactMarker{}, Text: summary, Timestamp: ts, Key: l.UUID})
+		}
+		return msgs
+	}
+	// A background task's completion notice is the CLI talking to the
+	// model, not the human: as a user bubble it showed up as a wall of
+	// raw <task-notification> XML in the human's voice (2026-09-30), and
+	// it can open a whole unprompted turn with no explanation. It becomes
+	// a "notification" entry the conversation draws as a system line.
+	if l.Type == "user" && (l.Origin != nil && l.Origin.Kind == "task-notification") {
+		return append(msgs, provider.Message{Role: "notification", Text: taskNotificationText(l.Message), Timestamp: ts, Key: l.UUID, Notice: true})
+	}
+	switch l.Type {
+	case "user":
+		var texts []string
+		for _, b := range l.Message.blocks() {
+			switch b.Type {
+			case "text":
+				// Harness-injected lines (isMeta) and the CLI's
+				// slash-command bookkeeping (<command-name>,
+				// <local-command-stdout>) are not something the human
+				// typed — rendering them as user bubbles misattributes
+				// them. Tool results on such lines still flow below.
+				if b.Text != "" && !l.IsMeta && !isCommandMarkup(b.Text) {
+					texts = append(texts, b.Text)
+				}
+			case "tool_result":
+				msgs = append(msgs, provider.Message{
+					Role:      "tool_result",
+					Text:      toolResultText(b.Content),
+					Tool:      &provider.ToolUse{ID: b.ToolUseID},
+					Timestamp: ts,
+					IsError:   b.IsError,
+					Key:       b.ToolUseID,
+				})
+			}
+		}
+		if len(texts) > 0 {
+			text := strings.Join(texts, "\n")
+			m := provider.Message{Role: "user", Text: text, Timestamp: ts, Key: userKey(l.UUID)}
+			if isInterruptMarker(text) {
+				// claude's own marker, not the human's words.
+				m.Key, m.Notice = l.UUID, true
+			}
+			msgs = append(msgs, m)
+		}
+	case "assistant":
+		blocks := l.Message.blocks()
+		// Every block counts toward the message's indices, the ones no
+		// row is made for (thinking, empty text) included: the live
+		// stream numbers them all.
+		// A line claude wrote itself ("No response requested.", an API
+		// error) is a notice keyed by its uuid, as is a line with no
+		// message id at all (no live stream ever keyed one).
+		synthetic := l.Message.Model == syntheticModel
+		key := func(int) string { return l.UUID }
+		if !synthetic && l.Message.ID != "" {
+			first := st.blocks[l.Message.ID]
+			st.blocks[l.Message.ID] = first + len(blocks)
+			key = func(i int) string { return blockKey(l.Message.ID, first+i) }
+		}
+		for i, b := range blocks {
+			switch b.Type {
+			case "text":
+				if b.Text != "" {
+					msgs = append(msgs, provider.Message{Role: "agent", Text: b.Text, Timestamp: ts, IsError: l.IsAPIErrorMessage, Key: key(i), Notice: synthetic})
+				}
+			case "tool_use":
+				msgs = append(msgs, provider.Message{Role: "tool", Tool: newToolUse(b.ID, b.Name, b.Input), Timestamp: ts, Key: b.ID})
+			}
+		}
+	}
+	return msgs
 }
 
 // candidateTranscripts returns every transcript under dir (a JSONL file

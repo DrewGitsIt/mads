@@ -46,6 +46,14 @@ const BEHAVIOR_LABELS: Record<string, string> = {
   delegate_stop: "Stopping one subagent",
 };
 
+/**
+ * Matrix rows that are provider-layer plumbing rather than something a user
+ * picks a provider for: kept out of the Settings table, its count and the
+ * capability tags. `stable_keys` is the conversation-key contract
+ * (docs/CHAT-STREAM-DESIGN.md §1).
+ */
+export const INTERNAL_BEHAVIORS: ReadonlySet<string> = new Set(["stable_keys"]);
+
 export function behaviorLabel(behavior: string): string {
   const known = BEHAVIOR_LABELS[behavior];
   if (known) return known;

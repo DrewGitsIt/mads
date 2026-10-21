@@ -36,11 +36,10 @@ typed per item kind — so the package carries its own small client
 other adapters is the provider contract, `agentenv`, `binlocate`, and the
 conformance suite.
 
-**Decisions inherited, not relitigated**: the opaque conversation keys and
-frames (docs/CHAT-STREAM-DESIGN.md, under revision) are not wired; the
-adapter implements the existing provider contract. Codex item ids ride
-`ToolUse.ID`, the one id field the event and transcript types have; no
-fields were added.
+**Decisions inherited, not relitigated**: the opaque conversation keys of
+docs/CHAT-STREAM-DESIGN.md §1 (C1). Every event and transcript row carries
+`Key` = codex's item id; a user row's key is `user:<clientUserMessageId>`
+(see "Conversation keys" below).
 
 ## Shape of the work
 
@@ -65,7 +64,7 @@ tests: `fakecodex_test.go` (scripted stand-in), `codexcli_test.go`
 | Interrupt | `turn/interrupt {threadId, turnId}` → `{}`; `turn/completed` status `interrupted`; the partial agentMessage never completes and is never stored. |
 | Compaction | `thread/compact/start {threadId}` → `{}`; its own turn with a `contextCompaction` item; `tokenUsage.last.totalTokens` is the compacted size. No instructions parameter. |
 | Approvals | server requests `item/commandExecution/requestApproval` and `item/fileChange/requestApproval` (after the item's `item/started`, keyed by `itemId`), `item/permissions/requestApproval`; answered `{decision: accept|decline|cancel|acceptForSession}`; codex then sends `serverRequest/resolved`. |
-| Transcript | `thread/items/list {threadId, limit, cursor}` — paged, same item ids as live, works on an unloaded thread right after `initialize`; `-32601` for ephemeral threads. |
+| Transcript | `thread/items/list {threadId, limit, cursor, sortDirection?, turnId?}` — paged, same item ids as live, works on an unloaded thread right after `initialize`; `-32601` for ephemeral threads. `nextCursor` is null on a page that reaches the end (even a full one); `backwardsCursor` is anchored on the page's first item, included, and stays valid as items are appended (probed 2026-10-21). |
 | Models | `model/list` → `{data:[{id, displayName, hidden, isDefault, supportedReasoningEfforts…}], nextCursor}`, no thread needed. |
 | MCP servers | `config.mcp_servers.<name> = {command, args, env}` or `{url}` on the thread — session-only. |
 | Usage | `thread/tokenUsage/updated {tokenUsage:{total, last, modelContextWindow}}`: `total` is per app-server **process** (a resumed thread restarts at 0), `inputTokens` includes `cachedInputTokens`, `outputTokens` includes `reasoningOutputTokens`. No money. |
@@ -76,7 +75,7 @@ Row-by-row reasons live in `providers/codexcli/README.md`; the summary:
 
 | Native | Emulated | Unsupported |
 |---|---|---|
-| Interactive, ACP (structured), Interrupt, Resume, Branching, RefAnnounce, Transcript, ModelDiscovery, CostReporting (tokens), MCPServers, TrustLimited, TrustReadOnly, Compaction | OneShot, OneShotStream, OneShotResume (an app-server thread, not `codex exec`) | TrustAutoReview (reviewer unproven), CompactionFocus, PTY (not built), CwdReroot, the four Delegate rows |
+| Interactive, ACP (structured), Interrupt, Resume, Branching, RefAnnounce, Transcript, ModelDiscovery, CostReporting (tokens), MCPServers, TrustLimited, TrustReadOnly, Compaction, StableKeys | OneShot, OneShotStream, OneShotResume (an app-server thread, not `codex exec`) | TrustAutoReview (reviewer unproven), CompactionFocus, PTY (not built), CwdReroot, the four Delegate rows |
 
 ## Session lifecycle
 
@@ -103,11 +102,15 @@ for other threads — a multi-agent run's sub-agents — are ignored.
 
 ### Item → Event mapping
 
-- `item/agentMessage/delta` → `EventText`; an item that completes with
-  more text than its deltas carried emits the rest. Commentary and final
-  answer are both text; two messages back to back get a paragraph break.
-  The final answer is also kept per turn for OneShot.
-- reasoning `item/completed` → `EventThinking` with the summary parts.
+- `item/agentMessage/delta` → `EventText` keyed by the item; an item that
+  completes with more text than its deltas carried emits the rest.
+  Commentary and final answer are both text, each its own keyed item with
+  exactly its stored text: nothing is joined between two messages back to
+  back (until C1 the adapter inserted a paragraph break; the UI's join
+  rule now decides, the same live and stored). The final answer is also
+  kept per turn for OneShot.
+- reasoning `item/completed` → `EventThinking` with the summary parts,
+  whole (summary deltas are not forwarded), keyed by the item.
 - commandExecution, fileChange, mcpToolCall, dynamicToolCall, imageView:
   `item/started` → `EventToolUse` (id = item id; kind from codex's own
   `commandActions` parse — reads and listings are `read`, searches
@@ -118,6 +121,24 @@ for other threads — a multi-agent run's sub-agents — are ignored.
 - webSearch: one `EventToolUse` + result at completion (its started item
   has an empty query).
 - contextCompaction: `EventCompact` start/done, auto or manual.
+- With `StartOptions.Keyed`: `EventSettle` (Key = the item's key)
+  after every `item/completed` of the thread — codex stores an item as it
+  completes it, 0–27 ms behind — and an unkeyed one before each
+  `EventTurnEnd`. Never without the option.
+
+### Conversation keys
+
+Key = codex's item id for every item kind (`msg_…`, `rs_…`, `exec-…`, the
+compaction item's id): the id on `item/started`, the deltas,
+`item/completed` and `thread/items/list` alike. A tool's `EventToolUse`
+and `EventToolResult` (and its tool / tool_result rows) share it; the
+model-level `call_…`/`ctc_…` ids are never used. A user row's key is
+`user:<clientId>` — the `clientUserMessageId` mads sent on `turn/start`
+or `turn/steer` (both take one; `SendKeyed` passes the caller's id, `Send`
+mints one) — or `user:<item id>` for a message sent without one. An
+interrupted partial agentMessage is live only: codex never completes or
+stores it. Pinned by the conformance stable_keys probe against the
+stand-in and, in the smoke, the real binary.
 
 ## Trust enforcement (Native)
 
@@ -198,7 +219,16 @@ injected context (environment_context, skills_instructions,
 recommended_plugins, turn_aborted, world_state/turn_context) appears as
 user-role messages to be filtered by name forever. The items list has
 neither trap and uses the live ids. Cost: no timestamps
-(`Message.Timestamp` zero). Roles: userMessage → user, agentMessage →
+(`Message.Timestamp` zero). Every row carries its item's key.
+
+`TranscriptSince` (the session child's settle reads) runs only on the live
+session's app-server — with none it is `ErrUnsupported` and the caller
+uses `Transcript`. Its cursor is the last item returned plus a codex
+cursor anchored on it: the `backwardsCursor` of a one-item descending page,
+which lists ascending from that item, itself included, and stays valid as
+the thread grows. Each read drops the anchor (checking it is the item the
+cursor named, else `ErrCursorStale`) and re-anchors on the new last item.
+`nextCursor` couldn't serve: it is null on the page that reaches the end. Roles: userMessage → user, agentMessage →
 agent, tool items → tool + tool_result (no result while still
 `inProgress`), contextCompaction → compact; reasoning, plan, review and
 hook items are skipped.
@@ -249,5 +279,3 @@ never precedes a JSON reply; `Ref` is announced before the reply and
   `account/rateLimits/updated` → `EventAccount`.
 - Delegates: codex's multi-agent threads (`collabAgentToolCall`,
   `subAgentActivity`) as mads delegates.
-- Opaque conversation keys from codex item ids, once the chat-stream
-  design settles.

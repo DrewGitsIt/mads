@@ -28,6 +28,13 @@ type lies struct {
 	// oneShotFreshOnResume answers a one-shot with Resume by silently
 	// starting fresh, whatever the declaration.
 	oneShotFreshOnResume bool
+	// stable_keys lies (each one a way the store and the stream disagree).
+	keysDropResult  bool // the store never keeps the tool result
+	keysRenamed     bool // the store keys the second text part differently
+	keysTextDiffers bool // the store's plain reply text differs from the stream
+	keysInterleave  bool // the first text part's key comes back after the tool
+	keysUnsupported bool // emits keys while declaring stable_keys unsupported
+	settleUnasked   bool // emits EventSettle without StartOptions.Keyed
 }
 
 type stub struct {
@@ -75,6 +82,8 @@ func stubScript() Script {
 		Recall:         func() string { return "recall" },
 		AttemptWrite:   func() string { return "attempt-write" },
 		AttemptCommand: func() string { return "attempt-command" },
+		ToolTurn:       func() string { return "tool-text" },
+		StoreWait:      300 * time.Millisecond,
 		Timeout:        2 * time.Second,
 	}
 }
@@ -103,7 +112,7 @@ func (s *stub) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 	s.mu.Unlock()
 
 	sess := &stubSession{
-		p: s, ref: ref, mode: opts.Mode,
+		p: s, ref: ref, mode: opts.Mode, settle: opts.Keyed || s.lies.settleUnasked,
 		events:    make(chan provider.Event, 256),
 		interrupt: make(chan struct{}, 1),
 	}
@@ -161,6 +170,20 @@ func (s *stub) Transcript(_ context.Context, ref string) ([]provider.Message, er
 	return append([]provider.Message{}, s.sessions[ref]...), nil
 }
 
+// TranscriptSince is the stub's incremental reader: the cursor is a row
+// index.
+func (s *stub) TranscriptSince(ctx context.Context, ref string, cursor provider.TranscriptCursor) ([]provider.Message, provider.TranscriptCursor, error) {
+	all, err := s.Transcript(ctx, ref)
+	if err != nil {
+		return nil, cursor, err
+	}
+	from, _ := cursor.(int)
+	if from > len(all) {
+		return nil, cursor, provider.ErrCursorStale
+	}
+	return all[from:], len(all), nil
+}
+
 func (s *stub) usage(text string) provider.Usage {
 	if s.lies.zeroUsage {
 		return provider.Usage{}
@@ -195,8 +218,30 @@ type stubSession struct {
 	ptyR      *io.PipeReader
 	ptyW      *io.PipeWriter
 
+	settle bool // emit EventSettle at each turn's end
+
 	mu     sync.Mutex
 	closed bool
+	turn   int
+}
+
+// keys reports whether the stub keys its items: honestly when it declares
+// stable_keys working, or as a lie.
+func (ss *stubSession) keys() bool {
+	return ss.p.matrix[provider.BehaviorStableKeys].Works() || ss.p.lies.keysUnsupported
+}
+
+// key is the stub's native id for item n of the current turn, or "" when it
+// doesn't key.
+func (ss *stubSession) key(n string) string {
+	if !ss.keys() {
+		return ""
+	}
+	return fmt.Sprintf("%s:t%d:%s", ss.ref, ss.turn, n)
+}
+
+func (ss *stubSession) SendKeyed(ctx context.Context, text, id string) error {
+	return ss.send(ctx, text, id)
 }
 
 func (ss *stubSession) Ref() string                   { return ss.ref }
@@ -238,11 +283,36 @@ func (ss *stubSession) Close() error {
 	return nil
 }
 
-func (ss *stubSession) Send(_ context.Context, text string) error {
+func (ss *stubSession) Send(ctx context.Context, text string) error {
+	return ss.send(ctx, text, "")
+}
+
+func (ss *stubSession) send(_ context.Context, text, id string) error {
+	ss.mu.Lock()
+	ss.turn++
+	ss.mu.Unlock()
+	userKey := ""
+	if ss.keys() {
+		if id == "" {
+			id = ss.key("user")
+		}
+		userKey = "user:" + id
+	}
 	ss.p.mu.Lock()
 	history := append([]provider.Message{}, ss.p.sessions[ss.ref]...)
-	ss.p.sessions[ss.ref] = append(ss.p.sessions[ss.ref], provider.Message{Role: "user", Text: text})
+	ss.p.sessions[ss.ref] = append(ss.p.sessions[ss.ref], provider.Message{Role: "user", Text: text, Key: userKey})
 	ss.p.mu.Unlock()
+	store := func(m provider.Message) {
+		ss.p.mu.Lock()
+		ss.p.sessions[ss.ref] = append(ss.p.sessions[ss.ref], m)
+		ss.p.mu.Unlock()
+	}
+	end := func(ev provider.Event) {
+		if ss.settle {
+			ss.emit(provider.Event{Kind: provider.EventSettle})
+		}
+		ss.emit(ev)
+	}
 
 	go func() {
 		if text == "slow" {
@@ -250,11 +320,11 @@ func (ss *stubSession) Send(_ context.Context, text string) error {
 				select {
 				case <-ss.interrupt:
 					if !ss.p.lies.interruptStuck {
-						ss.emit(provider.Event{Kind: provider.EventTurnEnd, Interrupted: true})
+						end(provider.Event{Kind: provider.EventTurnEnd, Interrupted: true})
 						return
 					}
 				case <-time.After(5 * time.Millisecond):
-					if !ss.emit(provider.Event{Kind: provider.EventText, Text: fmt.Sprintf("tick %d ", i)}) {
+					if !ss.emit(provider.Event{Kind: provider.EventText, Key: ss.key("ticks"), Text: fmt.Sprintf("tick %d ", i)}) {
 						return
 					}
 				}
@@ -278,13 +348,40 @@ func (ss *stubSession) Send(_ context.Context, text string) error {
 			ss.emit(provider.Event{Kind: provider.EventTurnEnd})
 			return
 		}
+		if text == "tool-text" {
+			l := ss.p.lies
+			first, tool, second := ss.key("a"), ss.key("tool"), ss.key("b")
+			ss.emit(provider.Event{Kind: provider.EventText, Key: first, Text: "Looking. "})
+			ss.emit(provider.Event{Kind: provider.EventToolUse, Key: tool, Tool: &provider.ToolUse{Name: "ls"}})
+			ss.emit(provider.Event{Kind: provider.EventToolResult, Key: tool, Text: "a.txt"})
+			if l.keysInterleave {
+				ss.emit(provider.Event{Kind: provider.EventText, Key: first, Text: "late "})
+			}
+			ss.emit(provider.Event{Kind: provider.EventText, Key: second, Text: "One file."})
+			storedSecond := second
+			if l.keysRenamed {
+				storedSecond += "-renamed"
+			}
+			store(provider.Message{Role: "agent", Key: first, Text: "Looking. "})
+			store(provider.Message{Role: "tool", Key: tool, Tool: &provider.ToolUse{Name: "ls"}})
+			if !l.keysDropResult {
+				store(provider.Message{Role: "tool_result", Key: tool, Text: "a.txt"})
+			}
+			store(provider.Message{Role: "agent", Key: storedSecond, Text: "One file."})
+			usage := ss.p.usage("Looking. One file.")
+			end(provider.Event{Kind: provider.EventTurnEnd, Usage: &usage})
+			return
+		}
 		reply := ss.p.reply(text, history)
-		ss.p.mu.Lock()
-		ss.p.sessions[ss.ref] = append(ss.p.sessions[ss.ref], provider.Message{Role: "agent", Text: reply})
-		ss.p.mu.Unlock()
+		key := ss.key("reply")
+		storedText := reply
+		if ss.p.lies.keysTextDiffers {
+			storedText += " (edited)"
+		}
+		store(provider.Message{Role: "agent", Key: key, Text: storedText})
 		usage := ss.p.usage(reply)
-		ss.emit(provider.Event{Kind: provider.EventText, Text: reply})
-		ss.emit(provider.Event{Kind: provider.EventTurnEnd, Usage: &usage})
+		ss.emit(provider.Event{Kind: provider.EventText, Key: key, Text: reply})
+		end(provider.Event{Kind: provider.EventTurnEnd, Usage: &usage})
 		if ss.mode == provider.ModePTY && ss.ptyW != nil {
 			_, _ = ss.ptyW.Write([]byte(reply + "\r\n> "))
 		}

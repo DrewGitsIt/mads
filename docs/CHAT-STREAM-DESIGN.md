@@ -108,8 +108,8 @@ Per-provider derivation:
 
 | Item | claude | codex | goose | hermes |
 |---|---|---|---|---|
-| Assistant text / thinking | `<message_id>:<index>` (index counted after de-duping by `uuid`, including signature-only thinking) | item id | `<messageId>@<created>:<run>` (the `created` stamp disambiguates colliding ids) | stored `message_uid`, assigned live by position (the Nth model call of the turn = the Nth new assistant row) |
-| Tool call / result | `tool_use_id` | item id | `toolCallId` | stored tool-call id, mapped from the live `tc-…` in order |
+| Assistant text / thinking | `<message_id>:<index>` (index counted after de-duping by `uuid`, including signature-only thinking) | item id | `<messageId>@<created>:<run>` (the `created` stamp disambiguates colliding ids) | while the child lives: the live `<messageId>:<run>`, which the reader puts on the stored row it matches by position (the Nth model call of the turn = the Nth new assistant row); after the child: stored `message_uid` (see "Hermes" below) |
+| Tool call / result | `tool_use_id` | item id | `toolCallId` | while the child lives: the live `tc-…`, matched to the stored calls in order; after the child: stored `call_…` id |
 | User message | `user:<mads id>`, sent as stdin `uuid` | `user:<mads id>` via `clientUserMessageId` | `user:<mads id>` live; matched on settle | `user:<mads id>` live; matched on settle |
 | Mid-turn send | `user:<mads id>` via `queued_command.source_uuid` | `user:<mads id>` via `turn/steer` | as user message | as user message |
 | Synthetic rows | the row's own `uuid` | item id | row id | `message_uid` |
@@ -124,7 +124,26 @@ from the row's native id.
 
 **Text equality** is part of the contract, so an adapter normalises live text
 to what the agent stores (hermes: drop the injected leading `"\n\n"`). That is
-what makes the swap at settle invisible.
+what makes the swap at settle invisible. Where normalising changes what a
+consumer sees today (hermes swaps a tool's title for its stored name and its
+rendered result for the stored output), the adapter does it only for a
+session started with `StartOptions.Keyed`, the keyed consumer's opt-in.
+
+**Hermes keys are stable per session child, not per conversation**
+(`stable_keys: emulated`). hermes stores no id that existed live: the live
+`messageId` is never written, and `message_uid` exists only once the row is.
+So live items carry provisional keys, the adapter keeps a ledger of what each
+turn streamed, and its readers match stored rows to it by position and serve
+matched rows under the live key for as long as that child lives. A stored row
+of the in-flight turn with nothing live to match yet (hermes writes a
+tool-call row a few ms before the tool-call frame), and the rows after it, are
+held back by `Transcript` and `TranscriptSince` alike, so no reader sees a
+row under two keys while the child lives. When the child exits the ledger goes
+with it and the same rows read under `message_uid` and `call_…`: a viewer
+**re-reads the transcript and replaces hermes items** at a new epoch rather
+than merging by key across it (the tail is gone then anyway, §3). Limits: a
+turn whose stored user row doesn't read back as the text sent isn't matched
+(its rows keep native keys), and text rows are matched by count.
 
 ### 2. Frame contract on `/output`
 

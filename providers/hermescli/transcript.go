@@ -41,6 +41,10 @@ import (
 // errNoStore marks a missing state.db — the home has never run a session.
 var errNoStore = errors.New("no hermes state.db")
 
+// errSessionNotFound: state.db has no sessions row for the ref (hermes
+// writes it with the first prompt).
+var errSessionNotFound = errors.New("session not found")
+
 // openStore opens state.db read-only. mode=ro (not immutable): hermes-acp
 // may be writing it right now, and the WAL must be read to see its latest
 // rows. busy_timeout rides out a checkpoint in progress.
@@ -81,21 +85,72 @@ func (p *Provider) requireStoredSession(ctx context.Context, ref string) error {
 	return nil
 }
 
-// Transcript implements provider.TranscriptReader over state.db.
+// Transcript implements provider.TranscriptReader over state.db, keyed:
+// rows this binding's live child matched to what it streamed carry the live
+// keys, the rest their own (keys.go). While that child lives, the in-flight
+// turn's rows from the first one with nothing live to match yet onward are
+// held back, exactly as TranscriptSince holds them: served now under their
+// own keys, they would be re-keyed a moment later when the live item
+// arrives, and a reader would hold the same row under two keys.
 func (p *Provider) Transcript(ctx context.Context, ref string) ([]provider.Message, error) {
+	rows, err := p.readRows(ctx, ref)
+	if err != nil {
+		return nil, fmt.Errorf("transcript: %w", err)
+	}
+	al := p.aliasesFor(ref, rows)
+	if al.hold < len(rows) {
+		rows = rows[:al.hold]
+	}
+	return normalizeRows(rows, al), nil
+}
+
+// TranscriptSince implements provider.IncrementalTranscriptReader. Row ids
+// are no cursor — hermes rewrites a session's rows with fresh ids on every
+// load — so the cursor is the message_uid of the last row served, and the
+// answer is the display rows after that uid's current row. A uid that's
+// gone (compaction) is provider.ErrCursorStale. Rows of the turn in flight
+// that have nothing live to match yet are held back (keys.go).
+func (p *Provider) TranscriptSince(ctx context.Context, ref string, cursor provider.TranscriptCursor) ([]provider.Message, provider.TranscriptCursor, error) {
+	rows, err := p.readRows(ctx, ref)
+	if err != nil {
+		return nil, cursor, fmt.Errorf("transcript since: %w", err)
+	}
+	from := 0
+	if c, ok := cursor.(hermesCursor); ok {
+		i := cursorIndex(rows, c)
+		if i < 0 {
+			return nil, cursor, fmt.Errorf("hermes session %s no longer has row %q: %w", ref, c.uid, provider.ErrCursorStale)
+		}
+		from = i + 1
+	}
+	al := p.aliasesFor(ref, rows)
+	to := len(rows)
+	if al.hold < to {
+		to = al.hold
+	}
+	if to <= from {
+		return nil, cursor, nil
+	}
+	served := rows[from:to]
+	last := served[len(served)-1]
+	return normalizeRows(served, al), hermesCursor{uid: last.uid, n: to}, nil
+}
+
+// readRows is the display projection of ref's rows.
+func (p *Provider) readRows(ctx context.Context, ref string) ([]storedRow, error) {
 	if ref == "" {
-		return nil, fmt.Errorf("transcript: empty session ref")
+		return nil, fmt.Errorf("empty session ref")
 	}
 	db, path, err := p.openStore()
 	if err != nil {
-		return nil, fmt.Errorf("transcript: %w", err)
+		return nil, err
 	}
 	defer func() { _ = db.Close() }()
 	rows, err := readDisplayRows(ctx, db, ref)
 	if err != nil {
-		return nil, fmt.Errorf("transcript: %s in %s: %w", ref, path, err)
+		return nil, fmt.Errorf("%s in %s: %w", ref, path, err)
 	}
-	return normalizeRows(rows), nil
+	return rows, nil
 }
 
 // storedSession is the slice of a sessions row the lineage walk needs.
@@ -121,7 +176,7 @@ const sessionCols = "id, source, parent_session_id, end_reason, model_config"
 func lineage(ctx context.Context, db *sql.DB, ref string) ([]string, error) {
 	cur, err := scanSession(db.QueryRowContext(ctx, "SELECT "+sessionCols+" FROM sessions WHERE id = ?", ref))
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("session not found")
+		return nil, errSessionNotFound
 	}
 	if err != nil {
 		return nil, err
@@ -300,26 +355,25 @@ const (
 	contentJSONPrefix = "\x00json:"
 )
 
-func normalizeRows(rows []storedRow) []provider.Message {
+// normalizeRows maps display rows to Messages, keyed (keys.go): user rows
+// "user:"+message_uid; assistant text by its live key when al matched it,
+// else its message_uid; tool calls and results by the live tool key when
+// matched, else the stored call id.
+func normalizeRows(rows []storedRow, al aliases) []provider.Message {
 	var msgs []provider.Message
 	for _, r := range rows {
 		ts := unixFloat(r.timestamp)
 		text := decodeContent(r.content)
+		key := rowKey(r)
 		if r.summary {
 			// A compaction carrier: the summary hermes carried forward.
-			msgs = append(msgs, provider.Message{Role: "compact", Text: text, Compact: &provider.CompactMarker{}, Timestamp: ts})
+			msgs = append(msgs, provider.Message{Role: "compact", Text: text, Compact: &provider.CompactMarker{}, Timestamp: ts, Key: key})
 			continue
 		}
 		switch r.role {
 		case "user":
-			// The persona the adapter prefixed to a process's first prompt
-			// (wrapSystemPrompt) is not the user's message.
-			text = stripSystemPrompt(text)
-			if i := strings.LastIndex(text, correctionMarker); i >= 0 {
-				text = text[i+len(correctionMarker):]
-			}
-			if text != "" {
-				msgs = append(msgs, provider.Message{Role: "user", Text: text, Timestamp: ts})
+			if text = userText(r.content); text != "" {
+				msgs = append(msgs, provider.Message{Role: "user", Text: text, Timestamp: ts, Key: "user:" + key})
 			}
 		case "assistant":
 			if failedTurn(r.displayKind, text) {
@@ -327,26 +381,51 @@ func normalizeRows(rows []storedRow) []provider.Message {
 				// place (Message.IsError), with hermes's own words: the model
 				// sees this row on its next turn (survey run3), so hiding it
 				// would make the conversation read differently from what the
-				// agent knows.
-				msgs = append(msgs, provider.Message{Role: "agent", Text: strings.TrimSpace(text), IsError: true, Timestamp: ts})
+				// agent knows. Never streamed: a notice, keyed by its row.
+				msgs = append(msgs, provider.Message{Role: "agent", Text: strings.TrimSpace(text), IsError: true, Notice: true, Timestamp: ts, Key: key})
 				continue
 			}
 			if text != "" {
-				msgs = append(msgs, provider.Message{Role: "agent", Text: text, Timestamp: ts})
+				if live, ok := al.text[r.uid]; ok {
+					key = live
+				}
+				msgs = append(msgs, provider.Message{Role: "agent", Text: text, Timestamp: ts, Key: key})
 			}
-			msgs = append(msgs, toolCallMessages(r.toolCalls, ts)...)
+			for _, m := range toolCallMessages(r.toolCalls, ts) {
+				m.Key = m.Tool.ID
+				if live, ok := al.tool[m.Tool.ID]; ok {
+					m.Key = live
+				}
+				msgs = append(msgs, m)
+			}
 		case "tool":
+			key := r.toolCallID
+			if live, ok := al.tool[r.toolCallID]; ok {
+				key = live
+			}
 			msgs = append(msgs, provider.Message{
 				Role:      "tool_result",
 				Tool:      &provider.ToolUse{ID: r.toolCallID, Name: r.toolName},
 				Text:      text,
 				IsError:   toolResultFailed(text),
 				Timestamp: ts,
+				Key:       key,
 			})
 		}
 		// system and anything else: not conversation.
 	}
 	return msgs
+}
+
+// userText is what the user typed, from a stored user row: without the
+// persona the adapter prefixed to a process's first prompt
+// (wrapSystemPrompt), and after the last interrupt-correction marker.
+func userText(content string) string {
+	text := stripSystemPrompt(decodeContent(content))
+	if i := strings.LastIndex(text, correctionMarker); i >= 0 {
+		text = text[i+len(correctionMarker):]
+	}
+	return text
 }
 
 func failedTurn(kind, text string) bool {

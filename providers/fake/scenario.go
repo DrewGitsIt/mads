@@ -105,6 +105,20 @@ type Rule struct {
 	// this rule only, so one suite-wide scenario can give a single task's
 	// stage a resumable session without changing every other one-shot.
 	AnnounceRef bool `yaml:"announce_ref,omitempty"`
+	// Blocks streams the reply as separate text items, one per block: each
+	// block's chunks stream back to back (DelayMs between chunks), each
+	// block gets its own key and its own stored row, recorded as its last
+	// chunk streams (claude stores each finished message; codex each
+	// completed item). Replaces Reply/Chunks. With Tools, the tools run
+	// between the first block and the rest — the "text, tool, text" shape.
+	Blocks [][]string `yaml:"blocks,omitempty"`
+	// UserLagMs records the user's message that long after the send
+	// (claude writes it ~1 s after a cold start).
+	UserLagMs int `yaml:"user_lag_ms,omitempty"`
+	// HoldUntilToolDone stores the text block before a tool, and the tool
+	// call itself, only once the tool's result is in — goose writes a
+	// message only after its tools have run.
+	HoldUntilToolDone bool `yaml:"hold_until_tool_done,omitempty"`
 }
 
 // UsageOverride pins one or more of a scripted one-shot's usage fields; unset
@@ -130,6 +144,12 @@ type ToolStep struct {
 	// write — the trust matrix's BehaviorTrustLimited gates on this, distinct
 	// from a Path+Content file write.
 	Command bool `yaml:"command,omitempty"`
+	// Result, when set, is the tool's output: an EventToolResult with this
+	// text follows the call (after DurationMs), and a tool_result row is
+	// stored. Without it the step emits only the call, as it always has.
+	Result string `yaml:"result,omitempty"`
+	// DurationMs is how long the tool runs before its result.
+	DurationMs int `yaml:"duration_ms,omitempty"`
 }
 
 // Validate reports every problem at once (§10.3 ethos).
@@ -149,6 +169,12 @@ func (sc Scenario) Validate() error {
 			if ts.Content != "" && ts.Path == "" {
 				probs = append(probs, fmt.Sprintf("rule %d tool %d: content without a path", i, j))
 			}
+		}
+		if len(r.Blocks) > 0 && (r.Reply != "" || len(r.Chunks) > 0) {
+			probs = append(probs, fmt.Sprintf("rule %d: blocks replaces reply/chunks; set one", i))
+		}
+		if r.HoldUntilToolDone && len(r.Tools) == 0 {
+			probs = append(probs, fmt.Sprintf("rule %d: hold_until_tool_done needs a tool", i))
 		}
 		if r.Match == "" && !r.Resumed && i != len(sc.Rules)-1 {
 			probs = append(probs, fmt.Sprintf("rule %d: catch-all (empty match) shadows later rules", i))

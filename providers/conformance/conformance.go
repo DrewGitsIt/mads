@@ -50,6 +50,14 @@ type Script struct {
 	// on a harness that cannot elicit the shape, and the check records that
 	// it was not probed rather than passing silently.
 	Unprompted func() string
+	// ToolTurn returns a prompt whose reply is a sentence, one harmless tool
+	// call, then another sentence — the stable_keys probe's second turn. A
+	// harness declaring BehaviorStableKeys working must provide it.
+	ToolTurn func() string
+	// StoreWait bounds how long the stable_keys probe waits for the agent's
+	// store to catch up with a turn (goose stores a tool call only after the
+	// tool ends). Zero means 10s.
+	StoreWait time.Duration
 	// Timeout bounds each wait on the provider. Zero means 5s.
 	Timeout time.Duration
 }
@@ -203,6 +211,11 @@ func Check(ctx context.Context, p provider.Provider, s Script) []Result {
 
 	c.add(provider.BehaviorMCPServers, c.mcpServers(), "")
 
+	// Last of the structured probes, so it also sees whether any earlier one
+	// got an EventSettle it never asked for.
+	keysNote, keysErr := c.stableKeys(structured)
+	c.add(provider.BehaviorStableKeys, keysErr, keysNote)
+
 	switch {
 	case !structured:
 		c.add(TurnTermination, nil, "not probed: needs the structured transport")
@@ -286,6 +299,9 @@ type checker struct {
 	s       Script
 	ctx     context.Context
 	results []Result
+	// unaskedSettle: collect saw an EventSettle on a session that never set
+	// StartOptions.Keyed (the stable_keys result reports it).
+	unaskedSettle bool
 }
 
 // delegateInspector checks BehaviorDelegateTranscript against the
@@ -408,6 +424,8 @@ func (c *checker) collect(sess provider.Session) (string, *provider.Event, error
 			switch ev.Kind {
 			case provider.EventText:
 				text.WriteString(ev.Text)
+			case provider.EventSettle:
+				c.unaskedSettle = true // no probe but stable_keys opts in
 			case provider.EventTurnEnd:
 				return text.String(), &ev, nil
 			case provider.EventError:
@@ -417,6 +435,32 @@ func (c *checker) collect(sess provider.Session) (string, *provider.Event, error
 			return text.String(), nil, fmt.Errorf("no turn end within %s", c.s.timeout())
 		case <-c.ctx.Done():
 			return text.String(), nil, c.ctx.Err()
+		}
+	}
+}
+
+// collectInterrupted reads an interrupted turn through its end. Unlike
+// collect, an EventError is no failure here: some agents close an
+// interrupted turn with an error-flavoured result (claude's empty
+// error_during_execution), which is the interrupt working.
+func (c *checker) collectInterrupted(sess provider.Session) error {
+	deadline := time.After(c.s.timeout())
+	for {
+		select {
+		case ev, ok := <-sess.Events():
+			if !ok {
+				return errors.New("event stream closed before turn end (process died mid-turn?)")
+			}
+			switch ev.Kind {
+			case provider.EventSettle:
+				c.unaskedSettle = true
+			case provider.EventTurnEnd:
+				return nil
+			}
+		case <-deadline:
+			return fmt.Errorf("no turn end within %s", c.s.timeout())
+		case <-c.ctx.Done():
+			return c.ctx.Err()
 		}
 	}
 }
@@ -524,7 +568,7 @@ func (c *checker) interrupt() error {
 	if err := sess.Interrupt(c.ctx); err != nil {
 		return fmt.Errorf("Interrupt: %w", err)
 	}
-	if _, _, err := c.collect(sess); err != nil {
+	if err := c.collectInterrupted(sess); err != nil {
 		return fmt.Errorf("turn did not end after interrupt: %w", err)
 	}
 	// The session must survive the interrupt.

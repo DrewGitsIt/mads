@@ -45,6 +45,7 @@ func TestHonestPartialStubPasses(t *testing.T) {
 		provider.BehaviorResume:          provider.Unsupported,
 		provider.BehaviorOneShotResume:   provider.Unsupported,
 		provider.BehaviorTranscript:      provider.Unsupported,
+		provider.BehaviorStableKeys:      provider.Unsupported,
 		provider.BehaviorModelDiscovery:  provider.Unsupported,
 		provider.BehaviorPTY:             provider.Unsupported,
 		provider.BehaviorCompaction:      provider.Unsupported,
@@ -112,6 +113,7 @@ func TestMismatchesAreCaught(t *testing.T) {
 			"declared-unsupported transcript quietly works",
 			newStub(map[provider.Behavior]provider.Support{
 				provider.BehaviorTranscript: provider.Unsupported,
+				provider.BehaviorStableKeys: provider.Unsupported,
 			}, lies{secretTranscript: true}),
 			provider.BehaviorTranscript, "declared unsupported but Transcript returns data",
 		},
@@ -157,6 +159,38 @@ func TestMismatchesAreCaught(t *testing.T) {
 				provider.BehaviorCompactionFocus: provider.Unsupported,
 			}, lies{dropsFocus: true}),
 			provider.BehaviorCompactionFocus, "want ErrUnsupported",
+		},
+		{
+			"a streamed tool result is never stored",
+			newStub(nil, lies{keysDropResult: true}),
+			provider.BehaviorStableKeys, `streamed tool_result`,
+		},
+		{
+			"the store renames an item",
+			newStub(nil, lies{keysRenamed: true}),
+			provider.BehaviorStableKeys, "never stored",
+		},
+		{
+			"the store's text differs from the stream",
+			newStub(nil, lies{keysTextDiffers: true}),
+			provider.BehaviorStableKeys, "text streamed",
+		},
+		{
+			"an item's chunks are interleaved with another's",
+			newStub(nil, lies{keysInterleave: true}),
+			provider.BehaviorStableKeys, "must be contiguous",
+		},
+		{
+			"declared-unsupported stable keys quietly emitted",
+			newStub(map[provider.Behavior]provider.Support{
+				provider.BehaviorStableKeys: provider.Unsupported,
+			}, lies{keysUnsupported: true}),
+			provider.BehaviorStableKeys, "declared unsupported but",
+		},
+		{
+			"a settle hint nobody asked for",
+			newStub(nil, lies{settleUnasked: true}),
+			provider.BehaviorStableKeys, "without StartOptions.Keyed",
 		},
 	}
 	for _, c := range cases {

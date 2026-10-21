@@ -146,6 +146,11 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorDelegateTranscript: provider.Unsupported,
 		provider.BehaviorDelegateSteer:      provider.Unsupported,
 		provider.BehaviorDelegateStop:       provider.Unsupported,
+		// kiro-cli isn't installed anywhere a capture could be taken, so no
+		// live id has been checked against what kiro stores: the engine's
+		// zero Keys knob emits no keys, live or stored (README "Conversation
+		// keys (unverified)" has the derivation that would apply).
+		provider.BehaviorStableKeys: provider.Unsupported,
 	}
 }
 

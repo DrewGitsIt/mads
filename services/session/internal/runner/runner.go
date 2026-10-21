@@ -1834,7 +1834,11 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 // — without duplicating the Router's own crash bookkeeping (lease release,
 // session.crashed), which fires independently when this OS process exits.
 func (r *Runner) pump(sess provider.Session) {
+	var join textJoiner
 	for ev := range sess.Events() {
+		// First, so every consumer below (conversation status, synth,
+		// digest, the live stream) sees text as it always read.
+		ev = join.apply(ev)
 		r.notePeerAddress(sess)
 		if ev.Kind == provider.EventInbound {
 			ev = r.onInbound(ev)
@@ -1938,7 +1942,9 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			var join textJoiner
 			for ev := range events {
+				ev = join.apply(ev)
 				if ev.Kind == provider.EventTurnEnd {
 					r.sweepDeletedFiles()
 					r.shadowStore.CommitTurnAsync()

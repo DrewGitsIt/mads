@@ -18,6 +18,9 @@ type wireLine struct {
 	Subtype   string       `json:"subtype"`
 	SessionID string       `json:"session_id"`
 	Message   *wireMessage `json:"message"`
+	// UUID is the line's id: on an assistant or user line, the same uuid
+	// the session's JSONL line carries (keys.go).
+	UUID string `json:"uuid"`
 
 	// result-line fields. Origin distinguishes the extra result line a
 	// background-subagent notification re-invocation closes with (kind
@@ -294,6 +297,9 @@ func (l *wireLine) model() string {
 // wireMessage is an API message; content is either a plain string or a
 // block list, so it stays raw until blocks() decodes it.
 type wireMessage struct {
+	// ID is an assistant message's API id (msg_…), shared by every line
+	// the message's blocks are written on; a synthetic line's is a UUID.
+	ID      string          `json:"id"`
 	Role    string          `json:"role"`
 	Content json.RawMessage `json:"content"`
 	// Model and Usage ride on assistant messages: on a transcript line they
@@ -486,18 +492,24 @@ func toolPath(input json.RawMessage) string {
 // whole-message "assistant" text block that follows is then a duplicate of
 // what already streamed, so it is dropped and only its tool_use blocks emit.
 func (l *wireLine) events(interrupted bool, partial bool) []provider.Event {
+	return l.keyedEvents(interrupted, partial, nil)
+}
+
+// keyedEvents is events with each conversation item keyed by k (keys.go);
+// nil k leaves every Key empty.
+func (l *wireLine) keyedEvents(interrupted bool, partial bool, k *lineKeys) []provider.Event {
 	switch l.Type {
 	case "system":
 		return l.systemEvents()
 	case "stream_event":
-		return l.tagged(l.streamDeltaEvents())
+		return l.tagged(l.streamDeltaEvents(k))
 	case "assistant":
 		var evs []provider.Event
-		for _, b := range l.Message.blocks() {
+		for i, b := range l.Message.blocks() {
 			switch b.Type {
 			case "text":
 				if !partial && b.Text != "" {
-					evs = append(evs, provider.Event{Kind: provider.EventText, Text: b.Text})
+					evs = append(evs, provider.Event{Kind: provider.EventText, Key: k.block(i), Text: b.Text})
 				}
 			case "thinking":
 				// Emitted in both partial and whole modes: streamDeltaEvents
@@ -506,10 +518,10 @@ func (l *wireLine) events(interrupted bool, partial bool) []provider.Event {
 				// text — the shape the real capture in testdata/
 				// stream-task-subagent.jsonl actually carries) say nothing.
 				if b.Thinking != "" {
-					evs = append(evs, provider.Event{Kind: provider.EventThinking, Text: b.Thinking})
+					evs = append(evs, provider.Event{Kind: provider.EventThinking, Key: k.block(i), Text: b.Thinking})
 				}
 			case "tool_use":
-				evs = append(evs, provider.Event{Kind: provider.EventToolUse, Tool: newToolUse(b.ID, b.Name, b.Input)})
+				evs = append(evs, provider.Event{Kind: provider.EventToolUse, Key: k.tool(b.ID), Tool: newToolUse(b.ID, b.Name, b.Input)})
 			}
 		}
 		// A subagent's API call: its context and model live nowhere else on
@@ -578,6 +590,7 @@ func (l *wireLine) events(interrupted bool, partial bool) []provider.Event {
 			}
 			evs = append(evs, provider.Event{
 				Kind:    provider.EventToolResult,
+				Key:     k.tool(b.ToolUseID),
 				Tool:    &provider.ToolUse{ID: b.ToolUseID},
 				Text:    toolResultText(b.Content),
 				IsError: b.IsError,
@@ -717,12 +730,13 @@ func (l *wireLine) taskStatus() *provider.TaskStatus {
 // message/content-block start/stop framing, thinking deltas, and tool-input
 // (input_json_delta) deltas are bookkeeping the whole-message "assistant"
 // line already carries.
-func (l *wireLine) streamDeltaEvents() []provider.Event {
+func (l *wireLine) streamDeltaEvents(k *lineKeys) []provider.Event {
 	if len(l.Event) == 0 {
 		return nil
 	}
 	var e struct {
 		Type  string `json:"type"`
+		Index int    `json:"index"`
 		Delta struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
@@ -732,7 +746,7 @@ func (l *wireLine) streamDeltaEvents() []provider.Event {
 		return nil
 	}
 	if e.Type == "content_block_delta" && e.Delta.Type == "text_delta" && e.Delta.Text != "" {
-		return []provider.Event{{Kind: provider.EventText, Text: e.Delta.Text}}
+		return []provider.Event{{Kind: provider.EventText, Key: k.streamBlock(e.Index), Text: e.Delta.Text}}
 	}
 	return nil
 }

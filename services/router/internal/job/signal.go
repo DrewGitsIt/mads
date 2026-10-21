@@ -272,7 +272,7 @@ func targetAddr(ctx context.Context, deps Deps, l contracts.Link, wake bool) (st
 	if addr, ok := deps.Resolver.SessionAddr(l.GrantingSessionID); ok {
 		return addr, true
 	}
-	if !(wake || l.Implicit) || deps.Waker == nil {
+	if !wake && !l.Implicit || deps.Waker == nil {
 		return "", false
 	}
 	addr, err := deps.Waker.WakeSession(ctx, l.GrantingSessionID)

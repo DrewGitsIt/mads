@@ -2,7 +2,8 @@
   {
     "role": "user",
     "text": "what does the screenshot show?",
-    "timestamp": "2026-07-19T10:00:00Z"
+    "timestamp": "2026-07-19T10:00:00Z",
+    "key": "user:b1"
   },
   {
     "role": "tool",
@@ -21,7 +22,8 @@
         }
       ]
     },
-    "timestamp": "2026-07-19T10:00:01Z"
+    "timestamp": "2026-07-19T10:00:01Z",
+    "key": "toolu_11"
   },
   {
     "role": "tool_result",
@@ -31,12 +33,14 @@
       "name": ""
     },
     "timestamp": "2026-07-19T10:00:02Z",
-    "is_error": true
+    "is_error": true,
+    "key": "toolu_11"
   },
   {
     "role": "agent",
     "text": "I can't read that image without approval. Let me check the tests instead.",
-    "timestamp": "2026-07-19T10:00:03Z"
+    "timestamp": "2026-07-19T10:00:03Z",
+    "key": "b4"
   },
   {
     "role": "tool",
@@ -49,7 +53,8 @@
       "kind": "execute",
       "title": "go test ./..."
     },
-    "timestamp": "2026-07-19T10:00:04Z"
+    "timestamp": "2026-07-19T10:00:04Z",
+    "key": "toolu_12"
   },
   {
     "role": "tool_result",
@@ -58,6 +63,7 @@
       "id": "toolu_12",
       "name": ""
     },
-    "timestamp": "2026-07-19T10:00:09Z"
+    "timestamp": "2026-07-19T10:00:09Z",
+    "key": "toolu_12"
   }
 ]

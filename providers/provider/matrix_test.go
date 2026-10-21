@@ -46,6 +46,10 @@ func TestMatrixValidate(t *testing.T) {
 		{"emulated compaction", fullMatrix(map[Behavior]Support{
 			BehaviorCompaction: Emulated,
 		}), `behavior "compaction" cannot be emulated`},
+		{"stable keys without a transcript", fullMatrix(map[Behavior]Support{
+			BehaviorTranscript: Unsupported,
+		}), "stable_keys needs transcript"},
+		{"emulated stable keys", fullMatrix(map[Behavior]Support{BehaviorStableKeys: Emulated}), ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -90,6 +94,8 @@ func TestRequirementLevels(t *testing.T) {
 		// Never emulated: a harness without its own pass just hides Compact.
 		BehaviorCompaction:      LevelOptional,
 		BehaviorCompactionFocus: LevelOptional,
+		// Conversation plumbing: without it the chat merges by position.
+		BehaviorStableKeys: LevelOptional,
 	} {
 		if got := Requirement(b); got != want {
 			t.Errorf("Requirement(%s) = %s, want %s", b, got, want)
@@ -98,8 +104,8 @@ func TestRequirementLevels(t *testing.T) {
 	if Requirement("telepathy") != "" {
 		t.Error("unknown behavior should have no level")
 	}
-	if n := len(Behaviors()); n != 24 {
-		t.Errorf("Behaviors() = %d entries, want 24", n)
+	if n := len(Behaviors()); n != 25 {
+		t.Errorf("Behaviors() = %d entries, want 25", n)
 	}
 }
 

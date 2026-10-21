@@ -1,0 +1,15 @@
+# (session_id, message_id, rows sharing it) in the owner's real sessions.db, read-only, 2026-10-20; top 10 of 27 repeated pairs
+20261007_10|chatcmpl-827|3
+20261008_1|chatcmpl-633|3
+20261008_1|chatcmpl-830|3
+20261008_1|chatcmpl-927|3
+20261007_10|chatcmpl-111|2
+20261007_10|chatcmpl-152|2
+20261007_10|chatcmpl-252|2
+20261007_10|chatcmpl-324|2
+20261007_10|chatcmpl-894|2
+20261008_1|chatcmpl-117|2
+# repeated (session_id, message_id) pairs in total
+27
+# assistant message_id prefixes: chatcmpl-* (ollama) vs others
+chatcmpl|780

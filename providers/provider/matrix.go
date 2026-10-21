@@ -134,6 +134,15 @@ const (
 	// BehaviorDelegateStop — mads can stop one delegate without stopping
 	// its parent.
 	BehaviorDelegateStop Behavior = "delegate_stop"
+
+	// BehaviorStableKeys — every conversation item carries a Key derived
+	// from the agent's own ids, the same live (Event.Key) and stored
+	// (Message.Key), with the same text on both sides
+	// (docs/CHAT-STREAM-DESIGN.md §1; the conformance stable_keys probe).
+	// Native: the agent's stored ids are the live ids. Emulated: the
+	// adapter matches live items to stored rows itself (hermes, by
+	// position). Optional; internal plumbing, not a user-facing capability.
+	BehaviorStableKeys Behavior = "stable_keys"
 )
 
 // Support is a provider's declared implementation status for one behavior.
@@ -195,6 +204,8 @@ var requirements = map[Behavior]Level{
 	BehaviorDelegateTranscript: LevelOptional,
 	BehaviorDelegateSteer:      LevelOptional,
 	BehaviorDelegateStop:       LevelOptional,
+
+	BehaviorStableKeys: LevelOptional,
 }
 
 // Requirement returns the platform's requirement level for a behavior, or ""
@@ -246,6 +257,9 @@ func (m Matrix) Validate() error {
 	}
 	if m[BehaviorCompactionFocus].Works() && !m[BehaviorCompaction].Works() {
 		probs = append(probs, "compaction_focus needs compaction")
+	}
+	if m[BehaviorStableKeys].Works() && !m[BehaviorTranscript].Works() {
+		probs = append(probs, "stable_keys needs transcript (a key is only stable if a stored row carries it)")
 	}
 	// Never emulated (see BehaviorCompaction): Works() would count Emulated
 	// as working and light up every Compact affordance.

@@ -14,14 +14,49 @@ import (
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
-// Transcript implements provider.TranscriptReader via `goose session export
-// --session-id <ref> --format json` — goose's own session store, no ACP
-// spawn needed (design doc "Transcript normalization"; shape pinned against
-// testdata/captures/oneshot-export.json).
+// Transcript implements provider.TranscriptReader over goose's own store,
+// sessions.db (store.go), falling back to `goose session export
+// --session-id <ref> --format json` when the store isn't there, doesn't
+// hold the session, or its private schema isn't the one this reader knows
+// (design doc "Transcript normalization"; export shape pinned against
+// testdata/captures/oneshot-export.json). Both sources carry the same
+// message ids and created stamps, so the keys agree either way.
 func (p *Provider) Transcript(ctx context.Context, ref string) ([]provider.Message, error) {
 	if ref == "" {
 		return nil, fmt.Errorf("transcript: empty session ref")
 	}
+	rows, _, err := p.readStore(ctx, ref, nil)
+	if err == nil {
+		return normalizeExport(rows), nil
+	}
+	if !errors.Is(err, errStoreUnusable) {
+		return nil, fmt.Errorf("transcript: %w", err)
+	}
+	return p.exportTranscript(ctx, ref)
+}
+
+// TranscriptSince implements provider.IncrementalTranscriptReader over
+// sessions.db with a rowid cursor (store.go). ErrUnsupported whenever
+// Transcript would have fallen back to the export: re-serialising the
+// whole session is no incremental read.
+func (p *Provider) TranscriptSince(ctx context.Context, ref string, cursor provider.TranscriptCursor) ([]provider.Message, provider.TranscriptCursor, error) {
+	if ref == "" {
+		return nil, cursor, fmt.Errorf("transcript: empty session ref")
+	}
+	cur, _ := cursor.(storeCursor)
+	rows, next, err := p.readStore(ctx, ref, &cur)
+	switch {
+	case errors.Is(err, errStoreUnusable):
+		return nil, cursor, fmt.Errorf("transcript since: %w: %w", err, provider.ErrUnsupported)
+	case err != nil:
+		return nil, cursor, err
+	}
+	return normalizeExport(rows), next, nil
+}
+
+// exportTranscript is the fallback reader: goose's own export, one spawn
+// that re-serialises the whole session.
+func (p *Provider) exportTranscript(ctx context.Context, ref string) ([]provider.Message, error) {
 	out, err := p.gooseQuery(ctx, "session", "export", "--session-id", ref, "--format", "json")
 	if err != nil {
 		return nil, fmt.Errorf("transcript: %w", err)
@@ -64,8 +99,14 @@ type exportDoc struct {
 	Conversation []exportMessage `json:"conversation"`
 }
 
-// exportMessage is one conversation[] entry. Created is unix seconds.
+// exportMessage is one conversation[] entry — and one sessions.db messages
+// row, which holds the same fields (message_id, role, created_timestamp,
+// content_json, metadata_json). Created is unix seconds: the first
+// streamed chunk's _meta.goose.created for an assistant message (survey
+// captures/keys). rowID is the store's row id (0 from an export).
 type exportMessage struct {
+	ID       string `json:"id"`
+	rowID    int64
 	Role     string          `json:"role"`
 	Created  int64           `json:"created"`
 	Content  []exportBlock   `json:"content"`
@@ -107,18 +148,41 @@ type exportBlock struct {
 	} `json:"toolResult"`
 }
 
-// normalizeExport maps an export's conversation[] onto the
-// provider-independent Message form (design doc "Transcript normalization"):
-// user text → "user", assistant text → "agent", toolRequest → "tool",
-// toolResponse → "tool_result" (these ride role:"user" entries — never
-// misread them as user turns), thinking blocks and userVisible:false
-// entries (injected <turn-context>) skipped. Timestamps are the entry's
-// unix `created`, held in UTC so output is machine-independent.
+// normalizeExport maps goose messages (an export's conversation[] or
+// sessions.db rows) onto the provider-independent Message form (design doc
+// "Transcript normalization"): user text → "user", assistant text →
+// "agent", toolRequest → "tool", toolResponse → "tool_result" (these ride
+// role:"user" entries — never misread them as user turns), thinking blocks
+// and userVisible:false entries (the injected <turn-context> row after
+// every prompt) skipped. Timestamps are the entry's unix `created`, held in
+// UTC so output is machine-independent.
+//
+// Keys (docs/CHAT-STREAM-DESIGN.md §1), equal to the live ones acprpc
+// derives under goose's KeyModeMessageRun knob:
+//   - assistant text: "<message id>@<created>:<run>", run being the item's
+//     index among the message's text and thinking items. created tells
+//     apart ollama's chatcmpl-0..999 ids, which repeat within a session.
+//   - a tool call and its result: the call id (call_…). Live, a tool call
+//     carries the preceding text's messageId in _meta; stored, it is a row
+//     of its own (msg_<uuid>, sometimes a chatcmpl id), so only the call
+//     id is the same on both sides.
+//   - a user row: "user:"+its stored id. goose stores no caller id, so mads
+//     matches its own sends to these rows on settle (no KeyedSender).
+//
+// A message stored without an id (none seen) is keyed by its row, or for
+// an export by its position: synthetic, but stable for that source.
 func normalizeExport(conv []exportMessage) []provider.Message {
 	var msgs []provider.Message
-	for _, m := range conv {
+	for i, m := range conv {
 		if !m.visible() {
 			continue
+		}
+		id := m.ID
+		if id == "" {
+			id = fmt.Sprintf("row-%d", m.rowID)
+			if m.rowID == 0 {
+				id = fmt.Sprintf("export-%d", i)
+			}
 		}
 		ts := time.Unix(m.Created, 0).UTC()
 		switch m.Role {
@@ -135,6 +199,7 @@ func normalizeExport(conv []exportMessage) []provider.Message {
 						Role:      "tool_result",
 						Tool:      &provider.ToolUse{ID: b.ID},
 						Timestamp: ts,
+						Key:       b.ID,
 					}
 					if b.ToolResult != nil {
 						msg.Text = toolResponseText(b.ToolResult.Value.Content)
@@ -144,15 +209,19 @@ func normalizeExport(conv []exportMessage) []provider.Message {
 				}
 			}
 			if len(texts) > 0 {
-				msgs = append(msgs, provider.Message{Role: "user", Text: strings.Join(texts, "\n"), Timestamp: ts})
+				msgs = append(msgs, provider.Message{Role: "user", Text: strings.Join(texts, "\n"), Timestamp: ts, Key: "user:" + id})
 			}
 		case "assistant":
+			run := 0
 			for _, b := range m.Content {
 				switch b.Type {
 				case "text":
 					if b.Text != "" {
-						msgs = append(msgs, provider.Message{Role: "agent", Text: b.Text, Timestamp: ts})
+						msgs = append(msgs, provider.Message{Role: "agent", Text: b.Text, Timestamp: ts, Key: fmt.Sprintf("%s@%d:%d", id, m.Created, run)})
 					}
+					run++
+				case "thinking":
+					run++ // not a transcript row, but a run of the message
 				case "toolRequest":
 					if b.ToolCall == nil {
 						continue
@@ -161,6 +230,7 @@ func normalizeExport(conv []exportMessage) []provider.Message {
 						Role:      "tool",
 						Tool:      &provider.ToolUse{ID: b.ID, Name: b.ToolCall.Value.Name, Input: b.ToolCall.Value.Arguments},
 						Timestamp: ts,
+						Key:       b.ID,
 					})
 				}
 			}

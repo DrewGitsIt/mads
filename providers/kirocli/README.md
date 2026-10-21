@@ -154,6 +154,37 @@ trust is the engine's kind gate, a coarser mechanism).
   implementation has drifted from its own docs elsewhere, this design could
   be wrong in ways only a real binary would catch.
 
+## Conversation keys (unverified)
+
+`stable_keys` is **Unsupported**, and the binding emits **no** keys, live
+or stored: the engine's `Keys` knob is left at its zero value (the
+conformance probe fails an unsupported row that emits any). kiro-cli isn't
+installed, so nothing below has been checked against a binary or a store —
+it is the ACP-shape derivation that *would* apply, recorded so a future
+capture has something to confirm or refute
+(docs/CHAT-STREAM-DESIGN.md §1, providers/acprpc README "Keys"):
+
+- **Text / thinking**: if kiro stamps `agent_message_chunk` /
+  `agent_thought_chunk` with a `messageId` per model call (the spec field
+  goose and hermes both use), `KeyModeMessageRun` gives
+  `<messageId>:<run>`. Whether it repeats ids (goose's ollama ids do,
+  hence goose's `created` stamp) or stores them at all (hermes doesn't) is
+  unknown.
+- **Tools**: `toolCallId`, the spec's own id — native only if kiro's store
+  keeps the same id.
+- **Stored side**: today's reader is `session/load` replay
+  (transcript.go), whose chunks would need to carry the same `messageId`
+  as the live ones. goose's replay does; hermes's replay carries none. A
+  replay without ids can't key anything, which would leave either an
+  on-disk reader (kiro's store format is undocumented) or a hermes-style
+  position match.
+- **Settle hints**: none until the store's write timing is known.
+
+To flip the row: capture a live `kiro-cli acp` run (text, tool, text; an
+interrupt) together with whatever kiro persists for it, compare ids, then
+set `Keys`/`Settle` in `engineConfig` and declare Native or Emulated with
+the capture cited.
+
 ## Engine migration (behavior that deliberately changed)
 
 The hand-rolled ~430-line ACP layer (`wire.go`/`session.go`) is deleted;

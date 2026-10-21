@@ -35,6 +35,8 @@ func script() conformance.Script {
 		Recall:         func() string { return "recall" },
 		AttemptWrite:   func() string { return "attempt-write" },
 		AttemptCommand: func() string { return "attempt-shell" },
+		ToolTurn:       func() string { return "tool-turn" },
+		StoreWait:      2 * time.Second,
 		Timeout:        10 * time.Second, // each probe spawns a real subprocess
 	}
 }
@@ -132,10 +134,25 @@ func TestThinkingAndCommentary(t *testing.T) {
 	if len(thinking) != 1 || thinking[0] != "**Planning**" {
 		t.Errorf("thinking = %q, want the one reasoning summary", thinking)
 	}
-	// Commentary then final answer, two items back to back: a paragraph
-	// break between them, never "Checking.Done.".
-	if got := textOf(evs); got != "Checking.\n\nDone." {
-		t.Errorf("text = %q", got)
+	// Commentary then final answer, two items back to back: two keyed text
+	// runs, each exactly its item's text — nothing joined in between (the
+	// UI's join rule handles adjacency, live and stored alike).
+	var keys []string
+	texts := map[string]string{}
+	for _, ev := range evs {
+		if ev.Kind != provider.EventText {
+			continue
+		}
+		if ev.Key == "" {
+			t.Fatalf("text event without a key: %+v", ev)
+		}
+		if len(keys) == 0 || keys[len(keys)-1] != ev.Key {
+			keys = append(keys, ev.Key)
+		}
+		texts[ev.Key] += ev.Text
+	}
+	if len(keys) != 2 || keys[0] == keys[1] || texts[keys[0]] != "Checking." || texts[keys[1]] != "Done." {
+		t.Errorf("text items %v = %q", keys, texts)
 	}
 }
 

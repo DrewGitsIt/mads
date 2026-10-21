@@ -91,6 +91,11 @@ type faProfile struct {
 	// "model-less agent".
 	modelSelector bool
 	noModelOption bool
+	// keyed → every reply is one message with a stable messageId and a
+	// _meta.goose.created stamp (later chunks a second later, as goose's
+	// do), a thought run before the text, and the transcript file keeps
+	// the native ids the keys derive from: the stable_keys stand-in.
+	keyed bool
 }
 
 var faProfiles = map[string]faProfile{
@@ -128,6 +133,17 @@ var faProfiles = map[string]faProfile{
 		noModelOption:  true,
 		availableModes: []string{"auto", "approve"}, askMode: "approve",
 		cancelStop: "end_turn",
+	},
+	// keyed: goose's identity shape for the stable_keys probe — see
+	// faProfile.keyed. No loadSession, so resume is honestly unsupported.
+	"keyed": {
+		closeCap: true, metaNS: "goose", keyed: true,
+		availableModes: []string{"auto", "approve"}, askMode: "approve",
+		cancelStop: "cancelled",
+		optionID: map[string]string{
+			"allow_once": "k-o", "allow_always": "k-a",
+			"reject_once": "k-r", "reject_always": "k-x",
+		},
 	},
 	// dual: the codex shape — both surfaces, disjoint ids, so a test can
 	// prove which one discovery and selection actually use.
@@ -192,11 +208,23 @@ func faSend(m rpcMessage) {
 // otherwise-stateless fake process needs to serve session/load replay and
 // post-resume recall after a later process reattaches.
 type faTranscriptEntry struct {
-	Role string `json:"role"` // "user" or "agent"
+	Role string `json:"role"` // "user", "agent", "tool" or "tool_result"
 	Text string `json:"text"`
+	// The keyed profile's native ids: the message's id, its first chunk's
+	// created stamp and the text run's index within it; a tool's call id
+	// and name; a user row's own id.
+	ID      string `json:"id,omitempty"`
+	Created int64  `json:"created,omitempty"`
+	Run     int    `json:"run,omitempty"`
+	CallID  string `json:"call_id,omitempty"`
+	Name    string `json:"name,omitempty"`
 }
 
 func faAppendTranscript(path, role, text string) {
+	faAppendEntry(path, faTranscriptEntry{Role: role, Text: text})
+}
+
+func faAppendEntry(path string, e faTranscriptEntry) {
 	if path == "" {
 		return
 	}
@@ -206,7 +234,7 @@ func faAppendTranscript(path, role, text string) {
 		return
 	}
 	defer func() { _ = f.Close() }()
-	_ = json.NewEncoder(f).Encode(faTranscriptEntry{Role: role, Text: text})
+	_ = json.NewEncoder(f).Encode(e)
 }
 
 func faLoadTranscript(path string) []faTranscriptEntry {
@@ -291,6 +319,29 @@ func faServe(pr faProfile) {
 			"content": []map[string]any{{"type": "content", "content": map[string]any{"type": "text", "text": text}}},
 		})
 	}
+	// keyed profile: one message per reply, goose-shaped.
+	msgSeq := 0
+	const createdBase = 1792515000
+	say := func(chunks []string) (id string, created int64) {
+		msgSeq++
+		id = fmt.Sprintf("chatcmpl-%d", msgSeq%3) // repeats, like ollama's
+		created = createdBase + int64(10*msgSeq)
+		for i, c := range chunks {
+			stamp := created
+			if i > 0 {
+				stamp++ // later chunks carry later seconds
+			}
+			notifyUpdate(map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": id,
+				"content": map[string]any{"type": "text", "text": c},
+				"_meta":   map[string]any{"goose": map[string]any{"messageId": id, "created": stamp}}})
+		}
+		return id, created
+	}
+	sayStored := func(chunks []string) {
+		id, created := say(chunks)
+		faAppendEntry(transcript, faTranscriptEntry{Role: "agent", Text: strings.Join(chunks, ""), ID: id, Created: created})
+	}
+	userSeq := 0
 	sessionResultBody := func(includeID bool) map[string]any {
 		modes := make([]map[string]any, 0, len(pr.availableModes))
 		for _, m := range pr.availableModes {
@@ -593,11 +644,65 @@ func faServe(pr faProfile) {
 				prompt += b.Text
 			}
 			history = append(history, prompt)
-			faAppendTranscript(transcript, "user", prompt)
+			userSeq++
+			faAppendEntry(transcript, faTranscriptEntry{Role: "user", Text: prompt, ID: fmt.Sprintf("msg_u%d", userSeq)})
 
 			// Real turns open with noise the decoder must skip or map.
 			notifyUpdate(map[string]any{"sessionUpdate": "session_info_update", "_meta": map[string]any{"fake": map[string]any{"activeRunId": "run_fake"}}})
 			chunk("agent_thought_chunk", "thinking...")
+
+			if pr.keyed && (prompt == "tool-text" || strings.HasSuffix(prompt, "slow")) {
+				if prompt == "tool-text" {
+					// The stable_keys probe's turn: text, a tool, text —
+					// two messages, the tool between them.
+					sayStored([]string{"Listing ", "the files."})
+					permSeq++
+					callID := fmt.Sprintf("call_%d", permSeq)
+					a := faAttempts["attempt-shell"]
+					toolCall(callID, a)
+					toolDone(callID, "completed", "alpha.txt")
+					faAppendEntry(transcript, faTranscriptEntry{Role: "tool", CallID: callID, Name: a.name})
+					faAppendEntry(transcript, faTranscriptEntry{Role: "tool_result", CallID: callID, Text: "alpha.txt"})
+					sayStored([]string{"Found ", "alpha.txt."})
+					raw, _ := json.Marshal(promptResult{StopReason: "end_turn", Usage: usage})
+					faSend(rpcMessage{JSONRPC: "2.0", ID: m.ID, Result: raw})
+					continue
+				}
+				// slow: one message streamed until cancelled; the partial is
+				// stored under it, as goose stores a cancelled reply.
+				var sent []string
+				var id string
+				var created int64
+				stop := "end_turn"
+				for i := 0; i < 400; i++ {
+					tick := fmt.Sprintf("tick %d ", i)
+					if i == 0 {
+						id, created = say([]string{tick})
+					} else {
+						notifyUpdate(map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": id,
+							"content": map[string]any{"type": "text", "text": tick},
+							"_meta":   map[string]any{"goose": map[string]any{"messageId": id, "created": created + 1}}})
+					}
+					sent = append(sent, tick)
+					cancelled := false
+					select {
+					case mm, ok := <-msgs:
+						if !ok {
+							return
+						}
+						cancelled = mm.Method == "session/cancel"
+					case <-time.After(5 * time.Millisecond):
+					}
+					if cancelled {
+						stop = pr.cancelStop
+						break
+					}
+				}
+				faAppendEntry(transcript, faTranscriptEntry{Role: "agent", Text: strings.Join(sent, ""), ID: id, Created: created})
+				raw, _ := json.Marshal(promptResult{StopReason: stop, Usage: usage})
+				faSend(rpcMessage{JSONRPC: "2.0", ID: m.ID, Result: raw})
+				continue
+			}
 
 			reply := "ok"
 			stopReason := "end_turn"
@@ -697,7 +802,10 @@ func faServe(pr faProfile) {
 				}
 			}
 
-			if reply != "" {
+			switch {
+			case reply != "" && pr.keyed:
+				sayStored([]string{reply})
+			case reply != "":
 				chunk("agent_message_chunk", reply)
 				faAppendTranscript(transcript, "agent", reply)
 			}
@@ -789,7 +897,8 @@ func faReplayMain(path string) {
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for sc.Scan() {
 		var e capEntry
-		if json.Unmarshal(sc.Bytes(), &e) == nil && e.Dir != "" {
+		// "meta" lines (the survey captures' turn markers) aren't traffic.
+		if json.Unmarshal(sc.Bytes(), &e) == nil && (e.Dir == "c2s" || e.Dir == "s2c") {
 			entries = append(entries, e)
 		}
 	}
