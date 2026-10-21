@@ -38,7 +38,7 @@ func script() conformance.Script {
 
 // The whole conformance suite runs against the adapter driving the scripted
 // stand-in binary (kirocli precedent): ACP + PTY echo, mid-turn interrupt
-// with the fake's capture-pinned end_turn-after-cancel result, OneShot +
+// with the fake's 1.50.1 cancelled-after-cancel result, OneShot +
 // OneShotStream over the engine's ACP emulation, cross-process resume via
 // session/load, synchronous ref announce, transcript via a really-recorded
 // `session export`, model discovery, the scripted 8415/21 usage, both trust
@@ -133,6 +133,43 @@ func TestStartRefKnownAtReturn(t *testing.T) {
 	}
 	if sess.Mode() != provider.ModeACP {
 		t.Fatalf("Mode = %q", sess.Mode())
+	}
+}
+
+// TestInterruptBothCancelStopReasons proves a mid-turn Interrupt marks the
+// turn end under both resolutions goose has shipped: 1.50.1 answers
+// session/cancel with stopReason "cancelled", 1.48.0 answered "end_turn"
+// and left the engine's own interrupted flag as the only signal.
+func TestInterruptBothCancelStopReasons(t *testing.T) {
+	for _, tc := range []struct{ name, env string }{
+		{"1.50.1-cancelled", ""},
+		{"1.48.0-end_turn", "MADS_FAKE_GOOSE_CANCEL_STOP=end_turn"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var env []string
+			if tc.env != "" {
+				env = append(env, tc.env)
+			}
+			sess := startSession(t, testProvider(t, env...), provider.StartOptions{})
+			if err := sess.Send(context.Background(), "slow"); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case ev := <-sess.Events():
+				if ev.Kind == provider.EventTurnEnd {
+					t.Fatal("slow turn ended before Interrupt could land")
+				}
+			case <-time.After(15 * time.Second):
+				t.Fatal("no event from the slow turn")
+			}
+			if err := sess.Interrupt(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			events := drainTurn(t, sess)
+			if end := events[len(events)-1]; !end.Interrupted {
+				t.Fatalf("turn end after Interrupt: Interrupted = false (%+v)", end)
+			}
+		})
 	}
 }
 

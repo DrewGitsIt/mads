@@ -11,7 +11,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/golden"
 )
 
-// loadExportCapture parses the committed goose 1.48.0 export capture — the
+// loadExportCapture parses the committed goose 1.50.1 export capture — the
 // evidence base every normalization fact here is pinned against.
 func loadExportCapture(t *testing.T) exportDoc {
 	t.Helper()
@@ -30,8 +30,7 @@ func loadExportCapture(t *testing.T) exportDoc {
 // export (claudecode/transcript convention): the golden holds exactly what
 // the platform sees. The properties the golden encodes are also asserted
 // explicitly so a careless -update can't bless a regression: the injected
-// userVisible:false <turn-context> entry is absent, thinking blocks are
-// absent, every message carries the entry's unix `created` as a timestamp,
+// userVisible:false <turn-context> entry is absent, every message carries the entry's unix `created` as a timestamp,
 // and tool results ride role:"user" entries without being misread as user
 // turns.
 func TestTranscriptNormalizationGolden(t *testing.T) {
@@ -49,10 +48,10 @@ func TestTranscriptNormalizationGolden(t *testing.T) {
 		}
 	}
 	// The capture: 1 typed user message (its turn-context sibling skipped),
-	// 2 toolRequests (todo__todo_write, shell), their 2 toolResponses, and
-	// 1 final assistant text — thinking blocks contribute nothing.
-	if counts["user"] != 1 || counts["tool"] != 2 || counts["tool_result"] != 2 || counts["agent"] != 1 {
-		t.Errorf("role counts = %v, want user:1 tool:2 tool_result:2 agent:1", counts)
+	// 3 toolRequests (todo__todo_write, shell, todo__todo_write), their 3
+	// toolResponses, and 1 final assistant text.
+	if counts["user"] != 1 || counts["tool"] != 3 || counts["tool_result"] != 3 || counts["agent"] != 1 {
+		t.Errorf("role counts = %v, want user:1 tool:3 tool_result:3 agent:1", counts)
 	}
 
 	got, err := json.MarshalIndent(msgs, "", "  ")
@@ -60,6 +59,26 @@ func TestTranscriptNormalizationGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	golden.Assert(t, "transcript.golden.json", append(got, '\n'))
+}
+
+// Thinking blocks contribute nothing. The 1.50.1 capture ran a no-think
+// model, so this rides a synthetic entry in the 1.48.0 capture's exact
+// shape (a thinking block sharing its assistant entry with the text).
+func TestTranscriptSkipsThinkingBlocks(t *testing.T) {
+	conv := `[
+	 {"id":"chatcmpl-892","role":"assistant","created":1788032384,"content":[
+	  {"type":"thinking","thinking":"The user wants a file.","signature":""},
+	  {"type":"text","text":"Done."}
+	 ],"metadata":{"userVisible":true,"agentVisible":true}}
+	]`
+	var entries []exportMessage
+	if err := json.Unmarshal([]byte(conv), &entries); err != nil {
+		t.Fatal(err)
+	}
+	msgs := normalizeExport(entries)
+	if len(msgs) != 1 || msgs[0].Role != "agent" || msgs[0].Text != "Done." {
+		t.Fatalf("got %+v, want only the agent text %q", msgs, "Done.")
+	}
 }
 
 // The IsError mapping (toolResult.value.isError → Message.IsError) — the
@@ -119,17 +138,17 @@ func TestTranscriptViaExport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "20260829_15.json"), raw, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "20261020_1.json"), raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	p := testProvider(t, "MADS_FAKE_EXPORT_DIR="+dir)
 
-	msgs, err := p.Transcript(context.Background(), "20260829_15")
+	msgs, err := p.Transcript(context.Background(), "20261020_1")
 	if err != nil {
 		t.Fatalf("Transcript: %v", err)
 	}
-	if len(msgs) != 6 || msgs[0].Role != "user" {
-		t.Fatalf("got %d messages (first %+v), want the capture's 6 starting with the user turn", len(msgs), msgs[0])
+	if len(msgs) != 8 || msgs[0].Role != "user" {
+		t.Fatalf("got %d messages (first %+v), want the capture's 8 starting with the user turn", len(msgs), msgs[0])
 	}
 }
 

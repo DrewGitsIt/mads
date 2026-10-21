@@ -136,6 +136,27 @@ describe("payloads", () => {
     isolation: THIS.isolation,
   };
 
+  it("/new on a full-trust-only provider sends Full, whatever this session ran at", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((input: URL) => {
+        if (input.toString().endsWith("/providers")) {
+          const matrix = { trust_limited: "unsupported", trust_read_only: "unsupported", trust_auto_review: "unsupported" };
+          return Promise.resolve(new Response(JSON.stringify([{ name: "hermes", matrix }]), { status: 200 }));
+        }
+        return Promise.resolve(new Response("[]", { status: 200 }));
+      }),
+    );
+    const { open, createSession } = setup({ session: { ...THIS, provider: "hermes", model: "copilot:gpt-4.1", trust: "limited" } });
+    await open(newCommand);
+    await waitFor(() =>
+      expect(screen.getByTestId("trust-reason").textContent).toBe("Hermes can't enforce approvals; it runs at full trust"),
+    );
+    fireEvent.click(startBtn());
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+    expect(payloadOf(createSession).trust).toBe("full");
+  });
+
   it("/new creates with the staged pills and no links", async () => {
     const { open, createSession } = setup();
     await open(newCommand);

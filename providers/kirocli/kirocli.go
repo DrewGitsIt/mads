@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/agentenv"
+	"github.com/drewkidwell/mads/pkg/binlocate"
 	"github.com/drewkidwell/mads/providers/acprpc"
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -40,8 +41,9 @@ import (
 // Config adapts the binary to its surroundings. The zero value targets a
 // stock install.
 type Config struct {
-	// Bin is the kiro-cli executable (default "kiro-cli"). Tests point this
-	// at a scripted stand-in.
+	// Bin is the kiro-cli executable (default binlocate.Resolve("kiro-cli"),
+	// which honours $MADS_AGENT_BIN_DIR). Tests point this at a scripted
+	// stand-in.
 	Bin string
 	// ExtraArgs are appended to every invocation.
 	ExtraArgs []string
@@ -70,7 +72,7 @@ type Provider struct {
 
 func New(cfg Config) *Provider {
 	if cfg.Bin == "" {
-		cfg.Bin = "kiro-cli"
+		cfg.Bin = binlocate.Resolve("kiro-cli")
 	}
 	return &Provider{cfg: cfg}
 }

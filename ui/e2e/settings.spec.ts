@@ -10,6 +10,9 @@ test("settings journey: appearance persists, preflight reports live data service
   const palette = page.getByRole("radiogroup", { name: "Palette" });
   const theme = page.getByRole("radiogroup", { name: "Theme" });
 
+  // The palette filter opens on the saved palette's tone (Clay, Warm), and
+  // Space is Cool: show All first.
+  await page.getByRole("group", { name: "Filter palettes" }).getByRole("button", { name: "All" }).click();
   await Promise.all([
     page.waitForResponse((r) => r.request().method() === "PUT" && r.url().endsWith("/config")),
     palette.getByRole("radio", { name: "Space" }).click(),
@@ -90,9 +93,16 @@ test("settings journey: live theme change doesn't commit an unsaved Editor edit"
 
 test("settings: the save bar coming and going doesn't move the page", async ({ page, routerURL }) => {
   await page.goto(routerURL);
+  // The health check is the slowest late loader: the Router runs every
+  // provider's version probe in turn, and a Python-started harness
+  // (hermes-acp) alone takes a few hundred ms. Wait for it explicitly — the
+  // settle poll below compares immediately on its first try, so it can't
+  // tell "settled" from "the response hasn't arrived yet".
+  const preflight = page.waitForResponse((r) => new URL(r.url()).pathname === "/preflight" && r.ok());
   await page.getByRole("button", { name: "Settings" }).click();
   const profiles = page.locator("section#profiles");
   await profiles.waitFor();
+  await preflight;
   // The Settings scroll column: the nearest scrolling ancestor of a section.
   const measure = () =>
     profiles.evaluate((el) => {

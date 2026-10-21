@@ -123,6 +123,46 @@ describe("Launchpad", () => {
     await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
   });
 
+  it("starts a session on a full-trust-only provider at Full, and says why", async () => {
+    const hermesMatrix = { trust_limited: "unsupported", trust_read_only: "unsupported", trust_auto_review: "unsupported" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((input: URL) => {
+        const url = input.toString();
+        if (url.includes("/sessions/defaults")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                provider: { value: "hermes", source: "config" },
+                model: {},
+                agent: {},
+                isolation: {},
+                // Even if a preview said otherwise, the pill and the payload follow the matrix.
+                trust: { value: "limited", source: "config" },
+                dir: {},
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+        if (url.endsWith("/providers")) {
+          return Promise.resolve(new Response(JSON.stringify([{ name: "hermes", matrix: hermesMatrix }]), { status: 200 }));
+        }
+        return Promise.resolve(new Response("[]", { status: 200 }));
+      }),
+    );
+    const createSession = vi.fn().mockResolvedValue(makeSession({ id: "s-hermes" }));
+    render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("trust-reason").textContent).toBe("Hermes can't enforce approvals; it runs at full trust"),
+    );
+    expect(screen.getByText("Full access")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Describe your goal"), { target: { value: "Tidy the README" } });
+    fireEvent.click(screen.getByText("Start session"));
+    await waitFor(() => expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ trust: "full" })));
+  });
+
   it("selecting Auto sends agent: 'auto' plus the composer's opening_prompt", async () => {
     const session = makeSession({ id: "s44", agent: "investigator-bot" });
     const createSession = vi.fn().mockResolvedValue(session);

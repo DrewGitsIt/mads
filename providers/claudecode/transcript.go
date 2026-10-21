@@ -130,7 +130,8 @@ type transcriptLine struct {
 	Message *wireMessage `json:"message"`
 	// Attachment is an "attachment" line's payload. Only the queued_command
 	// kind is read: a peer message that arrived mid-turn is recorded as one
-	// (peerAttachment).
+	// (peerAttachment), and so is the human's own mid-turn send
+	// (queuedPrompt).
 	Attachment *transcriptAttachment `json:"attachment"`
 	// Cwd is the session's working directory, stamped on every line —
 	// candidateTranscripts's filter, not read by normalizeTranscript.
@@ -154,11 +155,49 @@ type transcriptLine struct {
 // Prompt is input the CLI took in while a turn ran; for a peer message it is
 // the <cross-session-message …>body</cross-session-message> block, and
 // Origin (when the CLI wrote one) the same peer origin an idle arrival
-// carries.
+// carries. CommandMode says whose input it was: "prompt" (the human or a
+// peer) or "task-notification".
 type transcriptAttachment struct {
-	Type   string      `json:"type"`
-	Prompt string      `json:"prompt"`
-	Origin *wireOrigin `json:"origin"`
+	Type        string      `json:"type"`
+	CommandMode string      `json:"commandMode"`
+	Prompt      promptText  `json:"prompt"`
+	Origin      *wireOrigin `json:"origin"`
+}
+
+// promptText is a queued_command's prompt. claude writes it as a bare string
+// for peer messages and task notifications, but as an array of content
+// blocks for the human's own mid-turn send (2.1.285,
+// testdata/transcript_queued.jsonl). As a plain string field the array
+// failed the whole line's decode, so the line was skipped. Only text blocks
+// contribute, as with toolResultText.
+type promptText string
+
+func (p *promptText) UnmarshalJSON(raw []byte) error {
+	*p = promptText(toolResultText(raw))
+	return nil
+}
+
+// queuedPrompt is the text of the human's own mid-turn send: a queued_command
+// in "prompt" mode that isn't a peer message (peerAttachment reads those).
+// claude records it only as this attachment, never as a user line, so
+// skipping it lost the message from the conversation. Empty for any other
+// attachment.
+//
+// TODO(task-notification dedupe): mid-turn task notifications
+// (commandMode "task-notification", 199 of the 222 queued_command lines in
+// the local corpus on 2026-10-20) are still skipped here. 14 of their 112
+// task ids were also delivered as a user line, which already renders as a
+// "notification" entry, so showing the attachment form needs a dedupe by
+// task id first.
+func queuedPrompt(a *transcriptAttachment) string {
+	if a == nil || a.Type != "queued_command" || a.CommandMode != "prompt" {
+		return ""
+	}
+	text := string(a.Prompt)
+	if strings.TrimSpace(text) == "" || isCommandMarkup(text) {
+		return ""
+	}
+	return text
 }
 
 var (
@@ -177,7 +216,7 @@ func peerAttachment(a *transcriptAttachment) (in *provider.Inbound, body, msgID 
 	if a.Origin.isPeer() {
 		return a.Origin.inbound(), a.Origin.Body, a.Origin.MsgID
 	}
-	m := crossSessionTag.FindStringSubmatch(a.Prompt)
+	m := crossSessionTag.FindStringSubmatch(string(a.Prompt))
 	if m == nil {
 		return nil, "", ""
 	}
@@ -365,8 +404,12 @@ func normalizeLines(r io.Reader, sidechain bool) ([]provider.Message, error) {
 		// arrival: an isMeta user line with a peer origin. Mid-turn: a
 		// queued_command attachment.
 		if l.Type == "attachment" {
-			if in, body, id := peerAttachment(l.Attachment); in != nil && !peers.repeat(in, body, id) {
-				msgs = append(msgs, provider.Message{Role: "inbound", Inbound: in, Text: body, Timestamp: ts})
+			if in, body, id := peerAttachment(l.Attachment); in != nil {
+				if !peers.repeat(in, body, id) {
+					msgs = append(msgs, provider.Message{Role: "inbound", Inbound: in, Text: body, Timestamp: ts})
+				}
+			} else if text := queuedPrompt(l.Attachment); text != "" {
+				msgs = append(msgs, provider.Message{Role: "user", Text: text, Timestamp: ts})
 			}
 			continue
 		}

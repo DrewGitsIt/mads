@@ -121,6 +121,15 @@ func (s *server) resolveSessionDefaultsSourced(ctx context.Context, sess *contra
 		sess.Isolation = contracts.IsolationWorktree
 		src.Isolation = contracts.SessionDefaultSourceBuiltin
 	}
+	// A provider that runs at full trust only (provider.FullTrustOnly —
+	// hermes) refuses every other level at Start, so a session that didn't
+	// choose one gets full there instead of the configured default, which
+	// stays as it is for every other provider. An explicit choice is left
+	// alone: refusing it is honest, quietly raising it is not.
+	if sess.Trust == "" && s.fullTrustOnly(sess.Provider) {
+		sess.Trust = contracts.TrustFull
+		src.Trust = contracts.SessionDefaultSourceProviderDefault
+	}
 	if sess.Trust == "" {
 		sess.Trust = cfg.DefaultTrust
 		if sess.Trust != "" {
@@ -176,6 +185,20 @@ func (s *server) resolveSessionDefaultsSourced(ctx context.Context, sess *contra
 	sess.Dir = contracts.ExpandHome(sess.Dir)
 
 	return src, nil
+}
+
+// fullTrustOnly reports whether the named, registered provider declares
+// every restricted trust level unsupported. An unknown or unregistered
+// provider says nothing either way.
+func (s *server) fullTrustOnly(name string) bool {
+	if name == "" || s.providers == nil {
+		return false
+	}
+	p, err := s.providers.Get(name)
+	if err != nil {
+		return false
+	}
+	return provider.FullTrustOnly(p.Matrix())
 }
 
 // errDirNotADirectory rejects a create whose resolved Dir is not a
@@ -240,7 +263,10 @@ func (s *server) discoveredModels(ctx context.Context, name string) []provider.M
 
 func (s *server) handleSessionDefaults(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	sess := contracts.Session{Workspace: q.Get("workspace"), Dir: q.Get("dir")}
+	// provider: the Launchpad's staged provider, so a preview of what an
+	// unstaged pill resolves to (trust, model) follows the harness the user
+	// picked rather than Config's.
+	sess := contracts.Session{Workspace: q.Get("workspace"), Dir: q.Get("dir"), Provider: q.Get("provider")}
 	src, err := s.resolveSessionDefaultsSourced(r.Context(), &sess)
 	if err != nil {
 		writeError(w, err)

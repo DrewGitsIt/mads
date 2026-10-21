@@ -9,6 +9,7 @@ import { FolderPill } from "../../../features/sessions/pills/FolderPill";
 import { IsolationPill } from "../../../features/sessions/pills/IsolationPill";
 import { ModelPill } from "../../../features/sessions/pills/ModelPill";
 import { TrustPill } from "../../../features/sessions/pills/TrustPill";
+import { fullAccessOnly } from "../../../features/sessions/pills/trustLevels";
 import type { StagedConfig } from "../../../features/sessions/pills/stagedConfig";
 import { useProviderMatrix } from "../../../features/settings/state/useProviderMatrix";
 import { formatShortcut } from "../../../platform/shortcut";
@@ -161,6 +162,7 @@ export function NewSessionCard({
     return buildCreateSessionPayload(goalText, staged, {
       links: link ? [link] : [],
       name: chosenName,
+      fullTrustOnly: fullAccessOnly(providers.find((p) => p.name === staged.provider)?.matrix),
     });
   }
 

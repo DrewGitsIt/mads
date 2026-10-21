@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { behaviorLabel, capabilityTags, differingBehaviors, topCapabilityTags } from "./providerBehaviors";
+import {
+  behaviorLabel,
+  capabilityTags,
+  differingBehaviors,
+  fullTrustOnlyNote,
+  providerLabel,
+  topCapabilityTags,
+} from "./providerBehaviors";
 import type { BehaviorInfo, ProviderInfo } from "../../router/types";
 
 const behaviors: BehaviorInfo[] = [
@@ -21,6 +28,18 @@ const goose: ProviderInfo = {
   },
 };
 
+describe("providerLabel", () => {
+  it("names the Codex CLI so it reads as ChatGPT's too", () => {
+    expect(providerLabel("codex")).toBe("Codex (ChatGPT)");
+    expect(providerLabel("claude-code")).toBe("Claude Code");
+  });
+
+  it("keeps ids that already read as names", () => {
+    expect(providerLabel("goose")).toBe("goose");
+    expect(providerLabel("kiro-cli")).toBe("kiro-cli");
+  });
+});
+
 describe("behaviorLabel", () => {
   it("reads known keys as product names", () => {
     expect(behaviorLabel("delegate_lifecycle")).toBe("Subagent cards");
@@ -33,6 +52,14 @@ describe("behaviorLabel", () => {
   });
 });
 
+describe("providerLabel", () => {
+  it("names products whose id isn't how people say it", () => {
+    expect(providerLabel("claude-code")).toBe("Claude Code");
+    expect(providerLabel("hermes")).toBe("Hermes");
+    expect(providerLabel("goose")).toBe("goose");
+  });
+});
+
 describe("capabilityTags", () => {
   it("lists only what isn't native: unsupported as No …, emulated as … emulated", () => {
     expect(capabilityTags(goose, behaviors)).toEqual([
@@ -40,6 +67,21 @@ describe("capabilityTags", () => {
       { behavior: "mcp_servers", tone: "bad", label: "No MCP servers" },
       { behavior: "trust_read_only", tone: "warn", label: "Read-only trust emulated" },
     ]);
+  });
+
+  it("collapses a full-trust-only provider's three trust rows into one tag", () => {
+    const hermes: ProviderInfo = {
+      name: "hermes",
+      matrix: { ...goose.matrix, trust_read_only: "unsupported", trust_limited: "unsupported", trust_auto_review: "unsupported" },
+    };
+    const withTrust = [...behaviors, { behavior: "trust_limited", level: "expected" }, { behavior: "trust_auto_review", level: "optional" }] as BehaviorInfo[];
+    expect(capabilityTags(hermes, withTrust)).toEqual([
+      { behavior: "branching", tone: "bad", label: "No branching" },
+      { behavior: "mcp_servers", tone: "bad", label: "No MCP servers" },
+      { behavior: "trust_limited", tone: "bad", label: "Full trust only" },
+    ]);
+    expect(fullTrustOnlyNote(hermes)).toBe("Hermes can't enforce approvals; it runs at full trust.");
+    expect(fullTrustOnlyNote(goose)).toBeUndefined();
   });
 
   it("says nothing for an all-native provider, or behaviours it declares nothing for", () => {

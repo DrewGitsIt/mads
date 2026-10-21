@@ -93,6 +93,17 @@ func EffectiveTrust(t Trust, m Matrix) Trust {
 	return t
 }
 
+// FullTrustOnly reports whether a provider declaring m can run sessions at
+// full trust only: every restricted level (limited, read_only, auto_review)
+// declared not working. Such a provider refuses a session asking for any
+// of them (hermes — it asks before only the calls its own reviewer flags,
+// so approvals can't be enforced), which is why a session that never chose
+// a level defaults to TrustFull on it rather than to the configured
+// default. Derived from the matrix, never from a provider name.
+func FullTrustOnly(m Matrix) bool {
+	return !m[BehaviorTrustLimited].Works() && !m[BehaviorTrustReadOnly].Works() && !m[BehaviorTrustAutoReview].Works()
+}
+
 // StartOptions configures an interactive session. Resume carries the
 // provider-native ref of a previous session (Session.Ref); empty starts
 // fresh. Resuming is the same spawn path as starting — that is how every

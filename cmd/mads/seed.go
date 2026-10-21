@@ -119,7 +119,7 @@ func cmdNewSession(args []string) error {
 	data := fs.String("data", "http://localhost:17374", "Data Service URL")
 	name := fs.String("name", "", "session name (required)")
 	workspace := fs.String("workspace", "", "workspace label")
-	provider := fs.String("provider", "claude-code", "harness provider: any name registered by the router (e.g. claude-code, kiro-cli, goose, fake)")
+	provider := fs.String("provider", "claude-code", "harness provider: any name registered by the router (e.g. claude-code, kiro-cli, goose, hermes, fake)")
 	model := fs.String("model", "", "model id for the chosen provider (empty = provider default)")
 	agent := fs.String("agent", "", "agent (persona) registry id to bind to this session (empty = no persona)")
 	_ = fs.Parse(args)

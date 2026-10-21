@@ -4,6 +4,7 @@ import { PathField } from "../../components/PathField/PathField";
 import { router } from "../../router/client";
 import type { Provider } from "../../router/types";
 import type { UseConfig } from "../../features/settings/state/useConfig";
+import { providerLabel } from "../../features/settings/providerBehaviors";
 import styles from "./WorkspaceStep.module.css";
 
 export interface WorkspaceStepProps {
@@ -94,7 +95,7 @@ export function WorkspaceStep({ onNext, onBack, config }: WorkspaceStepProps) {
           <option value="">No default</option>
           {providers.map((p) => (
             <option key={p} value={p}>
-              {p}
+              {providerLabel(p)}
             </option>
           ))}
         </select>

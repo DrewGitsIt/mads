@@ -41,6 +41,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   // Where the services look for mergiraf (session-worktrees.spec puts a
   // stand-in there for one journey).
   process.env.MADS_MERGIRAF = topology.mergirafPath;
+  // Where the services, and any `mads` CLI a spec runs, look for an agent
+  // harness: an empty stand-in dir, so nothing reaches a real one.
+  process.env.MADS_AGENT_BIN_DIR = topology.agentBinDir;
 
   return async () => {
     await topology.teardown();

@@ -243,6 +243,8 @@ export function TrustSegment({
               type="button"
               role="option"
               aria-selected={l.value === current}
+              aria-disabled={l.unavailable || undefined}
+              disabled={l.unavailable}
               title={l.description}
               className={cx(styles.item, l.value === current && styles.itemSelected)}
               onClick={() => onSelect(l.value)}

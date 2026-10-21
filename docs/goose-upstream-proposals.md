@@ -163,7 +163,7 @@ line 207), dispatched in
 are good and already better than most agents': `mode:"set"` replaces the
 base prompt, `mode:"append"` adds keyed text under "Additional
 Instructions", empty text clears the key. Capture-pinned in production
-shape (`providers/goosecli/testdata/captures/acp-transcript.jsonl` line
+shape (`providers/goosecli/testdata/captures/acp-transcript-1.48.0.jsonl` line
 13):
 
 ```json

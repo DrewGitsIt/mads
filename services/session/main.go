@@ -24,9 +24,11 @@ import (
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/claudecode"
+	"github.com/drewkidwell/mads/providers/codexcli"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/goosecli"
+	"github.com/drewkidwell/mads/providers/hermescli"
 	"github.com/drewkidwell/mads/providers/kirocli"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/session/internal/api"
@@ -53,7 +55,7 @@ func defaultMadsHome() string {
 }
 
 // resolveAgentEnv turns this process's env_mode config into what the
-// claudecode/kirocli/goosecli provider Configs need to hand agentenv.Build at every
+// claudecode/kirocli/goosecli/hermescli provider Configs need to hand agentenv.Build at every
 // agent spawn: the mode itself, the passthrough name list, and — isolated
 // mode only — this process's own bound-credential values. Those values are
 // extracted from parentEnv (this process's already-populated os.Environ(),
@@ -103,6 +105,30 @@ func buildProviderRegistry(mode agentenv.Mode, passthrough, credEnv []string) (*
 		Env:            credEnv,
 	})); err != nil {
 		return nil, fmt.Errorf("register goose provider: %w", err)
+	}
+	// hermes-acp reads its home from HERMES_HOME (default ~/.hermes, which
+	// HOME on the isolated base allowlist already reaches); HERMES_HOME is
+	// not on the allowlist, so a non-default home must pass through. Fresh
+	// slice, as above.
+	hermesPassthrough := append([]string{"HERMES_HOME", "HERMES_DATA_DIR_SUFFIX"}, passthrough...)
+	if err := registry.Register(hermescli.New(hermescli.Config{
+		EnvMode:        mode,
+		EnvPassthrough: hermesPassthrough,
+		Env:            credEnv,
+	})); err != nil {
+		return nil, fmt.Errorf("register hermes provider: %w", err)
+	}
+	// codex reads $CODEX_HOME (default ~/.codex) for its ChatGPT login,
+	// config and sessions: HOME is on agentenv's base allowlist, CODEX_HOME
+	// is not, so isolated mode passes it through. No trust ExtraArgs: the
+	// adapter sets each thread's sandbox and approval policy per trust.
+	codexPassthrough := append([]string{"CODEX_HOME"}, passthrough...)
+	if err := registry.Register(codexcli.New(codexcli.Config{
+		EnvMode:        mode,
+		EnvPassthrough: codexPassthrough,
+		Env:            credEnv,
+	})); err != nil {
+		return nil, fmt.Errorf("register codex provider: %w", err)
 	}
 	if err := registry.Register(fake.New()); err != nil {
 		return nil, fmt.Errorf("register fake provider: %w", err)
