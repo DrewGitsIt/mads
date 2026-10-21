@@ -82,10 +82,19 @@ below; the design must hold for all four columns.
 | User message id round-trips | yes (stdin `uuid`) | yes (`clientUserMessageId`) | no (text identical) | no (whitespace stripped; rewritten after a cancel) |
 | Mid-turn send | `queued_command` attachment, written at the next tool result | `turn/steer` | queued by mads | queued prompt, echoed when drained |
 | Live ≠ stored text | — | — | — | leading `"\n\n"` live after a tool |
+| Stored thinking (`stored_thinking`) | native: thinking blocks in the JSONL | native: reasoning summaries | unsupported: stored, but moved onto tool-call rows under other keys | native: reasoning columns |
 | Live-only / stored-only rows | interrupt markers; "No response requested." after a resume | interrupted partials (live only); injected context (rollout only) | hidden `<turn-context>` row (store only) | `failed_turn` "Your request was not processed." (store only) |
 
 Kiro (ACP) isn't installed; its column is unverified and stays so until a
-binary is available.
+binary is available (no stable keys, no stored thinking).
+
+**Thinking where `stored_thinking` is unsupported** (goose, kiro): the chat
+pane shows it only while it is in the unsettled tail, as `unsaved` items —
+through the turn and the next one for goose; for kiro (unkeyed) until its
+turn ends, when the stored page replaces the live items. mads keeps no copy
+of conversation content, so it is gone after that, as in the agent's own
+UI after a restart. The `session.thinking` events the runner still writes
+are not rendered in the chat (C4 decision, 2026-10-21).
 
 ## Design
 
@@ -275,10 +284,10 @@ the agent's store doesn't have yet**.
   own UI.
 - **Thinking** settles by key like any item, against the keyed store read
   (`provider.KeyedTranscriptReader`: Role `thinking` rows, where the
-  provider's `stored_thinking` is native). `session.thinking` events stay as
-  today, as the record only where `stored_thinking` is unsupported; nothing
-  settles against them, and they carry no keys — mads's event log is not a
-  second copy of the conversation.
+  provider's `stored_thinking` is native). `session.thinking` events are
+  still written, but nothing settles against them, they carry no keys and
+  the chat pane doesn't render them (C4): mads's event log is not a second
+  copy of the conversation.
 - **Tool-result bodies** are kept as a 2 KB preview in the tail; the live frame
   carries the full text as today, and the stored row has it once settled.
 - **ACP.** acprpc's in-memory buffer stops being the transcript; it supplies

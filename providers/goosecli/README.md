@@ -219,8 +219,11 @@ runs don't count thinking on either side: the stable_keys probe against
 the stand-in playing a thinking model (`MADS_FAKE_GOOSE_THINKING=1`,
 `TestStableKeysThinkingModel`) fails when they do. (qwen3.8 on ollama
 can't show it live: goose gets its reasoning inline as text, with a
-literal `</think>`, never as thought chunks.) Live thinking stays
-unsaved; `session.thinking` is its record.
+literal `</think>`, never as thought chunks.) Live thinking ends
+`unsaved`: the chat pane shows it only while it is in the session's
+unsettled tail (through the next turn), and not after; the
+`session.thinking` events the runner writes aren't rendered in the chat
+(docs/CHAT-STREAM-DESIGN.md, "What the providers actually do").
 
 Filtered: the hidden `<turn-context>` row goose writes after every prompt
 (`userVisible:false`) — as is anything goose marks `userVisible:false`,
