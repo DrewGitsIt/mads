@@ -38,7 +38,11 @@ func TestRealGooseStableKeys(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "config", "config.yaml"), cfg, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p := &recordingProvider{Provider: New(Config{Env: []string{"GOOSE_PATH_ROOT=" + root, "GOOSE_TELEMETRY_ENABLED=false"}})}
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "alpha.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := &recordingProvider{Provider: New(Config{Env: []string{"GOOSE_PATH_ROOT=" + root, "GOOSE_TELEMETRY_ENABLED=false"}}), cwd: cwd}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
@@ -65,12 +69,16 @@ func TestRealGooseStableKeys(t *testing.T) {
 // probe looks for and adds no KeyedSender (goose has none).
 type recordingProvider struct {
 	*Provider
+	cwd  string
 	mu   sync.Mutex
 	refs []string
 	log  map[string][]provider.Event
 }
 
 func (r *recordingProvider) Start(ctx context.Context, opts provider.StartOptions) (provider.Session, error) {
+	if opts.Cwd == "" {
+		opts.Cwd = r.cwd // the probe names none; keep the agent out of the repo
+	}
 	sess, err := r.Provider.Start(ctx, opts)
 	if err != nil {
 		return nil, err
