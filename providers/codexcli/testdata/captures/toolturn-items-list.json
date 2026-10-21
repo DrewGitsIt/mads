@@ -1,0 +1,78 @@
+{
+ "data": [
+  {
+   "turnId": "01a15ccf-ec82-71d3-ac4e-14a569def823",
+   "item": {
+    "type": "userMessage",
+    "id": "01a15ccf-f237-78d3-90ac-144ab0e72584",
+    "clientId": "cid-1",
+    "content": [
+     {
+      "type": "text",
+      "text": "Say one short sentence, then run the shell command `ls`, then say one short sentence about the result.",
+      "text_elements": []
+     }
+    ]
+   }
+  },
+  {
+   "turnId": "01a15ccf-ec82-71d3-ac4e-14a569def823",
+   "item": {
+    "type": "reasoning",
+    "id": "rs_05294a402c2bc06d016ad8459f672081a39c375ea71be0af0f",
+    "summary": [],
+    "content": []
+   }
+  },
+  {
+   "turnId": "01a15ccf-ec82-71d3-ac4e-14a569def823",
+   "item": {
+    "type": "agentMessage",
+    "id": "msg_05294a402c2bc06d016ad8459f75d081a3970cce8b8b8d513b",
+    "text": "I’ll list the current directory.",
+    "phase": "commentary",
+    "memoryCitation": null,
+    "delivery": null,
+    "questions": null
+   }
+  },
+  {
+   "turnId": "01a15ccf-ec82-71d3-ac4e-14a569def823",
+   "item": {
+    "type": "commandExecution",
+    "id": "exec-02b11c94-49d9-405c-bbf2-dbc7d20a9dd3",
+    "pluginId": null,
+    "scriptPath": null,
+    "command": "/bin/zsh -lc ls",
+    "cwd": "/tmp/work",
+    "processId": "42334",
+    "source": "unifiedExecStartup",
+    "status": "completed",
+    "commandActions": [
+     {
+      "type": "listFiles",
+      "command": "ls",
+      "path": null
+     }
+    ],
+    "aggregatedOutput": "a.txt\nb.txt\n",
+    "exitCode": 0,
+    "durationMs": 0
+   }
+  },
+  {
+   "turnId": "01a15ccf-ec82-71d3-ac4e-14a569def823",
+   "item": {
+    "type": "agentMessage",
+    "id": "msg_05294a402c2bc06d016ad845a0836481a3b1d4971693700762",
+    "text": "The directory contains `a.txt` and `b.txt`.",
+    "phase": "final_answer",
+    "memoryCitation": null,
+    "delivery": null,
+    "questions": null
+   }
+  }
+ ],
+ "nextCursor": null,
+ "backwardsCursor": "{\"requestedThreadId\":\"01a15ccf-ec60-7f20-97b9-51922e42e414\",\"rolloutOrdinal\":7,\"includeAnchor\":true,\"scope\":{\"kind\":\"itemsByCreatedAtOrdinal\"}}"
+}

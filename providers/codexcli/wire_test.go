@@ -50,13 +50,19 @@ func (b *bufWC) lines() []map[string]any {
 // returns every event it emitted plus what it wrote back to "codex".
 func replay(t *testing.T, capture string, trust provider.Trust, asker provider.PermissionAsker) ([]provider.Event, *bufWC) {
 	t.Helper()
+	return replayWith(t, capture, provider.StartOptions{Trust: trust, Permissions: asker})
+}
+
+// replayWith is replay with the session's whole StartOptions.
+func replayWith(t *testing.T, capture string, opts provider.StartOptions) ([]provider.Event, *bufWC) {
+	t.Helper()
 	raw, err := os.ReadFile("testdata/captures/" + capture)
 	if err != nil {
 		t.Fatal(err)
 	}
 	w := &bufWC{}
 	c := &conn{stdin: w, pending: map[int64]chan rpcMessage{}, done: make(chan struct{}), waited: make(chan struct{}), reaper: newReaper(0)}
-	s := newSession(New(Config{}), c, provider.StartOptions{Trust: trust, Permissions: asker})
+	s := newSession(New(Config{}), c, opts)
 	c.onNotify, c.onRequest = s.handleNotification, s.handleRequest
 	s.ref = captureThread(t, raw)
 	s.model = "gpt-5.6-luna"

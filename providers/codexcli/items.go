@@ -86,6 +86,24 @@ type mcpResult struct {
 	} `json:"content"`
 }
 
+// itemKey is the item's conversation key (provider.Event.Key /
+// provider.Message.Key): codex's own item id — the same on item/started,
+// its deltas, item/completed and thread/items/list — for every item kind.
+// A tool's call and result share it. Never the model-level call_…/ctc_…
+// id, which only the rollout carries. A user message is keyed by the id
+// mads sent it with (clientUserMessageId, stored as clientId) when there is
+// one, so the key is mads' own; codex's item id otherwise (a message sent
+// by another client, or before mads sent ids).
+func itemKey(it *threadItem) string {
+	if it.Type == "userMessage" {
+		if it.ClientID != "" {
+			return "user:" + it.ClientID
+		}
+		return "user:" + it.ID
+	}
+	return it.ID
+}
+
 // userText is a user message's text, parts joined. Images and other
 // non-text input are skipped: provider.Message has no place for them.
 func (it *threadItem) userText() string {

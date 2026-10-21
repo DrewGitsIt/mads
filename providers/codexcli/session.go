@@ -140,6 +140,8 @@ type session struct {
 	trust  provider.Trust
 	asker  provider.PermissionAsker
 	effort string
+	// settle: the session asked for EventSettle (StartOptions.SettleHints).
+	settle bool
 
 	// sendMu serializes the turn-shaping calls (Send, Compact) so a second
 	// Send sees the first one's turn as open, and lets Interrupt wait out a
@@ -169,7 +171,6 @@ type session struct {
 	usedTools map[string]bool             // EventToolUse already sent
 	streamed  map[string]int              // agentMessage text bytes already sent
 	output    map[string]*strings.Builder // commandExecution outputDelta text
-	lastText  string                      // item id whose text was the last event
 	final     strings.Builder             // final_answer text this turn
 
 	// Usage. total is per app-server process (a resumed thread starts again
@@ -203,6 +204,7 @@ func newSession(p *Provider, c *conn, opts provider.StartOptions) *session {
 		trust:   effectiveTrust(opts.Trust),
 		asker:   opts.Permissions,
 		effort:  p.cfg.Effort,
+		settle:  opts.SettleHints,
 		asks:    map[string]*pendingAsk{},
 	}
 }
@@ -275,6 +277,21 @@ func newClientID() string {
 // same turn id and a single turn/completed (testdata/captures/
 // steer-compact.jsonl).
 func (s *session) Send(ctx context.Context, text string) error {
+	return s.send(ctx, text, newClientID())
+}
+
+// SendKeyed implements provider.KeyedSender: Send, with id as the message's
+// clientUserMessageId on turn/start — or on turn/steer, which takes one too
+// (schema v2 TurnSteerParams) — so codex stores id as the user item's
+// clientId and the transcript keys the row "user:"+id.
+func (s *session) SendKeyed(ctx context.Context, text, id string) error {
+	if id == "" {
+		id = newClientID()
+	}
+	return s.send(ctx, text, id)
+}
+
+func (s *session) send(ctx context.Context, text, cid string) error {
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
 	s.mu.Lock()
@@ -286,9 +303,8 @@ func (s *session) Send(ctx context.Context, text string) error {
 	s.mu.Unlock()
 	input := []map[string]any{{"type": "text", "text": text}}
 	// One id per message, kept: codex persists it on the userMessage item
-	// (clientId) live and in thread/items/list, so it is how a mads send
-	// and codex's record of it will be matched (C1, chat-stream keys).
-	cid := newClientID()
+	// (clientId) live and in thread/items/list, which is what keys the
+	// stored user row "user:"+cid (userKey).
 
 	if open {
 		if compacting {
@@ -343,8 +359,8 @@ func (s *session) recordSent(cid string) {
 }
 
 // SentClientIDs returns the clientUserMessageId of every message this
-// session sent (turn/start or turn/steer), in order. Nothing above the
-// provider reads it yet — it is kept for C1 rather than thrown away.
+// session sent (turn/start or turn/steer, Send or SendKeyed), in order —
+// each one the id in its stored user row's key ("user:"+id).
 func (s *session) SentClientIDs() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -652,22 +668,19 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 	}
 }
 
-// text emits one agentMessage delta. Two separate agent messages in a row
-// (commentary, then the final answer, with nothing between them) get a
-// paragraph break, so the reply doesn't read "now.The workspace".
+// text emits one agentMessage delta, keyed by the item. Each agentMessage
+// is an item of its own, live as stored: two in a row (commentary, then the
+// final answer) are two keyed runs with nothing added between them — the
+// UI's join rule (docs/CHAT-STREAM-DESIGN.md §6) decides how adjacent text
+// items read, the same way live and stored.
 func (s *session) text(itemID, delta string) {
 	s.mu.Lock()
 	if s.streamed == nil {
 		s.streamed = map[string]int{}
 	}
-	sep := s.lastText != "" && s.lastText != itemID
-	s.lastText = itemID
 	s.streamed[itemID] += len(delta)
 	s.mu.Unlock()
-	if sep {
-		delta = "\n\n" + delta
-	}
-	s.emit(provider.Event{Kind: provider.EventText, Text: delta})
+	s.emit(provider.Event{Kind: provider.EventText, Key: itemID, Text: delta})
 }
 
 func (s *session) itemStarted(it *threadItem) {
@@ -675,7 +688,6 @@ func (s *session) itemStarted(it *threadItem) {
 	case it.Type == "contextCompaction":
 		s.mu.Lock()
 		s.compactOpen, s.compactSeen = true, true
-		s.lastText = ""
 		s.mu.Unlock()
 		s.emit(provider.Event{Kind: provider.EventCompact, Compact: &provider.CompactStatus{Phase: "start"}})
 	case it.Type == "webSearch":
@@ -714,16 +726,26 @@ func (s *session) emitToolUse(it *threadItem) {
 		return
 	}
 	s.usedTools[it.ID] = true
-	s.lastText = ""
 	s.mu.Unlock()
 	tool := it.toolUse()
 	if it.Status == "inProgress" {
 		tool.Status = provider.ToolStatusInProgress
 	}
-	s.emit(provider.Event{Kind: provider.EventToolUse, Tool: tool})
+	s.emit(provider.Event{Kind: provider.EventToolUse, Key: it.ID, Tool: tool})
 }
 
+// itemCompleted finishes an item's live events and, for a session that
+// asked for settle hints, follows them with an EventSettle keyed to the
+// item: codex writes an item to its store as it completes it (survey: 0–27
+// ms behind item/completed), and never before.
 func (s *session) itemCompleted(it *threadItem) {
+	s.finishItem(it)
+	if s.settle {
+		s.emit(provider.Event{Kind: provider.EventSettle, Key: itemKey(it)})
+	}
+}
+
+func (s *session) finishItem(it *threadItem) {
 	switch {
 	case it.Type == "agentMessage":
 		s.mu.Lock()
@@ -741,10 +763,9 @@ func (s *session) itemCompleted(it *threadItem) {
 		}
 	case it.Type == "reasoning":
 		if text := it.reasoningText(); text != "" {
-			s.mu.Lock()
-			s.lastText = ""
-			s.mu.Unlock()
-			s.emit(provider.Event{Kind: provider.EventThinking, Text: text})
+			// Whole, at completion: the summary deltas are not forwarded, so
+			// one reasoning item is one event and can't interleave.
+			s.emit(provider.Event{Kind: provider.EventThinking, Key: it.ID, Text: text})
 		}
 	case it.Type == "contextCompaction":
 		s.mu.Lock()
@@ -763,12 +784,12 @@ func (s *session) itemCompleted(it *threadItem) {
 		}
 		delete(s.output, it.ID)
 		delete(s.items, it.ID)
-		s.lastText = ""
 		s.mu.Unlock()
 		text, isError, status := it.toolResult(streamed)
 		tool := it.toolUse()
 		s.emit(provider.Event{
 			Kind:    provider.EventToolResult,
+			Key:     it.ID,
 			Tool:    &provider.ToolUse{ID: it.ID, Name: tool.Name, Kind: tool.Kind, Status: status},
 			Text:    text,
 			IsError: isError,
@@ -818,7 +839,7 @@ func (s *session) finishTurn(status string, terr *turnError) {
 	s.turnOpen, s.turnID, s.interrupted = false, "", false
 	s.compacting, s.compactOpen, s.compactSeen = false, false, false
 	s.items, s.usedTools, s.streamed, s.output = nil, nil, nil, nil
-	s.lastText = ""
+	settle := s.settle
 	s.final.Reset()
 	s.mu.Unlock()
 
@@ -845,6 +866,10 @@ func (s *session) finishTurn(status string, terr *turnError) {
 			msg = terr.Message
 		}
 		s.emit(provider.Event{Kind: provider.EventError, Text: msg})
+	}
+	if settle {
+		// Every item the turn completed is stored by now.
+		s.emit(provider.Event{Kind: provider.EventSettle})
 	}
 	s.emit(provider.Event{Kind: provider.EventTurnEnd, Interrupted: interrupted, Usage: usage})
 }

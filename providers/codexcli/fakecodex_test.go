@@ -244,16 +244,24 @@ func (srv *fcServer) handle(line []byte) {
 		}
 		limit := 100
 		_ = json.Unmarshal(p["limit"], &limit)
-		start, _ := strconv.Atoi(str("cursor"))
 		srv.mu.Lock()
 		items := append([]itemEntry(nil), th.Items...)
 		srv.mu.Unlock()
-		end := min(start+limit, len(items))
-		var next any
-		if end < len(items) {
-			next = strconv.Itoa(end)
+		if turnID := str("turnId"); turnID != "" {
+			var in []itemEntry
+			for _, e := range items {
+				if e.TurnID == turnID {
+					in = append(in, e)
+				}
+			}
+			items = in
 		}
-		srv.result(m.ID, map[string]any{"data": items[start:end], "nextCursor": next})
+		page, err := fcItemsPage(th.ID, items, str("cursor"), str("sortDirection") == "desc", limit)
+		if err != nil {
+			srv.fail(m.ID, -32600, err.Error())
+			return
+		}
+		srv.result(m.ID, page)
 	case "turn/start":
 		th := srv.load(str("threadId"))
 		if th == nil {
@@ -472,6 +480,8 @@ func (srv *fcServer) runTurn(th *fcThread, turn *fcTurn, text, clientID string) 
 		srv.complete(th, turn, rs)
 		srv.reply(th, turn, "commentary", "Checking.")
 		srv.reply(th, turn, "final_answer", "Done.")
+	case "tool-turn":
+		srv.toolTurn(th, turn)
 	case "web":
 		ws := threadItem{Type: "webSearch", ID: "exec-" + srv.newID()}
 		srv.item(th, turn, ws, false)
@@ -518,6 +528,76 @@ func withClientID(it threadItem, cid any) map[string]any {
 	_ = json.Unmarshal(b, &m)
 	m["clientId"] = cid
 	return m
+}
+
+// fcCursor is codex's thread/items/list cursor as 0.154.0 renders it (the
+// probe in transcript.go's itemsCursor comment): a JSON object naming an
+// item by its rollout ordinal (here: its index) and whether a read from it
+// includes that item. The direction is the request's, not the cursor's.
+type fcCursor struct {
+	RequestedThreadID string `json:"requestedThreadId"`
+	RolloutOrdinal    int    `json:"rolloutOrdinal"`
+	IncludeAnchor     bool   `json:"includeAnchor"`
+	Scope             struct {
+		Kind string `json:"kind"`
+	} `json:"scope"`
+}
+
+func fcCursorFor(thread string, ordinal int, include bool) string {
+	c := fcCursor{RequestedThreadID: thread, RolloutOrdinal: ordinal, IncludeAnchor: include}
+	c.Scope.Kind = "itemsByCreatedAtOrdinal"
+	b, _ := json.Marshal(c)
+	return string(b)
+}
+
+// fcItemsPage is one thread/items/list page with real codex's cursor rules:
+// nextCursor continues past the page's last item (excluded) and is null
+// once the page reaches the end, even when the page is full;
+// backwardsCursor is anchored on the page's first item, included, for a
+// read the other way.
+func fcItemsPage(thread string, items []itemEntry, cursor string, desc bool, limit int) (map[string]any, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	// order: the indices in read direction.
+	order := make([]int, len(items))
+	for i := range items {
+		if desc {
+			order[i] = len(items) - 1 - i
+		} else {
+			order[i] = i
+		}
+	}
+	start := 0
+	if cursor != "" {
+		var c fcCursor
+		if err := json.Unmarshal([]byte(cursor), &c); err != nil || c.RequestedThreadID != thread {
+			return nil, fmt.Errorf("invalid cursor %q", cursor)
+		}
+		start = len(order)
+		for i, idx := range order {
+			if idx == c.RolloutOrdinal {
+				start = i
+				if !c.IncludeAnchor {
+					start++
+				}
+				break
+			}
+		}
+	}
+	end := min(start+limit, len(order))
+	data := []itemEntry{}
+	for _, idx := range order[start:end] {
+		data = append(data, items[idx])
+	}
+	res := map[string]any{"data": data, "nextCursor": nil, "backwardsCursor": nil}
+	if len(data) > 0 {
+		res["backwardsCursor"] = fcCursorFor(thread, order[start], true)
+		if end < len(order) {
+			res["nextCursor"] = fcCursorFor(thread, order[end-1], false)
+		}
+	}
+	return res, nil
 }
 
 // gate asks the client when the thread's approval policy says codex would
@@ -585,6 +665,28 @@ func (srv *fcServer) attemptShell(th *fcThread, turn *fcTurn) string {
 	srv.complete(th, turn, it)
 	srv.reply(th, turn, "final_answer", "shell "+it.Status)
 	return "completed"
+}
+
+// toolTurn is the stable_keys probe's text, tool, text turn in codex's
+// own item sequence (captured 2026-10-21 with "Say one short sentence, then
+// run the shell command `ls`, then say one short sentence about the
+// result."): reasoning, a commentary message, an `ls` commandExecution
+// whose output comes back in aggregatedOutput on completion, the final
+// answer. `ls` is on codex's known-safe list, so no policy asks.
+func (srv *fcServer) toolTurn(th *fcThread, turn *fcTurn) {
+	rs := threadItem{Type: "reasoning", ID: "rs_" + srv.newID()}
+	srv.item(th, turn, rs, false)
+	rs.Summary = []string{"**Listing directory contents**"}
+	srv.complete(th, turn, rs)
+	srv.reply(th, turn, "commentary", "I’ll list the current directory.")
+	it := threadItem{Type: "commandExecution", ID: "exec-" + srv.newID(), Status: "inProgress",
+		Command: "/bin/zsh -lc ls", Cwd: th.Cwd,
+		CommandActions: []commandAction{{Type: "listFiles", Command: "ls"}}}
+	srv.item(th, turn, it, false)
+	out, code := "a.txt\nb.txt\n", 0
+	it.Status, it.AggregatedOutput, it.ExitCode = "completed", &out, &code
+	srv.complete(th, turn, it)
+	srv.reply(th, turn, "final_answer", "The directory contains `a.txt` and `b.txt`.")
 }
 
 // slow streams ticks until interrupted (the message never completes and is

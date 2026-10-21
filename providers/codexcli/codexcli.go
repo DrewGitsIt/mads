@@ -151,8 +151,11 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorDelegateTranscript: provider.Unsupported,
 		provider.BehaviorDelegateSteer:      provider.Unsupported,
 		provider.BehaviorDelegateStop:       provider.Unsupported,
-		// C1 in progress: each adapter declares its real stance with its keys.
-		provider.BehaviorStableKeys: provider.Unsupported,
+		// Every item's key is codex's own item id, the same on the live
+		// notifications and in thread/items/list; a user message's is the
+		// clientUserMessageId mads sent it with (SendKeyed). Live text is
+		// per item, exactly the stored text.
+		provider.BehaviorStableKeys: provider.Native,
 	}
 }
 
