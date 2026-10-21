@@ -215,18 +215,18 @@ in Parse order, the outside-the-wrapper notice included) — the same rule as
 the stored rows.
 
 A tool's call and result share its key; `item_start` comes before the
-`tool_use`, and there is no `item_stop` for a tool. Frames of a subagent
-(`parent_tool_use_id` on their `item_start`) are live and resumable but never
-in the tail: the main store doesn't hold them (they come from the event log
-as today).
+`tool_use`, and there is no `item_stop` for a tool. A subagent's items
+(`parent_tool_use_id` on their `item_start`, their own keys) are in the tail
+like the main agent's, so a viewer switching back mid-turn keeps delegate
+activity; the main store never holds them, so they end `unsaved` (§3).
 
 **Tail bookkeeping frames.**
 
 | kind | data | meaning |
 |---|---|---|
 | `settled` | `{keys:[…]}` | the store now has these keys: render them from `/transcript`, drop the live copies. Never in a replay of the tail again. |
-| `unsaved` | `{keys:[…]}` | the agent will never store these: keep showing the live copy (the agent's own UI loses them on a restart too). Sent ~1 s after a turn ends for its unstored items (not user messages, which wait for their row), for every in-flight item when the child's provider process exits mid-turn, and for a send that failed. |
-| `tail_truncated` | `{dropped, keys}` | in a replay only: the cap evicted these items (whole); fetch the transcript for them |
+| `unsaved` | `{keys:[…]}` | the agent will never store these: keep showing the live copy (the agent's own UI loses them on a restart too). Sent ~1 s after a turn ends for its unstored items (not user messages, which wait for their row) — codex's interrupted partial, a subagent's items, thinking from a provider whose `stored_thinking` is unsupported (or a thinking item a native one didn't store) — for every in-flight item when the child's provider process exits mid-turn, and for a send that failed. |
+| `tail_truncated` | `{dropped, keys}` | in a replay only: the cap evicted these items (whole); fetch the transcript for them. An item still streaming is evicted only when nothing else can go; its later frames then replay behind a stand-in `item_start` with no `id:` |
 | `resync` | `{reason:"epoch"\|"gap"\|"unkeyed"}` | refetch the last `/transcript` page and replace items by key; no `id:` |
 | `replay_end` | `{}` | the replay is over; everything after is live (pace only from here) |
 
@@ -266,10 +266,19 @@ the agent's store doesn't have yet**.
   stays the in-flight items. A hard cap (4 MiB, like the PTY ring) bounds the
   pathological case: the oldest frames drop and a `tail_truncated` marker
   takes their place (the viewer then knows to fetch the transcript).
-- **Never-stored items** (codex's interrupted partial, live-only notices) stay
-  in the tail, marked `unsaved`, until the child exits or the cap evicts them.
-  The UI shows them as it does today; they're absent after a restart, as in
-  the agent's own UI.
+- **Never-stored items** (codex's interrupted partial, a subagent's items,
+  thinking a provider doesn't store) stay in the tail, marked `unsaved`, but
+  not for long: once a later turn has ended, an earlier turn's unsaved items
+  leave the tail (into the retained journal, so a resume still has them). A
+  fresh viewer gets the latest finished turn's unsaved items and the current
+  turn's, never a pile-up. They're absent after a restart, as in the agent's
+  own UI.
+- **Thinking** settles by key like any item, against the keyed store read
+  (`provider.KeyedTranscriptReader`: Role `thinking` rows, where the
+  provider's `stored_thinking` is native). `session.thinking` events stay as
+  today, as the record only where `stored_thinking` is unsupported; nothing
+  settles against them, and they carry no keys — mads's event log is not a
+  second copy of the conversation.
 - **Tool-result bodies** are kept as a 2 KB preview in the tail; the live frame
   carries the full text as today, and the stored row has it once settled.
 - **ACP.** acprpc's in-memory buffer stops being the transcript; it supplies
@@ -298,6 +307,11 @@ the agent's store doesn't have yet**.
   400 for `before` over unkeyed rows (contract: `contracts.TranscriptPage`).
 - The Router's stored-ref fallback (no live child) reads the same keyed rows;
   there's no tail to merge then.
+- *Built (C2)*: the keyed form — `?v=2`, or any paging parameter
+  (`transcriptpage.Keyed`) — reads the agent's own store, through
+  `KeyedTranscriptReader` where the provider has it (stored thinking as
+  keyed rows), in the child and in the Router's fallback alike. Plain
+  `/transcript` is unchanged and never carries thinking rows.
 
 ### 5. Connecting, reconnecting, switching
 
@@ -317,11 +331,14 @@ the agent's store doesn't have yet**.
   (tool results as previews), `replay_end`, live.
 - **Resync** (another epoch, or a seq the journal no longer covers):
   `hello{resume:"resync"}`, `resync{reason:"epoch"|"gap"}`, then as fresh.
+- The tail a fresh replay sends includes subagent items, and unsaved items
+  only from the latest finished turn and the current one (§3).
 - A subscriber too slow for the live stream (1024 frames behind) is
   disconnected rather than skipped; it reconnects with its `Last-Event-ID`.
 
 **The journal** (memory only, per child): unsettled frames stay until their
-key is stored, capped at 4 MiB (evicting whole items, oldest first); every
+key is stored, capped at 4 MiB (evicting whole items, oldest first, an item
+still streaming last); every
 other frame (settled, status) is retained for 60 s or a 4 MiB ring, so a
 reconnect within that resumes without a gap.
 
@@ -331,12 +348,19 @@ declaring `unsaved`), and whenever `/transcript` is served, the child reads
 the store with `TranscriptSince` (a stale cursor re-reads the whole store;
 an adapter that can't read incrementally is read whole, at turn end and on
 `/transcript` only). An item settles when its row is stored (`agent` for
-text, `tool` for a call and `tool_result` for its result — or no result
-before the turn ended — `user`, `inbound`). A `/transcript` read settles the
+text, `thinking`, `tool` for a call and `tool_result` for its result — or
+no result before the turn ended — `user`, `inbound`). Settle reads use the
+keyed form (thinking rows included). A `/transcript` read settles the
 tail *before* it is answered, so no row it serves shares a key with a frame
-still in the tail. `GET /transcript?v=2` is the read a keyed client makes:
-always the agent's store (for goose, never acprpc's live buffer, whose rows
-mostly have no keys); plain `/transcript` keeps today's source.
+still in the tail. `GET /transcript?v=2` (or paged) is the read a keyed
+client makes: always the agent's store, keyed form (for goose, never
+acprpc's live buffer, whose rows mostly have no keys); plain `/transcript`
+keeps today's source.
+
+**The child's exit.** When the provider process dies mid-turn the child
+exits at once; first it waits (at most 250 ms) for every connected `/output`
+writer, legacy and v2, to put its last frames — `unsaved`, the error — on
+the wire.
 
 **User-row labels** (no `KeyedSender`: goose, hermes): on each settle read,
 the next unlabelled stored user row after the previous labelled one takes the
@@ -360,6 +384,17 @@ The client side, for C4:
   keep.
 - Replayed frames render instantly; the pacer paces only frames after
   `replay_end`.
+
+Accepted as they stand (C2 review, 2026-10-21), for C4 to build around:
+
+- `notice` frames have no live producer yet; stored notices come as
+  `/transcript` rows with `notice:true`.
+- Queue changes still arrive as `session.queue_changed` events;
+  `hello.queued` is only the snapshot at connect.
+- A send that failed (the HTTP caller got the error) is reported as
+  `unsaved` for its `user_message` keys: drop the bubble.
+- hermes runs without `StartOptions.Keyed` until C4 (no settle hints; it
+  settles at turn end and on `/transcript` reads).
 
 Consequences:
 
