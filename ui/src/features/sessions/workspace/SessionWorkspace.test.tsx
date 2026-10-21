@@ -313,7 +313,7 @@ describe("SessionWorkspace", () => {
     );
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
     const sessionCallsBefore = getSession.mock.calls.length;
-    const streamCountBefore = routerClient.sessionEventSources.length;
+    const streamCountBefore = routerClient.v2Sources.length;
 
     fireEvent.click(screen.getByLabelText("Workspace actions"));
     fireEvent.click(screen.getByRole("button", { name: "Restart Agent" }));
@@ -323,7 +323,7 @@ describe("SessionWorkspace", () => {
     // happen off the bounce succeeding, not off session.activity changing.
     await waitFor(() => expect(getSession.mock.calls.length).toBeGreaterThan(sessionCallsBefore));
     await waitFor(() =>
-      expect(routerClient.sessionEventSources.length).toBeGreaterThan(streamCountBefore),
+      expect(routerClient.v2Sources.length).toBeGreaterThan(streamCountBefore),
     );
   });
 

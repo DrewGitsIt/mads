@@ -25,6 +25,13 @@ export interface KeyedRow extends TranscriptMessage {
   /** Arrived after replay_end: the pacer reveals it at reading pace. */
   paced?: boolean;
   /**
+   * Built from this turn's frames (kept when it settles or its stored row
+   * replaces it); cleared when the next turn starts. What the renderer
+   * treats as the turn's own: its activity group stays open until the turn
+   * ends, then folds.
+   */
+  current?: boolean;
+  /**
    * A live row from before a replay of the whole tail (hello `fresh` or
    * `resync`): the replay resends its content, which replaces rather than
    * extends it.
@@ -156,8 +163,10 @@ export function conversationReducer(s: ConvState, a: ConvAction): ConvState {
       return applyFrame(s, a.frame);
     case "queued":
       return { ...s, queued: a.queued };
-    case "turn":
-      return { ...s, turn: { ...s.turn, ...a.turn } };
+    case "turn": {
+      const next = a.turn.active && !s.turn.active ? startTurn(s) : s;
+      return { ...next, turn: { ...next.turn, ...a.turn } };
+    }
     case "reset":
       return emptyConversation();
   }
@@ -188,6 +197,7 @@ function mergePage(s: ConvState, page: KeyedRow[], hasMore: boolean): ConvState 
     const prev = rows[r.key];
     const merged: KeyedRow = { ...r };
     if (prev?.paced) merged.paced = true;
+    if (prev?.current) merged.current = true;
     // The same send, stored: its failure (if any) stays shown.
     if (prev?.failed) merged.failed = true;
     rows[r.key] = merged;
@@ -235,6 +245,26 @@ function storedHas(s: ConvState, key: string): boolean {
   return !!r && !r.live;
 }
 
+/**
+ * A turn starts (a send, or the first item of one nobody here sent): the
+ * previous turn's rows stop being current. A no-op while one already runs.
+ */
+function startTurn(s: ConvState): ConvState {
+  if (s.turn.active) return s;
+  const rows = { ...s.rows };
+  for (const k of Object.keys(rows)) if (rows[k].current) rows[k] = { ...rows[k], current: false };
+  return { ...s, rows, turn: { active: true, startedAt: new Date().toISOString() } };
+}
+
+/**
+ * A new main-agent row from a live (not replayed) frame while no turn is
+ * known to run: a turn this client didn't start (an inbound wake, a
+ * compaction pass, another client's send seen only from its output).
+ */
+function implicitStart(s: ConvState, key: string, parent: unknown): ConvState {
+  return s.replaying || s.rows[key] || parent ? s : startTurn(s);
+}
+
 /** Add or patch a live row, appending a new key to the tail. */
 function upsertLive(s: ConvState, key: string, patch: (prev: KeyedRow | undefined) => KeyedRow): ConvState {
   const prev = s.rows[key];
@@ -273,15 +303,18 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
     }
     case "user_message": {
       if (!key || s.rows[key]) return s;
-      const next = upsertLive(s, key, () => ({
+      // A send (a queue delivery too) opens its turn; a replayed one doesn't —
+      // hello.turn already said whether a turn runs.
+      const base = s.replaying ? s : startTurn(s);
+      return upsertLive(base, key, () => ({
         key,
         role: "user",
         text: str(d.text) ?? "",
         attribution: d.attribution as Attribution | undefined,
         timestamp: str(d.ts),
         live: true,
+        current: true,
       }));
-      return d.queued ? next : { ...next, turn: { ...next.turn, active: true } };
     }
     case "item_start": {
       const prev = s.rows[key];
@@ -292,7 +325,7 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
       }
       if (!key || prev) return s;
       const item = str(d.item) ?? "text";
-      return upsertLive(s, key, () => ({
+      return upsertLive(implicitStart(s, key, d.parent_tool_use_id), key, () => ({
         key,
         role: ITEM_ROLE[item] ?? "agent",
         text: item === "tool_use" ? undefined : "",
@@ -301,13 +334,14 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
         open: item === "text" || item === "thinking",
         paced: item === "text" && paced,
         live: true,
+        current: true,
       }));
     }
     case "text_delta":
     case "thinking_delta": {
       if (!key || storedHas(s, key)) return s;
       const text = str(d.text) ?? "";
-      return upsertLive(s, key, (prev) =>
+      return upsertLive(implicitStart(s, key, undefined), key, (prev) =>
         prev
           ? { ...prev, stale: false, text: (prev.stale ? "" : (prev.text ?? "")) + text }
           : {
@@ -317,6 +351,7 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
               open: true,
               paced: f.kind === "text_delta" && paced,
               live: true,
+              current: true,
             },
       );
     }
@@ -329,8 +364,8 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
       if (!key || storedHas(s, key)) return s;
       const tool = d.tool as ToolUse | undefined;
       if (!tool) return s;
-      return upsertLive(s, key, (prev) => ({
-        ...(prev ?? { key, role: "tool", live: true, timestamp: new Date().toISOString() }),
+      return upsertLive(implicitStart(s, key, undefined), key, (prev) => ({
+        ...(prev ?? { key, role: "tool", live: true, current: true, timestamp: new Date().toISOString() }),
         role: "tool",
         timestamp: prev?.timestamp ?? new Date().toISOString(),
         tool: { ...tool, result: prev?.tool?.result },
@@ -342,7 +377,7 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
       return upsertLive(s, key, (prev) => {
         const base = prev?.tool ?? tool ?? { name: "" };
         return {
-          ...(prev ?? { key, role: "tool", live: true }),
+          ...(prev ?? { key, role: "tool", live: true, current: true }),
           role: "tool",
           tool: {
             ...base,
@@ -354,17 +389,18 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
     }
     case "notice": {
       if (!key || s.rows[key]) return s;
-      return upsertLive(s, key, () => ({ key, role: "agent", notice: true, text: str(d.text) ?? "", live: true }));
+      return upsertLive(s, key, () => ({ key, role: "agent", notice: true, text: str(d.text) ?? "", live: true, current: true }));
     }
     case "inbound": {
       if (!key || s.rows[key]) return s;
-      return upsertLive(s, key, () => ({
+      return upsertLive(implicitStart(s, key, undefined), key, () => ({
         key,
         role: "inbound",
         text: str(d.text) ?? "",
         inbound: d.inbound as TranscriptMessage["inbound"],
         timestamp: str(d.timestamp) ?? new Date().toISOString(),
         live: true,
+        current: true,
       }));
     }
     case "settled": {
@@ -385,13 +421,21 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
       const keys = (d.keys as string[] | undefined) ?? [];
       const rows = { ...s.rows };
       let changed = false;
+      let failed = false;
       for (const k of keys) {
         const r = rows[k];
         if (!r?.live) continue;
         rows[k] = r.role === "user" ? { ...r, failed: true, open: false } : { ...r, unsaved: true, open: false };
+        failed ||= r.role === "user";
         changed = true;
       }
-      return changed ? { ...s, rows } : s;
+      if (!changed) return s;
+      // A failed send opened a turn that never ran (the runner sends no
+      // turn_end for it): over, unless something streamed after it.
+      const main = s.tail.filter((k) => !rows[k]?.parent);
+      const lastKey = main[main.length - 1];
+      if (failed && !s.replaying && lastKey && rows[lastKey].failed) return { ...s, rows, turn: { active: false } };
+      return { ...s, rows };
     }
     case "turn_end": {
       // Every item ends with its turn (the server sends item_stop first; a

@@ -1023,7 +1023,7 @@ export class FakeRouterClient implements RouterClient {
 
   constructor(
     sessions: Record<string, Session> = fixtureSessions,
-    private readonly transcripts = fixtureTranscripts,
+    readonly transcripts = fixtureTranscripts,
     private readonly mentionables = fixtureMentionables,
     private readonly capabilities = fixtureCapabilities,
     tasks: Task[] = fixtureTasks,

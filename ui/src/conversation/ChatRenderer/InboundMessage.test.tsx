@@ -6,7 +6,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { ChatRenderer } from "./ChatRenderer";
 import { collapseFailedSends } from "./failedSends";
 import { buildItems } from "../activity/conversationItems";
-import { emptyPacer, enqueueInbound, revealedToMessages, step } from "../streaming/streamPacer";
+import type { KeyedRow } from "../keyed/conversation";
 import type { InboundSource, Link, TranscriptMessage } from "../../router/types";
 
 const source: InboundSource = {
@@ -24,9 +24,12 @@ const message = (inbound: Partial<InboundSource> = {}, text = "please rebase ont
   timestamp: "2026-10-19T10:00:00Z",
 });
 
+/** Transcript messages as keyed rows, keyed by position. */
+const keyed = (ms: TranscriptMessage[]): KeyedRow[] => ms.map((m, i) => ({ ...m, key: m.key ?? `r${i}` }));
+
 describe("inbound message row", () => {
   it("names the resolved session, the harness mark and the harness, and reads as a note, not a user turn", () => {
-    const { container } = render(<ChatRenderer messages={[message()]} />);
+    const { container } = render(<ChatRenderer rows={keyed([message()])} />);
     const row = screen.getByRole("note");
     expect(row.textContent).toContain("from Leader refactor");
     expect(row.textContent).toContain("via claude-code");
@@ -38,15 +41,15 @@ describe("inbound message row", () => {
   });
 
   it("falls back to the harness's own label, then to a generic name", () => {
-    const { rerender } = render(<ChatRenderer messages={[message({ session_name: undefined })]} />);
+    const { rerender } = render(<ChatRenderer rows={keyed([message({ session_name: undefined })])} />);
     expect(screen.getByRole("note").textContent).toContain("from repo-9c");
-    rerender(<ChatRenderer messages={[message({ session_name: undefined, from_name: undefined })]} />);
+    rerender(<ChatRenderer rows={keyed([message({ session_name: undefined, from_name: undefined })])} />);
     expect(screen.getByRole("note").textContent).toContain("from another session");
   });
 
   it("notes the relationship when the link resolves, without borrowing the link chip", () => {
     const link = { id: "l-1", granting_session_id: "s-1", subject_session_id: "me" } as Link;
-    render(<ChatRenderer messages={[message({ link_id: "l-1" })]} links={[link]} viewedSessionId="me" />);
+    render(<ChatRenderer rows={keyed([message({ link_id: "l-1" })])} links={[link]} viewedSessionId="me" />);
     const row = screen.getByRole("note");
     expect(row.textContent).toContain("your leader");
     expect(row.textContent).not.toContain("⇄");
@@ -54,56 +57,59 @@ describe("inbound message row", () => {
 
   it("shows a held message muted, with the reason and the body if there is one", () => {
     const { rerender } = render(
-      <ChatRenderer messages={[message({ state: "held", hold_reason: "mode-mismatch" })]} />,
+      <ChatRenderer rows={keyed([message({ state: "held", hold_reason: "mode-mismatch" })])} />,
     );
     const row = screen.getByRole("note");
     expect(row.textContent).toContain("Message from Leader refactor held by claude-code: mode-mismatch");
     expect(row.textContent).not.toContain("via claude-code");
-    rerender(<ChatRenderer messages={[message({ state: "held" }, "")]} />);
+    rerender(<ChatRenderer rows={keyed([message({ state: "held" }, "")])} />);
     expect(screen.getByRole("note").textContent).toContain("held by claude-code");
     expect(screen.getByRole("note").textContent).not.toContain("please rebase");
   });
 
   it("folds a long body behind Show more", () => {
-    render(<ChatRenderer messages={[message({}, "word ".repeat(200))]} />);
+    render(<ChatRenderer rows={keyed([message({}, "word ".repeat(200))])} />);
     const toggle = screen.getByRole("button", { name: "Show more" });
     fireEvent.click(toggle);
     expect(screen.getByRole("button", { name: "Show less" })).toBeTruthy();
   });
 
-  it("renders a live inbound item and the pacer hands it to history as a transcript row", () => {
-    let s = enqueueInbound(emptyPacer(), "ping", source, "2026-10-19T10:00:00Z");
-    s = step(s, 1000);
-    expect(s.items.map((i) => i.kind)).toEqual(["inbound"]);
-    render(<ChatRenderer messages={[]} liveItems={s.items} />);
-    expect(screen.getByRole("note").textContent).toContain("from Leader refactor");
-    expect(revealedToMessages(s.items)).toEqual([
-      { role: "inbound", text: "ping", inbound: source, timestamp: "2026-10-19T10:00:00Z" },
-    ]);
+  it("renders a live inbound row like a stored one, in the same slot", () => {
+    const live: KeyedRow = { ...message({}, "ping"), key: "in-1", current: true, live: true };
+    const { container, rerender } = render(<ChatRenderer rows={[live]} turnActive />);
+    const before = screen.getByRole("note");
+    expect(before.textContent).toContain("from Leader refactor");
+    expect(before.textContent).toContain("ping");
+    // Its stored copy arrives under the same key: the row stays mounted.
+    rerender(<ChatRenderer rows={[{ ...message({}, "ping"), key: "in-1" }]} />);
+    expect(screen.getByRole("note")).toBe(before);
+    expect(container.querySelectorAll("[data-user-msg]")).toHaveLength(0);
   });
 
-  it("is a message item keyed by position, so the live row and the persisted row share a slot", () => {
-    const live = buildItems([{ type: "message", message: message(), live: true }]);
-    const persisted = buildItems([{ type: "message", message: message() }]);
-    expect(live[0].key).toBe(persisted[0].key);
+  it("is a message item keyed by row key, so the live row and the stored row share a slot", () => {
+    const live = buildItems([{ type: "message", message: message(), live: true, key: "in-1" }]);
+    const stored = buildItems([{ type: "message", message: message(), key: "in-1" }]);
+    expect(live[0].key).toBe("in-1");
+    expect(live[0].key).toBe(stored[0].key);
   });
 });
 
 describe("inbound and failed sends", () => {
   it("is not the latest send: a failed user send keeps its Retry and an inbound never offers one", () => {
-    const sent: TranscriptMessage = { role: "user", text: "do it" };
-    const err: TranscriptMessage = { role: "agent", text: "auth rejected", is_error: true };
-    const { delivery } = collapseFailedSends([sent, err, message()]);
-    expect(delivery.get(sent)?.error).toBe("auth rejected");
+    const sent: KeyedRow = { key: "u1", role: "user", text: "do it" };
+    const err: KeyedRow = { key: "a1", role: "agent", text: "auth rejected", is_error: true };
+    const inbound: KeyedRow = { ...message(), key: "in-1" };
+    const { delivery } = collapseFailedSends([sent, err, inbound]);
+    expect(delivery.get("u1")?.error).toBe("auth rejected");
 
     // An inbound after the send opens its own exchange rather than counting as a reply.
-    const out = collapseFailedSends([sent, message(), { role: "agent", text: "ok" }]);
+    const out = collapseFailedSends([sent, inbound, { key: "a2", role: "agent", text: "ok" }]);
     expect(out.delivery.size).toBe(0);
   });
 
   it("does not retry the inbound as a user send", () => {
     const retried: string[] = [];
-    render(<ChatRenderer messages={[message()]} onRetry={(t) => retried.push(t)} />);
+    render(<ChatRenderer rows={keyed([message()])} onRetry={(t) => retried.push(t)} />);
     expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
     expect(retried).toEqual([]);
   });

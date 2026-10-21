@@ -7,15 +7,17 @@ import {
   buildItems,
   finishRunningTasks,
   foldHistoryEvents,
-  mergeTranscript,
   replayedCompactStatus,
+  rowsSubStream,
+  rowsToEntries,
   resumeRunningTasks,
   transcriptSubStream,
   type SourceEntry,
   type TaskModel,
 } from "./conversationItems";
 
-const msg = (text: string): SourceEntry => ({ type: "message", message: { role: "agent", text } });
+let n = 0;
+const msg = (text: string): SourceEntry => ({ type: "message", message: { role: "agent", text }, key: `m${n++}` });
 const tool = (name: string, id?: string, input?: unknown): SourceEntry => ({
   type: "tool",
   tool: { id, name, input },
@@ -59,6 +61,52 @@ describe("buildItems — grouping", () => {
     const historical = buildItems([msg("hi"), tool("Read", "toolu_9")]);
     expect(live[0].key).toBe(historical[1].key);
   });
+
+  it("keys every item by its row: a message's, a group's first row's, the plan's and a task's call's", () => {
+    const entries = rowsToEntries([
+      { key: "u1", role: "user", text: "go" },
+      { key: "th1", role: "thinking", text: "hmm" },
+      { key: "k:t1", role: "tool", tool: { id: "t1", name: "Read" } },
+      { key: "k:p1", role: "tool", tool: { id: "p1", name: "TodoWrite", input: { todos: [] } } },
+      { key: "k:a1", role: "tool", tool: { id: "a1", name: "Agent", kind: "agent" } },
+      { key: "a1", role: "agent", text: "done" },
+    ]);
+    const items = buildItems(entries);
+    expect(items.map((i) => `${i.type}:${i.key}`)).toEqual([
+      "message:u1",
+      "activity:th1",
+      "plan:k:p1",
+      "task:k:a1",
+      "message:a1",
+    ]);
+    // Inserting a row ahead re-keys nothing after it.
+    const more = buildItems(rowsToEntries([{ key: "u0", role: "user", text: "earlier" }])).concat(items);
+    expect(more.slice(1).map((i) => i.key)).toEqual(items.map((i) => i.key));
+  });
+});
+
+describe("rowsToEntries", () => {
+  it("marks only the current turn's rows live, and carries row keys onto activity entries", () => {
+    const entries = rowsToEntries([
+      { key: "t1", role: "tool", tool: { id: "t1", name: "Read" }, live: true },
+      { key: "t2", role: "tool", tool: { id: "t2", name: "Read" }, current: true },
+      { key: "th", role: "thinking", text: "x", current: true },
+    ]);
+    expect(entries.map((e) => (e.type === "card" ? undefined : e.live))).toEqual([undefined, true, true]);
+    expect(entries.map((e) => (e.type === "card" ? undefined : e.key))).toEqual(["t1", "t2", "th"]);
+  });
+});
+
+describe("rowsSubStream", () => {
+  it("folds a subagent's keyed rows into the dock's stream shape", () => {
+    expect(
+      rowsSubStream([
+        { key: "a", role: "agent", text: "looking", parent: "tu1" },
+        { key: "t", role: "tool", tool: { id: "s1", name: "Read", result: { text: "ok" } }, parent: "tu1" },
+        { key: "h", role: "thinking", text: "", parent: "tu1" },
+      ]).map((i) => i.type),
+    ).toEqual(["text", "tool"]);
+  });
 });
 
 describe("buildItems — plan widget (T14)", () => {
@@ -93,27 +141,6 @@ describe("buildItems — task cards (T15)", () => {
       tool("Bash", "t3"),
     ]);
     expect(items.map((i) => i.type)).toEqual(["activity", "task", "activity"]);
-  });
-});
-
-describe("mergeTranscript", () => {
-  it("interleaves thinking blocks by timestamp", () => {
-    const messages: TranscriptMessage[] = [
-      { role: "user", text: "go", timestamp: "2026-09-09T10:00:00Z" },
-      { role: "tool", tool: { id: "t1", name: "Read" }, timestamp: "2026-09-09T10:00:10Z" },
-      { role: "agent", text: "done", timestamp: "2026-09-09T10:00:20Z" },
-    ];
-    const entries = mergeTranscript(messages, [
-      { text: "hmm", timestamp: "2026-09-09T10:00:05Z" },
-      { text: "late thought", timestamp: "2026-09-09T10:00:30Z" },
-    ]);
-    expect(entries.map((e) => e.type)).toEqual([
-      "message",
-      "thinking",
-      "tool",
-      "message",
-      "thinking",
-    ]);
   });
 });
 
@@ -225,7 +252,7 @@ describe("foldHistoryEvents (T17)", () => {
     payload,
   });
 
-  it("folds statuses, task lifecycles, subagent streams and thinking from the event log", () => {
+  it("folds statuses, task lifecycles and subagent streams from the event log; never thinking", () => {
     const h = foldHistoryEvents([
       env(3, "session.thinking", { text: "pondering" }),
       env(1, "session.tool_status_changed", { tool_use_id: "t1", status: "interrupted" }),
@@ -240,7 +267,7 @@ describe("foldHistoryEvents (T17)", () => {
     expect(h.tasks.get("tk1")?.description).toBe("audit");
     expect(h.tasks.get("tk1")?.running).toBe(false);
     expect(h.subagentStreams.get("tu1")).toHaveLength(1);
-    expect(h.thinking[0].text).toBe("pondering");
+    expect(h).not.toHaveProperty("thinking");
   });
 });
 

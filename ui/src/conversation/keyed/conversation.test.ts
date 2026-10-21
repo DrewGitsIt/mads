@@ -183,8 +183,53 @@ describe("conversationReducer", () => {
     expect(s.rows.a.open).toBe(false);
   });
 
-  it("a queued user_message doesn't start a turn by itself", () => {
-    const s = run(emptyConversation(), hello(), f("replay_end"), f("user_message", { key: "u", text: "q", queued: true }));
+  it("a live user_message opens its turn (a queue delivery too); a replayed one doesn't", () => {
+    // The runner sends a queued message's frame at delivery, as it hands it
+    // to the provider (runner.sendTurn), so it opens a turn like any send.
+    const queued = run(emptyConversation(), hello(), f("replay_end"), f("user_message", { key: "u", text: "q", queued: true }));
+    expect(queued.turn.active).toBe(true);
+    const replayed = run(emptyConversation(), hello(), f("user_message", { key: "u", text: "q" }), f("replay_end"));
+    expect(replayed.turn.active).toBe(false);
+  });
+
+  it("rows stay current through settling and the stored copy, until the next turn starts", () => {
+    let s = run(emptyConversation(), hello(), f("replay_end"), f("user_message", { key: "user:1", text: "go" }));
+    s = run(s, f("item_start", { key: "t1", item: "tool_use" }), f("tool_use", { key: "t1", tool: { id: "t1", name: "ls" } }));
+    s = run(s, f("settled", { keys: ["user:1", "t1"] }), page([{ role: "user", key: "user:1", text: "go" }, { role: "tool", key: "t1", tool: { id: "t1", name: "ls" } }]));
+    expect(s.rows.t1.live).toBeFalsy();
+    expect(s.rows.t1.current).toBe(true);
+    s = run(s, f("turn_end"));
+    expect(s.rows.t1.current).toBe(true); // the renderer folds it once the reveal drains
+    s = run(s, f("user_message", { key: "user:2", text: "again" }));
+    expect(s.rows.t1.current).toBe(false);
+    expect(s.rows["user:2"].current).toBe(true);
+  });
+
+  it("a live item with no turn known to run starts one; a replayed or subagent one doesn't", () => {
+    const idle = run(emptyConversation(), hello(), f("replay_end"));
+    expect(run(idle, f("item_start", { key: "a", item: "text" })).turn.active).toBe(true);
+    expect(run(idle, f("inbound", { key: "i", text: "from outside" })).turn.active).toBe(true);
+    expect(run(idle, f("item_start", { key: "s", item: "text", parent_tool_use_id: "task1" })).turn.active).toBe(false);
+    expect(run(emptyConversation(), hello(), f("item_start", { key: "a", item: "text" })).turn.active).toBe(false);
+  });
+
+  it("a turn started from outside (Stop's opposite: agent_state working) clears the last turn's rows", () => {
+    let s = run(emptyConversation(), hello(), f("replay_end"), ...textItem("a", "done"), f("turn_end"));
+    expect(s.rows.a.current).toBe(true);
+    s = run(s, { type: "turn", turn: { active: true, startedAt: "t1" } });
+    expect(s.turn).toMatchObject({ active: true, startedAt: "t1" });
+    expect(s.rows.a.current).toBe(false);
+  });
+
+  it("a failed send ends the turn it opened; one with output after it doesn't", () => {
+    let s = run(emptyConversation(), hello(), f("replay_end"), f("user_message", { key: "user:1", text: "go" }));
+    expect(s.turn.active).toBe(true);
+    s = run(s, f("unsaved", { keys: ["user:1"] }));
+    expect(s.rows["user:1"].failed).toBe(true);
     expect(s.turn.active).toBe(false);
+
+    let t = run(emptyConversation(), hello(), f("replay_end"), f("user_message", { key: "user:1", text: "go" }), ...textItem("a", "working"));
+    t = run(t, f("unsaved", { keys: ["user:1"] }));
+    expect(t.turn.active).toBe(true);
   });
 });

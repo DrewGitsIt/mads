@@ -26,10 +26,8 @@ import type {
   ToolStatus,
   ToolStatusChange,
   ToolUse,
-  TranscriptMessage,
   Usage,
 } from "../router/types";
-import { foldToolResults } from "../router/toolPairing";
 import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
 import { leaderLink } from "./Composer/commands/useLinkCommandState";
 import { useWorkspaceForRef } from "../tasks/useSessionWorkspace";
@@ -47,12 +45,12 @@ import { ActivityDock, type DockView } from "./activity/ActivityDock";
 import { RunningStack } from "./activity/RunningStack";
 import type { SubstripEntry } from "./activity/Substrip";
 import {
-  appendSubagentItem,
   applyTaskEvent,
   CONVERSATION_EVENT_TYPES,
   SUBAGENT_STREAM_EVENT_TYPES,
   finishRunningTasks,
   foldHistoryEvents,
+  rowsSubStream,
   transcriptSubStream,
   mergeDelegates,
   replayedCompactStatus,
@@ -62,12 +60,13 @@ import {
   type SubStreamItem,
   type TaskModel,
 } from "./activity/conversationItems";
+import { subagentRows } from "./keyed/conversation";
+import { useKeyedConversation } from "./keyed/useKeyedConversation";
+import { useReveal } from "./keyed/useReveal";
 import { LinkNamesProvider, useLinkNames } from "./activity/linkNames";
 import { formatTokens, toolTitle } from "./activity/toolDisplay";
 import { Chip } from "../components/Chip/Chip";
 import { FADE_OUT_MS, usePresence } from "../components/Motion";
-import { useStreamPacer } from "./streaming/useStreamPacer";
-import { revealedToMessages } from "./streaming/streamPacer";
 import { streamPaceToWpm, useStreamSpeed } from "./streaming/streamSpeed";
 import { PermissionCard } from "./ChatRenderer/PermissionCard";
 import { TerminalView, type TerminalViewHandle } from "./TerminalRenderer/TerminalView";
@@ -86,6 +85,7 @@ import { useWorktreeCards } from "./Worktree/useWorktreeCards";
 import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
 import { STREAM_REATTACH_EVENT, type StreamReattachDetail } from "./streamReattachSignal";
 import { useStickToBottom } from "./useStickToBottom";
+import { useOlderPages } from "./useOlderPages";
 import { FindBar, useFindBar } from "./Find/FindBar";
 import { useVisibleCards } from "./useVisibleCards";
 import { useDelegateFile } from "./activity/useDelegateFile";
@@ -154,19 +154,12 @@ type TransportState =
       retryable: boolean;
     };
 
-// Driven purely by the stream, not by "who sent the message" — the same
-// transition applies whether this client's own send started the turn or a
-// linked-session inject/mid-turn mount is the first thing observed, so both
-// fall out of the same code path with no separate case to maintain.
-// The in-flight turn is built directly from the stream (text tokens, tool_use,
-// tool_result) and is the SOLE source of truth for it, reconciled with the
-// persisted transcript exactly once, on turn_end — no mid-turn transcript poll
-// to make streamed text rubber-band. The ordered items live in a stream pacer
-// (useStreamPacer) so the reveal rate can be decoupled from token arrival;
-// ConversationTab keeps only the turn's phase + a `blocked` reason here.
-// "revealing" is a turn the agent has finished whose paced reveal is still
-// playing: the composer and working indicator are already idle (the agent
-// is), while the live items stay on screen until the reveal drains.
+// Derived, never stored: "live" while the keyed conversation says a turn
+// runs (hello.turn, a user_message, the turn's first item; turn_end, an
+// error frame or Stop end it), whoever started it. "revealing" is a turn the
+// agent has finished whose paced reveal is still playing: the composer and
+// working indicator are already idle (the agent is), while the turn's
+// activity stays open until the reveal drains.
 type TurnPhase = "idle" | "live" | "revealing";
 
 /**
@@ -191,7 +184,6 @@ export function ConversationTab({
   onOpenTask,
 }: ConversationTabProps) {
   const [session, setSession] = useState<Session | null>(null);
-  const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [loadError, setLoadError] = useState(false);
   const [retryToken, setRetryToken] = useState(0);
   const [transport, setTransport] = useState<TransportState>({ status: "idle", mode: "chat" });
@@ -217,32 +209,17 @@ export function ConversationTab({
     action?: { label: string; onClick: () => void };
   }>();
   const [waking, setWaking] = useState(false);
-  const [turnPhase, setTurnPhase] = useState<TurnPhase>("idle");
+  // Why the latest send failed (its HTTP error, or the stream's error
+  // frame) — the reason on a send the stream reported unsaved.
+  const [sendFailure, setSendFailure] = useState<string>();
   // session.workspace is a reference (id or name), not the name the dock's
   // ⎇ segment prints — resolved here, off the session this tab already holds,
   // and kept live by the hook's workspace.* subscription.
   const sessionWorkspace = useWorkspaceForRef(routerClient, session?.workspace);
   const agents = useAgentIndex(routerClient);
   const checkoutBranch = useCheckoutBranch(routerClient, session);
-  // Paces the live turn's reveal (a reading pace in words per minute; Native
-  // by default). Owns the ordered items; its callbacks are stable across
-  // renders.
+  // The reveal's reading pace in words per minute (Native by default).
   const wordsPerMinute = streamPaceToWpm(useStreamSpeed(routerClient));
-  const pacer = useStreamPacer(wordsPerMinute);
-  const showAll = usePresence(pacer.behind, FADE_OUT_MS);
-  const {
-    enqueueText: pacerEnqueueText,
-    enqueueTool: pacerEnqueueTool,
-    enqueueThinking: pacerEnqueueThinking,
-    enqueueInbound: pacerEnqueueInbound,
-    applyToolResult: pacerApplyToolResult,
-    finish: pacerFinish,
-    flush: pacerFlush,
-    reset: pacerReset,
-  } = pacer;
-  // Bumped by each turn start (beginTurn): an end-of-turn reconcile that
-  // resolves after the next turn started must leave that turn alone.
-  const turnGenRef = useRef(0);
   // Last completed turn's usage, for the dock's context rim and the + menu's
   // context row. Populated from the stream's turn_end frame (the only place
   // usage is reported), seeded from session.last_usage at mount.
@@ -280,10 +257,11 @@ export function ConversationTab({
   // exists; the Router 404s and the browser's EventSource, per spec, never
   // auto-reconnects a connection whose *initial* handshake failed (only a
   // previously-established one retries on a later drop). streamBroken flags
-  // exactly that dead-on-arrival case; streamGeneration is bumped once the
-  // session is confirmed active again (session.activity_changed, picked up
-  // by the WORKSPACE_SESSION_EVENT_TYPES subscription below) to force one
-  // fresh connection — not a timer/backoff loop, just a single deliberate
+  // exactly that dead-on-arrival case; once the session is confirmed active
+  // again (session.activity_changed, picked up by the
+  // WORKSPACE_SESSION_EVENT_TYPES subscription below) the streams reopen —
+  // the chat's keyed one from its last frame (reattach), the terminal's by
+  // streamGeneration. Not a timer/backoff loop, just a single deliberate
   // re-open keyed to a real state transition.
   const [streamBroken, setStreamBroken] = useState(false);
   const [streamGeneration, setStreamGeneration] = useState(0);
@@ -328,14 +306,11 @@ export function ConversationTab({
   // by harness id — laid over `tasks` at render (mergeDelegates) as the one
   // authority on whether each subagent is running and how it ended.
   const [delegates, setDelegates] = useState<Map<string, Delegate>>(new Map());
-  // Each subagent's own conversation stream, keyed by the spawning Agent
-  // tool_use id. Parent-tagged /output events land here and NEVER in the
-  // main stream (the interleave bug this redesign fixes); history replays
-  // from session.subagent_event — claude-code's transcript omits sidechains.
-  const [subagentStreams, setSubagentStreams] = useState<Map<string, SubStreamItem[]>>(new Map());
-  // Whole historical thinking blocks (session.thinking), merged into the
-  // rendered stream by timestamp. Live thinking rides the pacer instead.
-  const [thinkingHistory, setThinkingHistory] = useState<{ text: string; timestamp?: string }[]>([]);
+  // Subagent streams read back from the event log (session.subagent_event),
+  // by spawning Agent tool_use id — only for a dock whose subagent has no
+  // transcript file and no live rows (the keyed stream's subagentRows,
+  // which never enter the main list).
+  const [subagentReplay, setSubagentReplay] = useState<Map<string, SubStreamItem[]>>(new Map());
   // The V2 working indicator's current-activity ticker: latest tool title,
   // or "Thinking" fed by thinking_tokens ticks.
   const [currentActivity, setCurrentActivity] = useState<string>();
@@ -347,19 +322,6 @@ export function ConversationTab({
     | { type: "subagent"; parentToolUseId: string; title: string; subtype?: string }
     | null
   >(null);
-
-  const appendSubagent = useCallback(
-    (
-      parentId: string,
-      ev: { kind: "text" | "tool_use" | "tool_result" | "thinking"; text?: string; tool?: ToolUse; is_error?: boolean },
-    ) => {
-      // Live wire frames carry no timestamps — stamp arrival time so
-      // subagent rows and their group headers can report durations.
-      const stamped = { ...ev, timestamp: new Date().toISOString() };
-      setSubagentStreams((m) => appendSubagentItem(m, parentId, stamped));
-    },
-    [],
-  );
 
   useEffect(() => {
     // Ctrl+` hides or shows; it never ends the shell. Showing a dock with no
@@ -384,30 +346,63 @@ export function ConversationTab({
     return () => window.clearTimeout(id);
   }, [compactStatus]);
 
+  // The keyed conversation (docs/CHAT-STREAM-DESIGN.md §5, §6): the last
+  // transcript page plus /output?v=2, merged by key — the only source of
+  // the rows, the turn state and the queue's snapshot. The terminal view
+  // reads transcript pages only (its PTY rides the legacy stream).
+  const ptyMode =
+    transport.status === "idle"
+      ? transport.mode === "terminal"
+      : transport.status === "switching" && transport.to === "terminal";
+  const statusRef = useRef<(kind: string, data: Record<string, unknown>) => void>(() => {});
+  const conv = useKeyedConversation(routerClient, sessionId, {
+    stream: !ptyMode,
+    onStatus: (kind, data) => statusRef.current(kind, data),
+    onLoadError: () => setLoadError(true),
+    onDisconnect: () => setStreamBroken(true),
+  });
+  const { dispatch: convDispatch, reattach: convReattach, refreshLast } = conv;
+  const turnLive = conv.state.turn.active;
+  const ptyModeRef = useRef(ptyMode);
+  ptyModeRef.current = ptyMode;
   // The user's messages waiting behind the in-flight turn. The session
   // process owns the queue (POST /messages with queue:true), so it survives
-  // this pane unmounting; this is only its mirror — fetched on mount, then
+  // this pane unmounting; this is only its mirror — hello's snapshot, then
   // kept current by session.queue_changed.
-  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
+  const queuedMessages = conv.state.queued;
+  // Paced reveal of the turn's text; `final` once the turn is over, so the
+  // last word shows whole.
+  const reveal = useReveal(conv.rows, wordsPerMinute, !turnLive);
+  const showAll = usePresence(reveal.behind, FADE_OUT_MS);
+  const turnPhase: TurnPhase = turnLive ? "live" : reveal.pending ? "revealing" : "idle";
+  // Latest turn phase, for callbacks that fire outside the render that set it.
+  const turnPhaseRef = useRef(turnPhase);
+  turnPhaseRef.current = turnPhase;
+  // A turn starting while the last reply still reveals shows the rest of it
+  // at once, so the new message lands after the whole reply. Only the last
+  // turn's rows: a turn opened by its own first text paces that text.
+  const wasLive = useRef(turnLive);
+  const { revealAll } = reveal;
+  useEffect(() => {
+    if (turnLive && !wasLive.current) revealAll((r) => !r.current);
+    wasLive.current = turnLive;
+  }, [turnLive, revealAll]);
 
   useEffect(() => {
     let cancelled = false;
     setLoadError(false);
     setSession(null);
-    setMessages([]);
-    setTurnPhase("idle");
-    pacerReset();
     setPermissionRequests(new Map());
     setLastUsage(undefined);
     setCompactStatus(undefined);
     setAgentSince(undefined);
     setPendingReplay(null);
-    setQueuedMessages([]);
     setToolStatuses(new Map());
     setTasks(new Map());
+    setBackground([]);
     setDelegates(new Map());
-    setSubagentStreams(new Map());
-    setThinkingHistory([]);
+    setSubagentReplay(new Map());
+    setSendFailure(undefined);
     setCurrentActivity(undefined);
     setDockTarget(null);
     // Reset to the chat default up front — the mode lookup below is async,
@@ -423,13 +418,11 @@ export function ConversationTab({
           // usage at wake time — before this mount has seen a turn_end of
           // its own (services/session/internal/runner's persistUsage).
           if (s.last_usage) setLastUsage(s.last_usage);
-          // Reopened mid-turn: the /output stream never replays the frames
-          // that would have flipped the turn live, so the record's mirrored
-          // agent state does it — otherwise the working indicator stays away
-          // until the turn's next frame. Only a live Runner clears the
-          // mirror, so an inactive session's "working" is a stale leftover.
+          // Reopened mid-turn: the stream's hello says whether a turn runs;
+          // the record's mirrored agent state only seeds the indicator's
+          // label. Only a live Runner clears the mirror, so an inactive
+          // session's "working" is a stale leftover.
           if (s.activity === "active" && s.agent_state?.state === "working") {
-            setTurnPhase("live");
             setAgentSince(s.agent_state.since);
             if (s.agent_state.label) setCurrentActivity((a) => a ?? s.agent_state?.label);
           }
@@ -438,14 +431,13 @@ export function ConversationTab({
       .catch(() => {
         if (!cancelled) setLoadError(true);
       });
-    void routerClient
-      .getTranscript(sessionId)
-      .then((m) => {
-        if (!cancelled) setMessages(m);
-      })
-      .catch(() => {
+    // The transcript's last page is the keyed conversation's own mount
+    // fetch; a Retry asks for it again.
+    if (retryToken > 0) {
+      refreshLast().catch(() => {
         if (!cancelled) setLoadError(true);
       });
+    }
     // The session service's current transport mode IS the persistence
     // mechanism for the toggle's last state — every switch is a real
     // SwitchTransport, so there's nothing else to read the "last choice"
@@ -462,14 +454,6 @@ export function ConversationTab({
     // event is already carried by the live stream, so nothing further is
     // needed for those once this mount is done.
     void routerClient
-      .listQueuedMessages(sessionId)
-      .then((q) => {
-        // Merge rather than replace: a queue_changed that landed while this
-        // was in flight is fresher, and it carries the whole queue anyway.
-        if (!cancelled) setQueuedMessages((live) => (live.length > 0 ? live : q));
-      })
-      .catch(() => {});
-    void routerClient
       .getPermissionRequests(sessionId)
       .then((reqs) => {
         if (cancelled) return;
@@ -477,18 +461,16 @@ export function ConversationTab({
       })
       .catch(() => {});
     // History parity (T17): the control-plane event log is the only
-    // historical source for subagent streams, task lifecycles, main-agent
-    // thinking, and out-of-band status changes — the provider transcript
-    // omits all four. Merge live-wins: anything the stream delivered while
-    // this fetch was in flight is fresher than the replay.
+    // historical source for task lifecycles, compaction and out-of-band
+    // status changes — the provider transcript omits them. Merge live-wins:
+    // anything the stream delivered while this fetch was in flight is
+    // fresher than the replay.
     void getAllEvents(routerClient, { sessionId, types: CONVERSATION_EVENT_TYPES })
       .then((envelopes) => {
         if (cancelled) return;
         const h = foldHistoryEvents(envelopes);
         setToolStatuses((live) => new Map([...h.statuses, ...live]));
         setTasks((live) => new Map([...h.tasks, ...live]));
-        setSubagentStreams((live) => new Map([...h.subagentStreams, ...live]));
-        setThinkingHistory(h.thinking);
         setPendingReplay({ compact: h.compact });
       })
       .catch(() => {});
@@ -512,7 +494,7 @@ export function ConversationTab({
     return () => {
       cancelled = true;
     };
-  }, [routerClient, sessionId, retryToken, pacerReset]);
+  }, [routerClient, sessionId, retryToken, refreshLast]);
 
   // Finishes the event-log replay once the session record is in too (see
   // pendingReplay): subagents spawned inside a turn still in flight are
@@ -630,6 +612,16 @@ export function ConversationTab({
   // unmounts with the transport, so its ref is the hook's callback ref; the
   // terminal stream just takes the element ref.
   const stick = useStickToBottom();
+  // Scrolling near the top loads the page before the oldest row, keeping
+  // the item being read where it was.
+  const olderPages = useOlderPages(stick.element, {
+    hasMore: conv.state.hasMore,
+    loadOlder: conv.loadOlder,
+    version: `${conv.state.cursor}/${conv.state.hasMore}`,
+  });
+  // The working indicator a send showed before its turn was confirmed: a
+  // send that fails takes it back.
+  const optimisticTurn = useRef(false);
 
   // The dock's Commit…: one click with "Write commit messages for me" on and a
   // Fast Model to write them, else the dialog.
@@ -677,19 +669,14 @@ export function ConversationTab({
   );
 
   // Shares SessionWorkspace's session-scoped subscription (see
-  // WORKSPACE_SESSION_EVENT_TYPES) rather than opening its own — GET
-  // /transcript has no push notification of its own (see refetchAfterTurn
-  // below), and a linked-session inject/digest lands on this session's
-  // transcript out of band from anything this viewer sent, so it needs a
-  // server-scoped trigger to refetch rather than waiting on the stream's
-  // own turn_end (which only fires for turns this session's provider runs).
+  // WORKSPACE_SESSION_EVENT_TYPES) rather than opening its own. A
+  // linked-session inject/digest needs nothing here: it reaches the
+  // conversation as a user_message frame like any send.
   useEffect(() => {
     return subscribeToEvents(
       { sessionId, types: WORKSPACE_SESSION_EVENT_TYPES },
       (envelope) => {
-        if (envelope.type === "link.message_injected") {
-          void routerClient.getTranscript(sessionId).then(setMessages);
-        } else if ((SESSION_SHELL_REFETCH_EVENT_TYPES as string[]).includes(envelope.type)) {
+        if ((SESSION_SHELL_REFETCH_EVENT_TYPES as string[]).includes(envelope.type)) {
           refetchSession();
         }
         // Anything else in WORKSPACE_SESSION_EVENT_TYPES (task.*/stage.*/
@@ -698,34 +685,44 @@ export function ConversationTab({
         // nothing to do with them.
       },
     );
-  }, [refetchSession, routerClient, sessionId]);
+  }, [refetchSession, sessionId]);
 
-  // The session's live data-plane stream (services/session's GET /output,
-  // proxied via the Router) — one subscription per session, independent of
-  // display mode. This is the channel SessionTerminalBridge rides for
-  // terminal-mode output; it also stays open across a chat<->terminal
-  // switch, since the switch is server-side (SwitchTransport), not a
-  // reconnect of this stream.
+  // The terminal view's data-plane stream (services/session's legacy GET
+  // /output, proxied via the Router): the channel SessionTerminalBridge
+  // rides for pty_output. The chat view never opens it — its conversation
+  // and status frames come from the keyed stream above. A switch to
+  // terminal opens it as the switch starts; the PTY's buffer replays on
+  // attach.
   useEffect(() => {
+    if (!ptyMode) return;
     const source = routerClient.streamSession(sessionId);
     setEventSource(source);
-    setBackground([]);
     setStreamBroken(false);
+    const onError = (ev: MessageEvent<string>) => {
+      // A transport failure (no data): dead on arrival against a dormant session.
+      if (typeof ev.data !== "string") setStreamBroken(true);
+    };
+    source.addEventListener("error", onError);
     return () => {
+      source.removeEventListener("error", onError);
       source.close();
       setEventSource(null);
     };
-  }, [routerClient, sessionId, streamGeneration]);
+  }, [routerClient, sessionId, streamGeneration, ptyMode]);
 
-  // Reconnects the stream exactly once a dead-on-arrival connection
-  // (streamBroken) coincides with the session having gone active — see the
+  // Reopens both streams: the keyed one from the last frame it saw.
+  const reattachStreams = useCallback(() => {
+    setStreamBroken(false);
+    setStreamGeneration((g) => g + 1);
+    convReattach();
+  }, [convReattach]);
+
+  // Reconnects exactly once a dead-on-arrival connection (streamBroken)
+  // coincides with the session having gone active — see the
   // streamBroken/streamGeneration declaration above.
   useEffect(() => {
-    if (streamBroken && session?.activity === "active") {
-      setStreamBroken(false);
-      setStreamGeneration((g) => g + 1);
-    }
-  }, [streamBroken, session?.activity]);
+    if (streamBroken && session?.activity === "active") reattachStreams();
+  }, [streamBroken, session?.activity, reattachStreams]);
 
   // Forced reattach for "Restart agent" (SessionWorkspace's kebab) — fires
   // unconditionally on a successful bounce, regardless of the cached
@@ -735,12 +732,11 @@ export function ConversationTab({
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<StreamReattachDetail>).detail;
       if (detail?.sessionId !== sessionId) return;
-      setStreamBroken(false);
-      setStreamGeneration((g) => g + 1);
+      reattachStreams();
     };
     window.addEventListener(STREAM_REATTACH_EVENT, handler);
     return () => window.removeEventListener(STREAM_REATTACH_EVENT, handler);
-  }, [sessionId]);
+  }, [sessionId, reattachStreams]);
 
   const terminalBridge = useMemo(
     () =>
@@ -785,88 +781,25 @@ export function ConversationTab({
     [routerClient, sessionId, handleToggle],
   );
 
-  const messagesRef = useRef<TranscriptMessage[]>(messages);
-  messagesRef.current = messages;
-
-  // Latest turn phase, read from callbacks that fire outside the render
-  // that set it (EventSource "open", visibilitychange) — same ref-mirrors-
-  // state idiom as messagesRef above.
-  const turnPhaseRef = useRef(turnPhase);
-  turnPhaseRef.current = turnPhase;
-
-  // GET /transcript has no push notification for turn completion (no domain
-  // event fires per-turn, only on session start/shutdown), so the persisted
-  // reply only becomes visible by re-fetching once the stream's turn_end
-  // frame says the turn is over. One fetch, one retry 300ms later if the
-  // transcript hasn't caught up yet (or the fetch throws) — never an
-  // unbounded poll; the frozen streamed bubble is the fallback if both fail.
-  // A transcript that hasn't grown never replaces the pane: it can be behind
-  // it — the harness writes a just-sent user message to its file a beat
-  // after receiving it, and the bubble added on send would vanish until the
-  // next turn's end.
-  const refetchAfterTurn = useCallback(async (stillCurrent: () => boolean = () => true) => {
-    const baseline = messagesRef.current.length;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const fresh = await routerClient.getTranscript(sessionId);
-        if (!stillCurrent()) return;
-        if (fresh.length > baseline) {
-          setMessages(fresh);
-          return;
-        }
-      } catch {
-        // retry below
-      }
-      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300));
-    }
-  }, [routerClient, sessionId]);
-
-  // Ends the live turn. The agent is done, so the composer and indicator go
-  // idle now; a paced reveal keeps playing ("revealing") and, once drained,
-  // reconciles once with the persisted transcript and drops the live items —
-  // frozen-visible throughout, so there's never a flash to empty. A send in
-  // the meantime takes the reveal over (handleSendStart), and the reconcile
-  // then stands down.
+  // Ends the turn here: the agent is done (turn_end, an error frame, Stop, or
+  // the control plane's idle), so the composer and indicator go idle now. A
+  // paced reveal keeps playing ("revealing") over the keyed rows; nothing is
+  // refetched or replaced — the keyed conversation refreshes its last page
+  // once at turn_end, merged by key.
   const endTurn = useCallback(() => {
-    // The ref too, not just state: a second end-of-turn signal (the stream's
-    // turn_end and the agent going idle both arrive) mustn't see "live".
-    if (turnPhaseRef.current === "live") turnPhaseRef.current = "revealing";
-    setTurnPhase((p) => (p === "live" ? "revealing" : p));
+    setCurrentActivity(undefined);
+    // A turn ending with no task_notification means those subagents never
+    // finished — interrupted-shape, never a spinner that ticks forever.
+    setTasks((m) => finishRunningTasks(m));
     // A Stop question outlives nothing: the turn it asked about is over.
     setStopConfirm(undefined);
-    pacerFinish(() => {
-      const gen = turnGenRef.current;
-      const stillCurrent = () => turnGenRef.current === gen;
-      void refetchAfterTurn(stillCurrent).finally(() => {
-        if (!stillCurrent()) return;
-        setTurnPhase((p) => (p === "revealing" ? "idle" : p));
-        pacerReset();
-      });
-    });
-  }, [pacerFinish, refetchAfterTurn, pacerReset]);
-
-  // A turn starts — the user's send, a queued message going out, or one
-  // this pane only hears about from the agent state. If the last reply is
-  // still revealing, show the rest of it at once and hand it to the history
-  // as plain transcript rows, so the new user message lands after it. The
-  // next turn's own end reconciles the whole thing with the persisted
-  // transcript.
-  const beginTurn = useCallback(() => {
-    turnGenRef.current++;
-    if (turnPhaseRef.current === "revealing") {
-      const revealed = pacerFlush();
-      setMessages((m) => [...m, ...revealedToMessages(revealed)]);
-    }
-    turnPhaseRef.current = "live"; // ahead of the render, for the next signal
-    setTurnPhase("live");
-  }, [pacerFlush]);
+    convDispatch({ type: "turn", turn: { active: false } });
+  }, [convDispatch]);
 
   // The chat-mode "Stop" button — the ⌘/Ctrl-C of the terminal. Interrupts the
-  // in-flight turn, then finalizes locally exactly as onTurnEnd does rather
-  // than waiting on the child's turn_end frame (the /output stream is
-  // known-unreliable for the current turn — see refetchAfterTurn), so the stop
-  // reads as immediate. The child still sends its own turn_end; that just
-  // reconciles onto an already-idle turn.
+  // in-flight turn, then finalizes locally rather than waiting on the child's
+  // turn_end frame, so the stop reads as immediate. The child still sends its
+  // own turn_end; that just lands on an already-idle turn.
   const handleInterrupt = useCallback(async () => {
     try {
       await routerClient.interrupt(sessionId);
@@ -874,25 +807,90 @@ export function ConversationTab({
       setSendError(err instanceof Error ? err.message : "Failed to stop the agent.");
       return;
     }
-    setCurrentActivity(undefined);
-    setTasks((m) => finishRunningTasks(m));
     endTurn();
   }, [routerClient, sessionId, endTurn]);
 
-  // Durable turn-completion reconciliation: /output is ephemeral and can
-  // shed frames under an end-of-turn burst (the hub closes overflowing
-  // subscriptions rather than silently gapping, but a frame can still be
-  // lost to a dying connection). The runner's session.turn_ended envelope
-  // rides the control-plane event log — lossless — so it finalizes any turn
-  // the stream's own turn_end frame failed to close, instead of leaving the
-  // pane frozen on its last streamed item until a remount. Idempotent when
-  // both signals arrive: an idle pane just re-checks the transcript.
+  // The keyed stream's status frames (today's provider.Event data): the
+  // conversation itself tracks turn_end, the rest is this tab's own state.
+  statusRef.current = (kind, data) => {
+    if (kind === "hello") {
+      // A connection that didn't resume starts from its own snapshots (sent
+      // only when there is something to say): the last one's processes are
+      // gone with it.
+      if (data.resume !== "resumed") setBackground([]);
+      return;
+    }
+    const ev = data as unknown as StreamEvent;
+    switch (ev.kind) {
+      case "turn_end":
+        // turn_end carries this turn's usage — the only place it's reported,
+        // so it feeds the dock's context rim. One that counts no tokens (a
+        // /compact turn the CLI gave no figure for) leaves the rim where it was.
+        if (ev.usage && countsTokens(ev.usage)) setLastUsage(ev.usage);
+        endTurn();
+        return;
+      case "error":
+        endTurn();
+        setSendError(ev.text || "The agent hit an error.");
+        setSendFailure(ev.text || undefined);
+        return;
+      case "permission_request":
+        upsertPermissionRequest(ev.permission);
+        return;
+      case "task":
+        // Not a turn signal: lifecycle lines arrive between turns too.
+        setTasks((m) => applyTaskEvent(m, ev.task, true));
+        return;
+      case "background":
+        setBackground(ev.background ?? []);
+        return;
+      case "compact":
+        setCompactStatus(ev.compact);
+        return;
+      case "thinking":
+        // The thinking-token tick: just the indicator's ticker. (Thinking
+        // text is a keyed row.) claude-code streams a subagent's ticks
+        // untagged, so a tick never opens a turn.
+        setCurrentActivity(
+          ev.thinking_tokens ? `Thinking · ${formatTokens(ev.thinking_tokens)} tokens` : "Thinking…",
+        );
+        return;
+      case "inbound":
+        // A message from outside MADS with no key to merge by: it shows once
+        // stored (the turn-end page); its turn starts here.
+        if (!ev.parent_tool_use_id && !conv.state.turn.active) convDispatch({ type: "turn", turn: { active: true } });
+        return;
+    }
+  };
+
+  // The ticker names what the turn's latest activity row is doing: its
+  // tool, or thinking. Status ticks refine it in between.
+  let activityRow: (typeof conv.rows)[number] | undefined;
+  for (let i = conv.rows.length - 1; i >= 0 && !activityRow; i--) {
+    const r = conv.rows[i];
+    if (r.current && (r.role === "tool" || r.role === "thinking")) activityRow = r;
+  }
+  const activityKey = activityRow?.key;
+  const activityLabel = activityRow
+    ? activityRow.role === "tool" && activityRow.tool
+      ? toolTitle(activityRow.tool, linkName)
+      : "Thinking…"
+    : undefined;
+  useEffect(() => {
+    if (turnLive && activityKey && activityLabel) setCurrentActivity(activityLabel);
+  }, [turnLive, activityKey, activityLabel]);
+
+  // Durable turn-completion reconciliation: the runner's session.turn_ended
+  // envelope rides the control-plane event log, so it closes a turn the
+  // stream's own turn_end didn't reach (a stream down meanwhile). Idempotent
+  // when both signals arrive. In the terminal view, which reads transcript
+  // pages only, it is also when the last page is fetched again.
   //
   // session.agent_state rides the same log: "working" marks a turn in flight
-  // even when this tab saw none of its /output frames (another client's send,
-  // a linked-session wake, a reconnect) and carries the turn's start for the
-  // elapsed counter; "idle" closes the turn exactly as turn_ended does — and
-  // unlike turn_ended, it fires for a turn with no digest delta too.
+  // even when this tab saw none of its frames (no stream connected) and
+  // carries the turn's start for the elapsed counter; "idle" closes the turn
+  // exactly as turn_ended does — and unlike turn_ended, it fires for a turn
+  // with no digest delta too.
   // Delegate records change on the control plane — a backgrounded subagent
   // finishes long after the turn (and the /output stream's frames) that
   // spawned it, so this is the signal that ends its spinner.
@@ -912,8 +910,10 @@ export function ConversationTab({
           // Only from idle. The control plane can deliver a turn's
           // "working" after the stream already ended that turn, so while a
           // reply is revealing it is no proof of a new turn — the stream's
-          // own next frame is (onText/onTool/onThinking), being ordered.
-          if (turnPhaseRef.current === "idle") beginTurn();
+          // own next frame is, being ordered.
+          if (turnPhaseRef.current === "idle") {
+            convDispatch({ type: "turn", turn: { active: true, startedAt: state.since || envelope.timestamp } });
+          }
           setAgentSince(state.since || envelope.timestamp);
           // The stream's own tool/thinking frames keep the ticker current;
           // the server label only fills it when none has arrived yet.
@@ -922,53 +922,38 @@ export function ConversationTab({
         }
         if (state?.state !== "idle") return;
       }
-      if (turnPhaseRef.current === "live") {
-        setCurrentActivity(undefined);
-        setTasks((m) => finishRunningTasks(m));
-        endTurn();
-      } else if (turnPhaseRef.current === "idle") {
-        // A late signal for a turn this pane already closed. A turn starting
-        // meanwhile (a queued message goes out exactly now) owns the pane.
-        const gen = turnGenRef.current;
-        void refetchAfterTurn(() => turnGenRef.current === gen);
-      }
-      // "revealing": the turn already ended here; its reveal reconciles.
+      if (ptyModeRef.current) refreshLast().catch(() => {});
+      if (turnPhaseRef.current === "live") endTurn();
     });
-  }, [sessionId, beginTurn, endTurn, refetchAfterTurn]);
+  }, [sessionId, convDispatch, endTurn, refreshLast]);
 
-  // A queued message going out is the start of a turn this pane didn't
-  // send, so it gets the user bubble a direct send gets from onSent. The
-  // turn-end transcript refetch reconciles either way.
+  // Queue changes. A queued message going out needs nothing here: it
+  // reaches the conversation as a user_message frame, which opens its turn.
   useEffect(() => {
     return subscribeToEvents({ sessionId, types: ["session.queue_changed"] }, (envelope) => {
       const change = envelope.payload as Partial<QueueChanged> | undefined;
       if (!change) return;
-      setQueuedMessages(change.queued ?? []);
-      if (change.delivered) {
-        const text = change.delivered.text;
-        if (turnPhaseRef.current !== "live") beginTurn();
-        setMessages((m) => [...m, { role: "user", text, timestamp: new Date().toISOString() }]);
-      }
+      convDispatch({ type: "queued", queued: change.queued ?? [] });
       if (change.failed) {
         setSendError(`Couldn't send your queued message: ${change.error ?? "unknown error"}`);
       }
     });
-  }, [sessionId, beginTurn]);
+  }, [sessionId, convDispatch]);
 
   // Queued messages live in the session process, so a session that stops
   // has none, whatever the last event said.
   useEffect(() => {
-    if (session && session.activity !== "active") setQueuedMessages([]);
-  }, [session]);
+    if (session && session.activity !== "active") convDispatch({ type: "queued", queued: [] });
+  }, [session, convDispatch]);
 
   const handleCancelQueued = useCallback(
     (queuedId: string) => {
-      setQueuedMessages((q) => q.filter((m) => m.id !== queuedId));
+      convDispatch({ type: "queued", queued: queuedMessages.filter((m) => m.id !== queuedId) });
       routerClient.cancelQueuedMessage(sessionId, queuedId).catch((err: unknown) => {
         setSendError(err instanceof Error ? err.message : "Couldn't remove the queued message.");
       });
     },
-    [routerClient, sessionId],
+    [routerClient, sessionId, convDispatch, queuedMessages],
   );
 
   const handleCompactNow = useCallback(async (instructions?: string) => {
@@ -988,192 +973,6 @@ export function ConversationTab({
   // compact gets no Compact affordance at all (the + menu item and the
   // context rim's link both hide when onCompact is absent).
   const compaction = useCompactionSupport(session?.provider);
-
-  // Consumes the same live output stream SessionTerminalBridge rides for
-  // terminal mode (set up above) — chat mode folds its text/tool_use/
-  // turn_end/error frames into the turn-state machine instead of opening a
-  // second stream.
-  useEffect(() => {
-    if (!eventSource) return;
-    // Parent-tagged events are a subagent's sidechain: they route to that
-    // subagent's own stream (dock + substrip), NEVER into the main
-    // transcript — interleaving them was the live bug this redesign fixes.
-    const onText = (ev: MessageEvent<string>) => {
-      const parsed = JSON.parse(ev.data) as StreamEvent;
-      if (parsed.kind !== "text") return;
-      if (parsed.parent_tool_use_id) {
-        appendSubagent(parsed.parent_tool_use_id, { kind: "text", text: parsed.text });
-        return;
-      }
-      // Only the main agent's own output is a turn: a backgrounded
-      // subagent keeps streaming after its parent's turn ended, and nothing
-      // would ever close a phase it opened.
-      if (turnPhaseRef.current !== "live") beginTurn();
-      pacerEnqueueText(parsed.text);
-    };
-    const onTool = (ev: MessageEvent<string>) => {
-      const parsed = JSON.parse(ev.data) as StreamEvent;
-      if (parsed.kind !== "tool_use") return;
-      if (parsed.parent_tool_use_id) {
-        appendSubagent(parsed.parent_tool_use_id, { kind: "tool_use", tool: parsed.tool });
-        return;
-      }
-      if (turnPhaseRef.current !== "live") beginTurn();
-      pacerEnqueueTool(parsed.tool, new Date().toISOString());
-      setCurrentActivity(toolTitle(parsed.tool, linkNameRef.current));
-    };
-    const onToolResult = (ev: MessageEvent<string>) => {
-      const parsed = JSON.parse(ev.data) as StreamEvent;
-      if (parsed.kind !== "tool_result") return;
-      if (parsed.parent_tool_use_id) {
-        appendSubagent(parsed.parent_tool_use_id, {
-          kind: "tool_result",
-          tool: parsed.tool,
-          text: parsed.text,
-          is_error: parsed.is_error,
-        });
-        return;
-      }
-      // Attach the result to its live tool card (matched by id) so the card
-      // shows its outcome as it arrives — never a silent no-op. An is_error
-      // result renders as the card's own error state; it is NOT a permission
-      // signal (claude reports every ordinary tool failure this way — a
-      // non-zero exit, a missing file), so it must not raise an approval
-      // signal. Genuine permission stalls arrive as permission_request
-      // events and drive the approval jump below.
-      pacerApplyToolResult(parsed.tool?.id, {
-        text: parsed.text,
-        is_error: parsed.is_error,
-        timestamp: new Date().toISOString(),
-      });
-    };
-    const onThinking = (ev: MessageEvent<string>) => {
-      const parsed = JSON.parse(ev.data) as StreamEvent;
-      if (parsed.kind !== "thinking") return;
-      if (parsed.parent_tool_use_id) {
-        if (parsed.text) {
-          appendSubagent(parsed.parent_tool_use_id, { kind: "thinking", text: parsed.text });
-        }
-        return;
-      }
-      // A whole block is the main agent's. A bare token tick may not be:
-      // claude-code streams a subagent's thinking_tokens untagged, so a tick
-      // only feeds a turn already live (session.agent_state opens turns).
-      if (parsed.text && turnPhaseRef.current !== "live") beginTurn();
-      // A whole block joins the live stream as a think row; a bare
-      // thinking_tokens count is just the indicator's ticker.
-      if (parsed.text) pacerEnqueueThinking(parsed.text);
-      setCurrentActivity(
-        parsed.thinking_tokens
-          ? `Thinking · ${formatTokens(parsed.thinking_tokens)} tokens`
-          : "Thinking…",
-      );
-    };
-    // A message from outside MADS reaching the agent. Not a user send: idle,
-    // it opens an unprompted turn the way the first text/tool event does;
-    // mid-turn it lands in the stream after the tool call in flight. The
-    // turn-end refetch replaces it with the persisted role "inbound" row.
-    const onInbound = (ev: MessageEvent<string>) => {
-      const parsed = JSON.parse(ev.data) as StreamEvent;
-      if (parsed.kind !== "inbound" || parsed.parent_tool_use_id) return;
-      if (turnPhaseRef.current !== "live") beginTurn();
-      pacerEnqueueInbound(parsed.text, parsed.inbound, new Date().toISOString());
-    };
-    const onTask = (ev: MessageEvent<string>) => {
-      const parsed = JSON.parse(ev.data) as StreamEvent;
-      if (parsed.kind !== "task") return;
-      // Not a turn signal: lifecycle lines arrive between turns too.
-      setTasks((m) => applyTaskEvent(m, parsed.task, true));
-    };
-    const onBackground = (ev: MessageEvent<string>) => {
-      const parsed = JSON.parse(ev.data) as StreamEvent;
-      if (parsed.kind !== "background") return;
-      setBackground(parsed.background ?? []);
-    };
-    const onPermissionRequest = (ev: MessageEvent<string>) => {
-      const parsed = JSON.parse(ev.data) as StreamEvent;
-      if (parsed.kind !== "permission_request") return;
-      upsertPermissionRequest(parsed.permission);
-    };
-    const onCompact = (ev: MessageEvent<string>) => {
-      const parsed = JSON.parse(ev.data) as StreamEvent;
-      if (parsed.kind !== "compact") return;
-      setCompactStatus(parsed.compact);
-    };
-    const onTurnEnd = (ev: MessageEvent<string>) => {
-      // turn_end carries this turn's usage — the only place it's reported, so
-      // it feeds the dock's context rim. One that counts no tokens (a /compact
-      // turn the CLI gave no figure for) leaves the rim where it was.
-      if (typeof ev.data === "string") {
-        try {
-          const parsed = JSON.parse(ev.data) as StreamEvent;
-          if (parsed.kind === "turn_end" && parsed.usage && countsTokens(parsed.usage)) {
-            setLastUsage(parsed.usage);
-          }
-        } catch {
-          // non-JSON turn_end frame — leave the meter on its last value
-        }
-      }
-      setCurrentActivity(undefined);
-      // A turn ending with no task_notification means those subagents never
-      // finished — interrupted-shape, never a spinner that ticks forever.
-      setTasks((m) => finishRunningTasks(m));
-      endTurn();
-    };
-    const onError = (ev: MessageEvent<string>) => {
-      // A native transport-level failure (e.g. the initial GET /output 404
-      // against a dormant session) fires a plain Event, not a MessageEvent —
-      // no `.data` to parse, and not a StreamEvent from the provider at all.
-      if (typeof ev.data !== "string") {
-        setStreamBroken(true);
-        return;
-      }
-      const parsed = JSON.parse(ev.data) as StreamEvent;
-      setTurnPhase("idle");
-      pacerReset();
-      setCurrentActivity(undefined);
-      setTasks((m) => finishRunningTasks(m));
-      setSendError(parsed.kind === "error" ? parsed.text : "The agent hit an error.");
-    };
-    eventSource.addEventListener("text", onText);
-    eventSource.addEventListener("tool_use", onTool);
-    eventSource.addEventListener("tool_result", onToolResult);
-    eventSource.addEventListener("thinking", onThinking);
-    eventSource.addEventListener("inbound", onInbound);
-    eventSource.addEventListener("task", onTask);
-    eventSource.addEventListener("background", onBackground);
-    eventSource.addEventListener("permission_request", onPermissionRequest);
-    eventSource.addEventListener("turn_end", onTurnEnd);
-    eventSource.addEventListener("compact", onCompact);
-    eventSource.addEventListener("error", onError);
-    return () => {
-      eventSource.removeEventListener("text", onText);
-      eventSource.removeEventListener("tool_use", onTool);
-      eventSource.removeEventListener("tool_result", onToolResult);
-      eventSource.removeEventListener("thinking", onThinking);
-      eventSource.removeEventListener("inbound", onInbound);
-      eventSource.removeEventListener("task", onTask);
-      eventSource.removeEventListener("background", onBackground);
-      eventSource.removeEventListener("permission_request", onPermissionRequest);
-      eventSource.removeEventListener("turn_end", onTurnEnd);
-      eventSource.removeEventListener("compact", onCompact);
-      eventSource.removeEventListener("error", onError);
-    };
-  }, [
-    eventSource,
-    refetchAfterTurn,
-    upsertPermissionRequest,
-    appendSubagent,
-    pacerEnqueueText,
-    pacerEnqueueTool,
-    pacerEnqueueThinking,
-    pacerEnqueueInbound,
-    pacerApplyToolResult,
-    beginTurn,
-    endTurn,
-    pacerReset,
-  ]);
-
   // Out-of-band status synthesis (session.tool_status_changed) rides the
   // control-plane /events stream, not the data-plane /output — subscribe
   // alongside the WORKSPACE_SESSION_EVENT_TYPES subscription above.
@@ -1187,56 +986,6 @@ export function ConversationTab({
       },
     );
   }, [sessionId]);
-
-  // Native EventSource auto-reconnects after a mid-stream drop (unlike the
-  // dead-on-arrival case streamBroken handles above, which never retries on
-  // its own) — but whatever frames were missed during the outage are gone
-  // for good, so a live turn needs a deliberate transcript refetch the moment
-  // the connection is restored to recover what the stream dropped (turn_end
-  // then reconciles the live items away).
-  useEffect(() => {
-    if (!eventSource) return;
-    const onOpen = () => {
-      // Only a live turn: a revealing one already has its whole reply, and
-      // the full transcript under its live items would show it twice.
-      if (turnPhaseRef.current !== "live") return;
-      void routerClient.getTranscript(sessionId).then(setMessages);
-      refetchSession();
-    };
-    eventSource.addEventListener("open", onOpen);
-    return () => eventSource.removeEventListener("open", onOpen);
-  }, [eventSource, routerClient, sessionId, refetchSession]);
-
-  // Sticky "a turn was in flight since we last knew the tab was visible"
-  // flag. Backgrounded tabs throttle timers/connections, so a turn that
-  // starts and finishes entirely while hidden can leave turn_end unhandled —
-  // this catches that the moment the user looks back, rather than depending
-  // on refocus to be an accidental refetch trigger (the exact bug reported).
-  // Cleared once reconciled while visible; left set if the turn is still
-  // running so a later visibility toggle checks again.
-  const turnWasLiveRef = useRef(false);
-  useEffect(() => {
-    if (turnPhase !== "idle") {
-      turnWasLiveRef.current = true;
-    } else if (document.visibilityState === "visible") {
-      turnWasLiveRef.current = false;
-    }
-  }, [turnPhase]);
-
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState !== "visible" || !turnWasLiveRef.current) return;
-      // A revealing turn already ended and has its whole reply — the full
-      // transcript under its live items would show it twice. Its own
-      // reconcile follows the reveal.
-      if (turnPhaseRef.current === "revealing") return;
-      turnWasLiveRef.current = turnPhaseRef.current !== "idle";
-      void routerClient.getTranscript(sessionId).then(setMessages);
-      refetchSession();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [routerClient, sessionId, refetchSession]);
 
   // The dock's Commit/Land counts are only recounted at turn ends and by
   // mads's own Commit/Land, so work committed or merged outside mads would
@@ -1323,7 +1072,10 @@ export function ConversationTab({
   const dockModel = dockParent
     ? [...mergeDelegates(tasks, delegates).values()].find((t) => t.toolUseId === dockParent)
     : undefined;
-  const dockLive = dockParent ? subagentStreams.get(dockParent) : undefined;
+  const dockLive = useMemo(
+    () => (dockParent ? rowsSubStream(subagentRows(conv.state, dockParent)) : undefined),
+    [conv.state, dockParent],
+  );
   const dockFile = useDelegateFile(
     routerClient,
     sessionId,
@@ -1335,8 +1087,8 @@ export function ConversationTab({
     [dockFile],
   );
   // No file for it: read back what mads recorded live — every subagent's
-  // stream, so only now, once per conversation. Live frames win for any
-  // subagent they've already reached (as at open).
+  // stream, so only now, once per conversation. Live rows win for any
+  // subagent the keyed stream still holds.
   const needStreamReplay = dockFile?.available === false;
   const streamReplayedFor = useRef<string>(undefined);
   useEffect(() => {
@@ -1346,8 +1098,7 @@ export function ConversationTab({
       .then((envelopes) => {
         if (cancelled) return;
         streamReplayedFor.current = sessionId;
-        const h = foldHistoryEvents(envelopes);
-        setSubagentStreams((live) => new Map([...h.subagentStreams, ...live]));
+        setSubagentReplay(foldHistoryEvents(envelopes).subagentStreams);
       })
       .catch(() => {});
     return () => {
@@ -1424,12 +1175,11 @@ export function ConversationTab({
         ? transport.to
         : transport.attemptedMode;
   // Never shown mid-switch/terminal — terminal mode already has its own live
-  // view via SessionTerminalBridge on the same stream. The paced items are the
-  // live turn's content.
+  // view via SessionTerminalBridge.
   const inChatTurn = activeMode === "chat" && turnPhase === "live";
-  // A revealing turn keeps its live items on screen until the reveal drains.
-  const liveItems = inChatTurn || (activeMode === "chat" && turnPhase === "revealing") ? pacer.items : [];
-  const lastLiveItem = liveItems[liveItems.length - 1];
+  // The turn's activity stays open until its reveal drains.
+  const turnShowing = activeMode === "chat" && turnPhase !== "idle";
+  const lastRow = reveal.rows[reveal.rows.length - 1];
   // Trailing "working" affordance — truthy for the ENTIRE live turn, never
   // just while the tail happens to look busy. It used to go false whenever
   // the last live item was finished text or a completed tool call, which
@@ -1440,8 +1190,8 @@ export function ConversationTab({
   // the approval jump's signal, not this one's.
   const working: { tool?: ToolUse } | false = !inChatTurn
     ? false
-    : lastLiveItem?.kind === "tool" && !lastLiveItem.tool.result
-      ? { tool: lastLiveItem.tool }
+    : lastRow?.current && lastRow.role === "tool" && lastRow.tool && !lastRow.tool.result
+      ? { tool: lastRow.tool }
       : {};
   // Never carry a stale open compose sheet across a switch back to chat and
   // later back to terminal — it would pop back open unprompted.
@@ -1494,12 +1244,12 @@ export function ConversationTab({
   const substripEntries: SubstripEntry[] = [...effectiveTasks.values()]
     .filter((t) => t.running && !visibleTaskCards.has(t.taskId))
     .map((model) => {
-      const stream = model.toolUseId ? subagentStreams.get(model.toolUseId) : undefined;
-      const last = stream && stream.length > 0 ? stream[stream.length - 1] : undefined;
+      const stream = model.toolUseId ? subagentRows(conv.state, model.toolUseId) : [];
+      const last = stream[stream.length - 1];
       const op =
-        last?.type === "tool"
+        last?.role === "tool" && last.tool
           ? toolTitle(last.tool, linkName)
-          : last?.type === "thinking"
+          : last?.role === "thinking"
             ? "Thinking…"
             : (model.currentStep ?? model.lastToolName);
       return { model, op };
@@ -1525,14 +1275,12 @@ export function ConversationTab({
     let tool = dockTarget.tool;
     let toolTimestamp: string | undefined;
     if (dockTarget.toolId) {
-      for (const m of foldToolResults(messages)) {
-        if (m.role === "tool" && m.tool?.id === dockTarget.toolId) {
-          tool = m.tool;
-          toolTimestamp = m.timestamp;
+      // Any row: the main list's, or a subagent's.
+      for (const r of Object.values(conv.state.rows)) {
+        if (r.role === "tool" && r.tool?.id === dockTarget.toolId) {
+          tool = r.tool;
+          toolTimestamp = r.timestamp;
         }
-      }
-      for (const item of pacer.items) {
-        if (item.kind === "tool" && item.tool.id === dockTarget.toolId) tool = item.tool;
       }
     }
     dockView = { type: "tool", tool, timestamp: toolTimestamp };
@@ -1542,7 +1290,7 @@ export function ConversationTab({
       parentToolUseId: dockTarget.parentToolUseId,
       title: dockModel?.description ?? dockTarget.title,
       subtype: dockTarget.subtype ?? dockModel?.subagentType,
-      items: dockFileItems ?? subagentStreams.get(dockTarget.parentToolUseId) ?? [],
+      items: dockFileItems ?? (dockLive?.length ? dockLive : subagentReplay.get(dockTarget.parentToolUseId)) ?? [],
       task: dockModel,
     };
   }
@@ -1554,32 +1302,36 @@ export function ConversationTab({
     setComposeOpen(true);
   };
   // A chat send's lifecycle, shared by the composer and Retry on a message
-  // the harness failed — a retry is an ordinary send of the same text.
+  // that failed — a retry is an ordinary send of the same text. The bubble
+  // is the send's own user_message frame; here the working indicator shows
+  // at once, ahead of it, and stands down if the send fails before a turn.
   const noteSendStart = () => {
     if (session.activity !== "active") setWaking(true);
-    if (turnPhaseRef.current !== "live") beginTurn();
+    optimisticTurn.current = !turnLive;
+    if (!turnLive) convDispatch({ type: "turn", turn: { active: true } });
   };
   const noteSendError = (msg: string) => {
     setWaking(false);
     setSendError(msg);
+    setSendFailure(msg);
+    if (optimisticTurn.current) convDispatch({ type: "turn", turn: { active: false } });
+    optimisticTurn.current = false;
   };
   const noteQueued = (q: QueuedMessage) => {
     setWaking(false);
-    setQueuedMessages((cur) => (cur.some((m) => m.id === q.id) ? cur : [...cur, q]));
+    optimisticTurn.current = false;
+    if (!queuedMessages.some((m) => m.id === q.id)) {
+      convDispatch({ type: "queued", queued: [...queuedMessages, q] });
+    }
   };
-  const noteSent = (text: string) => {
-    // A send against a dormant session wakes it (Router:
-    // handleSessionMessages) synchronously within the POST's own
-    // request/response cycle — for a fast reply, the whole turn (including
-    // turn_end) can complete before this mount's /output stream (opened
-    // before the child existed, permanently dead per the WHATWG EventSource
-    // spec — see streamBroken above) ever reconnects. Piggyback the same
-    // bounded refetch turn_end normally triggers, rather than depending on a
-    // stream that's known-unreliable for this specific turn.
-    const wasDormant = session.activity !== "active";
+  // A send against a dormant session wakes it (Router: handleSessionMessages)
+  // within the POST's own request/response cycle, before this mount's
+  // stream (opened before the child existed, dead per the WHATWG
+  // EventSource spec — see streamBroken above) reconnects. It does once the
+  // session goes active, from its cursor, and the replay brings the turn.
+  const noteSent = () => {
     setWaking(false);
-    setMessages((m) => [...m, { role: "user", text, timestamp: new Date().toISOString() }]);
-    if (wasDormant) void refetchAfterTurn();
+    optimisticTurn.current = false;
   };
   // Resends the transcript's text verbatim: any attachment paths the Router
   // appended the first time are already in it, so the agent gets the same
@@ -1590,7 +1342,7 @@ export function ConversationTab({
     try {
       const result = await routerClient.sendMessage(sessionId, { text, mentions: [], queue: true });
       if (result.status === "queued") noteQueued(result.queued);
-      else noteSent(text);
+      else noteSent();
     } catch (err) {
       noteSendError(err instanceof Error ? err.message : String(err));
     }
@@ -1676,13 +1428,21 @@ export function ConversationTab({
         <div className={styles.body}>
           {showHistory ? (
             <>
-              <div className={styles.stream} ref={stick.ref} onScroll={stick.onScroll} data-testid="conversation-stream">
+              <div
+                className={styles.stream}
+                ref={stick.ref}
+                onScroll={() => {
+                  stick.onScroll();
+                  olderPages.onScroll();
+                }}
+                data-testid="conversation-stream"
+              >
                 {provisioning && (
                   <div className={styles.provisioningWrap}>
                     <ProvisioningStrip sessionId={sessionId} onDone={onProvisioningDone} />
                   </div>
                 )}
-                {messages.length === 0 && worktree.cards.length === 0 && !inChatTurn && liveItems.length === 0 ? (
+                {conv.rows.length === 0 && worktree.cards.length === 0 && !inChatTurn ? (
                   <>
                     <div className={styles.emptyTranscript}>
                       {leaderId
@@ -1696,17 +1456,15 @@ export function ConversationTab({
                   </>
                 ) : (
                   <ChatRenderer
-                    messages={messages}
+                    rows={reveal.rows}
                     links={links}
                     viewedSessionId={sessionId}
                     linkName={linkName}
                     attachmentUrl={(id, variant) =>
                       routerClient.attachmentUrl({ session: sessionId }, id, variant)
                     }
-                    liveItems={liveItems}
-                    turnActive={inChatTurn}
+                    turnActive={turnShowing}
                     foldNewCode={wordsPerMinute !== null}
-                    thinkingHistory={thinkingHistory}
                     toolStatuses={toolStatuses}
                     background={backgroundByTool}
                     tasks={tasksByToolUseMap}
@@ -1725,6 +1483,7 @@ export function ConversationTab({
                     onResolvePermission={resolvePermission}
                     permissionReveal={permissionReveal}
                     onRetry={(text) => void retrySend(text)}
+                    sendFailure={sendFailure}
                     find={find.request}
                     onFindStatus={find.onStatus}
                   />
@@ -1812,7 +1571,7 @@ export function ConversationTab({
                     <WorkingIndicator
                       tool={working.tool}
                       activity={currentActivity}
-                      since={agentSince}
+                      since={agentSince ?? conv.state.turn.startedAt}
                     />
                   )}
                   <QueuedMessages
@@ -1824,7 +1583,7 @@ export function ConversationTab({
                     // The paced reveal trails the agent by more than a couple of
                     // seconds' reading — offer to skip to the end of it.
                     <div className={styles.revealAll} data-leaving={showAll.leaving || undefined}>
-                      <Chip tone="info" onClick={pacer.revealAll}>
+                      <Chip tone="info" onClick={() => reveal.revealAll()}>
                         Show all
                       </Chip>
                     </div>

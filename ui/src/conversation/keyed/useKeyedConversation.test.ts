@@ -85,7 +85,7 @@ describe("useKeyedConversation", () => {
     });
     await waitFor(() => expect(client.transcriptPageCalls).toHaveLength(2));
     await waitFor(() => expect(hook.result.current.rows[0].timestamp).toBe("t"));
-    expect(statuses).toEqual(["turn_end"]);
+    expect(statuses).toEqual(["hello", "turn_end"]);
   });
 
   it("reattach resumes after the last frame seen", async () => {
@@ -110,5 +110,35 @@ describe("useKeyedConversation", () => {
     expect(hook.result.current.rows).toHaveLength(150);
     expect(hook.result.current.rows[0].key).toBe("k0");
     expect(hook.result.current.state.hasMore).toBe(false);
+  });
+
+  it("a reopened stream that starts fresh merges the last page: what settled while it was down", async () => {
+    const { hook, src, client } = setup([{ role: "user", key: "u0", text: "hi" }]);
+    await waitFor(() => expect(keys(hook.result.current.rows)).toEqual(["u0"]));
+    // The first connection was dead on arrival (a dormant session): no frames, no cursor.
+    act(() => hook.result.current.reattach());
+    client.transcripts["s1"] = [
+      { role: "user", key: "u0", text: "hi" },
+      { role: "user", key: "user:1", text: "wake up" },
+      { role: "agent", key: "a1", text: "awake" },
+    ];
+    act(() => {
+      src().emitFrame("hello", { epoch: "e", seq: 9, keyed: true, resume: "fresh", turn: { active: false }, queued: [] });
+      src().emitFrame("replay_end", {}, "e:9");
+    });
+    await waitFor(() => expect(keys(hook.result.current.rows)).toEqual(["u0", "user:1", "a1"]));
+    expect(client.transcriptPageCalls).toHaveLength(2);
+    expect(hook.result.current.state.replaying).toBe(false);
+  });
+
+  it("the first connection's fresh hello fetches nothing more", async () => {
+    const { src, client } = setup([{ role: "user", key: "u0", text: "hi" }]);
+    await waitFor(() => expect(client.transcriptPageCalls).toHaveLength(1));
+    act(() => {
+      src().emitFrame("hello", { epoch: "e", seq: 0, keyed: true, resume: "fresh", turn: { active: false }, queued: [] });
+      src().emitFrame("replay_end", {}, "e:0");
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(client.transcriptPageCalls).toHaveLength(1);
   });
 });

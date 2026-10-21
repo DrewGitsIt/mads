@@ -5,6 +5,10 @@ import { compactLine } from "./compactFormat";
 import { formatMessageTime, parseMessageTime } from "./messageTime";
 import { buildFeedRows } from "../../pipeline/DrillIn/feedFormat";
 import type { TranscriptMessage } from "../../router/types";
+import type { KeyedRow } from "../keyed/conversation";
+
+/** Transcript messages as keyed rows, keyed by position. */
+const keyed = (ms: TranscriptMessage[]): KeyedRow[] => ms.map((m, i) => ({ ...m, key: m.key ?? `r${i}` }));
 
 const compaction: TranscriptMessage = {
   role: "compact",
@@ -19,11 +23,11 @@ describe("compaction marker", () => {
   it("renders a compaction as a system row, not a user bubble", () => {
     const { container } = render(
       <ChatRenderer
-        messages={[
+        rows={keyed([
           { role: "user", text: "before", timestamp: "2026-09-30T02:50:00Z" },
           compaction,
           { role: "user", text: "after", timestamp: "2026-09-30T03:00:10Z" },
-        ]}
+        ])}
       />,
     );
     const marker = screen.getByRole("note", { name: "Conversation compacted" });
@@ -38,7 +42,7 @@ describe("compaction marker", () => {
 
   it("names an auto-compaction, and has no disclosure without a summary", () => {
     render(
-      <ChatRenderer messages={[{ role: "compact", compact: { trigger: "auto", pre_tokens: 191000, post_tokens: 12000 } }]} />,
+      <ChatRenderer rows={keyed([{ role: "compact", compact: { trigger: "auto", pre_tokens: 191000, post_tokens: 12000 } }])} />,
     );
     expect(screen.getByRole("note", { name: "Conversation auto-compacted" }).textContent).toContain(
       "context was full · 191k → 12k tokens",
@@ -56,11 +60,11 @@ describe("message hover timestamps", () => {
   it("stamps each message with its time, and skips unknown ones", () => {
     const { container } = render(
       <ChatRenderer
-        messages={[
+        rows={keyed([
           { role: "user", text: "stamped", timestamp: "2026-09-29T21:52:23Z" },
           { role: "agent", text: "zero time", timestamp: "0001-01-01T00:00:00Z" },
           { role: "agent", text: "no time" },
-        ]}
+        ])}
       />,
     );
     const stamps = container.querySelectorAll("time");

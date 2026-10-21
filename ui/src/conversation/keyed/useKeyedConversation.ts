@@ -67,10 +67,19 @@ export interface KeyedConversation {
 export interface KeyedConversationOptions {
   /** Open `/output?v=2`. False: transcript pages only (a terminal-mode session's chat view). */
   stream: boolean;
-  /** Every status frame, and an inbound frame without a key, as today's handlers take them. */
+  /**
+   * Every status frame, and an inbound frame without a key, as today's
+   * handlers take them; and each hello (a connection's state snapshots
+   * follow it: live-only state from before a fresh or resync hello is stale).
+   */
   onStatus?: (kind: string, data: Record<string, unknown>) => void;
   /** The mount page failed. */
   onLoadError?: (err: unknown) => void;
+  /**
+   * The connection failed (an `error` event with no data): dropped, or dead
+   * on arrival — a dormant session's 404, which EventSource never retries.
+   */
+  onDisconnect?: () => void;
 }
 
 /**
@@ -92,6 +101,8 @@ export function useKeyedConversation(
   onStatusRef.current = opts.onStatus;
   const onLoadErrorRef = useRef(opts.onLoadError);
   onLoadErrorRef.current = opts.onLoadError;
+  const onDisconnectRef = useRef(opts.onDisconnect);
+  onDisconnectRef.current = opts.onDisconnect;
   const errorRef = useRef<unknown>(undefined);
   const [generation, bump] = useReducer((n: number) => n + 1, 0);
   const olderInFlight = useRef<Promise<void> | null>(null);
@@ -134,7 +145,8 @@ export function useKeyedConversation(
     let closed = false;
     // Reopening this session's stream resumes after the last frame seen; a
     // new session's starts fresh (its state was just reset).
-    const after = streamedSession.current === sessionId ? stateRef.current.lastId : undefined;
+    const reopened = streamedSession.current === sessionId;
+    const after = reopened ? stateRef.current.lastId : undefined;
     streamedSession.current = sessionId;
     const source: SessionEventSource = client.streamSessionV2(sessionId, after);
     // Frames held while a resync/eviction page is in flight, applied right
@@ -162,7 +174,15 @@ export function useKeyedConversation(
     };
 
     const handle = (kind: string) => (ev: MessageEvent<string>) => {
-      if (closed || typeof ev.data !== "string") return; // a connection error carries no data
+      if (closed) return;
+      if (typeof ev.data !== "string") {
+        // A connection error carries no data. Only a closed source is
+        // reported: one still CONNECTING is the browser's own retry, which
+        // resends Last-Event-ID.
+        const state = (source as { readyState?: number }).readyState;
+        if (kind === "error" && (state === undefined || state === 2)) onDisconnectRef.current?.();
+        return;
+      }
       let data: Record<string, unknown>;
       try {
         data = JSON.parse(ev.data) as Record<string, unknown>;
@@ -171,7 +191,7 @@ export function useKeyedConversation(
       }
       const frame: Frame = { kind, data, id: ev.lastEventId || undefined };
       const isStatus = (STATUS_KINDS as readonly string[]).includes(kind);
-      if (isStatus || (kind === "inbound" && !data.key)) onStatusRef.current?.(kind, data);
+      if (isStatus || kind === "hello" || (kind === "inbound" && !data.key)) onStatusRef.current?.(kind, data);
       if (kind === "inbound" && !data.key) return;
       if (kind === "resync") {
         swap("live");
@@ -186,6 +206,14 @@ export function useKeyedConversation(
         return;
       }
       dispatch({ type: "frame", frame });
+      if (kind === "hello" && reopened && data.resume === "fresh") {
+        // A reopened stream with no cursor into this epoch (the last one
+        // never connected: a dormant session's 404): what settled while it
+        // was down is only in the transcript. Merge the last page first,
+        // holding the replay that follows.
+        swap([]);
+        return;
+      }
       if (kind === "turn_end" && stateRef.current.keyed) {
         // One merge for timestamps and full tool results; no visible change.
         refreshLast().catch(() => {});
