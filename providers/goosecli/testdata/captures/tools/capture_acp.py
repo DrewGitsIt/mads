@@ -20,8 +20,10 @@ Two modes:
       Fresh process: initialize -> session/load (replayed session/update
       notifications arrive before the response resolves) -> session/close.
 
-Environment: GOOSE_BIN (default ~/.local/bin/goose), GOOSE_ACP_MODEL
-(default qwen3.8). Requires a working goose provider; run turns take
+Environment: GOOSE_BIN (default ~/.local/bin/goose; the 1.50.1 captures
+used /Applications/Goose.app/Contents/Resources/bin/goose), GOOSE_ACP_MODEL
+(default qwen3.8; the 1.50.1 captures used qwen3.8-coder-nothink), and
+GOOSE_PATH_ROOT to keep the run out of the real session store. Requires a working goose provider; run turns take
 10-60s+ on a local ollama model, hence the generous timeouts.
 """
 import json
@@ -239,10 +241,10 @@ def run_full(cwd, out_path):
         # Turn 2: cancel mid-turn. Drain stale turn-1 notifications first so we
         # wait on *fresh* chunks — cancelling before the run is active is
         # silently ignored by goose. Cancel only after several chunks: goose
-        # sets stopReason:"cancelled" only if another stream event arrives
-        # after the cancel token trips (server.rs prompt loop); cancelling on
-        # the very first chunk can end the stream with no further event and
-        # resolve as "end_turn" (observed — see README).
+        # 1.48.0 set stopReason:"cancelled" only if another stream event
+        # arrived after the cancel token tripped (server.rs prompt loop), so
+        # its cancels resolved "end_turn" (observed — see README); 1.50.1
+        # resolves "cancelled".
         while not c.notifications.empty():
             c.notifications.get_nowait()
         q = c.request_async(

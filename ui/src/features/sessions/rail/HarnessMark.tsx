@@ -53,6 +53,49 @@ function ClaudeMark() {
   );
 }
 
+/**
+ * Hermes's caduceus, reduced to a staff, one pair of wings and a single
+ * serpent curve — hand-drawn, since nothing smaller than Nous Research's
+ * wordmark ships with hermes, and the full caduceus muddies below 16px.
+ */
+function HermesMark() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3v18M12 6C9.5 3.5 5.5 3.5 3 5c3 .5 5.5 1.5 9 3.5M12 6c2.5-2.5 6.5-2.5 9-1-3 .5-5.5 1.5-9 3.5M9 11c2-1 6-1 6 1.25S9 15 9 17.25 13 19 15 18" />
+    </svg>
+  );
+}
+
+/**
+ * A terminal prompt in a window, for the Codex CLI (registry name "codex").
+ * Drawn rather than vendored: OpenAI's marks are trademarks, and what the
+ * glance needs is "the CLI one", which a prompt says at 10px.
+ */
+function CodexMark() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="2.5" y="4" width="19" height="16" rx="3" />
+      <path d="M7 9.5l3 2.5-3 2.5M12.5 15h4.5" />
+    </svg>
+  );
+}
+
 /** A plug, for an adapter that speaks ACP over RPC to something unnamed. */
 function AcpMark() {
   return (
@@ -77,6 +120,8 @@ function AcpMark() {
 const MARKS: Record<string, () => React.JSX.Element> = {
   "claude-code": ClaudeMark,
   goose: GooseMark,
+  hermes: HermesMark,
+  codex: CodexMark,
   "acp-rpc": AcpMark,
 };
 

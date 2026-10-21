@@ -9,6 +9,8 @@ import {
   behaviorLabel,
   capabilityTags,
   differingBehaviors,
+  fullTrustOnlyNote,
+  providerLabel,
   topCapabilityTags,
 } from "../providerBehaviors";
 import { optionsWith } from "../settingHelpers";
@@ -88,6 +90,7 @@ export function ModelsSection({ config }: ModelsSectionProps) {
   const providerName = draft.default_provider ?? "";
   const provider = matrix.providers.find((p) => p.name === providerName);
   const tags = topCapabilityTags(provider ? capabilityTags(provider, matrix.behaviors) : []);
+  const trustNote = provider ? fullTrustOnlyNote(provider) : undefined;
   const fastModelMode = effectiveFastModelMode(draft);
   const status = fastModelStatusLine(fastModelMode, draft, fastModelStatus.status, fastModelStatus.loading);
 
@@ -114,7 +117,7 @@ export function ModelsSection({ config }: ModelsSectionProps) {
               options={[
                 { value: "", label: "— none —" },
                 ...optionsWith(
-                  matrix.providers.map((p) => ({ value: p.name, label: p.name })),
+                  matrix.providers.map((p) => ({ value: p.name, label: providerLabel(p.name) })),
                   providerName,
                 ).filter((o) => o.value),
               ]}
@@ -134,6 +137,11 @@ export function ModelsSection({ config }: ModelsSectionProps) {
                 )}
                 <InlineLink onClick={showAllCapabilities}>All capabilities →</InlineLink>
               </div>
+            )}
+            {trustNote && (
+              <StatusLine tone="warn" testId="provider-trust-note">
+                {trustNote}
+              </StatusLine>
             )}
           </div>
         </SettingRow>
@@ -250,7 +258,7 @@ function CapabilityMatrix({ matrix }: { matrix: UseProviderMatrix }) {
             <th scope="col">Behaviour</th>
             {providers.map((provider) => (
               <th key={provider.name} scope="col">
-                {provider.name}
+                {providerLabel(provider.name)}
               </th>
             ))}
           </tr>

@@ -144,11 +144,11 @@ func (s *ptySession) pumpBanner(tee *terminalTee) {
 }
 
 // bannerRefRe pins the session id in `goose session`'s startup banner
-// against the committed goose 1.48.0 capture
-// (testdata/captures/pty-banner.raw): the id sits inside ESC[2m dim codes
-// mid-art-line —
+// against the committed goose 1.50.1 capture
+// (testdata/captures/pty-banner.raw; the 1.48.0 banner had the same id
+// line): the id sits inside ESC[2m dim codes mid-art-line —
 //
-//	ESC[2m20260829_20ESC[0m ESC[2m· /tmp/mads-goose-capture-pty
+//	ESC[2m20261020_4ESC[0m ESC[2m· /private/tmp/mads-goose-capture-pty
 //
 // so match unanchored against ANSI-stripped bytes, keyed on the `·`
 // separator (U+00B7, two UTF-8 bytes) that follows the id (design doc

@@ -81,6 +81,35 @@ describe("SessionRail shell cards", () => {
     expect(card("has shell").className).not.toMatch(/shellCard/);
   });
 
+  // A shell found already running (the app opening, a card mounting) just
+  // shows; one that starts or ends while the card is on screen animates.
+  it("shows an already-running shell still, and types in one that just started", async () => {
+    const running = { ...shellFor("s1"), startedAt: Date.now() - 60_000 };
+    fake.setShells([running]);
+    renderRail();
+    await waitFor(() => expect(card("has shell").querySelector("[data-shell-prompt]")).not.toBeNull());
+    expect(card("has shell").querySelector("[data-typing]")).toBeNull();
+    expect(card("has shell").dataset.shellMotion).toBeUndefined();
+
+    act(() => fake.setShells([running, { ...shellFor("s2"), startedAt: Date.now() }]));
+    await waitFor(() => expect(card("plain").querySelector("[data-shell-prompt]")).not.toBeNull());
+    expect(card("plain").querySelector("[data-typing]")).not.toBeNull();
+    expect(card("plain").dataset.shellMotion).toBe("true");
+  });
+
+  it("erases the prompt before closing its slot when a shell ends", async () => {
+    fake.setShells([shellFor("s1")]);
+    renderRail();
+    await waitFor(() => expect(card("has shell").querySelector("[data-shell-prompt]")).not.toBeNull());
+
+    act(() => fake.setShells([]));
+    await waitFor(() => expect(card("has shell").querySelector("[data-erasing]")).not.toBeNull());
+    // Still a shell card while it erases: the face and indent go with the slot.
+    expect(card("has shell").className).toMatch(/shellCard/);
+    await waitFor(() => expect(card("has shell").querySelector("[data-shell-prompt]")).toBeNull());
+    expect(card("has shell").className).not.toMatch(/shellCard/);
+  });
+
   it("subscribes to the shell set once for the whole rail", async () => {
     fake.setShells([shellFor("s1")]);
     renderRail();

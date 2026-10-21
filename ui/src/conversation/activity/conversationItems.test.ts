@@ -334,6 +334,25 @@ describe("delegate records over the task-line fold", () => {
     expect(failed).toMatchObject({ running: false, completed: false, state: "failed", status: "failed" });
   });
 
+  it("totals a resumed delegate's runs: its record's prior runs plus the task lines' live one, the record's once it ends", () => {
+    // Claude Code counts each run's tools and time from zero; tokens are its latest figure.
+    let tasks = applyTaskEvent(new Map(), { phase: "started", task_id: "a1", tool_use_id: "toolu_spawn" }, true);
+    tasks = applyTaskEvent(tasks, { phase: "notification", task_id: "a1", status: "completed", total_tokens: 456_816, tool_uses: 77, duration_ms: 1_745_070 }, true);
+    tasks = applyTaskEvent(tasks, { phase: "started", task_id: "a1", tool_use_id: "toolu_relay" }, true);
+    expect(tasks.get("a1")).toMatchObject({ toolUses: undefined, durationMs: undefined, totalTokens: 456_816 });
+    tasks = applyTaskEvent(tasks, { phase: "progress", task_id: "a1", total_tokens: 456_386, tool_uses: 61, duration_ms: 800_000 }, true);
+
+    const resumed = rec({ state: "running", runs: 3, tool_uses: 285, duration_ms: 5_161_773, prior_tool_uses: 285, prior_duration_ms: 5_161_773, total_tokens: 456_816 });
+    expect(mergeDelegates(tasks, new Map([["a1", resumed]])).get("a1")).toMatchObject({
+      running: true, toolUses: 346, durationMs: 800_000, priorDurationMs: 5_161_773, totalTokens: 456_386,
+    });
+
+    const ended = rec({ ...resumed, state: "completed", tool_uses: 350, duration_ms: 6_000_000, total_tokens: 456_400 });
+    const done = mergeDelegates(tasks, new Map([["a1", ended]])).get("a1")!;
+    expect(done).toMatchObject({ running: false, toolUses: 350, durationMs: 6_000_000, totalTokens: 456_400 });
+    expect(done.priorDurationMs).toBeUndefined();
+  });
+
   it("materializes a delegate the fold never saw, anchored and named from its record", () => {
     const got = mergeDelegates(new Map(), new Map([["a1", rec({ description: "audit", type: "Explore", state: "completed", duration_ms: 1900 })]]));
     expect(got.get("a1")).toMatchObject({

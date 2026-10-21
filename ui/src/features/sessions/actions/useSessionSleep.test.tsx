@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { SessionSleepPrompt, useSessionSleep, type SleepVerb } from "./useSessionSleep";
+import { SessionSleepPrompt, useSessionSleep, type DoneRequestNotices, type SleepVerb } from "./useSessionSleep";
 import { FakeRouterClient } from "../../../router/fixtures";
 import type { LandResult, Session } from "../../../router/types";
 
@@ -30,9 +30,14 @@ function isolated(overrides: Partial<Session> = {}): Session {
 /** A stand-in for the one caller that owns the controller (SessionsSurface). */
 function renderHost(session: Session, client = new FakeRouterClient()) {
   const onError = vi.fn<(verb: SleepVerb, session: Session, err: unknown) => void>();
+  const notices = {
+    sent: vi.fn<DoneRequestNotices["sent"]>(),
+    confirmed: vi.fn<DoneRequestNotices["confirmed"]>(),
+    failed: vi.fn<DoneRequestNotices["failed"]>(),
+  };
 
   function Host() {
-    const sleep = useSessionSleep(client, onError);
+    const sleep = useSessionSleep(client, onError, notices);
     return (
       <>
         <button type="button" onClick={() => sleep.requestSleep(session)}>
@@ -56,7 +61,7 @@ function renderHost(session: Session, client = new FakeRouterClient()) {
   }
 
   render(<Host />);
-  return { client, onError };
+  return { client, onError, notices };
 }
 
 function clickSleep() {
@@ -276,6 +281,58 @@ describe("useSessionSleep — marking done", () => {
     await waitFor(() => expect(onError).toHaveBeenCalled());
     expect(onError.mock.calls[0][0]).toBe("mark done");
     expect(terminate).not.toHaveBeenCalled();
+  });
+
+  // The rail's motion (rail/useDoneMotion) moves a card only on the server's
+  // answer, so the controller says when a request went out and how it ended.
+  it("tells the rail a check-off went out, then what the server answered", async () => {
+    const session = isolated({ unlanded_count: 0 });
+    const client = new FakeRouterClient();
+    const answered = { ...session, tags: ["aside"], updated_at: "2026-07-02T00:00:00Z" };
+    vi.spyOn(client, "setSessionAside").mockResolvedValue(answered);
+    vi.spyOn(client, "closeSession").mockResolvedValue();
+    const { notices } = renderHost(session, client);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done it" }));
+    expect(notices.sent).toHaveBeenCalledWith(session, true);
+    await waitFor(() => expect(notices.confirmed).toHaveBeenCalledWith(answered, true));
+    expect(notices.failed).not.toHaveBeenCalled();
+  });
+
+  it("tells the rail nothing until a dialog is answered, and nothing at all if it's dismissed", () => {
+    const session = isolated();
+    const client = new FakeRouterClient();
+    spies(client, session);
+    const { notices } = renderHost(session, client);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done it" }));
+    expect(notices.sent).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" });
+    expect(notices.sent).not.toHaveBeenCalled();
+  });
+
+  it("tells the rail a refused check-off failed", async () => {
+    const session = isolated({ unlanded_count: 0 });
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "setSessionAside").mockRejectedValue(new Error("data service down"));
+    const { notices } = renderHost(session, client);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done it" }));
+    await waitFor(() => expect(notices.failed).toHaveBeenCalledWith("s1"));
+    expect(notices.confirmed).not.toHaveBeenCalled();
+  });
+
+  it("a failed sleep after an accepted check-off still counts as accepted", async () => {
+    const session = isolated({ unlanded_count: 0 });
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "setSessionAside").mockResolvedValue(session);
+    vi.spyOn(client, "closeSession").mockRejectedValue(new Error("child stuck"));
+    const { notices, onError } = renderHost(session, client);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done it" }));
+    await waitFor(() => expect(onError).toHaveBeenCalled());
+    expect(notices.confirmed).toHaveBeenCalled();
+    expect(notices.failed).not.toHaveBeenCalled();
   });
 
   it("brings a session back without waking it", () => {

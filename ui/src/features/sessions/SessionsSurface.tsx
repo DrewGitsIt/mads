@@ -11,6 +11,7 @@ import type { Session } from "../../router/types";
 import { NoSessionsEmptyState } from "./EmptyStates";
 import { Launchpad } from "./launchpad/Launchpad";
 import { SessionRail } from "./rail/SessionRail";
+import { useDoneMotion } from "./rail/useDoneMotion";
 import { EMPTY_AGENT_STATE, EMPTY_OPEN_TASK_BREAKDOWN, statusOf } from "./rail/railGroups";
 import { LinkModal, type NodeStatus } from "./links/LinkModal";
 import { useLinkEditor, useRailLinkEditor } from "./links/useLinkEditor";
@@ -106,8 +107,13 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelin
   // One controller for both sleep controls — the rail card's ⏸ and the
   // workspace kebab's "Sleep now" — so the unlanded-commits question is asked
   // from either, and the prompt below is the only one of its kind on screen.
-  const sleep = useSessionSleep(router, (verb, session, err) =>
-    reportActionError(verb, session.id, err),
+  // The ✓ and bring-back's motion on the rail: the controller says when a
+  // request goes out and what the server answered, the rail draws it.
+  const doneMotion = useDoneMotion();
+  const sleep = useSessionSleep(
+    router,
+    (verb, session, err) => reportActionError(verb, session.id, err),
+    doneMotion,
   );
 
   function handleSessionCreated(session: Session, goalText: string) {
@@ -116,7 +122,8 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelin
     setInitialTab(undefined);
     setOpenRun(undefined);
     setProvisioningSessionId(session.id);
-    setPendingFirstMessage({ sessionId: session.id, text: goalText });
+    // A /new-follower created without a goal has nothing to send.
+    setPendingFirstMessage(goalText ? { sessionId: session.id, text: goalText } : undefined);
   }
 
   // The composer's /new card (⌘↵) opens what it created the same way.
@@ -226,6 +233,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelin
               setActionError(undefined);
             }}
             onSleep={sleep.requestSleep}
+            doneMotion={doneMotion}
             onSetDone={(session, done, working) => {
               if (done) sleep.requestDone(session, working);
               else sleep.bringBack(session);

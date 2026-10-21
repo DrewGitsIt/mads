@@ -300,6 +300,34 @@ describe("DelegateView — a long session's log", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
+  it("totals a resumed delegate's header across its runs, while the working indicator times this one", async () => {
+    const client = new FakeRouterClient();
+    // Two runs before (208 + 77 tools, 1h 26m); the third started 13m ago.
+    const started = new Date(Date.now() - 13 * 60_000).toISOString();
+    client.delegates.push({
+      ...record, runs: 3, started_at: started, total_tokens: 456_816,
+      tool_uses: 285, duration_ms: 5_161_773, prior_tool_uses: 285, prior_duration_ms: 5_161_773,
+    });
+    vi.spyOn(client, "getEvents").mockResolvedValue([
+      env(1, "session.subagent_task", { phase: "notification", task_id: "a1", status: "completed", total_tokens: 456_816, tool_uses: 77, duration_ms: 1_745_070 }),
+      env(2, "session.subagent_task", { phase: "started", task_id: "a1", tool_use_id: "toolu_relay" }),
+      env(3, "session.subagent_task", { phase: "progress", task_id: "a1", total_tokens: 456_386, tool_uses: 61, duration_ms: 700_000 }),
+      env(4, "session.subagent_event", {
+        parent_tool_use_id: "toolu_spawn",
+        kind: "tool_use",
+        tool: { id: "t1", name: "Bash", kind: "execute", title: "go test ./..." },
+      }),
+    ]);
+    render(<DelegateView sessionId="s1" harnessId="a1" routerClient={client} onBack={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId("delegate-counters").textContent).toContain("346 tools"));
+    const counters = screen.getByTestId("delegate-counters").textContent!;
+    expect(counters).toContain("456.4k tok");
+    expect(counters).toContain("1h 39m");
+    const indicator = screen.getByRole("status", { name: /Using|Working/ });
+    expect(indicator.textContent).toContain("13m");
+    expect(indicator.textContent).not.toContain("1h");
+  });
+
   it("reads its lifecycle and, with no file, its stream from past the log's first page", async () => {
     const client = new FakeRouterClient();
     client.delegates.push(record);

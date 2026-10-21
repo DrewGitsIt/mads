@@ -78,6 +78,22 @@ describe("DelegateRows", () => {
     expect(rows[1].querySelector('[data-status="failed"]')).toBeTruthy();
   });
 
+  it("times a resumed delegate across its runs, running and ended", () => {
+    render(
+      <DelegateRows
+        delegates={[
+          // 29m 05s of earlier runs; this one started 2m ago.
+          d("resumed", { runs: 3, prior_duration_ms: 1_745_000 }),
+          // Ended with no harness duration: its last run's span plus the earlier runs'.
+          d("ended", { state: "stopped", runs: 2, prior_duration_ms: 60_000, ended_at: new Date(NOW - 60_000).toISOString() }),
+        ]}
+      />,
+    );
+    const rows = screen.getAllByRole("button");
+    expect(rows[0].textContent).toContain("31m 05s");
+    expect(rows[1].textContent).toContain("2m 00s");
+  });
+
   it("folds past three rows behind '+N more'", () => {
     render(<DelegateRows delegates={["a", "b", "c", "e", "f"].map((id) => d(id))} />);
     expect(screen.getAllByText(/^task /)).toHaveLength(3);

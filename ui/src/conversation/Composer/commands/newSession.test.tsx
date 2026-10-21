@@ -93,6 +93,7 @@ const payloadOf = (spy: { mock: { calls: unknown[][] } }) =>
 
 const goal = () => screen.getByLabelText("Goal for the new session") as HTMLTextAreaElement;
 const startBtn = () => screen.getByRole("button", { name: /^Start\s*↵$/ }) as HTMLButtonElement;
+const nameField = () => screen.getByLabelText("Name for the new session") as HTMLInputElement;
 const openBtn = () => screen.getByRole("button", { name: /Start & open/ }) as HTMLButtonElement;
 
 describe("/new prefill", () => {
@@ -135,6 +136,27 @@ describe("payloads", () => {
     isolation: THIS.isolation,
   };
 
+  it("/new on a full-trust-only provider sends Full, whatever this session ran at", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((input: URL) => {
+        if (input.toString().endsWith("/providers")) {
+          const matrix = { trust_limited: "unsupported", trust_read_only: "unsupported", trust_auto_review: "unsupported" };
+          return Promise.resolve(new Response(JSON.stringify([{ name: "hermes", matrix }]), { status: 200 }));
+        }
+        return Promise.resolve(new Response("[]", { status: 200 }));
+      }),
+    );
+    const { open, createSession } = setup({ session: { ...THIS, provider: "hermes", model: "copilot:gpt-4.1", trust: "limited" } });
+    await open(newCommand);
+    await waitFor(() =>
+      expect(screen.getByTestId("trust-reason").textContent).toBe("Hermes can't enforce approvals; it runs at full trust"),
+    );
+    fireEvent.click(startBtn());
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+    expect(payloadOf(createSession).trust).toBe("full");
+  });
+
   it("/new creates with the staged pills and no links", async () => {
     const { open, createSession } = setup();
     await open(newCommand);
@@ -150,24 +172,26 @@ describe("payloads", () => {
       "/new-leader",
       newLeaderCommand,
       { granting_session_id: "$new", subject_session_id: "s-this", preset: "leader" },
-      /new session\s*── leads ──▶\s*dns-tracing/,
+      /✎\s*── leads ──▶\s*dns-tracing/,
     ],
     [
       "/new-follower",
       newFollowerCommand,
       { granting_session_id: "s-this", subject_session_id: "$new", preset: "leader" },
-      /dns-tracing\s*this\s*── leads ──▶\s*new session/,
+      /dns-tracing\s*this\s*── leads ──▶\s*✎/,
     ],
     [
       "/new-monitor",
       newMonitorCommand,
       { granting_session_id: "$new", subject_session_id: "s-this", preset: "monitor" },
-      /new session\s*── watches ──▶\s*dns-tracing/,
+      /✎\s*── watches ──▶\s*dns-tracing/,
     ],
   ])("%s stages its link in the same request, cadence on signal by default", async (_, command, link, row) => {
     const { open, createSession } = setup();
     await open(command);
     expect(screen.getByTestId("new-session-card").textContent).toMatch(row);
+    // The new node is its name field, previewing the name the goal gives it.
+    expect(nameField().placeholder).toBe("reproduce DNS error");
     fireEvent.click(startBtn());
     await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
     expect(payloadOf(createSession)).toMatchObject({
@@ -262,6 +286,74 @@ describe("Enter vs ⌘Enter", () => {
       expect(screen.getByRole("alert").textContent).toMatch(/provider is not installed/),
     );
     expect(close).not.toHaveBeenCalled();
+  });
+});
+
+describe("naming and a goalless follower", () => {
+  it("a typed name is kept as chosen, not derived from the goal", async () => {
+    const { open, createSession } = setup();
+    await open(newLeaderCommand);
+    fireEvent.change(nameField(), { target: { value: "  dns lead  " } });
+    fireEvent.keyDown(nameField(), { key: "Enter" });
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+    expect(payloadOf(createSession)).toMatchObject({ name: "dns lead", name_source: "user" });
+  });
+
+  it("/new-leader and /new-monitor still need a goal", async () => {
+    const { open } = setup();
+    await open(newMonitorCommand, "");
+    expect(startBtn().disabled).toBe(true);
+    expect(nameField().placeholder).toBe("new session");
+    expect(goal().placeholder).toBe("What should the new session do?");
+  });
+
+  it("/new-follower without a goal: Create makes 'follower of [this]', numbered past taken names, and sends nothing", async () => {
+    const { client, open, createSession, sendMessage, api, created } = setup();
+    vi.spyOn(client, "listSessions").mockResolvedValue([
+      { ...THIS, id: "s-x", name: "follower of [dns-tracing]" },
+    ]);
+    await open(newFollowerCommand, "");
+    expect(goal().placeholder).toBe(
+      "Optional for new followers. Leave empty to let the leader agent start the dialogue.",
+    );
+    await waitFor(() => expect(nameField().placeholder).toBe("follower of [dns-tracing] 2"));
+    const create = screen.getByRole("button", { name: /^Create\s*↵$/ }) as HTMLButtonElement;
+    expect(screen.getByRole("button", { name: /Create & open/ })).toBeTruthy();
+    expect(create.disabled).toBe(false);
+    fireEvent.click(create);
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+    expect(payloadOf(createSession)).toMatchObject({
+      name: "follower of [dns-tracing] 2",
+      name_source: "user",
+    });
+    expect(payloadOf(createSession).opening_prompt).toBeUndefined();
+    await waitFor(() =>
+      expect(api.notify).toHaveBeenCalledWith(`Created ${created.name}`, expect.anything()),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("/new-follower with a goal is a normal Start: derived name, goal sent", async () => {
+    const { open, createSession, sendMessage } = setup();
+    await open(newFollowerCommand);
+    fireEvent.click(startBtn());
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    expect(payloadOf(createSession)).toMatchObject({
+      name: "reproduce DNS error",
+      name_source: "derived",
+    });
+  });
+
+  it("Create & open on a goalless follower opens it with nothing to send", async () => {
+    const { open, sendMessage } = setup();
+    const opened = vi.fn();
+    window.addEventListener(OPEN_CREATED_SESSION_EVENT, opened);
+    await open(newFollowerCommand, "");
+    fireEvent.click(screen.getByRole("button", { name: /Create & open/ }));
+    await waitFor(() => expect(opened).toHaveBeenCalledTimes(1));
+    expect((opened.mock.calls[0][0] as CustomEvent).detail.goal).toBe("");
+    expect(sendMessage).not.toHaveBeenCalled();
+    window.removeEventListener(OPEN_CREATED_SESSION_EVENT, opened);
   });
 });
 

@@ -31,6 +31,7 @@ import type {
 } from "../router/types";
 import { foldToolResults } from "../router/toolPairing";
 import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
+import { leaderLink } from "./Composer/commands/useLinkCommandState";
 import { useWorkspaceForRef } from "../tasks/useSessionWorkspace";
 import { SessionTerminalBridge } from "./TerminalRenderer/sessionTerminalBridge";
 import { SessionDock, latestLandOutcome } from "./Dock";
@@ -288,6 +289,8 @@ export function ConversationTab({
   const [streamGeneration, setStreamGeneration] = useState(0);
   const links = useSessionLinks([sessionId]);
   const linkName = useLinkNames(routerClient, sessionId, links);
+  // A follower started without a goal waits on its leader's first message.
+  const leaderId = leaderLink(links, sessionId)?.granting_session_id;
   const linkNameRef = useRef(linkName);
   linkNameRef.current = linkName;
 
@@ -1681,7 +1684,11 @@ export function ConversationTab({
                 )}
                 {messages.length === 0 && worktree.cards.length === 0 && !inChatTurn && liveItems.length === 0 ? (
                   <>
-                    <div className={styles.emptyTranscript}>No conversation yet</div>
+                    <div className={styles.emptyTranscript}>
+                      {leaderId
+                        ? `Waiting for ${linkName(leaderId) ?? "its leader"} to send the first message`
+                        : "No conversation yet"}
+                    </div>
                     {/* No rows to anchor to — every card is a fallback one. */}
                     {livePermissionRequests.map((req) => (
                       <PermissionCard key={req.id} request={req} onResolve={resolvePermission} />

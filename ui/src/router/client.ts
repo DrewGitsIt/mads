@@ -318,7 +318,8 @@ export interface RouterClient {
   deleteWorkspace(id: string): Promise<void>;
 
   // --- Session defaults (Launchpad preview) ---
-  getSessionDefaults(workspace?: string, dir?: string): Promise<SessionDefaults>;
+  /** provider: a staged provider, so trust and model resolve for it rather than for Config's. */
+  getSessionDefaults(workspace?: string, dir?: string, provider?: string): Promise<SessionDefaults>;
 
   // --- Agents (Library) ---
   listAgents(): Promise<Agent[]>;
@@ -1196,8 +1197,8 @@ export class FetchRouterClient implements RouterClient {
   }
 
   // --- Session defaults (Launchpad preview) ---
-  async getSessionDefaults(workspace?: string, dir?: string): Promise<SessionDefaults> {
-    return routerGet(this.baseUrl, "/sessions/defaults", { workspace, dir });
+  async getSessionDefaults(workspace?: string, dir?: string, provider?: string): Promise<SessionDefaults> {
+    return routerGet(this.baseUrl, "/sessions/defaults", { workspace, dir, provider });
   }
 
   // --- Agents (Library) ---

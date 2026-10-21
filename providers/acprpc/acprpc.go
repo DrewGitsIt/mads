@@ -8,7 +8,7 @@
 //
 // The ACP v1 spec (agentclientprotocol.com, pinned by the official
 // agent-client-protocol-schema crate) is normative: wire.go's types derive
-// from the spec schema, and the committed captures — goose 1.48.0 under
+// from the spec schema, and the committed captures — goose 1.50.1 and 1.48.0 under
 // providers/goosecli/testdata/captures/, claude-agent-acp 0.75.1 /
 // codex-acp 1.10.0 / hermes 0.21.1 under testdata/captures/ here — are
 // evidence of individual agents' behavior within it, never shapes to bake
@@ -33,8 +33,10 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/procreap"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -121,7 +123,7 @@ type Config struct {
 	// agent renames a tool is safe, under-enforcing is not). The need is
 	// capture-pinned: goose's tool_call updates carry only
 	// _meta.goose.toolCall names and no kind
-	// (providers/goosecli/testdata/captures/acp-transcript.jsonl line 33),
+	// (providers/goosecli/testdata/captures/acp-transcript.jsonl line 18),
 	// so classification must be supplied, not read off the wire.
 	ToolClassTable []ToolClassRule
 	// PermissionAsksEveryCall declares that the agent's limited-trust mode
@@ -130,7 +132,7 @@ type Config struct {
 	// that ("Ask before every tool call", goose_mode.rs; permission_
 	// inspector.rs sends every call without a user-config grant to
 	// RequireApproval — and the capture asks even for todo__todo_write,
-	// acp-transcript.jsonl line 34). Forwarding all of those to the user
+	// acp-transcript-1.48.0.jsonl line 34). Forwarding all of those to the user
 	// would make a card of every file read, so with this set and an asker
 	// wired (StartOptions.Permissions, limited trust only), the engine
 	// allows the read/search/think/fetch classes itself and forwards only
@@ -158,6 +160,19 @@ type Config struct {
 	// agent drops — goose 1.50.1 accepts "/compact <text>" but its summary
 	// ignores the text (same capture, turn 3).
 	CompactFocus bool
+	// OwnProcessTree starts the agent in a process group of its own and,
+	// when the session ends — Close, which every Start failure, OneShot
+	// return or cancel, and DiscoverModels pass through — SIGKILLs that
+	// group and every descendant that left it (pkg/procreap: snapshots
+	// taken while the agent lives, killed by pid + start-time identity).
+	// Needed where an agent's helpers outlive it: hermes runs its
+	// dependency bootstrap in children of its own group (pm/client.py:77,
+	// a `uv sync` that survived as ppid-1 orphans when only hermes-acp was
+	// killed) and detaches tool processes, MCP servers and kernels into
+	// sessions of their own (tools/process_registry.py:1246,
+	// tools/mcp_tool.py:594, tools/code_kernel.py:642). Off by default:
+	// goose and kiro-cli keep the plain stdin-EOF-then-kill shutdown.
+	OwnProcessTree bool
 }
 
 // ConfigOptionValue is one PreseedConfigOptions entry.
@@ -272,6 +287,27 @@ func (e *Engine) env(extra []string) []string {
 	env = append(env, e.cfg.Env...)
 	env = append(env, extra...)
 	return env
+}
+
+// closeTree is closeWait for an OwnProcessTree agent: grace for the
+// agent to exit on its own (its stdout ending), then the whole group is
+// killed while the agent is still unreaped — its pid, and so the group
+// id, can't have been reused yet — then the agent is waited and every
+// remembered descendant that left the group is reaped.
+func closeTree(cmd *exec.Cmd, grace time.Duration, readDone <-chan struct{}, reaper *procreap.Reaper) {
+	select {
+	case <-readDone:
+	case <-time.After(grace):
+	}
+	procreap.KillGroup(cmd.Process.Pid)
+	reaper.MarkExited()
+	_ = cmd.Wait()
+	reaper.Reap()
+}
+
+// ownGroup puts cmd in a process group of its own (OwnProcessTree).
+func ownGroup(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
 // closeWait shuts a process down gently: signal by closing its stdin, give

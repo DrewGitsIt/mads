@@ -52,9 +52,33 @@ agents — not services themselves.
   trust tool-class table), OneShot emulated over ACP (the `goose run` plan
   superseded — its stream announces no session id), `goose session` PTY
   with banner ref discovery and a SessionLocator backstop, and `session
-  export` transcripts. Every claim is capture/source-pinned against goose
-  1.48.0 (`goosecli/testdata/captures/`); CI runs the full conformance
+  export` transcripts. Every claim is capture/source-pinned — source at
+  goose 1.48.0, captures re-taken at 1.50.1 on 2026-10-20 (the only wire
+  change: cancel now resolves `stopReason:"cancelled"`; the 1.48.0
+  `end_turn` transcript is kept) (`goosecli/testdata/captures/`); CI runs the full conformance
   suite against a scripted stand-in, no goose binary needed.
+- `hermescli/` — the Hermes Agent adapter: `hermes-acp` on the acprpc
+  engine, offered at **full trust only** (hermes asks only about edits and
+  commands its own reviewer flags, so Start refuses every lower level),
+  the model per session via ACP `session/set_model` (never written to the
+  user's config), a session wrapper that makes hermes's cumulative usage
+  per-turn and strips its post-tool paragraph break, stdio MCP servers
+  (live-proven), and a TranscriptReader
+  over hermes's own `state.db` (read-only). Pinned against hermes 0.22.2
+  (`hermescli/testdata/captures/`); CI runs the full conformance suite
+  against a stand-in that writes a real state.db; `MADS_HERMES_SMOKE=1`
+  runs the real binary on Copilot in a scratch home.
+- `codexcli/` — the OpenAI Codex CLI adapter, registry name `codex`
+  (shown as "Codex (ChatGPT)"): its own small JSON-RPC client for
+  `codex app-server` (threads, turns, items — not ACP), `turn/steer` for a
+  mid-turn Send, approvals mapped onto codex's sandbox + approval policy,
+  `thread/fork` branching, `thread/compact/start`, `thread/items/list`
+  transcripts, and a reaper for the tool processes codex moves out of its
+  process group. A per-thread config override stops codex persisting folder
+  trust into the user's `~/.codex/config.toml`. Capture-pinned against
+  codex 0.154.0 (`codexcli/testdata/captures/`); CI runs the full
+  conformance suite against a scripted stand-in, `MADS_CODEX_SMOKE=1` opts
+  into the real-binary smoke.
 
 ## Test it
 
@@ -66,7 +90,23 @@ The conformance suite's own correctness is proven in `conformance/` against
 an in-memory stub: an honest stub passes (full and partial matrices, ACP-only
 and PTY-only), and every lie class is caught (`TestMismatchesAreCaught`).
 
+A plain `go test ./...` never starts a real harness. Real-binary tests are
+opt-in (`MADS_CLAUDE_SMOKE=1`), and every harness that boots a service or
+runs preflight/model discovery against the registered adapters (the router
+boot test, `scripts/e2esmoke`, `ui/e2e/lib/topology.ts`) sets
+`MADS_AGENT_BIN_DIR` to a stand-in dir — see the contract note below. New
+harnesses must do the same.
+
 ## Contract notes
+
+- Binary lookup: an adapter's default binary is `binlocate.Resolve(name)`,
+  never a bare name. With `$MADS_AGENT_BIN_DIR` set, `pkg/binlocate` answers
+  only `$MADS_AGENT_BIN_DIR/<name>` (PATH and known install locations are
+  ignored) and `Resolve` returns that path even when it's missing, so exec
+  fails fast instead of searching PATH; `pkg/preflight` reports the row
+  not-installed. A test that needs a harness drops a stand-in script there.
+  The router boot test traps same-named scripts on PATH to catch an adapter
+  that bypasses this.
 
 - A `Session` turn: one `Send`, streamed `Event`s, closed by `EventTurnEnd`.
   The events channel closing **without** a turn end is the process-died signal
@@ -89,4 +129,5 @@ and PTY-only), and every lie class is caught (`TestMismatchesAreCaught`).
   `OneShot`, PTY) builds its environment through the shared
   `agentenv.Build` helper — see that package's doc comment for the isolated
   base allowlist and passthrough semantics — so inherit/isolated behavior is
-  defined exactly once and can't drift between spawn sites.
+  defined exactly once and can't drift between spawn sites (goosecli and
+  codexcli build theirs the same way).

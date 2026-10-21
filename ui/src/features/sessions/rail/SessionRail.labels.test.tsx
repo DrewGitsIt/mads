@@ -184,6 +184,7 @@ describe("SessionRail context labels", () => {
         sessions={[
           makeSession({ id: "a", name: "on claude", workspace: "mads", provider: "claude-code" }),
           makeSession({ id: "b", name: "on goose", workspace: "mads", provider: "goose" }),
+          makeSession({ id: "x", name: "on codex", workspace: "mads", provider: "codex" }),
           makeSession({ id: "c", name: "on something new", workspace: "mads", provider: "zed-acp" }),
           makeSession({ id: "d", name: "no provider yet", workspace: "mads" }),
         ]}
@@ -194,11 +195,14 @@ describe("SessionRail context labels", () => {
     const markOn = (name: string) => cardFor(name).querySelector('[class*="harness"]');
     expect(markOn("on claude")?.getAttribute("aria-label")).toBe("claude-code");
     expect(markOn("on goose")?.getAttribute("aria-label")).toBe("goose");
+    // The Codex CLI has art of its own, not the fallback letter.
+    expect(markOn("on codex")?.getAttribute("aria-label")).toBe("codex");
+    expect(markOn("on codex")?.querySelector("svg")).not.toBeNull();
     // An unknown harness is legible the day it lands: no art required.
     expect(markOn("on something new")?.textContent).toBe("Z");
     // A record that has not said yet claims nothing.
     expect(markOn("no provider yet")).toBeNull();
-    for (const name of ["on claude", "on goose", "on something new"]) {
+    for (const name of ["on claude", "on goose", "on codex", "on something new"]) {
       expect(labelsOn(cardFor(name))).toEqual({ location: "mads" });
     }
   });

@@ -8,9 +8,10 @@ PTY for the terminal transport, and `goose session export --format json`
 for normalized transcripts.
 
 **Unlike kirocli, every claim here is verified against a live binary**:
-goose **1.48.0** is installed at `~/.local/bin/goose` on this machine (the
-early probes ran against 1.46.0; the binary was upgraded 2026-08-29 and all
-committed captures are 1.48.0 evidence) with a working local ollama
+goose **1.48.0** was installed at `~/.local/bin/goose` on this machine (the
+early probes ran against 1.46.0; the binary was upgraded 2026-08-29), and
+the committed captures were re-taken on 2026-10-20 against the **1.50.1**
+Goose Desktop binary (see "Re-verified against binary 1.50.1") with a working local ollama
 provider (`qwen3.8`), and the goose source tree is checked out at
 `~/repo/goose`. Wire shapes below were captured from real `goose acp`
 handshakes and `goose run` invocations — **committed, sanitized, under
@@ -38,7 +39,7 @@ is therefore tagged with its upstream-fixable seam. The three known ones:
    stable `session/new` param or promote the method out of unstable.
 3. **One-shot session-id announcement** — **confirmed absent** (pinned:
    `testdata/captures/oneshot-stream.jsonl`, zero "session" mentions in a
-   full 303-line tool-using run). Upstream fix: a session-id line in
+   full tool-using run — 303 lines at 1.48.0, 9 at 1.50.1). Upstream fix: a session-id line in
    `--output-format stream-json` output would be trivially additive. Until
    then the `--name` fallback carries attribution (see "OneShot").
    **Moot for mads since the re-plan**: shipped OneShot rides ACP, where
@@ -78,6 +79,27 @@ for the doc's file:line citations — the ACP server was refactored into
 `crates/goose/src/acp/server/*.rs` modules in this range, so old
 `server.rs`/`dispatch.rs` line references have drifted; the shapes have not.
 
+### Re-verified against binary 1.50.1 (captures re-taken 2026-10-20)
+
+Goose Desktop auto-updated the bundled CLI that `pkg/binlocate` resolves
+(`/Applications/Goose.app/Contents/Resources/bin/goose`) to **1.50.1**, so
+every committed capture was re-taken against it with the same scripts and
+prompts (model `qwen3.8-coder-nothink`, an isolated `GOOSE_PATH_ROOT`;
+provenance in `testdata/captures/README.md`). A wire diff against the
+1.48.0 captures found **one behavior change**: after `session/cancel` the
+in-flight prompt now resolves **`stopReason:"cancelled"`**
+(`acp-transcript.jsonl` line 55) where 1.48.0 resolved `"end_turn"`. The
+engine already maps `cancelled` → `Interrupted` and keeps its own
+interrupted flag, so both versions are handled; the 1.48.0 transcript is
+kept as `acp-transcript-1.48.0.jsonl` to keep the `end_turn` path pinned
+in replay. Everything else — initialize capabilities, session/new keys,
+configOption and mode ids, every `session/update` variant, the
+`mcpServers`-required load error, the `_goose/unstable` system-prompt
+method — is unchanged; the only other differences are additive (a
+`goose.toolCall.providerIndex` key in stream-json tool `_meta`, a
+spinner-free PTY banner). `pkg/preflight/compat.go` now proves 1.46–1.50
+(Max 1.51.0, exclusive).
+
 ## ACP v1 spec is normative
 
 The malleability stance above is about *goose*; the **protocol itself is
@@ -103,10 +125,10 @@ Concrete executor rules that follow:
   `max_turn_requests`, `refusal`, `cancelled` — even though goose emits
   only three today. `cancelled` → `Interrupted`; `refusal` → `EventError`
   then TurnEnd; the `max_*` pair → plain TurnEnd. An unrecognized string →
-  plain TurnEnd, never a decode error. (Captured practice: goose resolves
-  cancelled runs with `end_turn`, not `cancelled` — see the Interrupt
-  matrix row — so `cancelled` handling is spec-driven defense, not the
-  interruption signal.)
+  plain TurnEnd, never a decode error. (Captured practice: goose 1.48.0 resolved
+  cancelled runs with `end_turn`, 1.50.1 with `cancelled` — see the
+  Interrupt matrix row — so the engine's own flag stays the interruption
+  signal and `cancelled` handling is a second, spec-driven one.)
 - **Select permission replies by option `kind`, never by hardcoded
   optionId.** The spec says the agent offers an `options[]` array of
   `{optionId, name, kind}` with kind ∈ `allow_once`/`allow_always`/
@@ -181,13 +203,13 @@ untouched.
 | Behavior | Support | Why |
 |---|---|---|
 | Interactive | **Native** | `goose acp` verified live: initialize → session/new → session/prompt with streamed `session/update` notifications. |
-| Interrupt | **Native** | `session/cancel` notification terminates the run promptly (`_meta.goose.activeRunId` → null), **but do not rely on the stop reason**: in 3/3 captured cancels the in-flight `session/prompt` response resolved `stopReason:"end_turn"`, not `"cancelled"` (pinned: `testdata/captures/acp-transcript.jsonl` turn 2 — goose's `prompt_stop_reason` only sets `was_cancelled` if another stream event arrives *after* the token trips, and the token usually kills the stream first). The adapter's own interrupted flag is the source of truth; still parse `"cancelled"` defensively (it remains one of source's three stop reasons: `end_turn`, `cancelled`, `max_tokens`). Session survives. |
+| Interrupt | **Native** | `session/cancel` notification terminates the run promptly (`_meta.goose.activeRunId` → null), **but do not rely on the stop reason alone**: at 1.48.0, 3/3 captured cancels resolved the in-flight `session/prompt` with `stopReason:"end_turn"`, not `"cancelled"` (pinned: `testdata/captures/'''+'''acp-transcript-1.48.0.jsonl` turn 2 — 1.48's `prompt_stop_reason` only set `was_cancelled` if another stream event arrived *after* the token tripped, and the token usually killed the stream first); 1.50.1 resolves `"cancelled"` (pinned: `testdata/captures/acp-transcript.jsonl` lines 36-55). The adapter's own interrupted flag is the source of truth on both; still map `"cancelled"` (it remains one of source's three stop reasons: `end_turn`, `cancelled`, `max_tokens`). Session survives. |
 | OneShot | **Emulated** | Rides the engine's ACP emulation (`acprpc.Engine.OneShot`) — honest because it is not the CLI's native one-shot; supersedes the `goose run` plan. Ref is Native-strength: session/new returns it synchronously. See "OneShot". |
 | OneShotStream | **Emulated** | Same path: `OnEvent` streams the ACP session/update events genuinely incrementally. |
 | Resume | **Native** | `loadSession:true` in initialize; `session/load` replay-then-respond confirmed live (pinned: `testdata/captures/acp-load-replay.jsonl`). Ref = goose sessionId (`20260829_2` format). |
 | Transcript | **Native** | `session export --format json` verified — richer than kirocli's session/load-replay approach (timestamps, usage, no process spawn). Filter entries with `metadata.userVisible == false` (injected `<turn-context>` blocks) and `metadata.turnContext == true`. |
 | ModelDiscovery | **Native** | Probe: spawn `goose acp`, initialize, `session/new` (cwd = temp dir), read the `model` configOption's options + `currentValue` (→ `Default`), `session/close`, exit. No LLM call involved. v1 returns the *active provider's* models (bare IDs); cross-provider composite IDs (`provider/model`) are a noted extension. |
-| CostReporting | **Native** | `session/prompt` result carries `usage{totalTokens,inputTokens,outputTokens}` — confirmed live on the captured turn-1 result (pinned: `testdata/captures/acp-transcript.jsonl` line 85) → `Usage` on EventTurnEnd. `usage_update` notifications additionally carry `{used, size, cost{amount,currency}}`. Smoke asserts usage presence. |
+| CostReporting | **Native** | `session/prompt` result carries `usage{totalTokens,inputTokens,outputTokens}` — confirmed live on the captured turn-1 result (pinned: `testdata/captures/acp-transcript.jsonl` line 35) → `Usage` on EventTurnEnd. `usage_update` notifications additionally carry `{used, size, cost{amount,currency}}`. Smoke asserts usage presence. |
 | ACP | **Native** | The real thing, official SDK, schema v1. |
 | PTY | **Native** | `goose session` interactive REPL under creack/pty (mirror kirocli/claudecode pty.go). |
 | Branching | **Unsupported** | goose's `session/fork` is real and stable, but mads has no provider-layer branching surface or conformance probe yet. Flip this row when one exists — goose would be the first Native. |
@@ -216,14 +238,14 @@ covers it; add passthrough if not).
    tools run in-process in goose.
 2. Fresh start: `session/new {cwd, mcpServers: fromStartOptions}` → ref from
    `sessionId`. Resume: `session/load {sessionId, cwd, mcpServers}` —
-   **`mcpServers` is required**: 1.48.0 rejects its absence with -32602
+   **`mcpServers` is required**: 1.48.0 and 1.50.1 reject its absence with -32602
    `missing field \`mcpServers\`` (pinned:
    `testdata/captures/acp-load-replay.jsonl` lines 3-4; the retry with
    `mcpServers:[]` succeeded). Use the kirocli `replaying` flag pattern
    (buffer replayed updates, don't stream them; they also feed
    Transcript's live-session path if wanted, though export is the primary
    source). Replay notifications are coalesced **per message, not per
-   token** (5 thought chunks on replay vs 100+ live), and the load
+   token** (5 thought chunks on replay vs 100+ live at 1.48.0), and the load
    response carries the session's persisted `currentModeId`. Unknown ref ⇒
    `resource_not_found` → wrap ErrUnsupported? No — return the error;
    resume of a bad ref is a real failure.
@@ -245,8 +267,8 @@ covers it; add passthrough if not).
    updates must flow while the response is pending). Response →
    `EventTurnEnd{Interrupted: stopReason=="cancelled" || interruptFlag,
    Usage: fromResult}` — the `|| interruptFlag` arm is load-bearing, not
-   belt-and-braces: captured cancels resolve `end_turn` (see the Interrupt
-   matrix row), so the flag is what actually detects interruption. A second Send mid-turn gets `invalid_params "session
+   belt-and-braces: 1.48.0's captured cancels resolved `end_turn` (see the
+   Interrupt matrix row), so the flag is what reliably detects interruption. A second Send mid-turn gets `invalid_params "session
    already has active run …"` — surface as EventError + TurnEnd, same as
    kirocli's error path (the Runner's busy-tracking should prevent it
    anyway).
@@ -271,7 +293,7 @@ covers it; add passthrough if not).
 goose's `_meta.goose.toolCall` gives `{toolName, extensionName}` — use
 `toolName` as the normalized Name; pinned examples are `{toolName:"shell",
 extensionName:"developer"}` and `{toolName:"todo__todo_write",
-extensionName:"todo"}` (`testdata/captures/acp-transcript.jsonl` —
+extensionName:"todo"}` (`testdata/captures/acp-transcript-1.48.0.jsonl` —
 naming is per-extension, not uniform, so never synthesize
 `developer__shell`-style composites). Titles are humanized display strings
 (`"developer: shell · cargo build"`), not stable identifiers. Live
@@ -292,7 +314,7 @@ so kirocli's kind-based gating cannot work here. Instead:
 - `TrustLimited` / `TrustReadOnly`: `session/set_mode "approve"` — goose
   then sends `session/request_permission` for *every* tool call. The
   request params carry **no `_meta`** (pinned:
-  `testdata/captures/acp-transcript.jsonl` lines 34/44/66 — just
+  `testdata/captures/acp-transcript-1.48.0.jsonl` lines 34/44/66 — just
   `sessionId`, `toolCall{toolCallId, kind:"other", status, title,
   rawInput}`, and `options[]`), so gating must correlate `toolCallId` with
   the immediately preceding `tool_call` session/update — which carries
@@ -362,7 +384,8 @@ true CLI one-shot path is ever wanted.
   text = joined text blocks of the last assistant message.
 - **Ref attribution — resolved**: no session-id line appears anywhere in
   the stream (pinned: `testdata/captures/oneshot-stream.jsonl`, full
-  303-line tool-using run, zero mentions of "session"), so the
+  tool-using run — 303 lines at 1.48.0, 9 at 1.50.1 — zero mentions of
+  "session"), so the
   `--name mads-<random>` fallback **is needed — and confirmed working**:
   resolve the id via `goose session list --format json` on a verbatim
   `name` match, additionally requiring `user_set_name:true` as a guard
@@ -388,7 +411,7 @@ true CLI one-shot path is ever wanted.
 `goose session [--resume --session-id <ref>]` under creack/pty, mirroring
 kirocli's pty.go: Events() nil, Terminal(), Resize, Send injects a line,
 Interrupt writes `\x03`. Ref discovery: the banner's session-id line reads
-`20260829_20 · /tmp/mads-goose-capture-pty`, but in the raw bytes the id
+`20261020_4 · /private/tmp/mads-goose-capture-pty`, but in the raw bytes the id
 sits inside ANSI dim escapes mid-art-line (pinned:
 `testdata/captures/pty-banner.raw`) — a `^\s*` anchor only holds after
 ANSI stripping. Match unanchored `(\d{8}_\d+)\s+·` against ANSI-stripped
@@ -471,13 +494,14 @@ ACP session's assistant reply readable from `GET /transcript` in real time
    `services/pipeline/main.go` (mirror the kirocli blocks), and the
    `cmd/mads/run.go` `-provider` switch (`goose`, plus `-goose-args`).
 3. `pkg/preflight/providers.go`: binary `goose`, version probe
-   `goose --version` (output is ` 1.48.0` — note the leading space).
-   `pkg/preflight/compat.go`: proven range 1.46–1.48 (binary-verified at
-   1.48.0 — all committed captures are 1.48.0 evidence; the earlier probes
-   ran at 1.46.0. The `_goose/unstable/*` system-prompt method and the
-   `--output-format stream-json` flag are the version-sensitive surfaces,
-   and the 1.46→1.48 deltas — including the ≤1.46 mcpServers suppression —
-   are documented in the re-verification note above).
+   `goose --version` (output is ` 1.50.1` — note the leading space).
+   `pkg/preflight/compat.go`: proven range 1.46–1.50 (Max 1.51.0,
+   exclusive; source-verified at 1.48.0, committed captures re-taken at
+   1.50.1, the earliest probes ran at 1.46.0. The `_goose/unstable/*`
+   system-prompt method and the `--output-format stream-json` flag are the
+   version-sensitive surfaces, and the 1.46→1.48 and 1.48→1.50.1 deltas —
+   including the ≤1.46 mcpServers suppression and 1.50's `cancelled` stop
+   reason — are documented in the re-verification notes above).
 4. `providers/README.md`: add the goosecli bullet.
 5. Conformance: `conformance.Run(t, New(Config{Bin: fakegoose}))` with a
    scripted stand-in implementing the verified wire shapes above

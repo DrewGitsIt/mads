@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/drewkidwell/mads/pkg/binlocate"
 	"github.com/drewkidwell/mads/pkg/mergedriver"
 )
 
@@ -80,6 +81,10 @@ func TestRun_DataServiceUnhealthy(t *testing.T) {
 }
 
 func TestRun_HappyPath(t *testing.T) {
+	// Hermetic: an empty $MADS_AGENT_BIN_DIR hides every real claude, so the
+	// provider row must read not-installed and no real `claude --version`
+	// runs.
+	t.Setenv(binlocate.EnvAgentBinDir, t.TempDir())
 	c := New(Deps{
 		Data:      fakeData{},
 		Providers: fakeProviders{names: []string{"claude-code"}},
@@ -100,6 +105,29 @@ func TestRun_HappyPath(t *testing.T) {
 	disk := findCheck(t, checks, "disk_space")
 	if !disk.Healthy {
 		t.Errorf("disk_space check = %+v, want healthy", disk)
+	}
+	claude := findCheck(t, checks, "provider:claude-code")
+	if !claude.NotInstalled {
+		t.Errorf("provider:claude-code check = %+v, want not-installed under an empty $MADS_AGENT_BIN_DIR", claude)
+	}
+}
+
+// TestCheckProviderBinary_AgentBinDirStandIn: with $MADS_AGENT_BIN_DIR
+// set, the probe runs the stand-in there and ignores a same-named binary on
+// PATH.
+func TestCheckProviderBinary_AgentBinDirStandIn(t *testing.T) {
+	onPath, dir := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(onPath, "goose"), []byte("#!/bin/sh\necho ' 1.0.0'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "goose"), []byte("#!/bin/sh\necho ' 1.46.0'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", onPath)
+	t.Setenv(binlocate.EnvAgentBinDir, dir)
+	check := checkProviderBinary(context.Background(), "goose", knownProviderBinaries["goose"])
+	if !check.Healthy || check.Detail != "goose v1.46.0" {
+		t.Errorf("checkProviderBinary(goose) = %+v, want the stand-in's goose v1.46.0", check)
 	}
 }
 
@@ -136,10 +164,10 @@ func TestCheckProviderBinary_InstalledButBroken(t *testing.T) {
 	}
 }
 
-// TestGooseCompatRange pins the proven 1.46–1.48 window: versions inside it
-// pass, versions on either side get guidance (Max is exclusive at 1.49.0 so
-// the whole proven 1.48.x line passes), and only the newer side is a mere
-// warning — too-old is a known incompatibility.
+// TestGooseCompatRange pins the proven 1.46–1.50 window: versions inside it
+// pass, versions on either side get guidance (Max is exclusive at 1.51.0 so
+// the whole re-verified 1.50.x line passes), and only the newer side is a
+// mere warning — too-old is a known incompatibility.
 func TestGooseCompatRange(t *testing.T) {
 	r, known := compatMatrix["goose"]
 	if !known {
@@ -150,8 +178,11 @@ func TestGooseCompatRange(t *testing.T) {
 		"1.46.0": {true, false},
 		"1.48.0": {true, false},
 		"1.48.5": {true, false},
-		"1.49.0": {false, true},
-		"1.50.1": {false, true},
+		"1.49.0": {true, false},
+		"1.50.1": {true, false},
+		"1.50.9": {true, false},
+		"1.51.0": {false, true},
+		"1.52.3": {false, true},
 	} {
 		ok, unproven, guidance := r.evaluate(version)
 		if ok != want.ok || unproven != want.unproven {
@@ -159,6 +190,42 @@ func TestGooseCompatRange(t *testing.T) {
 		}
 		if !ok && guidance == "" {
 			t.Errorf("goose compat evaluate(%s) rejected without guidance", version)
+		}
+	}
+}
+
+// TestCheckProviderBinary_Codex proves the codex row end to end with a
+// scripted stand-in printing codex's real `--version` shape.
+func TestCheckProviderBinary_Codex(t *testing.T) {
+	bin := t.TempDir()
+	script := filepath.Join(bin, "codex")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'codex-cli 0.154.0'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("HOME", t.TempDir()) // keep binlocate's ~/.local/bin fallback out of it
+	check := checkProviderBinary(context.Background(), "codex", knownProviderBinaries["codex"])
+	if !check.Healthy || check.Detail != "codex v0.154.0" {
+		t.Errorf("checkProviderBinary(codex) = %+v, want healthy with Detail %q", check, "codex v0.154.0")
+	}
+}
+
+// TestCodexCompatRange pins the proven 0.154.x window.
+func TestCodexCompatRange(t *testing.T) {
+	r, known := compatMatrix["codex"]
+	if !known {
+		t.Fatal("no codex row in compatMatrix")
+	}
+	for version, want := range map[string]struct{ ok, unproven bool }{
+		"0.153.9": {false, false},
+		"0.154.0": {true, false},
+		"0.154.7": {true, false},
+		"0.155.0": {false, true},
+		"1.0.0":   {false, true},
+	} {
+		ok, unproven, _ := r.evaluate(version)
+		if ok != want.ok || unproven != want.unproven {
+			t.Errorf("codex compat evaluate(%s) = ok %v unproven %v, want %+v", version, ok, unproven, want)
 		}
 	}
 }
@@ -229,5 +296,43 @@ func TestRun_MergirafRowIsOptional(t *testing.T) {
 	}
 	if m := findCheck(t, checks, "mergiraf"); !m.Warning || !m.Optional {
 		t.Errorf("mergiraf row = %+v", m)
+	}
+}
+
+// TestCheckProviderBinary_Hermes proves the hermes row end to end with a
+// stand-in: the probed binary is hermes-acp (what the adapter spawns), whose
+// --version prints the bare version.
+func TestCheckProviderBinary_Hermes(t *testing.T) {
+	bin := t.TempDir()
+	script := filepath.Join(bin, "hermes-acp")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 0.22.2\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	check := checkProviderBinary(context.Background(), "hermes", knownProviderBinaries["hermes"])
+	if !check.Healthy || check.Detail != "hermes v0.22.2" {
+		t.Errorf("checkProviderBinary(hermes) = %+v, want healthy with Detail %q", check, "hermes v0.22.2")
+	}
+}
+
+// TestHermesCompatRange pins the proven 0.22.x window.
+func TestHermesCompatRange(t *testing.T) {
+	r, known := compatMatrix["hermes"]
+	if !known {
+		t.Fatal("no hermes row in compatMatrix")
+	}
+	for version, want := range map[string]struct{ ok, unproven bool }{
+		"0.21.1": {false, false},
+		"0.22.0": {true, false},
+		"0.22.2": {true, false},
+		"0.23.0": {false, true},
+	} {
+		ok, unproven, guidance := r.evaluate(version)
+		if ok != want.ok || unproven != want.unproven {
+			t.Errorf("hermes compat evaluate(%s) = ok %v unproven %v, want %+v", version, ok, unproven, want)
+		}
+		if !ok && guidance == "" {
+			t.Errorf("hermes compat evaluate(%s) rejected without guidance", version)
+		}
 	}
 }

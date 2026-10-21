@@ -244,15 +244,16 @@ func TestErrorSurfaces(t *testing.T) {
 }
 
 // TestInterruptMarksTurnEnd is the interrupted-flag-over-stopReason proof,
-// run against both cancel resolutions seen in the wild: goose resolves
-// end_turn (the flag is the only signal), the synthetic profile resolves
-// cancelled (claude/hermes behavior).
+// run against both cancel resolutions seen in the wild: goose 1.48 resolved
+// end_turn (the flag is the only signal); goose 1.50 and the synthetic
+// profile (claude/hermes behavior) resolve cancelled.
 func TestInterruptMarksTurnEnd(t *testing.T) {
 	for _, tc := range []struct {
 		profile string
 		cfg     Config
 	}{
 		{"goose", gooseConfig()},
+		{"goose-1.48", gooseConfig()},
 		{"synthetic", syntheticConfig()},
 	} {
 		t.Run(tc.profile, func(t *testing.T) {

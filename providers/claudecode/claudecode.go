@@ -21,14 +21,16 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/agentenv"
+	"github.com/drewkidwell/mads/pkg/binlocate"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
 // Config adapts the binary to its surroundings. The zero value targets a
 // stock install.
 type Config struct {
-	// Bin is the claude executable (default "claude"). Tests point this at
-	// a scripted stand-in.
+	// Bin is the claude executable (default binlocate.Resolve("claude"),
+	// which honours $MADS_AGENT_BIN_DIR). Tests point this at a scripted
+	// stand-in.
 	Bin string
 	// ExtraArgs are appended to every invocation — permission flags land
 	// here (agent permissions, spec §13, are configured per session by the
@@ -68,7 +70,7 @@ type Provider struct {
 
 func New(cfg Config) *Provider {
 	if cfg.Bin == "" {
-		cfg.Bin = "claude"
+		cfg.Bin = binlocate.Resolve("claude")
 	}
 	if cfg.TranscriptDir == "" {
 		if home, err := os.UserHomeDir(); err == nil {

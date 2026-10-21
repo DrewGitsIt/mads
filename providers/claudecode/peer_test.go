@@ -156,7 +156,8 @@ func TestOwnReplayIsSilent(t *testing.T) {
 // built from real claude-code 2.1.285 lines with the bodies replaced): the
 // idle arrival's isMeta user line and the mid-turn queued_command
 // attachment, with and without an origin. A message recorded twice renders
-// once; other isMeta lines and non-peer queued commands stay out.
+// once; other isMeta lines stay out, and a non-peer queued command is the
+// human's own mid-turn send (TestQueuedPromptTranscript).
 func TestPeerTranscript(t *testing.T) {
 	f, err := os.Open(filepath.Join("testdata", "transcript_peer.jsonl"))
 	if err != nil {
@@ -187,6 +188,7 @@ func TestPeerTranscript(t *testing.T) {
 		{role: "user", text: "Now run the counts."},
 		{role: "inbound", text: "Rulings on your questions. Build on the prior work; don't restart.", from: "uds:/tmp/cc-socks/64861.sock", name: "repo-9c"},
 		{role: "inbound", text: "Second sender, tag only.", from: "uds:/tmp/cc-socks/70001.sock", name: "a-b6"},
+		{role: "user", text: "also check the logs"},
 		{role: "agent", text: "Counts done."},
 	}
 	if len(got) != len(want) {

@@ -13,15 +13,17 @@ the source of truth closest to the code.
   official `agent-client-protocol-schema` crate): `wire.go`'s types derive
   from the spec schema, never from any one agent's output.
 - The committed captures are **evidence of individual agents' behavior
-  within the spec, never shapes to bake in**: goose 1.48.0 under
-  `providers/goosecli/testdata/captures/`, claude-agent-acp 0.75.1 /
+  within the spec, never shapes to bake in**: goose 1.50.1 (plus a kept
+  1.48.0 transcript) under `providers/goosecli/testdata/captures/`,
+  claude-agent-acp 0.75.1 /
   codex-acp 1.10.0 / hermes 0.21.1 under `testdata/captures/` here. Each
   directory has a provenance README with capture commands and
   sanitization notes.
 - The engine is **not a `provider.Provider`** — it has no Name, Matrix, or
   registration. Bindings wrap it and own those: `providers/goosecli` is
   the first instantiation, and `providers/kirocli` was migrated onto it
-  (deleting its hand-rolled ~430-line ACP layer).
+  (deleting its hand-rolled ~430-line ACP layer); `providers/hermescli`
+  is the third, kind-based binding.
 
 ## Engine invariants
 
@@ -38,8 +40,8 @@ of these:
   http MCP entries ride only when `mcpCapabilities.http` was advertised,
   sse never.
 - `mcpServers` is **always present** on both `session/new` and
-  `session/load`, even when empty — goose 1.48.0 rejects its absence on
-  load with `-32602 missing field mcpServers`
+  `session/load`, even when empty — goose (1.48.0, 1.50.1) rejects its
+  absence on load with `-32602 missing field mcpServers`
   (`providers/goosecli/testdata/captures/acp-load-replay.jsonl` lines 3-4).
 - One in-flight `session/prompt` per session, enforced at `Send`.
 - All five `stopReason`s handled; all twelve `sessionUpdate` variants
@@ -54,10 +56,11 @@ of these:
   codex's source pairs `optionId:"allow_for_session"` with
   `kind:"allow_always"` (`testdata/captures/README.md`, "codex permission
   options").
-- Interruption is tracked by the engine's own flag — **never trust
-  `stopReason:"cancelled"`**: goose resolved `end_turn` in 3/3 cancel
-  attempts (`acp-transcript.jsonl` lines 86-105), codex likewise, while
-  claude/hermes do resolve `cancelled`. Both wire styles are real.
+- Interruption is tracked by the engine's own flag — **never rely on
+  `stopReason:"cancelled"` alone**: goose 1.48.0 resolved `end_turn` in
+  3/3 cancel attempts (`acp-transcript-1.48.0.jsonl` lines 86-105), codex
+  likewise, while goose 1.50.1 (`acp-transcript.jsonl` lines 36-55) and
+  claude/hermes resolve `cancelled`. Both wire styles are real.
 - `session/load` replay updates are suppressed from the event stream
   (buffered as `ReplayMessages` for bindings' transcript use), so a resume
   never leaks history as live events.
@@ -96,6 +99,7 @@ capture citations are to committed files.
 | `SystemPrompt` | Most ACP agents have NO system-prompt surface — goose-as-client drops system prompts entirely (`provider.rs:820-826`); goose-as-agent has only `_goose/unstable/session/system-prompt/set` (works at 1.48.0, `acp-transcript.jsonl` lines 13-14). mads must never silently drop an agent persona, so the zero value is first-send prefixing and the extension strategy falls back to it on `-32601`. |
 | `ToolIdentity` | ACP gives clients no canonical tool name: claude sets `kind` + `_meta.claudeCode.toolName`, codex/hermes set `kind` only, goose sets neither and puts identity in `_meta.goose.toolCall` (`testdata/captures/README.md` "Tool identity varies"). All three strategies occur in the wild; TitleOnly (the zero value) means limited/read_only degrade to deny-all. |
 | `PermissionAsksEveryCall` | goose's `approve` mode asks before EVERY tool call, reads included (`goose_mode.rs`: "Ask before every tool call"; `permission_inspector.rs` sends every call without a user grant to RequireApproval; `acp-transcript.jsonl` line 34 asks for `todo__todo_write`). Set, the engine answers read/search/think/fetch itself at limited trust instead of making each a card. Unset (kiro-cli, whose own policy trusts reads), every ask is forwarded. Never applied at auto_review, whose reviewer mode has already filtered. |
+| `OwnProcessTree` | hermes's helpers outlive hermes-acp: its dependency bootstrap's PM worker runs in hermes-acp's own process group (`pm/client.py:77`) and survived as ppid-1 `uv sync` orphans when only hermes-acp was killed (integration run, 2026-10-20), and its tools detach into sessions of their own (`tools/process_registry.py:1246`, `tools/mcp_tool.py:594`, `tools/code_kernel.py:642`). Set, the agent starts with `Setpgid`, and Close (the funnel for Start failures, one-shot returns and cancels, discovery) kills the group while the agent is still unreaped, then reaps remembered descendants by pid + start time (`pkg/procreap`, codexcli's reaper). Off for goose and kiro-cli. |
 | `ToolClassTable` | goose's `tool_call` updates carry only the `_meta` name and no `kind` (`goosecli/testdata/captures/acp-transcript.jsonl` line 33), so classification must be supplied, not read off the wire. Unknown identities deny below full trust. |
 
 ## Who answers a permission request

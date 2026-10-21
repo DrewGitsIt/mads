@@ -1,14 +1,15 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type Ref } from "react";
 import { requestOpenSession } from "../../../appNavigation";
 import { Button } from "../../../components/Button/Button";
 import { PopoverPlacementContext } from "../../../components/Popover/Popover";
 import { SegmentedControl } from "../../../components/SegmentedControl/SegmentedControl";
-import { buildCreateSessionPayload } from "../../../features/sessions/launchpad/sessionPayload";
+import { buildCreateSessionPayload, deriveSessionName } from "../../../features/sessions/launchpad/sessionPayload";
 import { AgentPill } from "../../../features/sessions/pills/AgentPill";
 import { FolderPill } from "../../../features/sessions/pills/FolderPill";
 import { IsolationPill } from "../../../features/sessions/pills/IsolationPill";
 import { ModelPill } from "../../../features/sessions/pills/ModelPill";
 import { TrustPill } from "../../../features/sessions/pills/TrustPill";
+import { fullAccessOnly } from "../../../features/sessions/pills/trustLevels";
 import type { StagedConfig } from "../../../features/sessions/pills/stagedConfig";
 import { useProviderMatrix } from "../../../features/settings/state/useProviderMatrix";
 import { formatShortcut } from "../../../platform/shortcut";
@@ -119,17 +120,50 @@ export function NewSessionCard({
   const [submitting, setSubmitting] = useState(false);
   const [startError, setStartError] = useState<string>();
   const submittingRef = useRef(false);
+  const nameRef = useRef<HTMLInputElement>(null);
   const goalRef = useRef(goal);
   goalRef.current = goal;
   const cadenceLabelId = useId();
   const { providers } = useProviderMatrix();
 
+  const [name, setName] = useState("");
+  const [takenNames, setTakenNames] = useState<string[]>([]);
+
   const thisName = session?.name || "This session";
   const rel = relationship(variant, thisName);
 
+  // A follower may start without a goal: its leader (this session) briefs
+  // it. With no goal to derive a name from, it gets a placeholder name kept
+  // as chosen, so the leader's handle for it never changes on its own.
+  const goalOptional = variant === "follower";
+  const goalEmpty = goal.trim() === "";
+  const followerName = goalOptional ? uniqueName(`follower of [${thisName}]`, takenNames) : "";
+  const chosenName = name.trim() || (goalOptional && goalEmpty ? followerName : undefined);
+  const namePlaceholder = goalEmpty
+    ? followerName || "new session"
+    : deriveSessionName(goal);
+
+  useEffect(() => {
+    if (!goalOptional) return;
+    let cancelled = false;
+    routerClient
+      .listSessions()
+      .then((sessions) => {
+        if (!cancelled) setTakenNames(sessions.map((s) => s.name));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [routerClient, goalOptional]);
+
   function payloadFor(goalText: string): CreateSessionPayload {
     const link = stagedLinkFor(variant, sessionId, cadence);
-    return buildCreateSessionPayload(goalText, staged, { links: link ? [link] : [] });
+    return buildCreateSessionPayload(goalText, staged, {
+      links: link ? [link] : [],
+      name: chosenName,
+      fullTrustOnly: fullAccessOnly(providers.find((p) => p.name === staged.provider)?.matrix),
+    });
   }
 
   // Every variant is dry-run, not only the linked ones: it costs no model
@@ -163,7 +197,7 @@ export function NewSessionCard({
   const errors = (validation?.errors ?? []).filter(
     (e) => !(block && e.field.startsWith("links")),
   );
-  const canStart = goal.trim() !== "" && !block && errors.length === 0 && !submitting;
+  const canStart = (!goalEmpty || goalOptional) && !block && errors.length === 0 && !submitting;
 
   async function start(open: boolean) {
     if (!canStart || submittingRef.current) return;
@@ -185,13 +219,27 @@ export function NewSessionCard({
     if (e.metaKey || e.ctrlKey) {
       e.preventDefault();
       void start(true);
-    } else if (!e.shiftKey && e.target instanceof HTMLTextAreaElement) {
-      // Plain ↵ starts only from the goal field — elsewhere it presses
-      // whatever has focus (a pill, a menu row).
+    } else if (
+      !e.shiftKey &&
+      (e.target instanceof HTMLTextAreaElement || e.target === nameRef.current)
+    ) {
+      // Plain ↵ starts only from the goal or name field — elsewhere it
+      // presses whatever has focus (a pill, a menu row).
       e.preventDefault();
       void start(false);
     }
   }
+
+  const newNode = (
+    <NameField
+      inputRef={nameRef}
+      value={name}
+      placeholder={namePlaceholder}
+      onChange={setName}
+    />
+  );
+  // Nothing goes out to a goalless follower, so the buttons don't say Start.
+  const verb = goalOptional && goalEmpty ? "Create" : "Start";
 
   const providerName = staged.provider;
   const providerInfo = providers.find((p) => p.name === providerName);
@@ -201,11 +249,11 @@ export function NewSessionCard({
       <div className={styles.card} onKeyDown={handleKeyDown} data-testid="new-session-card">
         {rel && (
           <div className={styles.linkviz}>
-            {rel.newHolds ? <NewNode /> : <ThisNode name={thisName} />}
+            {rel.newHolds ? newNode : <ThisNode name={thisName} />}
             <span className={styles.arrow} title={rel.allows} tabIndex={0} aria-label={rel.allows}>
               ── {rel.verb} ──▶
             </span>
-            {rel.newHolds ? <ThisNode name={thisName} /> : <NewNode />}
+            {rel.newHolds ? <ThisNode name={thisName} /> : newNode}
             <span className={styles.cadence}>
               <span
                 id={cadenceLabelId}
@@ -229,7 +277,11 @@ export function NewSessionCard({
           className={styles.goal}
           rows={2}
           aria-label="Goal for the new session"
-          placeholder="What should the new session do?"
+          placeholder={
+            goalOptional
+              ? "Optional for new followers. Leave empty to let the leader agent start the dialogue."
+              : "What should the new session do?"
+          }
           value={goal}
           autoFocus
           onFocus={(e) => {
@@ -328,10 +380,10 @@ export function NewSessionCard({
 
         <div className={styles.actions}>
           <Button disabled={!canStart} onClick={() => void start(false)}>
-            {submitting ? "Starting…" : "Start"} <kbd className={styles.kbd}>↵</kbd>
+            {submitting ? `${verb === "Start" ? "Starting" : "Creating"}…` : verb} <kbd className={styles.kbd}>↵</kbd>
           </Button>
           <Button variant="primary" disabled={!canStart} onClick={() => void start(true)}>
-            Start &amp; open <kbd className={styles.kbd}>{formatShortcut("Mod+↵")}</kbd>
+            {verb} &amp; open <kbd className={styles.kbd}>{formatShortcut("Mod+↵")}</kbd>
           </Button>
         </div>
       </div>
@@ -347,6 +399,39 @@ function ThisNode({ name }: { name: string }) {
   );
 }
 
-function NewNode() {
-  return <span className={[styles.node, styles.newNode].join(" ")}>new session</span>;
+/** The new session's node in the relationship row: its name, editable. Blank keeps the placeholder name. */
+function NameField({
+  inputRef,
+  value,
+  placeholder,
+  onChange,
+}: {
+  inputRef: Ref<HTMLInputElement>;
+  value: string;
+  placeholder: string;
+  onChange: (name: string) => void;
+}) {
+  return (
+    <label className={[styles.node, styles.newNode, styles.nameField].join(" ")} title={value || placeholder}>
+      <input
+        ref={inputRef}
+        className={styles.nameInput}
+        aria-label="Name for the new session"
+        value={value}
+        placeholder={placeholder}
+        size={Math.max(8, (value || placeholder).length)}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <span className={styles.pencil} aria-hidden>
+        ✎
+      </span>
+    </label>
+  );
+}
+
+/** `base`, or `base 2`, `base 3`… — the first not in `taken`. */
+export function uniqueName(base: string, taken: string[]): string {
+  const used = new Set(taken);
+  if (!used.has(base)) return base;
+  for (let n = 2; ; n++) if (!used.has(`${base} ${n}`)) return `${base} ${n}`;
 }

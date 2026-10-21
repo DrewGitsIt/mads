@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/binlocate"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/testleakcheck"
@@ -262,7 +263,7 @@ func TestDigestwatchSubscribesAtBootAndDeliversDigest(t *testing.T) {
 	if err := os.MkdirAll(homeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	env := bootCleanEnv(homeDir)
+	env, bins := bootAgentBinEnv(t, bootCleanEnv(homeDir))
 
 	dataURL := datatest.Start(t)
 	data := dataclient.New(dataURL, "boottest")
@@ -297,6 +298,18 @@ func TestDigestwatchSubscribesAtBootAndDeliversDigest(t *testing.T) {
 	defer router.terminate(t, 5*time.Second)
 	routerURL := "http://" + router.addr
 	bootWaitHealth(t, routerURL)
+
+	// Boot warms model discovery for every provider. hermes must refuse
+	// under this scratch HOME (no hermes dependency install there) rather
+	// than run hermes-acp, whose launcher would install ~600 MB into
+	// $HOME/.hermes and leave the installer running after the Router
+	// (pkg/hermesinstall). Either way the attempt is logged once warm ends.
+	bootEventually(t, 10*time.Second, func() bool {
+		return router.stderr.count("model discovery hermes") >= 1
+	})
+	if _, err := os.Stat(filepath.Join(homeDir, ".hermes")); !os.IsNotExist(err) {
+		t.Fatalf("booting the Router created %s/.hermes (%v): something ran hermes-acp", homeDir, err)
+	}
 
 	// Both watchers (turn-ended digests, run digests) must reach subscribed
 	// — this is the "no 422 at boot" acceptance criterion.
@@ -360,6 +373,83 @@ func TestDigestwatchSubscribesAtBootAndDeliversDigest(t *testing.T) {
 
 	if n := router.stderr.count("status 422"); n != 0 {
 		t.Fatalf("router logged %d occurrence(s) of \"status 422\" during the run:\n%s", n, strings.Join(router.stderr.snapshot(), "\n"))
+	}
+
+	bins.assertHermetic(t)
+}
+
+// agentBinNames are the harness binaries the boot guard traps and waits
+// for: one per adapter the router registers.
+var agentBinNames = []string{"claude", "goose", "kiro-cli", "codex", "hermes-acp"}
+
+// bootAgentBins is the hermetic-harness regression guard. The router's boot
+// model discovery spawns every registered harness, so a booted router is
+// exactly where a leak to a real harness binary shows up.
+// $MADS_AGENT_BIN_DIR points at stand-ins that log to standinLog and exit 1;
+// trap stand-ins of the same names go first on PATH and log to leakLog. A
+// lookup that honours the knob reaches the first set; one that falls back
+// to a bare name (exec's PATH search) reaches the trap instead of a real
+// binary, and the test fails.
+type bootAgentBins struct {
+	standinLog, leakLog string
+}
+
+func bootAgentBinEnv(t *testing.T, env []string) ([]string, bootAgentBins) {
+	t.Helper()
+	root := t.TempDir()
+	b := bootAgentBins{standinLog: filepath.Join(root, "standin.log"), leakLog: filepath.Join(root, "leak.log")}
+	knobDir, trapDir := filepath.Join(root, "agent-bin"), filepath.Join(root, "path-trap")
+	for _, d := range []struct{ dir, log string }{{knobDir, b.standinLog}, {trapDir, b.leakLog}} {
+		if err := os.MkdirAll(d.dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range agentBinNames {
+			script := fmt.Sprintf("#!/bin/sh\necho \"%s $*\" >> '%s'\nexit 1\n", name, d.log)
+			if err := os.WriteFile(filepath.Join(d.dir, name), []byte(script), 0o755); err != nil { //nolint:gosec // test stand-in must be executable
+				t.Fatal(err)
+			}
+		}
+	}
+	out := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		switch {
+		case strings.HasPrefix(e, "PATH="):
+			e = "PATH=" + trapDir + string(os.PathListSeparator) + strings.TrimPrefix(e, "PATH=")
+		case strings.HasPrefix(e, binlocate.EnvAgentBinDir+"="):
+			continue
+		}
+		out = append(out, e)
+	}
+	return append(out, binlocate.EnvAgentBinDir+"="+knobDir), b
+}
+
+// assertHermetic waits for boot discovery to reach each registered
+// adapter's stand-in (proving the knob is honoured all the way into the
+// router) and fails if anything reached the PATH trap.
+func (b bootAgentBins) assertHermetic(t *testing.T) {
+	t.Helper()
+	read := func(p string) string {
+		raw, _ := os.ReadFile(p) //nolint:gosec // test-owned temp file
+		return string(raw)
+	}
+	var missing []string
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if leak := read(b.leakLog); leak != "" {
+			t.Fatalf("a harness lookup ignored $%s and searched PATH (a real binary would have run):\n%s", binlocate.EnvAgentBinDir, leak)
+		}
+		got := read(b.standinLog)
+		missing = missing[:0]
+		for _, name := range agentBinNames {
+			if !strings.Contains(got, name+" ") {
+				missing = append(missing, name)
+			}
+		}
+		if len(missing) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("boot discovery never reached the $%s stand-in for %v; stand-in log:\n%s", binlocate.EnvAgentBinDir, missing, got)
+		}
 	}
 }
 

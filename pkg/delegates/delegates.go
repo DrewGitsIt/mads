@@ -22,7 +22,9 @@
 //     roster just before reporting how it ended. Only a roster absence that
 //     outlasts Grace with no report concludes "stopped".
 //   - A finished delegate the harness runs again under the same id re-enters
-//     running (Runs counts the runs).
+//     running (Runs counts the runs). The harness counts each run's tools and
+//     time from zero; the record's are totals across runs, and the runs
+//     before the latest are kept apart (Prior*) for the live run to add to.
 package delegates
 
 import (
@@ -65,6 +67,11 @@ type entry struct {
 	// later one is on the record but hasn't been returned yet.
 	usageAt   time.Time
 	usageHeld bool
+	// runToolUses and runDurationMS are the latest run's counters as the
+	// harness last reported them — on a progress line or at its ending.
+	// Held here, not on the record (progress ticks don't write it), so a
+	// run that ended without a report still counts when the next begins.
+	runToolUses, runDurationMS int
 }
 
 // Tracker holds one session's delegates. Safe for concurrent use.
@@ -214,23 +221,25 @@ func resolve(defaults CapabilityDefaults, d contracts.Delegate) *contracts.Deleg
 // ending records it orphaned, concluded by mads.
 func FromHistory(sessionID string, r provider.DelegateRecord, defaults CapabilityDefaults) contracts.Delegate {
 	d := contracts.Delegate{
-		SessionID:      sessionID,
-		HarnessID:      r.HarnessID,
-		ToolUseID:      r.ToolUseID,
-		Depth:          r.Depth,
-		Type:           r.Type,
-		Description:    r.Description,
-		Backgrounded:   r.Background,
-		Runs:           max(r.Runs, 1),
-		StartedAt:      r.StartedAt.UTC(),
-		TranscriptPath: r.TranscriptPath,
-		WorktreePath:   r.WorktreePath,
-		Model:          r.Model,
-		Branch:         r.Branch,
-		Usage:          contractsUsage(r.Usage),
-		TotalTokens:    r.TotalTokens,
-		ToolUses:       r.ToolUses,
-		DurationMS:     r.DurationMS,
+		SessionID:       sessionID,
+		HarnessID:       r.HarnessID,
+		ToolUseID:       r.ToolUseID,
+		Depth:           r.Depth,
+		Type:            r.Type,
+		Description:     r.Description,
+		Backgrounded:    r.Background,
+		Runs:            max(r.Runs, 1),
+		StartedAt:       r.StartedAt.UTC(),
+		TranscriptPath:  r.TranscriptPath,
+		WorktreePath:    r.WorktreePath,
+		Model:           r.Model,
+		Branch:          r.Branch,
+		Usage:           contractsUsage(r.Usage),
+		TotalTokens:     r.TotalTokens,
+		ToolUses:        r.ToolUses,
+		DurationMS:      r.DurationMS,
+		PriorToolUses:   r.PriorToolUses,
+		PriorDurationMS: r.PriorDurationMS,
 	}
 	if r.Status == "" {
 		d.State, d.Reason, d.Inferred = contracts.DelegateOrphaned, ReasonNoEnding, true
@@ -264,6 +273,8 @@ func (t *Tracker) Seed(stored []contracts.Delegate, now time.Time) []contracts.D
 	var out []contracts.Delegate
 	for _, d := range stored {
 		e := &entry{d: d}
+		e.runToolUses = max(d.ToolUses-d.PriorToolUses, 0)
+		e.runDurationMS = max(d.DurationMS-d.PriorDurationMS, 0)
 		if e.d.Capabilities == nil {
 			e.d.Capabilities = t.resolveLocked(e.d)
 		}
@@ -278,8 +289,9 @@ func (t *Tracker) Seed(stored []contracts.Delegate, now time.Time) []contracts.D
 
 // Task folds one lifecycle report and returns the records it changed (at
 // most one). Progress ticks change nothing on the record — live counters
-// stay on the session.subagent_task stream — except to revive a delegate
-// mads had wrongly concluded ended.
+// stay on the session.subagent_task stream; the tracker only keeps the
+// latest for its run total — except to revive a delegate mads had wrongly
+// concluded ended.
 func (t *Tracker) Task(r contracts.SubagentTask, now time.Time) []contracts.Delegate {
 	if r.TaskID == "" {
 		return nil
@@ -302,19 +314,26 @@ func (t *Tracker) Task(r contracts.SubagentTask, now time.Time) []contracts.Dele
 			e.d.Backgrounded = true
 		}
 		if e.d.State != contracts.DelegateRunning {
-			e.d.State, e.d.Reason, e.d.Inferred, e.d.EndedAt = contracts.DelegateRunning, "", false, nil
-			e.d.Runs++
-			e.d.StartedAt = now
+			t.reenterLocked(e, now)
 		}
 		e.leftAt = time.Time{}
 	case "progress":
 		if !known {
 			e = t.createLocked(r, now)
+			e.noteRun(r)
 			break
 		}
 		if e.d.State != contracts.DelegateRunning && e.d.Inferred {
-			e.d.State, e.d.Reason, e.d.Inferred, e.d.EndedAt = contracts.DelegateRunning, "", false, nil
+			switch e.d.Reason {
+			case ReasonRunnerRestart, ReasonProcessExit:
+				// The process it ran in is gone: this is a new run whose
+				// start line came late, not the old one resuming.
+				t.reenterLocked(e, now)
+			default:
+				e.d.State, e.d.Reason, e.d.Inferred, e.d.EndedAt = contracts.DelegateRunning, "", false, nil
+			}
 		}
+		e.noteRun(r)
 	case "updated", "notification":
 		if r.Phase == "updated" && r.Status == "" {
 			return nil // a patch without a status transition
@@ -531,11 +550,33 @@ func (t *Tracker) fillLocked(e *entry, r contracts.SubagentTask) {
 	}
 }
 
+// reenterLocked starts a finished delegate's next run: the run that ended
+// joins the prior totals — here, once per run, so an ending reported twice
+// (inferred, then the harness's late word) can't count it twice.
+func (t *Tracker) reenterLocked(e *entry, now time.Time) {
+	e.d.State, e.d.Reason, e.d.Inferred, e.d.EndedAt = contracts.DelegateRunning, "", false, nil
+	e.d.Runs++
+	e.d.StartedAt = now
+	e.d.PriorToolUses += e.runToolUses
+	e.d.PriorDurationMS += e.runDurationMS
+	e.d.ToolUses, e.d.DurationMS = e.d.PriorToolUses, e.d.PriorDurationMS
+	e.runToolUses, e.runDurationMS = 0, 0
+}
+
+// noteRun keeps a report's counters for the run it belongs to.
+func (e *entry) noteRun(r contracts.SubagentTask) {
+	if r.ToolUses != 0 || r.DurationMS != 0 {
+		e.runToolUses, e.runDurationMS = r.ToolUses, r.DurationMS
+	}
+}
+
 // endingLocked folds an updated/notification report into the record.
 func (t *Tracker) endingLocked(e *entry, r contracts.SubagentTask, now time.Time) {
 	if r.Phase == "notification" {
 		if r.TotalTokens != 0 || r.ToolUses != 0 || r.DurationMS != 0 {
-			e.d.TotalTokens, e.d.ToolUses, e.d.DurationMS = r.TotalTokens, r.ToolUses, r.DurationMS
+			e.d.TotalTokens = r.TotalTokens
+			e.noteRun(r)
+			e.setTotals()
 		}
 	}
 	// An evidenced ending already stands; only an inferred one (or a
@@ -546,8 +587,17 @@ func (t *Tracker) endingLocked(e *entry, r contracts.SubagentTask, now time.Time
 	}
 }
 
+// setTotals sets the record's totals: the runs before, plus this one as
+// last reported. Assigned, never accumulated, so it is safe to repeat.
+func (e *entry) setTotals() {
+	e.d.ToolUses = e.d.PriorToolUses + e.runToolUses
+	e.d.DurationMS = e.d.PriorDurationMS + e.runDurationMS
+}
+
 func (t *Tracker) endLocked(e *entry, state contracts.DelegateState, reason string, inferred bool, at time.Time) {
 	e.d.State, e.d.Reason, e.d.Inferred = state, reason, inferred
+	// An ending with no report still has the run's last progress counters.
+	e.setTotals()
 	ended := at
 	e.d.EndedAt = &ended
 	e.leftAt = time.Time{}

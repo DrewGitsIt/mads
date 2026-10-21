@@ -115,6 +115,135 @@ func TestReentryKeepsAnchorAndCountsRuns(t *testing.T) {
 	}
 }
 
+func progress(id string, tools, ms int) contracts.SubagentTask {
+	return contracts.SubagentTask{Phase: "progress", TaskID: id, Description: "step", TotalTokens: 1000, ToolUses: tools, DurationMS: ms}
+}
+
+func ended(id string, tokens, tools, ms int) contracts.SubagentTask {
+	return contracts.SubagentTask{Phase: "notification", TaskID: id, Status: "completed", TotalTokens: tokens, ToolUses: tools, DurationMS: ms}
+}
+
+// counters is a record's tools and time: totals, then the prior runs'.
+func counters(t *testing.T, d contracts.Delegate, tools, ms, priorTools, priorMS int) {
+	t.Helper()
+	if d.ToolUses != tools || d.DurationMS != ms || d.PriorToolUses != priorTools || d.PriorDurationMS != priorMS {
+		t.Fatalf("counters = %d tools %d ms (prior %d, %d ms), want %d %d (%d, %d)",
+			d.ToolUses, d.DurationMS, d.PriorToolUses, d.PriorDurationMS, tools, ms, priorTools, priorMS)
+	}
+}
+
+// The harness counts each run's tools and time from zero; the record totals
+// them, and a resumed run's total is its prior runs' plus its own. Tokens are
+// the latest report's, not a sum.
+func TestResumeAfterNotificationTotalsRuns(t *testing.T) {
+	tr := delegates.New("ses_1", 0)
+	one(t, tr.Task(started("a1", "toolu_spawn", true), at(0)))
+	none(t, tr.Task(progress("a1", 3, 2000), at(2)))
+	d := one(t, tr.Task(ended("a1", 457978, 208, 3416703), at(60)))
+	counters(t, d, 208, 3416703, 0, 0)
+
+	d = one(t, tr.Task(started("a1", "toolu_relay", true), at(100)))
+	if d.Runs != 2 || !d.StartedAt.Equal(at(100)) {
+		t.Fatalf("re-entry = %+v", d)
+	}
+	counters(t, d, 208, 3416703, 208, 3416703)
+	none(t, tr.Task(progress("a1", 1, 3736), at(104)))
+
+	d = one(t, tr.Task(ended("a1", 456816, 77, 1745070), at(200)))
+	counters(t, d, 285, 5161773, 208, 3416703)
+	if d.TotalTokens != 456816 {
+		t.Errorf("tokens = %d, want the latest report's", d.TotalTokens)
+	}
+}
+
+// A run mads concluded ended (roster expiry) counts its last progress; the
+// harness's late word for the same run replaces those counters, and the next
+// run adds that run once.
+func TestInferredEndingThenLateNotificationCountsOnce(t *testing.T) {
+	tr := delegates.New("ses_1", 0)
+	one(t, tr.Task(started("a1", "toolu_spawn", true), at(0)))
+	none(t, tr.Task(progress("a1", 10, 50000), at(50)))
+	tr.Roster(nil, at(60))
+	d := one(t, tr.Expire(at(60).Add(delegates.Grace)))
+	if !d.Inferred {
+		t.Fatalf("expired = %+v", d)
+	}
+	counters(t, d, 10, 50000, 0, 0)
+
+	d = one(t, tr.Task(ended("a1", 900, 12, 61000), at(70)))
+	counters(t, d, 12, 61000, 0, 0)
+	none(t, tr.Task(ended("a1", 900, 12, 61000), at(71))) // and again: still once
+
+	d = one(t, tr.Task(started("a1", "toolu_relay", true), at(100)))
+	counters(t, d, 12, 61000, 12, 61000)
+}
+
+// An inferred ending with no report at all: the next run still counts the
+// last progress the ended one made.
+func TestReentryAfterUnreportedRunCountsItsProgress(t *testing.T) {
+	tr := delegates.New("ses_1", 0)
+	one(t, tr.Task(started("a1", "toolu_spawn", true), at(0)))
+	none(t, tr.Task(progress("a1", 4, 9000), at(9)))
+	one(t, tr.ProcessExit(at(10)))
+	d := one(t, tr.Task(started("a1", "toolu_relay", true), at(20)))
+	counters(t, d, 4, 9000, 4, 9000)
+}
+
+// Seeding from the store keeps a stored record's totals, so the run that
+// resumes after a restart adds to them rather than starting over.
+func TestResumeAfterSeedKeepsTotals(t *testing.T) {
+	tr := delegates.New("ses_1", 0)
+	none(t, tr.Seed([]contracts.Delegate{{
+		SessionID: "ses_1", HarnessID: "a1", ToolUseID: "toolu_spawn", State: contracts.DelegateCompleted, Runs: 2,
+		StartedAt: at(0), ToolUses: 285, DurationMS: 5161773, PriorToolUses: 208, PriorDurationMS: 3416703,
+	}}, at(100)))
+	d := one(t, tr.Task(started("a1", "toolu_relay", true), at(200)))
+	if d.Runs != 3 {
+		t.Fatalf("runs = %d", d.Runs)
+	}
+	counters(t, d, 285, 5161773, 285, 5161773)
+	d = one(t, tr.Task(ended("a1", 456386, 61, 900000), at(300)))
+	counters(t, d, 346, 6061773, 285, 5161773)
+}
+
+// A delegate orphaned by a runner restart whose next run's progress arrives
+// before its start line: the old process is gone, so that is a new run — it
+// counts, restarts the clock, and its own start line doesn't count it again.
+func TestProgressBeforeStartAfterSeedOrphanIsNewRun(t *testing.T) {
+	tr := delegates.New("ses_1", 0)
+	one(t, tr.Seed([]contracts.Delegate{{
+		SessionID: "ses_1", HarnessID: "a1", ToolUseID: "toolu_spawn", State: contracts.DelegateRunning, Runs: 1,
+		StartedAt: at(0), ToolUses: 30, DurationMS: 40000,
+	}}, at(100)))
+	d := one(t, tr.Task(progress("a1", 1, 500), at(200)))
+	if d.State != contracts.DelegateRunning || d.Runs != 2 || !d.StartedAt.Equal(at(200)) {
+		t.Fatalf("progress revival = %+v", d)
+	}
+	counters(t, d, 30, 40000, 30, 40000)
+	d = one(t, tr.Task(started("a1", "toolu_relay", true), at(201)))
+	if d.Runs != 2 || !d.StartedAt.Equal(at(200)) {
+		t.Fatalf("late start line = %+v", d)
+	}
+	d = one(t, tr.Task(ended("a1", 100, 2, 1500), at(202)))
+	counters(t, d, 32, 41500, 30, 40000)
+}
+
+// A roster expiry mads got wrong is the same run carrying on: progress
+// revives it without counting a new run.
+func TestProgressAfterRosterExpiryIsSameRun(t *testing.T) {
+	tr := delegates.New("ses_1", 0)
+	one(t, tr.Task(started("a1", "toolu_spawn", true), at(0)))
+	none(t, tr.Task(progress("a1", 2, 3000), at(3)))
+	tr.Roster(nil, at(4))
+	one(t, tr.Expire(at(4).Add(delegates.Grace)))
+	d := one(t, tr.Task(progress("a1", 5, 20000), at(20)))
+	if d.State != contracts.DelegateRunning || d.Runs != 1 || !d.StartedAt.Equal(at(0)) {
+		t.Fatalf("revival = %+v", d)
+	}
+	d = one(t, tr.Task(ended("a1", 100, 6, 25000), at(25)))
+	counters(t, d, 6, 25000, 0, 0)
+}
+
 // The parent waits on a foreground delegate, so one still running when the
 // turn ends was cut short; backgrounded delegates outlive the turn.
 func TestTurnEndStopsOnlyForeground(t *testing.T) {
@@ -284,12 +413,14 @@ func TestFromHistory(t *testing.T) {
 		},
 		HarnessID: "a1", ToolUseID: "toolu_a1", Description: "Audit",
 		StartedAt: start, EndedAt: end, Status: "killed", Runs: 2, TotalTokens: 10, ToolUses: 3, DurationMS: 90000,
+		PriorToolUses: 1, PriorDurationMS: 30000,
 	}, defaults)
 	if d.SessionID != "ses_1" || d.HarnessID != "a1" || d.ToolUseID != "toolu_a1" || d.Type != "Explore" || !d.Backgrounded ||
 		d.State != contracts.DelegateStopped || d.Reason != "killed" || d.Inferred || d.Runs != 2 ||
 		d.EndedAt == nil || !d.EndedAt.Equal(end) || !d.StartedAt.Equal(start) || d.TotalTokens != 10 {
 		t.Fatalf("FromHistory = %+v", d)
 	}
+	counters(t, d, 3, 90000, 1, 30000)
 	if c := d.Capabilities; c == nil || !c.Transcript || !c.Continuable || c.Steer != contracts.DelegateSteerRelay {
 		t.Fatalf("caps = %+v", d.Capabilities)
 	}

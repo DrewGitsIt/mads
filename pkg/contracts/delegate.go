@@ -91,12 +91,20 @@ type Delegate struct {
 	// defaults, corrected by what was observed about this one delegate.
 	// Nil until the runner has resolved them.
 	Capabilities *DelegateCapabilities `json:"capabilities,omitempty"`
-	// Final counters as the harness last reported them.
-	TotalTokens int       `json:"total_tokens,omitempty"`
-	ToolUses    int       `json:"tool_uses,omitempty"`
-	DurationMS  int       `json:"duration_ms,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	// Counters as the harness last reported them at an ending. ToolUses and
+	// DurationMS are totals across its runs (the harness reports each run
+	// from zero); TotalTokens is the latest report's, since the harness's
+	// figure is not a running sum.
+	TotalTokens int `json:"total_tokens,omitempty"`
+	ToolUses    int `json:"tool_uses,omitempty"`
+	DurationMS  int `json:"duration_ms,omitempty"`
+	// PriorToolUses and PriorDurationMS are the totals of the runs before
+	// the latest one, set when it re-entered running: a running delegate's
+	// total is these plus its live run's counters.
+	PriorToolUses   int       `json:"prior_tool_uses,omitempty"`
+	PriorDurationMS int       `json:"prior_duration_ms,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // DelegateSteer is how a user's message can reach a delegate.

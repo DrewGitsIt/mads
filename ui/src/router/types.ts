@@ -869,9 +869,14 @@ export interface Delegate {
   usage?: Usage;
   /** Matrix defaults corrected by run-time evidence; absent until resolved. */
   capabilities?: DelegateCapabilities;
+  /** The latest ending's report — not a sum across runs. */
   total_tokens?: number;
+  /** Totals across its runs (the harness counts each run from zero). */
   tool_uses?: number;
   duration_ms?: number;
+  /** The totals of the runs before the latest: a running one's live total adds to these. */
+  prior_tool_uses?: number;
+  prior_duration_ms?: number;
   created_at: string;
   updated_at: string;
 }

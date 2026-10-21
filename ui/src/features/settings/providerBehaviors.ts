@@ -1,9 +1,14 @@
 import type { BehaviorInfo, ProviderInfo, ProviderSupport } from "../../router/types";
+import { fullAccessOnly, fullAccessReason } from "../sessions/pills/trustLevels";
 
 // Product names for provider ids where the id isn't already how people
-// say it (goose, kiro-cli read fine as they are).
+// say it (goose, kiro-cli read fine as they are). codex is the OpenAI Codex
+// CLI, which signs in with a ChatGPT account: both names are on the label so
+// it is recognisable by either (providers/codexcli/README.md).
 const PROVIDER_LABELS: Record<string, string> = {
   "claude-code": "Claude Code",
+  hermes: "Hermes",
+  codex: "Codex (ChatGPT)",
 };
 
 /** A provider's display name: its product name if it has one, else its id. */
@@ -72,6 +77,18 @@ export interface CapabilityTag {
   label: string;
 }
 
+const TRUST_BEHAVIORS = ["trust_limited", "trust_read_only", "trust_auto_review"];
+const FULL_TRUST_ONLY_TAG: CapabilityTag = { behavior: "trust_limited", tone: "bad", label: "Full trust only" };
+
+/**
+ * The Settings line for a provider that runs at Full access only (every
+ * restricted trust level declared unsupported — hermes), else undefined.
+ */
+export function fullTrustOnlyNote(provider: ProviderInfo): string | undefined {
+  if (!fullAccessOnly(provider.matrix)) return undefined;
+  return `${fullAccessReason(providerLabel(provider.name))}.`;
+}
+
 /**
  * What `provider` doesn't do natively, in the matrix's behaviour order:
  * unsupported first-class as "No …", emulated as "… emulated". Native
@@ -79,7 +96,14 @@ export interface CapabilityTag {
  */
 export function capabilityTags(provider: ProviderInfo, behaviors: BehaviorInfo[]): CapabilityTag[] {
   const tags: CapabilityTag[] = [];
+  // A provider that refuses every restricted trust level says so once, not
+  // as three "No … trust" tags crowding the picker.
+  const fullOnly = fullAccessOnly(provider.matrix);
   for (const { behavior } of behaviors) {
+    if (fullOnly && TRUST_BEHAVIORS.includes(behavior)) {
+      if (!tags.some((t) => t.behavior === FULL_TRUST_ONLY_TAG.behavior)) tags.push(FULL_TRUST_ONLY_TAG);
+      continue;
+    }
     const support = provider.matrix[behavior];
     if (support === "unsupported") {
       tags.push({ behavior, tone: "bad", label: `No ${lowerFirst(behaviorLabel(behavior))}` });

@@ -77,10 +77,18 @@ func checkGit(ctx context.Context) Check {
 // runVersion runs bin with args under a bounded timeout and returns combined
 // stdout — every probe in this package is a quick local subprocess call,
 // never network-dependent, so 5s is generous, not a real constraint.
+//
+// The probe runs in a process group of its own, and a timeout kills the
+// whole group: a launcher that starts helpers (hermes-acp's Python
+// launcher can) must not leave them running after the probe gave up.
 func runVersion(ctx context.Context, bin string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
+	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 

@@ -88,8 +88,14 @@
   color: var(--text3);
 }
 
-.option:hover {
+.option:hover:not(:disabled) {
   background: var(--bg3);
+}
+
+/* A level the selected provider can't run (trustLevels' unavailable). */
+.option:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .optionSelected {
@@ -150,4 +156,11 @@
 
 .pathInput:focus {
   border-color: var(--accent);
+}
+
+/* TrustPill's one-line reason beside a full-trust-only provider's pill. */
+.trustReason {
+  align-self: center;
+  font-size: var(--fs-chip);
+  color: var(--text3);
 }
