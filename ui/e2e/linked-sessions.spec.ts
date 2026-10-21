@@ -91,7 +91,7 @@ test.describe("linked sessions: link UI behind the flag", () => {
     const workerPanel = page.locator("#workspace-panel-conversation");
     await injectLinkMessage(routerURL, link.id, "kick off the payments refactor");
     await expect(
-      workerPanel.getByText(new RegExp(`⇄ from Leader · ${leaderName}`)),
+      workerPanel.getByText(new RegExp(`⇄ from your leader · ${leaderName}`)),
     ).toBeVisible();
     await expect(workerPanel.getByText("kick off the payments refactor")).toBeVisible();
 

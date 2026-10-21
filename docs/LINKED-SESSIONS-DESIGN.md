@@ -61,8 +61,9 @@ Links are directed edges; nothing is 1:1 by design:
    immediately; replies arrive as events (optional bounded wait for
    quick-question ergonomics).
 2. **Attribution is explicit.** Injected messages render in the subject's stream
-   with source attribution ("⇄ from Leader · <session name>") — never
-   impersonating the subject's own user. Actor stamping via the existing
+   with source attribution ("⇄ from your leader · <session name>") — never
+   impersonating the subject's own user. Since 2026-10-20 the attribution is
+   written into the message itself (see "Message wrapper" below). Actor stamping via the existing
    X-Mads-Actor discipline.
 3. **Leader authority is capped by the subject's trust level.** A link grants
    reach, never permissions: the subject's agent acts on leader requests within
@@ -212,8 +213,8 @@ that may open an unprompted turn. Three layers:
    stream's `"inbound"` event. A delivered message that lands with no turn in
    flight is a turn the runner didn't start: busy (so Send/Inject queue
    behind it) and agent working until its turn end, its digest opening with
-   the message. It takes no user-turn ordinal (attributions don't shift) and
-   writes no `link.message_injected` — that event means mads delivered it.
+   the message. It writes no `link.message_injected` — that event means
+   mads delivered it.
 3. **Claude Code adapter (`providers/claudecode`).** The only place the
    specifics live: `--replay-user-messages` on the stream-json transport
    (a peer message is echoed as an `isReplay` user line with an `origin`
@@ -226,6 +227,63 @@ that may open an unprompted turn. Three layers:
 `isMeta`, `command_lifecycle`, or Claude Code; an address is only ever
 compared, never parsed. A harness with no such channel implements nothing
 and nothing changes.
+
+## Message wrapper (2026-10-20)
+
+Every message MADS inserts into a conversation as a user turn carries its
+label in the text, the way Claude Code wraps its own peer messages:
+
+```
+<mads-message kind="digest" from="Pipeline Study" relation="a session you lead" turn="42">
+…the body, exactly as delivered before (including any NOOP line)…
+</mads-message>
+```
+
+- **What's wrapped:** a linked session's message (`message_session`, a link
+  inject) as `kind="message"`; a per-turn digest as `kind="digest"`; a
+  signal wake (permission, crash, task terminal, with any mailbox backlog)
+  as `kind="signal"`; MADS's own grant notice and a pipeline's
+  folder-changed notice as `kind="notice"`. The human's own sends, queued or
+  not, are never wrapped.
+- **Attributes:** `kind` always; `from` (the sender's name, `mads` for
+  MADS's notices); `relation` when there is one, always from the
+  RECIPIENT's side — `your leader`, `a session monitoring you`, `a session
+  you lead`, `a session you monitor`, `your pipeline run`; `turn` on a
+  digest, the subject's transcript turn it covers in `get_session_turns`
+  numbering. Values are XML-escaped. No ids.
+- **Who wraps:** the session runner (`pkg/linkwrap.Wrap`), at the one point
+  it hands an injected message to the provider — sent at once or drained
+  from the queue. A coalesced run of queued digests is one turn of several
+  blocks, each wrapped on its own. A re-root note owed to the agent stays
+  outside, ahead of the wrapper.
+- **Who reads:** one parser (`pkg/linkwrap.Expand`) on both the live
+  child's transcript and the Router's durable one, so a sleeping session's
+  history is labelled exactly like a running one's. A wrapped user message
+  becomes one transcript message per block, labelled from its attributes;
+  text ahead of the blocks (the re-root note) becomes a notice from mads.
+  A block ends at the outermost close tag, so a body that quotes the tags
+  doesn't break it; a malformed or unclosed wrapper leaves the message
+  plain. `get_session_turns` counts a send as one turn however many blocks
+  it holds.
+- **Not retroactive:** messages from before 2026-10-20 have no wrapper and
+  read as the human's. The runner's in-memory, send-ordinal attribution
+  this replaces misaligned after any restart and is gone.
+- **The UI decides by kind,** not by looking the link up: digest and signal
+  render as digest cards (only the watching side ever gets one), notice as
+  a notice row, message as the "⇄ from <relation> · <name>" chip. A digest
+  card's cadence line appears when its sender's name matches one of the
+  viewer's links. A NOOP answering a digest or signal folds into a quiet
+  check; one answering a notice marks the notice "acknowledged".
+- **Spoofing:** anyone can type the tag. A human who types it in their own
+  session only changes how their own UI draws their own message; an agent
+  reading a wrapper it didn't get from MADS gains nothing a plain message
+  couldn't say. Bodies aren't escaped, so a linked session that writes a
+  close tag and a fresh block into its own message can make the rest draw
+  as a second block (say, a "notice from mads") in its subject's
+  conversation — the same reach it already has. The label is a rendering and context aid, never an
+  authority check: delivery-time checks (grants, `DigestAttributed` for the
+  self-amplification guard, the `link.message_injected` audit event) still
+  run on the Attribution the Router sends, not on parsed text.
 
 ## Unchanged from §1.12
 
@@ -347,8 +405,9 @@ and nothing changes.
    plus `count` reads forward from there. A slice past either end is
    clamped and the header says so; `from_turn` past N is a tool error
    naming N. The result is plain text: a `<name> — turns 41–42 of 42`
-   header, then per turn `## Turn N · user` (or `· from Leader · <name>`,
-   `· digest · <name>`, worded like the conversation's chips), the
+   header, then per turn `## Turn N · user` (or `· from your leader ·
+   <name>`, `· digest from a session you lead · <name>`, `· notice from
+   mads`, read from the message wrapper), the
    message, `agent:` lines, `tool <Name> <compact JSON input>` with its
    output on `  → ` lines, `notification:` lines, and a one-line
    `[context compacted]`. No thinking, statuses, ids, or locations. Tool

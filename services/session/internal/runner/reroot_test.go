@@ -202,6 +202,20 @@ func TestRerootNoteRidesAnInjectedFirstTurn(t *testing.T) {
 	if len(texts) != 2 || !strings.Contains(texts[0], "old-place") || texts[1] != "echo mine" {
 		t.Errorf("user turns = %q, want the note on the injection only", texts)
 	}
+	// The note sits outside the wrapper, ahead of it, and reads back as a
+	// notice from mads of its own beside the labelled message.
+	if !strings.HasPrefix(texts[0], "[mads] ") || !strings.HasSuffix(texts[0], "\n\n<mads-message kind=\"message\" from=\"friend\">\necho from a friend\n</mads-message>") {
+		t.Errorf("injected wire = %q, want the note then the wrapped message", texts[0])
+	}
+	var labels []string
+	for _, m := range r.Transcript(ctx) {
+		if m.Role == "user" && m.Attribution != nil {
+			labels = append(labels, m.Attribution.Kind+"/"+m.Attribution.SourceName)
+		}
+	}
+	if strings.Join(labels, ",") != "notice/mads,message/friend" {
+		t.Errorf("labels = %v, want the note as a mads notice, then the message", labels)
+	}
 }
 
 // A queued user message that becomes the first turn carries the note.

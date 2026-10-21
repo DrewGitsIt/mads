@@ -20,6 +20,10 @@
 //	                  conversation, then replies as "echo <x>" — a retry
 //	                  that succeeds
 //	anything    → "ok"
+//
+// A message MADS wrapped (pkg/linkwrap — a linked session's message, a
+// digest, a notice) is read as its bodies joined, so an injected "echo <x>"
+// still answers "you said <x>"; the transcript keeps the wrapped text.
 package fake
 
 import (
@@ -35,6 +39,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/linkwrap"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -527,6 +532,22 @@ func (f *Fake) Transcript(_ context.Context, ref string) ([]provider.Message, er
 	return readTranscriptFile(dir, ref)
 }
 
+// unwrap is prompt with any MADS wrappers taken off: the block bodies,
+// joined as the runner joins a coalesced run.
+func unwrap(prompt string) string {
+	segs, ok := linkwrap.Parse(prompt)
+	if !ok {
+		return prompt
+	}
+	parts := make([]string, 0, len(segs))
+	for _, s := range segs {
+		if s.Block != nil {
+			parts = append(parts, s.Block.Body)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
 // turnPlan is one prompt's resolved behavior.
 type turnPlan struct {
 	chunks    []string
@@ -541,6 +562,7 @@ type turnPlan struct {
 }
 
 func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) turnPlan {
+	prompt = unwrap(prompt)
 	if r := f.scenario.match(prompt, resumed); r != nil {
 		rateLimit := r.RateLimit
 		if r.RateLimitTimes > 0 {

@@ -797,8 +797,9 @@ firstDrained:
 }
 
 // TestInjectAttributionReachesTranscript proves decision 2
-// (docs/LINKED-SESSIONS-DESIGN.md): an injected message's Attribution
-// survives into the Transcript, and ordinary user turns carry none.
+// (docs/LINKED-SESSIONS-DESIGN.md): an injected message's label survives
+// into the Transcript (parsed back out of its wrapper — no link id rides
+// there), and ordinary user turns carry none.
 func TestInjectAttributionReachesTranscript(t *testing.T) {
 	ctx := context.Background()
 	base := datatest.Start(t)
@@ -823,7 +824,7 @@ func TestInjectAttributionReachesTranscript(t *testing.T) {
 		t.Fatalf("send: %v", err)
 	}
 
-	attribution := contracts.Attribution{LinkID: "lnk_x", SourceName: "leader"}
+	attribution := contracts.Attribution{LinkID: "lnk_x", SourceName: "leader", Kind: "message", Relation: "your leader"}
 	if err := r.Inject(ctx, "echo queued", attribution); err != nil {
 		t.Fatalf("inject mid-turn: %v", err)
 	}
@@ -859,8 +860,10 @@ func TestInjectAttributionReachesTranscript(t *testing.T) {
 			if m.Attribution == nil {
 				t.Fatalf("injected message %+v: attribution = nil, want set", m)
 			}
-			if m.Attribution.LinkID != attribution.LinkID || m.Attribution.SourceName != attribution.SourceName {
-				t.Fatalf("attribution = %+v, want %+v", m.Attribution, attribution)
+			want := attribution
+			want.LinkID = ""
+			if *m.Attribution != want {
+				t.Fatalf("attribution = %+v, want %+v", m.Attribution, want)
 			}
 			continue
 		}
@@ -870,6 +873,82 @@ func TestInjectAttributionReachesTranscript(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("transcript %+v: no message with text %q", msgs, "echo queued")
+	}
+}
+
+// TestTranscriptLabelsSurviveRestart is the regression for in-memory
+// attribution: labels keyed by the runner's own send count misaligned after
+// a session-process restart (a leader's digests went unlabelled while the
+// human's older messages were drawn as digests). Labels ride in the message
+// text now, so a fresh runner on the same conversation labels exactly the
+// wrapped messages — old and new — and none of the human's.
+func TestTranscriptLabelsSurviveRestart(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+	shared := fake.New()
+	digest := contracts.Attribution{LinkID: "lnk_m", SourceName: "Worker", DigestAttributed: true, Kind: "digest", Relation: "a session you lead", Turn: 3}
+
+	reg1 := provider.NewRegistry()
+	if err := reg1.Register(shared); err != nil {
+		t.Fatal(err)
+	}
+	r1 := New(sess.ID, data, reg1)
+	if err := r1.Start(ctx); err != nil {
+		t.Fatalf("start r1: %v", err)
+	}
+	ch1, unsub1 := r1.Subscribe()
+	for _, step := range []func() error{
+		func() error { return r1.Send(ctx, "echo human one") },
+		func() error { return r1.Inject(ctx, "echo digest one", digest) },
+		func() error { return r1.Send(ctx, "echo human two") },
+	} {
+		if err := step(); err != nil {
+			t.Fatal(err)
+		}
+		drainText(t, ch1)
+	}
+	unsub1()
+	if err := r1.Shutdown(ctx); err != nil {
+		t.Fatalf("shutdown r1: %v", err)
+	}
+
+	reg2 := provider.NewRegistry()
+	if err := reg2.Register(shared); err != nil {
+		t.Fatal(err)
+	}
+	r2 := New(sess.ID, data, reg2)
+	if err := r2.Start(ctx); err != nil {
+		t.Fatalf("start r2: %v", err)
+	}
+	t.Cleanup(func() { _ = r2.Shutdown(ctx) })
+	ch2, unsub2 := r2.Subscribe()
+	defer unsub2()
+	if err := r2.Inject(ctx, "echo digest two", digest); err != nil {
+		t.Fatal(err)
+	}
+	drainText(t, ch2)
+
+	var got []string
+	for _, m := range r2.Transcript(ctx) {
+		if m.Role != "user" {
+			continue
+		}
+		label := "human"
+		if m.Attribution != nil {
+			label = m.Attribution.Kind + "/" + m.Attribution.SourceName
+		}
+		got = append(got, label+": "+m.Text)
+	}
+	want := []string{
+		"human: echo human one",
+		"digest/Worker: echo digest one",
+		"human: echo human two",
+		"digest/Worker: echo digest two",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("user messages after restart:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 

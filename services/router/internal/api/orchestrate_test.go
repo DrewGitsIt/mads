@@ -568,8 +568,8 @@ func TestOrchestrateMessageDeliversAttributed(t *testing.T) {
 	if got.Role != "user" || got.Text != "hello" {
 		t.Fatalf("msgs[0] = %+v, want {role: user, text: hello}", got)
 	}
-	if got.Attribution == nil || got.Attribution.LinkID != link.ID || got.Attribution.SourceName != "leader-1" {
-		t.Fatalf("attribution = %+v, want {link_id: %q, source_name: leader-1}", got.Attribution, link.ID)
+	if want := (contracts.Attribution{SourceName: "leader-1", Kind: "message", Relation: "your leader"}); got.Attribution == nil || *got.Attribution != want {
+		t.Fatalf("attribution = %+v, want %+v", got.Attribution, want)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/linkwrap"
 	"github.com/drewkidwell/mads/pkg/turndigest"
 )
 
@@ -100,6 +101,7 @@ func GenerateDigest(sessionID string, deltas []string) Func {
 			return nil // skippable backend (or empty delta): skip, not a failure
 		}
 		text := res.Text
+		turn := subjectTurn(ctx, deps, sessionID, len(deliver) > 0)
 
 		for _, l := range deliver {
 			addr, ok := deps.Resolver.SessionAddr(l.GrantingSessionID)
@@ -108,6 +110,7 @@ func GenerateDigest(sessionID string, deltas []string) Func {
 			}
 			if err := deliverDigest(ctx, addr, text+noopInstruction, contracts.Attribution{
 				LinkID: l.ID, SourceName: sess.Name, DigestAttributed: true,
+				Kind: linkwrap.KindDigest, Relation: linkwrap.ToGranting(l), Turn: turn,
 			}); err != nil {
 				log.Printf("digest: deliver to %s via link %s: %v", l.GrantingSessionID, l.ID, err)
 				continue // one monitor's failure must not affect the others

@@ -9,6 +9,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/linkwrap"
 )
 
 const SignalKind = "signal"
@@ -212,6 +213,7 @@ func wakeMonitor(ctx context.Context, deps Deps, l contracts.Link, sourceName, t
 	body += closing
 	if err := deliverDigest(ctx, addr, body, contracts.Attribution{
 		LinkID: l.ID, SourceName: sourceName, DigestAttributed: true,
+		Kind: linkwrap.KindSignal, Relation: linkwrap.ToGranting(l),
 	}); err != nil {
 		log.Printf("wake: deliver to %s via link %s: %v", l.GrantingSessionID, l.ID, err)
 		for _, d := range backlog {

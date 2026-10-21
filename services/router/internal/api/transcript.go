@@ -8,6 +8,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/inbound"
+	"github.com/drewkidwell/mads/pkg/linkwrap"
 	"github.com/drewkidwell/mads/pkg/toolstatus"
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -67,6 +68,8 @@ func (s *server) inboundSources(ctx context.Context, sess contracts.Session) fun
 // two callers. Enrichment (kind/title/locations/server) is carried through
 // and statuses are resolved with the same rule engine the live child uses,
 // so a dormant session's transcript renders identically to a live refetch.
+// Injected messages are labelled from their in-text wrappers by the same
+// parse the live child runs (pkg/linkwrap).
 //
 // src resolves an inbound message's source (inboundSources); nil leaves
 // Inbound unset.
@@ -98,6 +101,7 @@ func normalizeTurns(msgs []provider.Message, src func(*provider.Inbound, time.Ti
 		}
 		result[i] = tm
 	}
+	result = linkwrap.Expand(result)
 	toolstatus.StampTranscriptStatuses(result)
 	return result
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/linkwrap"
 )
 
 const FolderNoticeKind = "folder_notice"
@@ -33,7 +34,9 @@ func NotifyFolderChanged(sessionID, taskTitle string, files []string) Func {
 		if !ok {
 			return nil
 		}
-		if err := deliverDigest(ctx, addr, FolderNotice(taskTitle, files), contracts.Attribution{SourceName: implicitSourceName}); err != nil {
+		if err := deliverDigest(ctx, addr, FolderNotice(taskTitle, files), contracts.Attribution{
+			SourceName: implicitSourceName, Kind: linkwrap.KindNotice, Relation: linkwrap.RelationPipelineRun,
+		}); err != nil {
 			return fmt.Errorf("folder notice: deliver to %s: %w", sessionID, err)
 		}
 		return nil

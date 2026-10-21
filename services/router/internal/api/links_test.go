@@ -474,9 +474,9 @@ func TestLinkInject404WhenSubjectNotRunning(t *testing.T) {
 
 // TestLinkInjectDeliversWithAttribution is the end-to-end happy path: a
 // Leader-preset link injects a message into a real running subject child,
-// and the delivered message lands in the subject's transcript stamped with
-// the link's id and the granting session's name (docs/LINKED-SESSIONS-DESIGN.md
-// decisions 1-2).
+// and the delivered message lands in the subject's transcript labelled with
+// the granting session's name and relation, read back from the wrapper
+// (docs/LINKED-SESSIONS-DESIGN.md decisions 1-2, "Message wrapper").
 func TestLinkInjectDeliversWithAttribution(t *testing.T) {
 	srv, _ := newTestServerWithRealSession(t)
 	setLinkedSessionsFlag(t, srv.URL, true)
@@ -522,7 +522,9 @@ func TestLinkInjectDeliversWithAttribution(t *testing.T) {
 	if got.Attribution == nil {
 		t.Fatalf("msgs[0] = %+v, attribution = nil, want set", got)
 	}
-	if got.Attribution.LinkID != link.ID || got.Attribution.SourceName != "leader-1" {
-		t.Fatalf("attribution = %+v, want {link_id: %q, source_name: leader-1}", got.Attribution, link.ID)
+	// Labelled from the wrapper the runner put on the wire: who and how
+	// they relate, no link id.
+	if want := (contracts.Attribution{SourceName: "leader-1", Kind: "message", Relation: "your leader"}); *got.Attribution != want {
+		t.Fatalf("attribution = %+v, want %+v", got.Attribution, want)
 	}
 }

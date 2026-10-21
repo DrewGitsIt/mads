@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/linkwrap"
 	"github.com/drewkidwell/mads/pkg/turndigest"
 )
 
@@ -358,7 +359,10 @@ func (s *server) resolveLinkAttribution(ctx context.Context, link contracts.Link
 	if granting, err := s.data.Session(ctx, link.GrantingSessionID); err == nil {
 		sourceName = granting.Name
 	}
-	return contracts.Attribution{LinkID: link.ID, SourceName: sourceName}
+	return contracts.Attribution{
+		LinkID: link.ID, SourceName: sourceName,
+		Kind: linkwrap.KindMessage, Relation: linkwrap.ToSubject(link),
+	}
 }
 
 // deliverLinkMessage POSTs text into link's subject session's /inject

@@ -1692,6 +1692,7 @@ export function ConversationTab({
                     messages={messages}
                     links={links}
                     viewedSessionId={sessionId}
+                    linkName={linkName}
                     attachmentUrl={(id, variant) =>
                       routerClient.attachmentUrl({ session: sessionId }, id, variant)
                     }

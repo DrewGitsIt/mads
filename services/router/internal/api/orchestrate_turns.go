@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/linkwrap"
 )
 
 // get_session_turns reads the subject's transcript, not its
@@ -36,8 +37,9 @@ const (
 
 // subjectTranscript reads subject's transcript the same way
 // handleSessionTranscript does: the running child's own /transcript first
-// (the only record of an in-flight turn, and the only one carrying link
-// attributions), the provider's durable TranscriptReader otherwise.
+// (the only record of an in-flight turn), the provider's durable
+// TranscriptReader otherwise. Both label injected messages from their
+// wrappers the same way (pkg/linkwrap).
 func (s *server) subjectTranscript(ctx context.Context, subject contracts.Session) []contracts.TranscriptMessage {
 	var msgs []contracts.TranscriptMessage
 	if addr, ok := s.sup.SessionAddr(subject.ID); ok {
@@ -51,51 +53,38 @@ func (s *server) subjectTranscript(ctx context.Context, subject contracts.Sessio
 	return msgs
 }
 
-// splitTurns segments a transcript into turns: each "user"-role message —
-// the human's, or one a link injected (Attribution set) — starts a turn
-// that runs until the next one. Anything before the first user message
-// (a fork's inherited head, an opening notification) folds into turn 1
-// rather than becoming a turn of its own, so the turn count is the number
-// of messages the session was sent. A transcript with entries but no user
-// message is one turn; an empty one is none.
+// splitTurns segments a transcript into turns (linkwrap.SplitTurns): the
+// turn model get_session_turns, the session list's turn counts and a
+// digest's turn attribute all share.
 func splitTurns(msgs []contracts.TranscriptMessage) [][]contracts.TranscriptMessage {
-	var turns [][]contracts.TranscriptMessage
-	sawUser := false
-	for _, m := range msgs {
-		if m.Role == "user" {
-			if sawUser || len(turns) == 0 {
-				turns = append(turns, nil)
-			}
-			sawUser = true
-		} else if len(turns) == 0 {
-			turns = append(turns, nil)
-		}
-		turns[len(turns)-1] = append(turns[len(turns)-1], m)
-	}
-	return turns
+	return linkwrap.SplitTurns(msgs)
 }
 
 // turnSourceLabel is the "## Turn N · <label>" half naming who sent the
-// message that opened the turn, worded as the conversation pane words its
-// chips (ui/src/conversation/ChatRenderer/ChatRenderer.tsx): a mads notice
-// with no link reads "from <source>", a digest push "digest · <source>",
-// any other link injection "from Leader · <source>".
+// message that opened the turn, from its wrapper label (pkg/linkwrap): a
+// MADS notice reads "notice from mads", a digest or signal "digest from
+// <relation> · <source>", a linked session's message "from <relation> ·
+// <source>".
 func turnSourceLabel(m contracts.TranscriptMessage) string {
 	a := m.Attribution
-	switch {
-	case a == nil:
+	if a == nil {
 		return "user"
-	case a.LinkID == "":
-		name := a.SourceName
-		if name == "" {
-			name = "mads"
-		}
-		return "from " + name
-	case a.DigestAttributed:
-		return "digest · " + a.SourceName
-	default:
-		return "from Leader · " + a.SourceName
 	}
+	name := a.SourceName
+	if name == "" {
+		name = linkwrap.NoticeSource
+	}
+	prefix := "from "
+	switch a.Kind {
+	case linkwrap.KindDigest, linkwrap.KindSignal:
+		prefix = a.Kind + " from "
+	case linkwrap.KindNotice:
+		return "notice from " + name
+	}
+	if a.Relation != "" {
+		return prefix + a.Relation + " · " + name
+	}
+	return prefix + name
 }
 
 // renderTurn writes one turn as plain text: role, words, and each tool call
@@ -109,6 +98,12 @@ func renderTurn(n int, msgs []contracts.TranscriptMessage) string {
 			opener = i
 			break
 		}
+	}
+	// A re-root note MADS put ahead of a wrapped message is a notice of
+	// its own; the turn is named for the message it rode in on.
+	if opener >= 0 && opener+1 < len(msgs) && msgs[opener].Attribution != nil &&
+		msgs[opener].Attribution.Kind == linkwrap.KindNotice && linkwrap.SameSend(msgs[opener], msgs[opener+1]) {
+		opener++
 	}
 	if opener >= 0 {
 		fmt.Fprintf(&sb, "## Turn %d · %s\n", n, turnSourceLabel(msgs[opener]))

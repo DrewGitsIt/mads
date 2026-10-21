@@ -4,6 +4,9 @@ import { ChatRenderer } from "./ChatRenderer";
 import { FLAGS } from "../../featureFlags";
 import type { Link, PermissionRequest, TranscriptMessage } from "../../router/types";
 
+/** useLinkNames for makeLink's lnk_1: its subject is "payments refactor". */
+const paymentsName = (id: string) => (id === "lnk_1" ? "payments refactor" : undefined);
+
 function makeLink(overrides: Partial<Link>): Link {
   return {
     id: "lnk_1",
@@ -138,7 +141,7 @@ describe("ChatRenderer", () => {
       {
         role: "user",
         text: "do the thing",
-        attribution: { link_id: "lnk_1", source_name: "Leader Session" },
+        attribution: { source_name: "Leader Session", kind: "message", relation: "your leader" },
       },
     ];
     const { container } = render(
@@ -157,7 +160,7 @@ describe("ChatRenderer — a notice from mads itself", () => {
       {
         role: "user",
         text: "A pipeline task merged into your folder while you were working",
-        attribution: { link_id: "", source_name: "your pipeline run" },
+        attribution: { source_name: "your pipeline run", kind: "notice", relation: "your pipeline run" },
       },
     ];
     const { container } = render(<ChatRenderer messages={messages} />);
@@ -173,31 +176,31 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     FLAGS.linkedSessions = false;
   });
 
-  it("renders an inject chip, never the user's own bubble, when the viewer is the link's subject", () => {
+  it("renders a message as an inject chip naming the sender by relation, never the user's own bubble", () => {
     FLAGS.linkedSessions = true;
     const messages: TranscriptMessage[] = [
       {
         role: "user",
         text: "do the thing",
-        attribution: { link_id: "lnk_1", source_name: "Leader Session" },
+        attribution: { source_name: "Leader Session", kind: "message", relation: "your leader" },
       },
     ];
     const { container } = render(
       <ChatRenderer messages={messages} links={[makeLink({})]} viewedSessionId="subject-id" />,
     );
-    expect(screen.getByText(/Leader Session/)).toBeTruthy();
+    expect(screen.getByText("⇄ from your leader · Leader Session")).toBeTruthy();
     const wrapper = container.querySelector('[class*="stream"]')?.firstElementChild;
     expect(wrapper?.className).toMatch(/injected/);
     expect(wrapper?.className).not.toMatch(/\buser\b/);
   });
 
-  it("renders a digest card with the cadence line when the viewer is the link's granter", () => {
+  it("renders a digest card, with the cadence of the link its sender is named on", () => {
     FLAGS.linkedSessions = true;
     const messages: TranscriptMessage[] = [
       {
         role: "user",
         text: "compressed summary of the turn",
-        attribution: { link_id: "lnk_1", source_name: "payments refactor" },
+        attribution: { source_name: "payments refactor", kind: "digest", relation: "a session you lead" },
       },
     ];
     render(
@@ -205,6 +208,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
         messages={messages}
         links={[makeLink({ cadence: "per_turn" })]}
         viewedSessionId="leader-id"
+        linkName={paymentsName}
       />,
     );
     expect(screen.getByText(/payments refactor/)).toBeTruthy();
@@ -218,7 +222,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
       {
         role: "user",
         text: "compressed summary of the turn",
-        attribution: { link_id: "lnk_1", source_name: "payments refactor" },
+        attribution: { source_name: "payments refactor", kind: "digest", relation: "a session you lead" },
       },
     ];
     render(
@@ -226,25 +230,85 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
         messages={messages}
         links={[makeLink({ cadence: "manual_only" })]}
         viewedSessionId="leader-id"
+        linkName={paymentsName}
       />,
     );
     expect(screen.getByText("cadence: manual — no automatic digests")).toBeTruthy();
   });
 
-  it("falls back to the inject chip when the attributed link isn't resolved yet", () => {
+  it("still renders a digest card when no link matches its sender — just without a cadence line", () => {
     FLAGS.linkedSessions = true;
     const messages: TranscriptMessage[] = [
       {
         role: "user",
-        text: "do the thing",
-        attribution: { link_id: "lnk_missing", source_name: "Leader Session" },
+        text: "summary from a session since unlinked",
+        attribution: { source_name: "old worker", kind: "digest", relation: "a session you monitor" },
       },
     ];
     const { container } = render(
-      <ChatRenderer messages={messages} links={[]} viewedSessionId="subject-id" />,
+      <ChatRenderer messages={messages} links={[]} viewedSessionId="leader-id" linkName={paymentsName} />,
     );
-    const wrapper = container.querySelector('[class*="stream"]')?.firstElementChild;
-    expect(wrapper?.className).toMatch(/injected/);
+    expect(screen.getByText("summary from a session since unlinked")).toBeTruthy();
+    expect(container.querySelector('[class*="digestCadence"]')).toBeNull();
+    expect(container.querySelector('[class*="digest"]')).toBeTruthy();
+  });
+
+  it("renders a signal as a digest card and collapses its NOOP the same way", () => {
+    FLAGS.linkedSessions = true;
+    const messages: TranscriptMessage[] = [
+      {
+        role: "user",
+        text: "Task done: wire the adapter",
+        attribution: { source_name: "your pipeline run", kind: "signal", relation: "your pipeline run" },
+      },
+      { role: "agent", text: "NOOP" },
+    ];
+    render(
+      <ChatRenderer
+        messages={messages}
+        links={[makeLink({ id: "lnk_self", granting_session_id: "leader-id", subject_session_id: "leader-id", implicit: true, cadence: "on_signal" })]}
+        viewedSessionId="leader-id"
+      />,
+    );
+    expect(screen.getByText(/1 quiet check · your pipeline run/)).toBeTruthy();
+    expect(screen.queryByText("NOOP")).toBeNull();
+  });
+
+  it("folds a coalesced digest run answered by one NOOP into a single chip", () => {
+    FLAGS.linkedSessions = true;
+    const digest = (text: string): TranscriptMessage => ({
+      role: "user",
+      text,
+      attribution: { source_name: "payments refactor", kind: "digest", relation: "a session you lead" },
+    });
+    render(
+      <ChatRenderer
+        messages={[digest("first of the run"), digest("second of the run"), { role: "agent", text: "NOOP" }]}
+        links={[makeLink({})]}
+        viewedSessionId="leader-id"
+      />,
+    );
+    expect(screen.getByText(/2 quiet checks · payments refactor/)).toBeTruthy();
+    expect(screen.queryByText("first of the run")).toBeNull();
+    expect(screen.queryByText("NOOP")).toBeNull();
+  });
+
+  it("never folds a notice into a quiet check: a NOOP answering it reads as acknowledged", () => {
+    FLAGS.linkedSessions = true;
+    const messages: TranscriptMessage[] = [
+      {
+        role: "user",
+        text: "You can now direct payments refactor.",
+        attribution: { source_name: "mads", kind: "notice", digest_attributed: true },
+      },
+      { role: "agent", text: "NOOP" },
+    ];
+    render(<ChatRenderer messages={messages} links={[makeLink({})]} viewedSessionId="leader-id" />);
+    expect(screen.queryByText(/quiet check/)).toBeNull();
+    expect(screen.getByText("You can now direct payments refactor.")).toBeTruthy();
+    expect(screen.getByText("⇄ from mads")).toBeTruthy();
+    expect(screen.getByText("acknowledged")).toBeTruthy();
+    expect(screen.queryByText("NOOP")).toBeNull();
   });
 
   it("collapses a digest answered with exactly NOOP into a quiet-check chip", () => {
@@ -253,7 +317,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
       {
         role: "user",
         text: "routine progress digest",
-        attribution: { link_id: "lnk_1", source_name: "payments refactor" },
+        attribution: { source_name: "payments refactor", kind: "digest", relation: "a session you lead" },
       },
       { role: "agent", text: "NOOP" },
     ];
@@ -274,7 +338,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     const digest = (text: string): TranscriptMessage => ({
       role: "user",
       text,
-      attribution: { link_id: "lnk_1", source_name: "payments refactor" },
+      attribution: { source_name: "payments refactor", kind: "digest", relation: "a session you lead" },
     });
     const messages: TranscriptMessage[] = [
       digest("digest one"),
@@ -303,7 +367,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
       role: "user",
       text,
       timestamp: at,
-      attribution: { link_id: "lnk_1", source_name: "payments refactor" },
+      attribution: { source_name: "payments refactor", kind: "digest", relation: "a session you lead" },
     });
     const messages: TranscriptMessage[] = [
       digest("thought then noop", "2026-10-15T10:00:00Z"),
@@ -336,7 +400,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     const digest = (text: string): TranscriptMessage => ({
       role: "user",
       text,
-      attribution: { link_id: "lnk_1", source_name: "payments refactor" },
+      attribution: { source_name: "payments refactor", kind: "digest", relation: "a session you lead" },
     });
     const messages: TranscriptMessage[] = [
       digest("digest one"),
@@ -369,12 +433,12 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
       {
         role: "user",
         text: "kick off the refactor",
-        attribution: { link_id: "lnk_1", source_name: "Leader Session" },
+        attribution: { source_name: "Leader Session", kind: "message", relation: "your leader" },
       },
       { role: "agent", text: "NOOP" },
     ];
-    // Viewed from the subject side, the attributed message is an inject
-    // chip, not a digest card — the reply stays visible.
+    // A linked session's message is an inject chip, not a digest card —
+    // the reply stays visible.
     render(
       <ChatRenderer
         messages={messages}

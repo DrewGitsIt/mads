@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/linkwrap"
 	"github.com/drewkidwell/mads/pkg/madsbin"
 )
 
@@ -82,6 +83,7 @@ func (s *server) announceOrchestrateGrant(link contracts.Link) {
 			Text: orchestrateGrantNotice(madsbin.Path(), s.routerURL, link.GrantingSessionID, link.SubjectSessionID, subjectName),
 			Attribution: contracts.Attribution{
 				LinkID: link.ID, SourceName: grantNoticeSource, DigestAttributed: true,
+				Kind: linkwrap.KindNotice,
 			},
 		}); err != nil {
 			log.Printf("router: orchestrate grant notice for %s: %v", link.GrantingSessionID, err)

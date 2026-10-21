@@ -48,9 +48,7 @@ func (r *Runner) inboundSource(ctx context.Context, in *provider.Inbound, at tim
 // the harness is running a turn this runner didn't start, so it is marked
 // busy — Send refuses and SendOrQueue/Inject queue behind it, exactly as
 // behind a sent turn, until its EventTurnEnd — and the agent working. It
-// does not count as a sent turn (no sentTurns ordinal: the transcript's
-// user turns, and the attributions keyed on them, don't include it). It is
-// also the turn's opening digest entry, so the digest says what prompted
+// does not count as a sent turn (sentAny). It is also the turn's opening digest entry, so the digest says what prompted
 // it. A held message reached only the harness and changes neither.
 //
 // No link.message_injected is recorded: that event means mads delivered

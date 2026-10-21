@@ -70,8 +70,8 @@ func TestOrchestrateGrantNoticeForLiveLeader(t *testing.T) {
 	if !filepath.IsAbs(cmd) {
 		t.Errorf("notice runs %q, want an absolute path to mads", cmd)
 	}
-	if notices[0].Attribution.LinkID != link.ID || !notices[0].Attribution.DigestAttributed {
-		t.Errorf("attribution = %+v, want link %s, digest-attributed", notices[0].Attribution, link.ID)
+	if a := notices[0].Attribution; a.Kind != "notice" || a.SourceName != "mads" || a.Relation != "" || !a.DigestAttributed {
+		t.Errorf("attribution = %+v, want a digest-attributed notice from mads", a)
 	}
 
 	waitOrchestrateStatusRouter(t, srv.URL, link.ID, contracts.OrchestrateActive)

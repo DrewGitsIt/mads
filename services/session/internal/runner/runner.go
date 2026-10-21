@@ -28,6 +28,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/delegates"
 	"github.com/drewkidwell/mads/pkg/githook"
 	"github.com/drewkidwell/mads/pkg/inbound"
+	"github.com/drewkidwell/mads/pkg/linkwrap"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/pkg/toolstatus"
 	"github.com/drewkidwell/mads/pkg/vault"
@@ -271,16 +272,10 @@ type Runner struct {
 	inbound  *inbound.Resolver
 	peerAddr string
 
-	// sentTurns counts every turn sent so far (Send and Inject alike),
-	// 1-indexed — the ordinal Transcript correlates against turnAttributions
-	// to attach the right Attribution to the right user-role message.
-	sentTurns int
-
-	// turnAttributions records, by sentTurns ordinal, the Attribution of
-	// turns that were injected (absent for ordinary user turns). In-memory
-	// only: lost on session bounce/restart, since the provider's own
-	// transcript has no metadata channel to persist into.
-	turnAttributions map[int]contracts.Attribution
+	// sentAny is set once this runner has sent a turn (Send and Inject
+	// alike). An injected turn's label isn't kept here: it rides in the
+	// message text itself (pkg/linkwrap), so it survives a restart.
+	sentAny bool
 
 	// lastRef is the last-observed provider-native ref, kept in sync by
 	// watchRefAnnounce as soon as the provider announces it (see providers/
@@ -366,6 +361,11 @@ type Runner struct {
 type pendingInjection struct {
 	text        string
 	attribution contracts.Attribution
+	// wire is what the provider is sent for this entry, set by
+	// drainNextLocked: text inside its wrapper for an injection (each
+	// digest wrapped on its own when a run coalesces), text as-is for a
+	// user entry.
+	wire string
 	// userID is set for the user's own message queued by SendOrQueue, empty
 	// for a linked-session injection. A user entry delivers as an ordinary
 	// user turn (no Attribution) and is the only kind the queue API exposes.
@@ -378,19 +378,18 @@ type pendingInjection struct {
 // correctly.
 func New(sessionID string, data *dataclient.Client, providers *provider.Registry) *Runner {
 	return &Runner{
-		sessionID:        sessionID,
-		data:             data,
-		providers:        providers,
-		Cwd:              ".",
-		Died:             make(chan struct{}),
-		hub:              newHub(),
-		touched:          make(map[string]string),
-		toolTouchedAt:    make(map[string]time.Time),
-		turnAttributions: make(map[int]contracts.Attribution),
-		shutdownCh:       make(chan struct{}),
-		permPending:      make(map[string]*pendingPermission),
-		toolStatus:       toolstatus.New(),
-		delegates:        delegates.New(sessionID, 0),
+		sessionID:     sessionID,
+		data:          data,
+		providers:     providers,
+		Cwd:           ".",
+		Died:          make(chan struct{}),
+		hub:           newHub(),
+		touched:       make(map[string]string),
+		toolTouchedAt: make(map[string]time.Time),
+		shutdownCh:    make(chan struct{}),
+		permPending:   make(map[string]*pendingPermission),
+		toolStatus:    toolstatus.New(),
+		delegates:     delegates.New(sessionID, 0),
 	}
 }
 
@@ -893,16 +892,11 @@ func (r *Runner) refreshCountsAsync() {
 	}()
 }
 
-// deliverLocked marks a turn as in-flight and records its ordinal — and,
-// for an injected turn, the Attribution Transcript will later attach to the
-// resulting user-role message. Must be called with r.mu held; the caller
-// sends on r.sess itself, after unlocking.
-func (r *Runner) deliverLocked(attribution *contracts.Attribution) {
+// deliverLocked marks a turn as in-flight. Must be called with r.mu held;
+// the caller sends on r.sess itself, after unlocking.
+func (r *Runner) deliverLocked() {
 	r.busy = true
-	r.sentTurns++
-	if attribution != nil {
-		r.turnAttributions[r.sentTurns] = *attribution
-	}
+	r.sentAny = true
 }
 
 // Send relays one user turn. Returns ErrTurnInFlight (surfaced as HTTP 409)
@@ -925,7 +919,7 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 	// A fork's ref is deterministic — the provider confirms its own new id
 	// (RefAnnouncer) — so the locator, which correlates on the first user
 	// message and would see the original conversation's, stays off.
-	if !r.locateArmed && r.lastRef == "" && r.sentTurns == 0 && r.forkFrom == "" {
+	if !r.locateArmed && r.lastRef == "" && !r.sentAny && r.forkFrom == "" {
 		r.locateArmed = true
 		armed = true
 		prov = r.prov
@@ -933,7 +927,7 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 		cwd = r.providerCwd
 		spawnedAt = r.spawnedAt
 	}
-	r.deliverLocked(nil)
+	r.deliverLocked()
 	sess := r.sess
 	// The user's own words go to the synthesis engine and digest; the
 	// provider (and the locator, which matches the transcript's first
@@ -972,7 +966,9 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 // conversation (docs/LINKED-SESSIONS-DESIGN.md decisions 1-2). It never
 // interrupts an in-flight turn: if the runner is busy, the message queues
 // and onTurnEnd delivers it once the current turn ends, FIFO with any other
-// queued injections. Trust capping (decision 3) needs no extra plumbing
+// queued injections. The provider gets text inside the attribution's
+// wrapper (pkg/linkwrap) — who sent it, in the conversation itself, where
+// both the agent and every transcript reader see it. Trust capping (decision 3) needs no extra plumbing
 // here — sess.Send is the same call Send makes, so an injected turn is
 // bound by the subject session's own trust level exactly as a user turn is.
 func (r *Runner) Inject(ctx context.Context, text string, attribution contracts.Attribution) error {
@@ -987,9 +983,11 @@ func (r *Runner) Inject(ctx context.Context, text string, attribution contracts.
 		r.recordInjectionAudit(ctx, attribution, text)
 		return nil
 	}
-	r.deliverLocked(&attribution)
+	r.deliverLocked()
 	sess := r.sess
-	wire, note := r.claimRerootNoteLocked(text)
+	// The label goes on the wire, in the message (pkg/linkwrap); any owed
+	// re-root note stays outside, ahead of it.
+	wire, note := r.claimRerootNoteLocked(linkwrap.Wrap(text, attribution))
 	r.mu.Unlock()
 
 	r.synthEngine.OnUserSend(text)
@@ -1107,15 +1105,13 @@ func (r *Runner) deliverNextLocked() {
 	next := r.drainNextLocked()
 	var delivered *contracts.QueuedMessage
 	var remaining []contracts.QueuedMessage
+	r.deliverLocked()
 	if next.userID != "" {
-		r.deliverLocked(nil)
 		delivered = &contracts.QueuedMessage{ID: next.userID, Text: next.text, QueuedAt: next.queuedAt}
 		remaining = r.queuedLocked()
-	} else {
-		r.deliverLocked(&next.attribution)
 	}
 	sess := r.sess
-	wire, note := r.claimRerootNoteLocked(next.text)
+	wire, note := r.claimRerootNoteLocked(next.wire)
 	r.mu.Unlock()
 	if sess == nil {
 		r.restoreRerootNote(note)
@@ -1158,15 +1154,24 @@ func (r *Runner) deliverNextLocked() {
 // one per queued digest. Any other queued injection (a real user/leader
 // message, or a digest from a different link) stops the coalescing and is
 // left at the front of the queue for its own turn, so non-digest ordering
-// is untouched. Must be called with r.mu held; mutates r.pending in place.
+// is untouched. Each coalesced digest keeps its own wrapper in the combined
+// wire text, so the transcript still shows one labelled digest per push.
+// Must be called with r.mu held; mutates r.pending in place.
 func (r *Runner) drainNextLocked() pendingInjection {
 	head := r.pending[0]
-	if head.userID != "" || !head.attribution.DigestAttributed {
+	if head.userID != "" {
 		r.pending = r.pending[1:]
+		head.wire = head.text
+		return head
+	}
+	if !head.attribution.DigestAttributed {
+		r.pending = r.pending[1:]
+		head.wire = linkwrap.Wrap(head.text, head.attribution)
 		return head
 	}
 
 	texts := []string{head.text}
+	wires := []string{linkwrap.Wrap(head.text, head.attribution)}
 	i := 1
 	for i < len(r.pending) {
 		item := r.pending[i]
@@ -1174,10 +1179,12 @@ func (r *Runner) drainNextLocked() pendingInjection {
 			break
 		}
 		texts = append(texts, item.text)
+		wires = append(wires, linkwrap.Wrap(item.text, item.attribution))
 		i++
 	}
 	r.pending = r.pending[i:]
 	head.text = strings.Join(texts, "\n\n")
+	head.wire = strings.Join(wires, "\n\n")
 	return head
 }
 

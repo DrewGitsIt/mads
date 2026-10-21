@@ -604,9 +604,19 @@ export interface SessionReport {
 // session a message was injected from (docs/LINKED-SESSIONS-DESIGN.md
 // decision 2).
 export interface Attribution {
-  link_id: string;
+  /** Only set at delivery; a transcript's attribution is parsed from the in-text wrapper (pkg/linkwrap), which carries no link id. */
+  link_id?: string;
   source_name: string;
+  digest_attributed?: boolean;
+  /** What the message is; absent reads as "message". */
+  kind?: AttributionKind;
+  /** The sender from the recipient's point of view ("your leader", "a session you lead", …); absent on mads's own notices. */
+  relation?: string;
+  /** On a digest: the subject's transcript turn it covers, get_session_turns numbering. */
+  turn?: number;
 }
+
+export type AttributionKind = "message" | "digest" | "signal" | "notice";
 
 // mirrors pkg/contracts/transcript.go InboundSource — where an inbound
 // message (a message that reached the agent from outside mads, over a channel

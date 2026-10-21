@@ -4,6 +4,8 @@ import { Fold, useArrivals } from "../../components/Motion";
 import { FLAGS } from "../../featureFlags";
 import { foldToolResults } from "../../router/toolPairing";
 import type {
+  Attribution,
+  AttributionKind,
   BackgroundTask,
   InboundSource,
   Link,
@@ -13,6 +15,7 @@ import type {
   TranscriptMessage,
 } from "../../router/types";
 import { ActivityGroup } from "../activity/ActivityGroup";
+import type { LinkNameResolver } from "../activity/toolDisplay";
 import type { PermissionReveal } from "../ApprovalJump/permissionReveal";
 import {
   anchorPermissions,
@@ -55,9 +58,11 @@ export type StreamItem =
 
 export interface ChatRendererProps {
   messages: TranscriptMessage[];
-  /** Linked sessions (flag-gated): links touching the viewed session, used to resolve an attributed message as an inject chip vs. a digest card (decision 4, docs/LINKED-SESSIONS-DESIGN.md). */
+  /** Linked sessions (flag-gated): links touching the viewed session — only for a digest card's cadence line, matched by sender name (an attribution parsed from the message wrapper carries no link id). */
   links?: Link[];
   viewedSessionId?: string;
+  /** Names a link's other session (useLinkNames), to match a digest's sender to its link. Absent → no cadence line. */
+  linkName?: LinkNameResolver;
   /**
    * Where the Router serves the viewed session's attachments — lets a user
    * message's attached files show as thumbnails. Absent → names only.
@@ -118,7 +123,7 @@ const CADENCE_LABEL: Record<Link["cadence"], string> = {
  * quiet checks aggregate into one, keeping the digests it absorbed so the
  * chip can expand to show them. */
 type QuietItem = { key: string; type: "quiet"; digests: QuietDigest[]; sources: string[] };
-type QuietDigest = { key: string; source: string; text: string; cadence: Link["cadence"] };
+type QuietDigest = { key: string; source: string; text: string; cadence?: Link["cadence"] };
 
 /** A finished activity group of only thinking rows — what a thinking model
  * (claude-code thinks by default) leaves between a digest and its NOOP. A
@@ -137,7 +142,7 @@ function DigestCard({ findKey, source, text, cadence }: {
   findKey?: string;
   source: string;
   text: string;
-  cadence: Link["cadence"];
+  cadence?: Link["cadence"];
 }) {
   return (
     <div className={styles.digest} data-find={findKey}>
@@ -145,7 +150,7 @@ function DigestCard({ findKey, source, text, cadence }: {
         ⌗ digest · <b>{source}</b>
       </div>
       <Markdown className={styles.prose} text={text} />
-      <div className={styles.digestCadence}>{CADENCE_LABEL[cadence]}</div>
+      {cadence && <div className={styles.digestCadence}>{CADENCE_LABEL[cadence]}</div>}
     </div>
   );
 }
@@ -170,17 +175,56 @@ function QuietChecks({ item }: { item: QuietItem }) {
   );
 }
 
-/** Would this message render as a digest card (vs. an inject chip)? The
- * viewed session being the attributed link's granting side is what makes it
- * the monitor's copy (decision 4, docs/LINKED-SESSIONS-DESIGN.md). */
-function isDigestCard(
-  message: TranscriptMessage,
-  linksById: Map<string, Link>,
-  viewedSessionId?: string,
-): boolean {
+/** What an attributed message is, from the kind its wrapper names
+ * (docs/LINKED-SESSIONS-DESIGN.md, "Message wrapper"). Absent reads as a
+ * message, the delivery default. */
+function kindOf(a: Attribution): AttributionKind {
+  return a.kind ?? "message";
+}
+
+/** Would this message render as a digest card? A digest or signal only
+ * ever reaches the watching side, so the viewer is the recipient by
+ * construction — no link lookup decides it. */
+function isDigestCard(message: TranscriptMessage): boolean {
   if (!message.attribution || !FLAGS.linkedSessions) return false;
-  const link = linksById.get(message.attribution.link_id);
-  return Boolean(link && viewedSessionId === link.granting_session_id);
+  const kind = kindOf(message.attribution);
+  return kind === "digest" || kind === "signal";
+}
+
+/** A notice from mads itself (a grant notice, a pipeline's folder notice):
+ * never the user's voice, and not gated on linking. */
+function isNotice(message: TranscriptMessage): boolean {
+  return Boolean(message.attribution && kindOf(message.attribution) === "notice");
+}
+
+/** The link a digest card came over, for its cadence line: the viewed
+ * session's watching link whose other side is named `from`, or its implicit
+ * hand-raiser for "your pipeline run". Undefined when it can't be told. */
+function digestLink(
+  a: Attribution,
+  links: Link[],
+  viewedSessionId: string | undefined,
+  linkName: LinkNameResolver | undefined,
+): Link | undefined {
+  const watching = links.filter((l) => l.granting_session_id === viewedSessionId);
+  if (a.relation === "your pipeline run") return watching.find((l) => l.implicit);
+  if (!linkName) return undefined;
+  const named = watching.filter((l) => !l.implicit && linkName(l.id) === a.source_name);
+  return named.length === 1 ? named[0] : undefined;
+}
+
+/** A finished agent reply of exactly NOOP at items[j], past any
+ * thinking-only activity from items[from]: the index of the reply, or -1. */
+function noopReplyAt(items: ReturnType<typeof buildItems>, from: number): number {
+  let j = from;
+  while (isThinkingOnly(items[j])) j++;
+  const reply = items[j];
+  return reply?.type === "message" &&
+    !reply.live &&
+    reply.message.role === "agent" &&
+    (reply.message.text ?? "").trim() === "NOOP"
+    ? j
+    : -1;
 }
 
 /**
@@ -195,6 +239,7 @@ export function ChatRenderer({
   messages,
   links = [],
   viewedSessionId,
+  linkName,
   attachmentUrl,
   liveItems = [],
   turnActive = false,
@@ -247,35 +292,49 @@ export function ChatRenderer({
   // directly, or past thinking-only activity — is the monitor saying
   // "nothing to do"; showing both in full would pay the transcript cost the
   // noop protocol exists to avoid.
+  //
+  // A notice is not a quiet check (it isn't a digest, and folding it in hid
+  // the grant notice): a NOOP answering one is folded into the notice row
+  // itself as "acknowledged" instead.
   const rendered: (ReturnType<typeof buildItems>[number] | QuietItem)[] = [];
+  const acknowledged = new Set<string>();
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
-    let j = i + 1;
-    while (isThinkingOnly(items[j])) j++;
-    const reply = items[j];
-    if (
-      item.type === "message" &&
-      isDigestCard(item.message, linksById, viewedSessionId) &&
-      reply?.type === "message" &&
-      !reply.live &&
-      reply.message.role === "agent" &&
-      (reply.message.text ?? "").trim() === "NOOP"
-    ) {
-      const source = item.message.attribution!.source_name;
-      const digest: QuietDigest = {
-        key: item.key,
-        source,
-        text: item.message.text ?? "",
-        cadence: linksById.get(item.message.attribution!.link_id)!.cadence,
-      };
-      const last = rendered[rendered.length - 1];
-      if (last?.type === "quiet") {
-        last.digests.push(digest);
-        if (!last.sources.includes(source)) last.sources.push(source);
-      } else {
-        rendered.push({ key: item.key, type: "quiet", digests: [digest], sources: [source] });
+    const j = item.type === "message" ? noopReplyAt(items, i + 1) : -1;
+    if (item.type === "message" && j >= 0 && isNotice(item.message)) {
+      acknowledged.add(item.key);
+      rendered.push(item);
+      i = j;
+      continue;
+    }
+    // A coalesced run (several digests delivered as one turn) is answered
+    // by one NOOP: the whole run folds into the chip.
+    let end = i + 1;
+    while (end < items.length) {
+      const next = items[end];
+      if (next.type !== "message" || next.message.role !== "user" || !isDigestCard(next.message)) break;
+      end++;
+    }
+    const runReply = item.type === "message" && isDigestCard(item.message) ? noopReplyAt(items, end) : -1;
+    if (runReply >= 0) {
+      for (let k = i; k < end; k++) {
+        const m = (items[k] as Extract<(typeof items)[number], { type: "message" }>).message;
+        const source = m.attribution!.source_name;
+        const digest: QuietDigest = {
+          key: items[k].key,
+          source,
+          text: m.text ?? "",
+          cadence: digestLink(m.attribution!, links, viewedSessionId, linkName)?.cadence,
+        };
+        const last = rendered[rendered.length - 1];
+        if (last?.type === "quiet") {
+          last.digests.push(digest);
+          if (!last.sources.includes(source)) last.sources.push(source);
+        } else {
+          rendered.push({ key: items[k].key, type: "quiet", digests: [digest], sources: [source] });
+        }
       }
-      i = j; // the thinking rows and the NOOP reply are consumed by the chip
+      i = runReply; // the thinking rows and the NOOP reply are consumed by the chip
       continue;
     }
     rendered.push(item);
@@ -365,37 +424,43 @@ export function ChatRenderer({
         // Injected messages carry role "user" at the transport level, but
         // must never render as the subject user's own turn (decision 2,
         // docs/LINKED-SESSIONS-DESIGN.md) — attribution wins over role.
-        // The wire's Attribution shape is identical for a leader's inject
-        // and a monitor's digest; resolve which one this is by comparing
-        // the attributed link against the session being viewed (decision 4).
-        // A notice from mads itself rather than a linked session (no link):
-        // e.g. a pipeline telling the agent which files a merge changed
-        // under it. Never the user's voice, and not gated on linking.
-        if (message.attribution && !message.attribution.link_id) {
+        // What the message is comes from its wrapper's kind: a notice from
+        // mads itself (e.g. a pipeline telling the agent which files a
+        // merge changed under it — never the user's voice, and not gated
+        // on linking), a digest or signal (a card: only the watching side
+        // ever receives one), or a linked session's message (a chip naming
+        // the sender by relation).
+        if (message.attribution && isNotice(message)) {
           return (
             <div key={item.key} className={styles.injected} data-find={item.key}>
-              <Chip tone="info">⇄ from {message.attribution.source_name || "mads"}</Chip>
+              <span className={styles.noticeHead}>
+                <Chip tone="info">⇄ from {message.attribution.source_name || "mads"}</Chip>
+                {acknowledged.has(item.key) && (
+                  <span className={styles.noticeAck} title="The agent answered NOOP">
+                    acknowledged
+                  </span>
+                )}
+              </span>
               <Markdown className={styles.prose} text={message.text ?? ""} />
             </div>
           );
         }
         if (message.attribution && FLAGS.linkedSessions) {
-          const link = linksById.get(message.attribution.link_id);
-          if (link && viewedSessionId === link.granting_session_id) {
+          if (isDigestCard(message)) {
             return (
               <DigestCard
                 key={item.key}
                 findKey={item.key}
                 source={message.attribution.source_name}
                 text={message.text ?? ""}
-                cadence={link.cadence}
+                cadence={digestLink(message.attribution, links, viewedSessionId, linkName)?.cadence}
               />
             );
           }
           return (
             <div key={item.key} className={styles.injected} data-find={item.key}>
               <Chip tone="info">
-                ⇄ from Leader · {message.attribution.source_name}
+                ⇄ from {message.attribution.relation ?? "a linked session"} · {message.attribution.source_name}
               </Chip>
               <Markdown className={styles.prose} text={message.text ?? ""} />
             </div>

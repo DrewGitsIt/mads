@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/linkwrap"
 )
 
 func user(text string) contracts.TranscriptMessage {
@@ -29,9 +30,14 @@ func toolResult(id, text string, isError bool) contracts.TranscriptMessage {
 	return m
 }
 
+// injected is a message MADS delivered, as a transcript reads it back: the
+// wrapped wire text, parsed by the same linkwrap pass transcriptFor runs.
 func injected(text, source string, digest bool) contracts.TranscriptMessage {
-	return contracts.TranscriptMessage{Role: "user", Text: text,
-		Attribution: &contracts.Attribution{LinkID: "lnk_1", SourceName: source, DigestAttributed: digest}}
+	a := contracts.Attribution{SourceName: source, Kind: linkwrap.KindMessage, Relation: linkwrap.RelationLeader}
+	if digest {
+		a = contracts.Attribution{SourceName: source, Kind: linkwrap.KindDigest, Relation: linkwrap.RelationLed, DigestAttributed: true}
+	}
+	return linkwrap.Expand([]contracts.TranscriptMessage{{Role: "user", Text: linkwrap.Wrap(text, a)}})[0]
 }
 
 // TestSplitTurns pins the turn model: each user message (human or link-
@@ -199,10 +205,11 @@ func TestTurnSourceLabel(t *testing.T) {
 		want string
 	}{
 		{user("hi"), "user"},
-		{injected("do it", "SOM-DST Classifier Primer", false), "from Leader · SOM-DST Classifier Primer"},
-		{injected("it did it", "payments", true), "digest · payments"},
+		{injected("do it", "SOM-DST Classifier Primer", false), "from your leader · SOM-DST Classifier Primer"},
+		{injected("it did it", "payments", true), "digest from a session you lead · payments"},
+		{contracts.TranscriptMessage{Role: "user", Attribution: &contracts.Attribution{Kind: "signal", SourceName: "your pipeline run", Relation: "your pipeline run"}}, "signal from your pipeline run · your pipeline run"},
+		{contracts.TranscriptMessage{Role: "user", Attribution: &contracts.Attribution{Kind: "notice"}}, "notice from mads"},
 		{contracts.TranscriptMessage{Role: "user", Attribution: &contracts.Attribution{SourceName: "pipeline"}}, "from pipeline"},
-		{contracts.TranscriptMessage{Role: "user", Attribution: &contracts.Attribution{}}, "from mads"},
 	}
 	for _, tc := range cases {
 		if got := turnSourceLabel(tc.m); got != tc.want {
@@ -267,7 +274,7 @@ tool Bash {"command":"wc -l data/review/*.jsonl","description":"Count labeled ro
       800 total
 agent: 800 labeled rows across two batches.
 
-## Turn 2 · from Leader · SOM-DST Classifier Primer
+## Turn 2 · from your leader · SOM-DST Classifier Primer
 Run the classifier on batch2 and report accuracy.
 tool Bash {"command":"python eval.py --batch 2"}
   → error: Traceback (most recent call last):

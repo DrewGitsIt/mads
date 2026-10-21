@@ -806,12 +806,12 @@ describe("ConversationTab", () => {
       {
         role: "user",
         text: "kick off the payments refactor",
-        attribution: { link_id: "lnk_1", source_name: "Leader Session" },
+        attribution: { source_name: "Leader Session", kind: "message", relation: "your leader" },
       },
     ]);
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() => expect(screen.getByText(/⇄ from Leader · Leader Session/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/⇄ from your leader · Leader Session/)).toBeTruthy());
     expect(screen.getByText("kick off the payments refactor")).toBeTruthy();
   });
 

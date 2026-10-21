@@ -10,6 +10,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/linkwrap"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/data/datatest"
@@ -207,7 +208,7 @@ func TestInboundWakesIdleAgent(t *testing.T) {
 	rig.sess.events <- provider.Event{Kind: provider.EventTurnEnd}
 	waitFor(t, "the queued inject to go out", func() bool {
 		s := rig.sess.sentTexts()
-		return len(s) == 1 && s[0] == "from the leader"
+		return len(s) == 1 && s[0] == linkwrap.Wrap("from the leader", contracts.Attribution{SourceName: "Leader"})
 	})
 
 	turns := eventsOfType[map[string]any](t, rig.data, rig.id, contracts.TurnEnded)
@@ -218,13 +219,6 @@ func TestInboundWakesIdleAgent(t *testing.T) {
 		if inj["text"] != "from the leader" {
 			t.Errorf("link.message_injected for %q: only mads's own delivery may write one", inj["text"])
 		}
-	}
-	// The inbound turn took no sent-turn ordinal: the inject is turn 1.
-	rig.r.mu.Lock()
-	sent, attr := rig.r.sentTurns, rig.r.turnAttributions[1]
-	rig.r.mu.Unlock()
-	if sent != 1 || attr.LinkID != link.ID {
-		t.Errorf("sentTurns = %d, turn 1 attribution = %+v, want the inject as turn 1", sent, attr)
 	}
 }
 
@@ -253,24 +247,24 @@ func TestHeldInboundOpensNoTurn(t *testing.T) {
 	}
 }
 
-// An inbound entry is not a user turn: the attribution of the user turn
-// after it is still the one recorded for that turn's ordinal.
+// An inbound entry sits beside the user turns without disturbing their
+// labels: the wrapped one after it is labelled, the plain one before isn't.
 func TestRenderTranscriptInboundKeepsAttributions(t *testing.T) {
-	attr := contracts.Attribution{LinkID: "lnk_1", SourceName: "Leader"}
+	attr := contracts.Attribution{SourceName: "Leader", Kind: "message", Relation: "your leader"}
 	msgs := []provider.Message{
 		{Role: "user", Text: "first"},
 		{Role: "inbound", Text: "from outside", Inbound: &provider.Inbound{Channel: "peer", From: "a", FromName: "x"}},
-		{Role: "user", Text: "injected"},
+		{Role: "user", Text: linkwrap.Wrap("injected", attr)},
 	}
 	var asked []string
-	out := renderTranscript(msgs, map[int]contracts.Attribution{2: attr}, func(in *provider.Inbound, _ time.Time) *contracts.InboundSource {
+	out := renderTranscript(msgs, func(in *provider.Inbound, _ time.Time) *contracts.InboundSource {
 		asked = append(asked, in.From)
 		return &contracts.InboundSource{Channel: in.Channel, Provider: "p", FromName: in.FromName}
 	})
 	if out[0].Attribution != nil || out[1].Attribution != nil {
 		t.Errorf("attribution on the wrong entry: %+v", out)
 	}
-	if out[2].Attribution == nil || *out[2].Attribution != attr {
+	if out[2].Attribution == nil || *out[2].Attribution != attr || out[2].Text != "injected" {
 		t.Errorf("injected turn attribution = %+v, want %+v", out[2].Attribution, attr)
 	}
 	if out[1].Role != "inbound" || out[1].Inbound == nil || out[1].Inbound.FromName != "x" || len(asked) != 1 {

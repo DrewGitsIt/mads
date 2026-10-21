@@ -124,6 +124,9 @@ func TestDeliverSignalWakesNonManualReaders(t *testing.T) {
 	if req.Attribution.SourceName != "watched session" {
 		t.Errorf("attribution source = %q, want watched session", req.Attribution.SourceName)
 	}
+	if req.Attribution.Kind != "signal" || req.Attribution.Relation != "a session you monitor" {
+		t.Errorf("attribution = %+v, want a signal from a session you monitor", req.Attribution)
+	}
 	if !req.Attribution.DigestAttributed {
 		t.Error("signal delivery not digest-attributed; monitor turns could self-amplify")
 	}
@@ -328,6 +331,9 @@ func TestDeliverSignalTaskTerminalReachesImplicitHandRaiser(t *testing.T) {
 	}
 	if req.Attribution.SourceName != "your pipeline run" {
 		t.Errorf("attribution source = %q, want your pipeline run", req.Attribution.SourceName)
+	}
+	if req.Attribution.Kind != "signal" || req.Attribution.Relation != "your pipeline run" {
+		t.Errorf("attribution = %+v, want a signal from your pipeline run", req.Attribution)
 	}
 	if !req.Attribution.DigestAttributed {
 		t.Error("implicit task-terminal delivery not digest-attributed; the forced turn could self-amplify")

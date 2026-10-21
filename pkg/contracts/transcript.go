@@ -167,6 +167,19 @@ type Attribution struct {
 	// digest-attributed is excluded from re-triggering digestwatch, so a
 	// monitor's own forced turn can't self-amplify a monitor chain.
 	DigestAttributed bool `json:"digest_attributed,omitempty"`
+	// Kind is what the message is: "message" (a linked session's message),
+	// "digest", "signal" or "notice" (MADS itself). Empty at delivery means
+	// "message". Together with SourceName, Relation and Turn it is written
+	// into the message text as the pkg/linkwrap wrapper, which is where a
+	// transcript's Attribution comes from — LinkID is not carried there.
+	Kind string `json:"kind,omitempty"`
+	// Relation is the sender seen from the RECIPIENT: "your leader", "a
+	// session monitoring you", "a session you lead", "a session you
+	// monitor", "your pipeline run". Empty for MADS's own notices.
+	Relation string `json:"relation,omitempty"`
+	// Turn is, on a digest, the subject session's transcript turn the digest
+	// covers up to (get_session_turns' 1-based turn model); 0 when unknown.
+	Turn int `json:"turn,omitempty"`
 }
 
 // InjectRequest is the body of POST /inject (session-service) and

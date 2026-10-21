@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/linkwrap"
 	"github.com/drewkidwell/mads/pkg/toolstatus"
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -42,10 +43,6 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 	ref := r.lastRef
 	providerName := r.providerName
 	sess := r.sess
-	attrs := make(map[int]contracts.Attribution, len(r.turnAttributions))
-	for k, v := range r.turnAttributions {
-		attrs[k] = v
-	}
 	if sess != nil {
 		ref = sess.Ref()
 	}
@@ -65,7 +62,7 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 	if sess != nil {
 		if lt, ok := sess.(transcripter); ok {
 			if msgs := lt.Transcript(); len(msgs) > 0 {
-				return renderTranscript(msgs, attrs, r.inboundSourcer(ctx))
+				return renderTranscript(msgs, r.inboundSourcer(ctx))
 			}
 		}
 	}
@@ -85,7 +82,7 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 		log.Printf("runner: transcript: read %s: %v", r.sessionID, err)
 		return out
 	}
-	return renderTranscript(msgs, attrs, r.inboundSourcer(ctx))
+	return renderTranscript(msgs, r.inboundSourcer(ctx))
 }
 
 // inboundSourcer is renderTranscript's inbound resolution for this session.
@@ -96,18 +93,19 @@ func (r *Runner) inboundSourcer(ctx context.Context) func(*provider.Inbound, tim
 }
 
 // renderTranscript maps normalized provider messages to wire TranscriptMessages,
-// attaching per-turn Attribution to each user message, then runs the same T5
+// labels injected user messages from their in-text wrappers (pkg/linkwrap —
+// the same parse the Router's durable transcript runs, so a message reads the
+// same live or asleep; a message with no wrapper is the human's), then runs
+// the same T5
 // tool-status rule engine as the live stream: resolve each recorded call's
 // status from its recorded result; calls with no result stay honestly open (a
 // refetch has no turn-end signal to distinguish "still running" from
 // "interrupted" — see conversation.go).
 //
 // An inbound message (Role "inbound") gets its resolved source from inbound
-// (nil leaves it unresolved) and is not a user turn: it never takes a user
-// ordinal, so the attributions of the turns after it stay put.
-func renderTranscript(msgs []provider.Message, attrs map[int]contracts.Attribution, inbound func(*provider.Inbound, time.Time) *contracts.InboundSource) []contracts.TranscriptMessage {
+// (nil leaves it unresolved).
+func renderTranscript(msgs []provider.Message, inbound func(*provider.Inbound, time.Time) *contracts.InboundSource) []contracts.TranscriptMessage {
 	out := make([]contracts.TranscriptMessage, len(msgs))
-	var userIdx int
 	for i, m := range msgs {
 		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp, IsError: m.IsError}
 		if m.Compact != nil {
@@ -118,14 +116,9 @@ func renderTranscript(msgs []provider.Message, attrs map[int]contracts.Attributi
 		if m.Inbound != nil && inbound != nil {
 			tm.Inbound = inbound(m.Inbound, m.Timestamp)
 		}
-		if m.Role == "user" {
-			userIdx++
-			if a, ok := attrs[userIdx]; ok {
-				tm.Attribution = &a
-			}
-		}
 		out[i] = tm
 	}
+	out = linkwrap.Expand(out)
 	// One call site for the stamp, both source branches — keeps the live-buffer
 	// path and the disk path status-consistent.
 	toolstatus.StampTranscriptStatuses(out)
