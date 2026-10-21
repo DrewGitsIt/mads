@@ -45,7 +45,21 @@ func (p *scriptProvider) Start(_ context.Context, opts provider.StartOptions) (p
 	return s, nil
 }
 
+// Transcript is the store without thinking rows, as the contract has it;
+// KeyedTranscript (provider.KeyedTranscriptReader) is all of it.
 func (p *scriptProvider) Transcript(context.Context, string) ([]provider.Message, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []provider.Message
+	for _, m := range p.rows {
+		if m.Role != "thinking" {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+func (p *scriptProvider) KeyedTranscript(context.Context, string) ([]provider.Message, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]provider.Message(nil), p.rows...), nil

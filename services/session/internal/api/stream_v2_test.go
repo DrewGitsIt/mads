@@ -987,3 +987,46 @@ func TestV2UnsavedPrunedAfterNextTurn(t *testing.T) {
 		t.Fatalf("a resume from before both turns got %v", got)
 	}
 }
+
+// Thinking the agent stores settles by key like any item, against the
+// keyed store read, and the keyed transcript serves it as a thinking row;
+// plain /transcript never carries one. Thinking it doesn't store is
+// unsaved.
+func TestV2ThinkingSettlesAgainstKeyedStore(t *testing.T) {
+	turn := func(n string) []provider.Event {
+		return []provider.Event{
+			{Kind: provider.EventThinking, Key: "th" + n, Text: "plan " + n},
+			{Kind: provider.EventText, Key: "k" + n, Text: "reply " + n},
+			{Kind: provider.EventTurnEnd},
+		}
+	}
+	p := newScriptProvider("scripted", map[string][]provider.Event{"one": turn("1"), "two": turn("2")})
+	srv, _ := startRunner(t, p, fastSettle)
+	live := openV2(t, srv.URL, "", "")
+	postMessage(t, srv, "one")
+	id := keyOf(ofKind(live.waitKind(t, "user_message", 1), "user_message")[0])
+	p.store(provider.Message{Role: "user", Text: "one", Key: id},
+		provider.Message{Role: "thinking", Text: "plan 1", Key: "th1"},
+		provider.Message{Role: "agent", Text: "reply 1", Key: "k1"})
+	fs := live.wait(t, "th1 to settle", func(fs []v2Frame) bool {
+		return slices.ContainsFunc(ofKind(fs, "settled"), func(f v2Frame) bool { return slices.Contains(f.keys(), "th1") })
+	})
+	if slices.ContainsFunc(ofKind(fs, "unsaved"), func(f v2Frame) bool { return slices.Contains(f.keys(), "th1") }) {
+		t.Fatalf("stored thinking declared unsaved:\n%s", dump(fs))
+	}
+	if !slices.ContainsFunc(transcriptRows(t, srv), func(m contracts.TranscriptMessage) bool { return m.Role == "thinking" && m.Key == "th1" }) {
+		t.Fatal("no thinking row in /transcript?v=2")
+	}
+	_, legacy := getBody(t, srv.URL+"/transcript")
+	if bytes.Contains(legacy, []byte(`"thinking"`)) {
+		t.Fatalf("plain /transcript carries thinking: %s", legacy)
+	}
+
+	// Turn two's thinking is never stored: unsaved.
+	postMessage(t, srv, "two")
+	id2 := keyOf(ofKind(live.waitKind(t, "user_message", 2), "user_message")[1])
+	p.store(provider.Message{Role: "user", Text: "two", Key: id2}, provider.Message{Role: "agent", Text: "reply 2", Key: "k2"})
+	live.wait(t, "th2 unsaved", func(fs []v2Frame) bool {
+		return slices.ContainsFunc(ofKind(fs, "unsaved"), func(f v2Frame) bool { return slices.Equal(f.keys(), []string{"th2"}) })
+	})
+}
