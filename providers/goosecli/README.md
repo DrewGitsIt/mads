@@ -25,7 +25,8 @@ row says so.
 | OneShotStream | **Emulated** | Same path; `OnEvent` streams genuinely incrementally (per-chunk `agent_message_chunk`s). |
 | Resume | **Native** | `session/load` (`loadSession:true`, `acp-transcript.jsonl` line 2) replays history as coalesced `session/update` notifications before its response resolves (`acp-load-replay.jsonl`); the engine suppresses the replay from the live event stream. |
 | RefAnnounce | **Emulated** | The ACP ref is Native-strength — `session/new` returns `sessionId` synchronously, so `Ref()` is set at Start-return. The PTY ref rides a cosmetic banner parse (`pty-banner.raw`: the id sits in ANSI-dim art, matched ANSI-stripped as `(\d{8}_\d+)\s+·`) that a goose redesign could break. Emulated is the honest one-row summary across both transports. |
-| Transcript | **Native** | `goose session export --session-id <ref> --format json` (`oneshot-export.json`) — goose's own session store, no ACP spawn. Richer than kirocli's load-replay approach: unix `created` timestamps per entry, `userVisible:false` injected turn-context entries filterable, tool blocks with correlation ids. |
+| Transcript | **Native** | goose's own store, `sessions.db`, read directly (store.go) — read-only, incrementally by row id (`TranscriptSince`), with `goose session export --session-id <ref> --format json` (`oneshot-export.json`) as the fallback when the store's private schema isn't the known one. Both give unix `created` stamps, `userVisible:false` turn-context rows to filter, and tool blocks with correlation ids. See "Conversation keys and the store". |
+| StableKeys | **Native** | goose's live ids are its stored ids: text `<messageId>@<created>:<run>`, tools `toolCallId`, user rows `user:<stored id>` (no KeyedSender: goose stores no caller id). See "Conversation keys and the store". |
 | ModelDiscovery | **Native** | The live agent's `model` configOption carries `options[]` + `currentValue` (`acp-transcript.jsonl` lines 3-4, 10-12); the engine's DiscoverModels reads it — no LLM call, no static list. |
 | CostReporting | **Native** | The prompt result carries `usage{totalTokens,inputTokens,outputTokens}` (`acp-transcript.jsonl` line 35), and `usage_update` notifications carry `{used,size}` context occupancy. |
 | ACP | **Native** | `goose acp --with-builtin developer` — the captured spawn shape. |
@@ -188,6 +189,51 @@ are honestly **Unsupported**: no command blocklist, no path-scoped write
 restriction, and the read_only trust emulation above is a coarser
 mechanism than the `read_only` intent claims (goosecli.go `IntentMatrix`).
 
+## Conversation keys and the store
+
+docs/CHAT-STREAM-DESIGN.md §1 keys every item identically live and stored.
+Evidence: `testdata/captures/keys/` (goose 1.50.1, survey 2026-10-20 — the
+wire of five turns next to every row goose inserted into its store).
+
+| Item | Key | Why it holds |
+|---|---|---|
+| Assistant text | `<messageId>@<created>:<run>` | Every chunk carries the model call's `messageId` and `_meta.goose.created`; the stored row has the same `message_id` and, as `created_timestamp`, the **first** chunk's `created` (later chunks carry later seconds: `chatcmpl-17` spans 372–375, stored 372). ollama's ids are `chatcmpl-0..999` and repeat within a session (27 repeated pairs in a real store), so `created` is part of the key. `run` is the item's index among the message's text and thinking items (thinking isn't a transcript row, but counts). |
+| Tool call / result | `toolCallId` | Live, a tool call's `_meta` carries the *preceding text's* messageId; stored, the call is a row of its own (`msg_<uuid>`, sometimes a chatcmpl id), so only the call id is the same on both sides. |
+| User message | `user:<stored message id>` | goose doesn't echo the prompt and stores no caller id (no `KeyedSender`), but stores the text byte-identical; the session child matches mads's send to this row on settle. |
+
+Filtered: the hidden `<turn-context>` row goose writes after every prompt
+(`userVisible:false`) — as is anything goose marks `userVisible:false`,
+the same rule the export reader always had.
+
+**Why `sessions.db` and not `export`.** The session child re-reads the
+store after every settle hint (§3) — each tool completion and each turn
+end. `goose session export` spawns goose and re-serialises the whole
+session as JSON every time: a long session would pay a process start and a
+full dump per tool call. The store is a SQLite file goose already writes,
+in conversation order and (live) insert-only, so a row-id cursor reads only
+what's new. It's read `mode=ro`/`query_only`, from where the spawned goose
+keeps it: `$GOOSE_PATH_ROOT/data/sessions/sessions.db` for an absolute
+`GOOSE_PATH_ROOT`, else `$XDG_DATA_HOME` (absolute) or `~/.local/share`,
+then `goose/sessions/sessions.db` (goose `paths.rs`, macOS included).
+
+**Guards on a private schema.** The preflight window (goose 1.46–1.51)
+keeps an untested goose from running at all; `checkStoreSchema` checks
+every table and column the reader touches (and a row that won't decode
+counts the same). On a mismatch — or no store, or no row for the session —
+`Transcript` falls back to `goose session export` (same ids, same keys) and
+`TranscriptSince` returns `ErrUnsupported`.
+
+**The cursor.** `{last row id, rows at or below it}`. goose rewrites a
+session only by deleting rows (`replace_conversation` for compaction,
+truncation for edits); either changes that count, and the read answers
+`ErrCursorStale`.
+
+**Settle hints** (`EventSettle`, only with `StartOptions.SettleHints`):
+after each tool completion — goose writes the tool call, its result and
+the text before them only once the tool is done (6 s after the call for
+`sleep 6`) — and at the prompt response. A long tool keeps that text
+unsettled for its whole run; that's goose, not the reader.
+
 ## Testing without goose installed
 
 - `fakegoose_test.go` re-execs the test binary as a scripted goose
@@ -202,9 +248,21 @@ mechanism than the `read_only` intent claims (goosecli.go `IntentMatrix`).
   `acp --with-builtin developer`.
 - `TestConformanceAgainstScriptedBinary` runs the full
   `providers/conformance` suite against that stand-in in CI — every
-  declared matrix row, zero real-binary dependency. Cross-process resume,
-  recall, and transcript ride one `MADS_FAKE_EXPORT_DIR` store the fake
-  rewrites synchronously inside each prompt handler.
+  declared matrix row, stable_keys included, zero real-binary dependency.
+  Cross-process resume, recall, transcript and keys ride a real
+  `sessions.db` (goose's schema, `testdata/sessions-schema.sql`) under the
+  test's scratch `GOOSE_PATH_ROOT`, written the way goose writes it: user
+  and `<turn-context>` rows when a prompt arrives, a message under its
+  messageId and first created stamp, ids from a pool of three (ollama's
+  repeat), and a tool call — with the text before it — only once the tool
+  is done. Every test provider gets a scratch `GOOSE_PATH_ROOT`, so no test
+  reads the real store.
+- `store_test.go` reads the survey session's own store rows
+  (`testdata/captures/keys/run.store.jsonl`) and expects exactly the keys
+  acprpc derives live from that session's wire (`acprpc/keys_test.go`):
+  collisions told apart by `created`, turn-context filtered, chained
+  `TranscriptSince` = `Transcript`, a rewrite → `ErrCursorStale`, and a
+  renamed column → export fallback + `ErrUnsupported`.
 - The real-binary evidence base is the committed captures themselves
   (`testdata/captures/`) — byte-replayed through the engine in
   `providers/acprpc/replay_test.go`, which is stronger than a smoke test:

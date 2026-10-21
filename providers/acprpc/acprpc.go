@@ -178,7 +178,7 @@ type Config struct {
 	// names no item identity: agents put their own on the wire, or none.
 	// goose stamps every chunk with the model call's messageId plus
 	// _meta.goose.created, and the store keeps both (survey 2026-10-20,
-	// goosecli testdata/captures/keys/run.wire.jsonl lines 13-14 and
+	// goosecli testdata/captures/keys/run.wire.jsonl lines 15-16 and
 	// run.store.jsonl rows 3, 6); hermes stamps a UUID4 messageId per
 	// model call that it never stores (hermescli testdata/captures/keys/
 	// runc1.wire.jsonl); kiro-cli is uncaptured. The zero value emits no

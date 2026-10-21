@@ -207,7 +207,7 @@ untouched.
 | OneShot | **Emulated** | Rides the engine's ACP emulation (`acprpc.Engine.OneShot`) — honest because it is not the CLI's native one-shot; supersedes the `goose run` plan. Ref is Native-strength: session/new returns it synchronously. See "OneShot". |
 | OneShotStream | **Emulated** | Same path: `OnEvent` streams the ACP session/update events genuinely incrementally. |
 | Resume | **Native** | `loadSession:true` in initialize; `session/load` replay-then-respond confirmed live (pinned: `testdata/captures/acp-load-replay.jsonl`). Ref = goose sessionId (`20260829_2` format). |
-| Transcript | **Native** | `session export --format json` verified — richer than kirocli's session/load-replay approach (timestamps, usage, no process spawn). Filter entries with `metadata.userVisible == false` (injected `<turn-context>` blocks) and `metadata.turnContext == true`. |
+| Transcript | **Native** | `session export --format json` verified — richer than kirocli's session/load-replay approach (timestamps, usage, no process spawn). Filter entries with `metadata.userVisible == false` (injected `<turn-context>` blocks) and `metadata.turnContext == true`. Since C1 the reader reads `sessions.db` first, export as fallback ("Transcript normalization"). |
 | ModelDiscovery | **Native** | Probe: spawn `goose acp`, initialize, `session/new` (cwd = temp dir), read the `model` configOption's options + `currentValue` (→ `Default`), `session/close`, exit. No LLM call involved. v1 returns the *active provider's* models (bare IDs); cross-provider composite IDs (`provider/model`) are a noted extension. |
 | CostReporting | **Native** | `session/prompt` result carries `usage{totalTokens,inputTokens,outputTokens}` — confirmed live on the captured turn-1 result (pinned: `testdata/captures/acp-transcript.jsonl` line 35) → `Usage` on EventTurnEnd. `usage_update` notifications additionally carry `{used, size, cost{amount,currency}}`. Smoke asserts usage presence. |
 | ACP | **Native** | The real thing, official SDK, schema v1. |
@@ -426,7 +426,18 @@ message via `goose session export --session-id <id>` (skip
 `userVisible:false` context entries). 0 or 2+ candidates ⇒ `ok=false` —
 never guess (provider.go contract).
 
-## Transcript normalization (transcript.go)
+## Transcript normalization (transcript.go, store.go)
+
+**Source (2026-10-21, chat-stream C1).** The reader reads goose's own
+`sessions.db` directly — read-only, incrementally by row id — and falls
+back to `goose session export` only when the store's private schema isn't
+the known one (column guard) or the store doesn't hold the session. Export
+spawns goose and re-serialises the whole session per call, and the session
+child re-reads after every settle hint (docs/CHAT-STREAM-DESIGN.md §3).
+Both sources carry each message's id and `created`, from which the reader
+derives the conversation keys acprpc also derives live (README
+"Conversation keys and the store"). The normalization below applies to
+both.
 
 `goose session export --session-id <ref> --format json` →
 `conversation[]` → `[]provider.Message`:
@@ -448,7 +459,12 @@ never guess (provider.go contract).
 Golden-pin the normalization against a captured real export
 (claudecode/transcript convention).
 
-**Live-turn transcript (assistant-reply gap, closed).** The ACP transport has
+**Live-turn transcript (assistant-reply gap, closed; superseded by C2).**
+The paragraph below is how the runner reads a live goose session today.
+docs/CHAT-STREAM-DESIGN.md makes the engine's buffer the live *tail* only,
+and history the store reader above (C2 changes the runner).
+
+The ACP transport has
 **no on-disk transcript** of its own the way claude-code's `.jsonl` does — the
 disk path above (`goose session export`) is a *resumed / retrospective* read
 that lags an in-flight turn. So the `acprpc` engine's `streamSession` now

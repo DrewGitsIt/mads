@@ -9,7 +9,8 @@
 // provenance) and also feeds the engine's replay tests.
 //
 // The PTY transport (`goose session` with banner ref discovery) lives in
-// pty.go, TranscriptReader (`session export`) in transcript.go, and the
+// pty.go, TranscriptReader (sessions.db, export fallback) in transcript.go
+// and store.go, and the
 // SessionLocator backstop (`session list` + export verification) in
 // locate.go. Not yet wired, its own chained task: registration.
 package goosecli
@@ -191,6 +192,18 @@ func (p *Provider) engineConfig() acprpc.Config {
 		// but its summary ignores text after the command. Both pinned by a
 		// goose 1.50.1 probe, acprpc testdata/captures/goose-acp-compact.jsonl.
 		CompactCommand: "/compact",
+		// Every chunk carries the model call's messageId and
+		// _meta.goose.created, which sessions.db stores as the message's
+		// message_id and created_timestamp (testdata/captures/keys:
+		// run.wire.jsonl lines 15-16 vs run.store.jsonl row 3); ollama's
+		// ids repeat (chatcmpl-0..999, 27 repeats in a real store), so the
+		// created stamp is part of the key. store.go derives the same keys.
+		Keys: acprpc.KeyStrategy{Mode: acprpc.KeyModeMessageRun, CreatedNamespace: "goose"},
+		// goose writes a tool call, its result and the text before it only
+		// once the tool finishes (lag.txt: 6025 ms for `sleep 6`), and the
+		// turn's last message before the prompt response (4-37 ms after
+		// its last chunk).
+		Settle: acprpc.SettlePoints{ToolDone: true, PromptResponse: true},
 	}
 }
 
@@ -255,13 +268,17 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorDelegateTranscript: provider.Unsupported,
 		provider.BehaviorDelegateSteer:      provider.Unsupported,
 		provider.BehaviorDelegateStop:       provider.Unsupported,
-		// C1 in progress: each adapter declares its real stance with its keys.
-		provider.BehaviorStableKeys: provider.Unsupported,
+		// The live ids are the stored ones: text keyed
+		// <messageId>@<created>:<run>, tools by toolCallId, on the wire
+		// (engineConfig Keys) and in sessions.db (store.go). User rows are
+		// keyed by goose's own id — goose stores no caller id, so no
+		// KeyedSender.
+		provider.BehaviorStableKeys: provider.Native,
 		// `goose session` under a pty (pty.go).
 		provider.BehaviorPTY: provider.Native,
-		// `session export --format json` (transcript.go) — richer than
-		// kirocli's session/load-replay approach: timestamps, no ACP spawn
-		// (design doc matrix row).
+		// goose's own sessions.db, read-only and incrementally (store.go),
+		// with `session export --format json` as the fallback when the
+		// store's schema isn't the known one (transcript.go).
 		provider.BehaviorTranscript: provider.Native,
 		// No provider-layer branching surface exists yet (goose's
 		// session/fork is real — flip when mads grows the surface); no cwd

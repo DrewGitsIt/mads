@@ -21,8 +21,13 @@ package goosecli
 
 import (
 	"bufio"
+	"crypto/rand"
+	"database/sql"
+	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +36,9 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+//go:embed testdata/sessions-schema.sql
+var sessionsSchema string
 
 func TestMain(m *testing.M) {
 	if os.Getenv("MADS_FAKE_GOOSE") == "1" {
@@ -160,36 +168,76 @@ func fgReplayFile(path string) {
 	_, _ = os.Stdout.Write(raw)
 }
 
-// fgConvEntry / fgConvContent are the persisted conversation shape — one
-// export-format `conversation[]` entry as transcript.go parses it
-// (testdata/captures/oneshot-export.json convention: role, unix `created`,
-// text content blocks).
-type fgConvEntry struct {
-	Role    string          `json:"role"`
-	Created int64           `json:"created"`
-	Content []fgConvContent `json:"content"`
-}
+// The stand-in's store is a real sessions.db under $GOOSE_PATH_ROOT/data/
+// sessions, built from goose's own schema (testdata/sessions-schema.sql)
+// and written the way goose writes it (survey testdata/captures/keys): the
+// user row and a hidden <turn-context> row when a prompt arrives, each
+// assistant message under its messageId and its first chunk's created,
+// and a tool call — with the text before it — only once the tool is done,
+// as rows of their own (msg_<uuid> ids). It serves resume (session/load
+// replays it), recall, and the TranscriptReader. Message ids come from a
+// pool of three, as ollama's chatcmpl-0..999 repeat; the created stamps
+// (a fake clock, ten seconds per message, later chunks a second on) are
+// what tell them apart.
 
-type fgConvContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-// fgWriteExport rewrites the session's export file — the single store that
-// serves resume (session/load rebuilds history from it), recall, AND the
-// transcript probe (`goose session export` replays it via fgSessionQuery).
-// Callers invoke it synchronously inside the session/prompt handler before
-// the response resolves, so a probe reading the file after its turn ends
-// can never race the write.
-func fgWriteExport(dir, id, cwd, mode string, conv []fgConvEntry) {
-	if dir == "" || id == "" {
-		return
+// openFakeStore opens (creating from goose's schema if needed) a
+// sessions.db for writing — shared by the stand-in and the fixture tests.
+func openFakeStore(path string) (*sql.DB, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
 	}
-	raw, _ := json.Marshal(map[string]any{
-		"id": id, "working_dir": cwd, "goose_mode": mode, "conversation": conv,
-	})
-	_ = os.WriteFile(filepath.Join(dir, id+".json"), raw, 0o644)
+	dsn := "file:" + url.PathEscape(path) + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	var n int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name = 'messages'").Scan(&n); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if n == 0 {
+		// sqlite_sequence is SQLite's own; the dump lists it, CREATE can't.
+		schema := strings.Replace(sessionsSchema, "CREATE TABLE sqlite_sequence(name,seq);", "", 1)
+		if _, err := db.Exec(schema); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
+	return db, nil
 }
+
+// fgStorePath is the stand-in's sessions.db, where goosecli.storePath
+// looks for it.
+func fgStorePath() string {
+	root := os.Getenv("GOOSE_PATH_ROOT")
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, "data", "sessions", "sessions.db")
+}
+
+func fgUUID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	h := hex.EncodeToString(b)
+	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
+}
+
+// fgRow is one messages row to insert.
+type fgRow struct {
+	id, role string
+	created  int64
+	content  []map[string]any
+	meta     map[string]any
+}
+
+func fgText(text string) []map[string]any {
+	return []map[string]any{{"type": "text", "text": text}}
+}
+
+var fgVisible = map[string]any{"userVisible": true, "agentVisible": true}
 
 // fgModes is the captured availableModes set (acp-transcript.jsonl line 4),
 // served on both session/new and session/load results.
@@ -241,12 +289,40 @@ func fgServe() {
 	var id, cwd, mode, sysPrompt string
 	model := "qwen3.8"
 	mode = "auto"
-	// Cross-process persistence (resume/recall/transcript): the in-memory
-	// conversation is rewritten to $MADS_FAKE_EXPORT_DIR/<id>.json inside
-	// each prompt handler; session/load rebuilds both from the file.
-	exportDir := os.Getenv("MADS_FAKE_EXPORT_DIR")
-	var conv []fgConvEntry
+	// Cross-process persistence (resume/recall/transcript): sessions.db,
+	// written as each message completes; session/load replays it.
+	var db *sql.DB
+	if path := fgStorePath(); path != "" {
+		var err error
+		if db, err = openFakeStore(path); err != nil {
+			fmt.Fprintln(os.Stderr, "fakegoose: store:", err)
+			os.Exit(1)
+		}
+		defer func() { _ = db.Close() }()
+	}
+	insert := func(rows ...fgRow) {
+		if db == nil {
+			return
+		}
+		for _, r := range rows {
+			content, _ := json.Marshal(r.content)
+			meta, _ := json.Marshal(r.meta)
+			if _, err := db.Exec(`INSERT INTO messages (message_id, session_id, role, content_json, created_timestamp, metadata_json)
+				VALUES (?, ?, ?, ?, ?, ?)`, r.id, id, r.role, string(content), r.created, string(meta)); err != nil {
+				fmt.Fprintln(os.Stderr, "fakegoose: insert:", err)
+				os.Exit(1)
+			}
+		}
+	}
 	var userHistory []string
+	// The fake clock and id pool (see the store comment above).
+	clock := time.Now().Unix()
+	msgSeq := 0
+	nextMessage := func() (string, int64) {
+		msgSeq++
+		clock += 10
+		return fmt.Sprintf("chatcmpl-%d", msgSeq%3), clock
+	}
 
 	msgs := make(chan fgMessage)
 	go func() {
@@ -279,16 +355,55 @@ func fgServe() {
 	chunk := func(text string) {
 		notifyUpdate(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}})
 	}
+	// say streams one assistant message the way goose 1.50.1 does
+	// (captures/keys run.wire.jsonl): every chunk carries the messageId
+	// and _meta.goose.created, later chunks a second later. It returns the
+	// row goose would store for it.
+	say := func(chunks ...string) fgRow {
+		msgID, created := nextMessage()
+		for i, c := range chunks {
+			stamp := created
+			if i > 0 {
+				stamp++
+			}
+			notifyUpdate(map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": msgID,
+				"content": map[string]any{"type": "text", "text": c},
+				"_meta":   map[string]any{"goose": map[string]any{"created": stamp, "messageId": msgID}}})
+		}
+		return fgRow{id: msgID, role: "assistant", created: created, content: fgText(strings.Join(chunks, "")), meta: fgVisible}
+	}
+	// lastMsg is the latest message's id and created, which goose puts on
+	// a tool call's _meta (the preceding text's).
+	lastMsg := func() (string, int64) { return fmt.Sprintf("chatcmpl-%d", msgSeq%3), clock }
+	// toolRows are the rows goose stores for a finished tool call: the
+	// request as an assistant row of its own and the response as a user
+	// row, both msg_<uuid>.
+	toolRows := func(callID, name string, input map[string]any, status, text string) []fgRow {
+		return []fgRow{
+			{id: "msg_" + fgUUID(), role: "assistant", created: clock, meta: fgVisible, content: []map[string]any{{
+				"type": "toolRequest", "id": callID,
+				"toolCall": map[string]any{"status": "success", "value": map[string]any{"name": name, "arguments": input}},
+			}}},
+			{id: "msg_" + fgUUID(), role: "user", created: clock, meta: fgVisible, content: []map[string]any{{
+				"type": "toolResponse", "id": callID,
+				"toolResult": map[string]any{"status": "success", "value": map[string]any{
+					"content": []map[string]any{{"type": "text", "text": text}}, "isError": status == "failed"}},
+			}}},
+		}
+	}
 	toolCall := func(callID string, a fgAttempt) {
 		notifyUpdate(map[string]any{
 			"sessionUpdate": "tool_call", "toolCallId": callID, "title": a.title, "rawInput": a.input,
 			// The capture's _meta shape (acp-transcript.jsonl line 18): bare
 			// toolName, extension in extensionName, vendor noise alongside.
-			"_meta": map[string]any{"goose": map[string]any{
-				"toolCall":  map[string]any{"toolName": a.name, "extensionName": a.ext},
-				"created":   1788032677,
-				"messageId": "chatcmpl-194",
-			}},
+			"_meta": func() map[string]any {
+				msgID, created := lastMsg()
+				return map[string]any{"goose": map[string]any{
+					"toolCall":  map[string]any{"toolName": a.name, "extensionName": a.ext},
+					"created":   created,
+					"messageId": msgID,
+				}}
+			}(),
 		})
 	}
 	toolDone := func(callID, status, text string) {
@@ -365,14 +480,12 @@ func fgServe() {
 		}
 		if allowed {
 			toolDone(callID, "completed", "ran "+a.title)
+			insert(toolRows(callID, a.name, a.input, "completed", "ran "+a.title)...)
 			return "used " + a.title
 		}
 		toolDone(callID, "failed", "The user has declined to run this tool")
+		insert(toolRows(callID, a.name, a.input, "failed", "The user has declined to run this tool")...)
 		return "denied via " + outcome
-	}
-
-	record := func(role, text string) {
-		conv = append(conv, fgConvEntry{Role: role, Created: time.Now().Unix(), Content: []fgConvContent{{Type: "text", Text: text}}})
 	}
 
 	hasMCPServers := func(params json.RawMessage) bool {
@@ -412,6 +525,12 @@ func fgServe() {
 			// and a %1000 truncation risks cross-process id collisions. The
 			// id shape is only ever matched as \d{8}_\d+.
 			id = fmt.Sprintf("20260921_%d", os.Getpid())
+			if db != nil {
+				if _, err := db.Exec("INSERT INTO sessions (id, working_dir, goose_mode) VALUES (?, ?, ?)", id, cwd, mode); err != nil {
+					fmt.Fprintln(os.Stderr, "fakegoose: session:", err)
+					os.Exit(1)
+				}
+			}
 			respond(m.ID, map[string]any{
 				"sessionId":     id,
 				"modes":         map[string]any{"currentModeId": mode, "availableModes": fgModes()},
@@ -431,35 +550,53 @@ func fgServe() {
 			}
 			_ = json.Unmarshal(m.Params, &p)
 			id, cwd = p.SessionID, p.Cwd
-			raw, err := os.ReadFile(filepath.Join(exportDir, id+".json"))
-			if err != nil {
+			var storedMode string
+			if db == nil || db.QueryRow("SELECT goose_mode FROM sessions WHERE id = ?", id).Scan(&storedMode) != nil {
 				respondErr(m.ID, -32603, "Session not found: "+id, nil)
 				continue
 			}
-			var doc struct {
-				GooseMode    string        `json:"goose_mode"`
-				Conversation []fgConvEntry `json:"conversation"`
-			}
-			_ = json.Unmarshal(raw, &doc)
-			if doc.GooseMode != "" {
-				mode = doc.GooseMode
-			}
-			conv = doc.Conversation
+			mode = storedMode
 			userHistory = nil
 			// Replay coalesced per message, BEFORE the response resolves —
 			// the capture's replay convention (acp-load-replay.jsonl; the
 			// engine's replaying window is only open during the request).
-			for _, e := range conv {
-				var text strings.Builder
-				for _, c := range e.Content {
-					text.WriteString(c.Text)
+			// Hidden rows stay hidden, as goose's replay keeps them.
+			rows, err := db.Query("SELECT role, content_json, metadata_json FROM messages WHERE session_id = ? ORDER BY id", id)
+			if err != nil {
+				respondErr(m.ID, -32603, err.Error(), nil)
+				continue
+			}
+			type replayed struct{ role, text string }
+			var history []replayed
+			for rows.Next() {
+				var role, content, meta string
+				_ = rows.Scan(&role, &content, &meta)
+				if strings.Contains(meta, `"userVisible":false`) {
+					continue
 				}
-				switch e.Role {
+				var blocks []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				}
+				_ = json.Unmarshal([]byte(content), &blocks)
+				var text strings.Builder
+				for _, b := range blocks {
+					if b.Type == "text" {
+						text.WriteString(b.Text)
+					}
+				}
+				if text.Len() > 0 {
+					history = append(history, replayed{role, text.String()})
+				}
+			}
+			_ = rows.Close()
+			for _, h := range history {
+				switch h.role {
 				case "user":
-					userHistory = append(userHistory, text.String())
-					notifyUpdate(map[string]any{"sessionUpdate": "user_message_chunk", "content": map[string]any{"type": "text", "text": text.String()}})
+					userHistory = append(userHistory, h.text)
+					notifyUpdate(map[string]any{"sessionUpdate": "user_message_chunk", "content": map[string]any{"type": "text", "text": h.text}})
 				case "assistant":
-					chunk(text.String())
+					chunk(h.text)
 				}
 			}
 			// The load response carries BOTH modes (the persisted
@@ -529,6 +666,35 @@ func fgServe() {
 			}
 			endTurn := func() { result("end_turn") }
 
+			// goose stores the prompt, then a hidden <turn-context> row,
+			// as the prompt arrives (survey lag.txt: 9-28 ms).
+			insert(fgRow{id: "msg_" + fgUUID(), role: "user", created: clock, content: fgText(prompt), meta: fgVisible},
+				fgRow{id: "msg_" + fgUUID(), role: "user", created: clock, meta: map[string]any{"userVisible": false, "agentVisible": true, "turnContext": true},
+					content: fgText("<turn-context>\n<working-directory>" + cwd + "</working-directory>\n</turn-context>")})
+
+			if prompt == "tool-text" {
+				// The stable_keys probe's turn, as goose ran it in the survey
+				// (captures/keys turn b): a sentence, `shell ls` with live
+				// output, a sentence. The first message and the tool rows land
+				// only once the tool is done.
+				before := say("I'll list ", "the files.")
+				a := fgAttempt{ext: "developer", name: "shell", title: "shell · ls", input: map[string]any{"command": "ls"}}
+				permSeq++
+				callID := fmt.Sprintf("call_%d", permSeq)
+				toolCall(callID, a)
+				notifyUpdate(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": callID, "status": "in_progress",
+					"_meta": map[string]any{"toolNotification": map[string]any{"type": "live_output", "params": map[string]any{
+						"sequence": 1, "chunks": []map[string]any{{"stream": "stdout", "output": "alpha.txt\n"}}}}}})
+				time.Sleep(50 * time.Millisecond)
+				toolDone(callID, "completed", "alpha.txt\nbeta.txt")
+				insert(before)
+				insert(toolRows(callID, a.name, a.input, "completed", "alpha.txt\nbeta.txt")...)
+				insert(say("Two files: ", "alpha.txt and beta.txt."))
+				userHistory = append(userHistory, prompt)
+				endTurn()
+				continue
+			}
+
 			if prompt == "slow" {
 				// kirocli's bounded loop shape: a mid-turn session/cancel
 				// breaks it, so it never swallows a later request. A
@@ -539,8 +705,14 @@ func fgServe() {
 				// (acp-transcript-1.48.0.jsonl lines 86-105); there the
 				// engine's own interrupted flag is the only signal.
 				cancelled := false
+				msgID, created := nextMessage()
+				var sent strings.Builder
 				for i := 0; i < 400 && !cancelled; i++ {
-					chunk(fmt.Sprintf("tick %d ", i))
+					tick := fmt.Sprintf("tick %d ", i)
+					notifyUpdate(map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": msgID,
+						"content": map[string]any{"type": "text", "text": tick},
+						"_meta":   map[string]any{"goose": map[string]any{"created": created, "messageId": msgID}}})
+					sent.WriteString(tick)
 					select {
 					case mm, ok := <-msgs:
 						if !ok || mm.Method == "session/cancel" {
@@ -549,6 +721,10 @@ func fgServe() {
 					case <-time.After(5 * time.Millisecond):
 					}
 				}
+				// A cancelled reply is stored as far as it streamed (survey
+				// captures/keys turn d: chatcmpl-287, partial "1").
+				insert(fgRow{id: msgID, role: "assistant", created: created, content: fgText(sent.String()), meta: fgVisible})
+				userHistory = append(userHistory, prompt)
 				stop := "end_turn"
 				if cancelled {
 					stop = "cancelled"
@@ -579,8 +755,10 @@ func fgServe() {
 			case strings.HasSuffix(prompt, "fail-tool"):
 				permSeq++
 				callID := fmt.Sprintf("call_%d", permSeq)
-				toolCall(callID, fgAttempts["attempt-shell"])
+				a := fgAttempts["attempt-shell"]
+				toolCall(callID, a)
 				toolDone(callID, "failed", "boom: exit 1")
+				insert(toolRows(callID, a.name, a.input, "failed", "boom: exit 1")...)
 				reply = "the tool failed"
 			default:
 				if a, ok := fgAttempts[lastWord(prompt)]; ok {
@@ -589,13 +767,9 @@ func fgServe() {
 			}
 
 			userHistory = append(userHistory, prompt)
-			record("user", prompt)
-			record("assistant", reply)
-			// Synchronous, before the response resolves — the transcript
-			// probe reads the file right after its turn ends.
-			fgWriteExport(exportDir, id, cwd, mode, conv)
-
-			chunk(reply)
+			// Stored before the response resolves, as goose does (4-37 ms
+			// after the last chunk, survey lag.txt).
+			insert(say(reply))
 			endTurn()
 
 		case "session/cancel":
@@ -623,21 +797,24 @@ func lastWord(s string) string {
 // testProvider wires the binding to the stand-in binary. Builtins stays
 // defaulted so the spawn argv is the production shape (the fake asserts
 // it); Env rides engineConfig → the engine's BaseEnv/Env seams → child.
+//
+// Every test provider gets a scratch GOOSE_PATH_ROOT (overridable through
+// extraEnv, last wins): the reader then looks for sessions.db there, never
+// in the real ~/.local/share/goose.
 func testProvider(t *testing.T, extraEnv ...string) *Provider {
 	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(Config{Bin: exe, Env: append([]string{"MADS_FAKE_GOOSE=1"}, extraEnv...)})
+	env := append([]string{"MADS_FAKE_GOOSE=1", "GOOSE_PATH_ROOT=" + t.TempDir()}, extraEnv...)
+	return New(Config{Bin: exe, Env: env})
 }
 
-// conformanceProvider is testProvider plus a shared export dir — the one
-// store serving the suite's cross-process resume, recall, and transcript
-// probes. Deliberately not baked into testProvider: the transcript/locate
-// fixture tests pass their own dirs, and duplicate env keys would be
-// ambiguous.
+// conformanceProvider is testProvider: its GOOSE_PATH_ROOT holds the one
+// sessions.db serving the suite's cross-process resume, recall, transcript
+// and stable-keys probes.
 func conformanceProvider(t *testing.T) *Provider {
 	t.Helper()
-	return testProvider(t, "MADS_FAKE_EXPORT_DIR="+t.TempDir())
+	return testProvider(t)
 }
