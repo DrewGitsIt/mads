@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Chip } from "../../components/Chip/Chip";
-import { Fold, useArrivals } from "../../components/Motion";
+import { FOLD_MS, Fold, useArrivals } from "../../components/Motion";
 import { FLAGS } from "../../featureFlags";
 import { foldToolResults } from "../../router/toolPairing";
 import type {
@@ -122,8 +122,15 @@ const CADENCE_LABEL: Record<Link["cadence"], string> = {
  * monitor-facing push carries) collapses to a quiet-check chip; consecutive
  * quiet checks aggregate into one, keeping the digests it absorbed so the
  * chip can expand to show them. */
-type QuietItem = { key: string; type: "quiet"; digests: QuietDigest[]; sources: string[] };
-type QuietDigest = { key: string; source: string; text: string; cadence?: Link["cadence"] };
+type QuietItem = { key: string; type: "quiet"; digests: QuietDigest[] };
+type QuietDigest = {
+  key: string;
+  source: string;
+  kind: "digest" | "signal";
+  time?: Date;
+  text: string;
+  cadence?: Link["cadence"];
+};
 
 /** A finished activity group of only thinking rows — what a thinking model
  * (claude-code thinks by default) leaves between a digest and its NOOP. A
@@ -138,16 +145,19 @@ function isThinkingOnly(item: ReturnType<typeof buildItems>[number] | undefined)
   );
 }
 
-function DigestCard({ findKey, source, text, cadence }: {
+function DigestCard({ findKey, source, kind = "digest", time, text, cadence }: {
   findKey?: string;
   source: string;
+  kind?: QuietDigest["kind"];
+  time?: Date;
   text: string;
   cadence?: Link["cadence"];
 }) {
   return (
     <div className={styles.digest} data-find={findKey}>
       <div className={styles.digestHeader}>
-        ⌗ digest · <b>{source}</b>
+        ⌗ {kind} · <b>{source}</b>
+        {time && ` · ${formatMessageTime(time)}`}
       </div>
       <Markdown className={styles.prose} text={text} />
       {cadence && <div className={styles.digestCadence}>{CADENCE_LABEL[cadence]}</div>}
@@ -155,22 +165,92 @@ function DigestCard({ findKey, source, text, cadence }: {
   );
 }
 
-/** The quiet-check chip; clicking it reveals the digests it stands for. */
-function QuietChecks({ item }: { item: QuietItem }) {
+/** The sessions behind a pill's updates, in order of first appearance, with
+ * how many updates each sent. */
+function quietSessions(digests: QuietDigest[]): { name: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const d of digests) counts.set(d.source, (counts.get(d.source) ?? 0) + 1);
+  return [...counts].map(([name, count]) => ({ name, count }));
+}
+
+/** What the pill says it is: "4 updates from Pipeline Design Study · no
+ * action needed" — the session names for one or two sources, a count past that. */
+export function quietLabel(digests: QuietDigest[]): string {
+  const names = quietSessions(digests).map((s) => s.name || "a linked session");
+  const n = digests.length;
+  const from =
+    names.length === 1 ? names[0] : names.length === 2 ? `${names[0]} and ${names[1]}` : `${names.length} sessions`;
+  return `${n} ${n === 1 ? "update" : "updates"} from ${from} · no action needed`;
+}
+
+/** The pill for digests and signals the agent answered NOOP; clicking it
+ * reveals them, grouped by session. `ease` is the height (px) of what just
+ * folded into it, shrunk to nothing so the conversation below glides up
+ * instead of jumping. */
+function QuietChecks({ item, ease }: { item: QuietItem; ease?: number }) {
   const [open, setOpen] = useState(false);
-  const n = item.digests.length;
+  const sessions = quietSessions(item.digests);
+  // Oldest first within a session: the transcript order, grouped.
+  const grouped = sessions.flatMap((s) => item.digests.filter((d) => d.source === s.name));
   return (
-    <div className={styles.quietGroup}>
+    <div
+      className={styles.quietGroup}
+      data-ease={ease ? true : undefined}
+      style={ease ? ({ "--ease-from": `${ease}px` } as CSSProperties) : undefined}
+    >
       <div className={styles.quiet}>
         <Chip tone="neutral" pressed={open} onClick={() => setOpen((o) => !o)}>
-          {open ? "▾" : "▸"} {n === 1 ? "1 quiet check" : `${n} quiet checks`} ·{" "}
-          {item.sources.join(", ")} · nothing needed
+          {open ? "▾" : "▸"} {quietLabel(item.digests)}
         </Chip>
       </div>
-      {open &&
-        item.digests.map((d) => (
-          <DigestCard key={d.key} source={d.source} text={d.text} cadence={d.cadence} />
-        ))}
+      {open && (
+        <>
+          <div className={styles.quietSessions}>
+            {sessions.map((s) => `${s.name} ×${s.count}`).join(" · ")}
+          </div>
+          {grouped.map((d) => (
+            <DigestCard key={d.key} source={d.source} kind={d.kind} time={d.time} text={d.text} cadence={d.cadence} />
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** A short title for a notice, so its collapsed row says what it is. The
+ * grant notice (router: orchestrateGrantNotice) is the one worth naming. */
+export function noticeTitle(a: Attribution, text: string): string {
+  if (/^The user has linked you to the session\b[^]*\bas its leader\b/.test(text)) {
+    return "Leader tools provided to this session";
+  }
+  return `Notice from ${a.source_name || "mads"}`;
+}
+
+/** A notice from mads: collapsed to a self-explanatory line, expandable to
+ * the message; "acknowledged" when the agent answered it NOOP. */
+function NoticeRow({ findKey, attribution, text, acknowledged }: {
+  findKey: string;
+  attribution: Attribution;
+  text: string;
+  acknowledged: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={styles.injected} data-find={findKey}>
+      <span className={styles.noticeHead}>
+        <Chip tone="info" pressed={open} onClick={() => setOpen((o) => !o)}>
+          {open ? "▾" : "▸"} [System] {noticeTitle(attribution, text)}
+          {!open && " · expand to show message"}
+        </Chip>
+        {acknowledged && (
+          <span className={styles.noticeAck} title="The agent answered NOOP">
+            acknowledged
+          </span>
+        )}
+      </span>
+      <Fold open={open}>
+        <Markdown className={styles.prose} text={text} />
+      </Fold>
     </div>
   );
 }
@@ -319,19 +399,19 @@ export function ChatRenderer({
     if (runReply >= 0) {
       for (let k = i; k < end; k++) {
         const m = (items[k] as Extract<(typeof items)[number], { type: "message" }>).message;
-        const source = m.attribution!.source_name;
         const digest: QuietDigest = {
           key: items[k].key,
-          source,
+          source: m.attribution!.source_name,
+          kind: kindOf(m.attribution!) === "signal" ? "signal" : "digest",
+          time: parseMessageTime(m.timestamp),
           text: m.text ?? "",
           cadence: digestLink(m.attribution!, links, viewedSessionId, linkName)?.cadence,
         };
         const last = rendered[rendered.length - 1];
         if (last?.type === "quiet") {
           last.digests.push(digest);
-          if (!last.sources.includes(source)) last.sources.push(source);
         } else {
-          rendered.push({ key: items[k].key, type: "quiet", digests: [digest], sources: [source] });
+          rendered.push({ key: items[k].key, type: "quiet", digests: [digest] });
         }
       }
       i = runReply; // the thinking rows and the NOOP reply are consumed by the chip
@@ -340,10 +420,36 @@ export function ChatRenderer({
     rendered.push(item);
   }
 
+  // Folding a digest and its NOOP into a pill drops the stream's height in
+  // one frame. Measure the drop and hand it to the pill as a margin that
+  // shrinks away (QuietChecks), so what's below glides up; the scroller's
+  // stick-to-bottom follows the shrinking height and the browser's scroll
+  // anchoring keeps a reader scrolled up in place.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const quietTotal = rendered.reduce((n, r) => n + (r.type === "quiet" ? r.digests.length : 0), 0);
+  const lastQuiet = [...rendered].reverse().find((r) => r.type === "quiet");
+  const measured = useRef<{ height: number; quiet: number } | null>(null);
+  const [easing, setEasing] = useState<{ key: string; px: number } | null>(null);
+  // Every commit measures against the last one; it sets state only when a
+  // pill grew and the stream shrank, so it settles.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const height = rootRef.current?.offsetHeight ?? 0;
+    const prev = measured.current;
+    measured.current = { height, quiet: quietTotal };
+    if (prev && lastQuiet && quietTotal > prev.quiet && height < prev.height) {
+      setEasing({ key: lastQuiet.key, px: prev.height - height });
+    }
+  });
+  useEffect(() => {
+    if (!easing) return;
+    const t = window.setTimeout(() => setEasing(null), FOLD_MS);
+    return () => window.clearTimeout(t);
+  }, [easing]);
+
   // Find: activity rows and compaction summaries don't render their text, so
   // their matches come from the transcript; everything else is searched as
   // rendered (useFind).
-  const rootRef = useRef<HTMLDivElement>(null);
   const query = find?.query ?? "";
   const matchCase = Boolean(find?.matchCase);
   const skipTools = Boolean(find?.skipTools);
@@ -371,7 +477,7 @@ export function ChatRenderer({
     <div className={styles.stream} ref={rootRef}>
       {rendered.map((item) => {
         if (item.type === "quiet") {
-          return <QuietChecks key={item.key} item={item} />;
+          return <QuietChecks key={item.key} item={item} ease={easing?.key === item.key ? easing.px : undefined} />;
         }
         if (item.type === "activity") {
           return (
@@ -432,17 +538,13 @@ export function ChatRenderer({
         // the sender by relation).
         if (message.attribution && isNotice(message)) {
           return (
-            <div key={item.key} className={styles.injected} data-find={item.key}>
-              <span className={styles.noticeHead}>
-                <Chip tone="info">⇄ from {message.attribution.source_name || "mads"}</Chip>
-                {acknowledged.has(item.key) && (
-                  <span className={styles.noticeAck} title="The agent answered NOOP">
-                    acknowledged
-                  </span>
-                )}
-              </span>
-              <Markdown className={styles.prose} text={message.text ?? ""} />
-            </div>
+            <NoticeRow
+              key={item.key}
+              findKey={item.key}
+              attribution={message.attribution}
+              text={message.text ?? ""}
+              acknowledged={acknowledged.has(item.key)}
+            />
           );
         }
         if (message.attribution && FLAGS.linkedSessions) {
@@ -452,6 +554,8 @@ export function ChatRenderer({
                 key={item.key}
                 findKey={item.key}
                 source={message.attribution.source_name}
+                kind={kindOf(message.attribution) === "signal" ? "signal" : "digest"}
+                time={parseMessageTime(message.timestamp)}
                 text={message.text ?? ""}
                 cadence={digestLink(message.attribution, links, viewedSessionId, linkName)?.cadence}
               />

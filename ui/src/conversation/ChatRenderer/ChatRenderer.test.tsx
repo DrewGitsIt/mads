@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { ChatRenderer } from "./ChatRenderer";
 import { FLAGS } from "../../featureFlags";
 import type { Link, PermissionRequest, TranscriptMessage } from "../../router/types";
@@ -270,7 +270,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
         viewedSessionId="leader-id"
       />,
     );
-    expect(screen.getByText(/1 quiet check · your pipeline run/)).toBeTruthy();
+    expect(screen.getByText(/1 update from your pipeline run · no action needed/)).toBeTruthy();
     expect(screen.queryByText("NOOP")).toBeNull();
   });
 
@@ -288,7 +288,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
         viewedSessionId="leader-id"
       />,
     );
-    expect(screen.getByText(/2 quiet checks · payments refactor/)).toBeTruthy();
+    expect(screen.getByText(/2 updates from payments refactor · no action needed/)).toBeTruthy();
     expect(screen.queryByText("first of the run")).toBeNull();
     expect(screen.queryByText("NOOP")).toBeNull();
   });
@@ -304,9 +304,13 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
       { role: "agent", text: "NOOP" },
     ];
     render(<ChatRenderer messages={messages} links={[makeLink({})]} viewedSessionId="leader-id" />);
-    expect(screen.queryByText(/quiet check/)).toBeNull();
+    expect(screen.queryByText(/updates? from/)).toBeNull();
+    // Collapsed by default, with a title that says what it is.
+    expect(screen.queryByText("You can now direct payments refactor.")).toBeNull();
+    const row = screen.getByRole("button", { name: /Notice from mads/ });
+    expect(row.textContent).toContain("[System] Notice from mads · expand to show message");
+    fireEvent.click(row);
     expect(screen.getByText("You can now direct payments refactor.")).toBeTruthy();
-    expect(screen.getByText("⇄ from mads")).toBeTruthy();
     expect(screen.getByText("acknowledged")).toBeTruthy();
     expect(screen.queryByText("NOOP")).toBeNull();
   });
@@ -328,7 +332,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
         viewedSessionId="leader-id"
       />,
     );
-    expect(screen.getByText(/1 quiet check · payments refactor/)).toBeTruthy();
+    expect(screen.getByText(/1 update from payments refactor · no action needed/)).toBeTruthy();
     expect(screen.queryByText("routine progress digest")).toBeNull();
     expect(screen.queryByText("NOOP")).toBeNull();
   });
@@ -355,7 +359,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
         viewedSessionId="leader-id"
       />,
     );
-    expect(screen.getByText(/2 quiet checks · payments refactor/)).toBeTruthy();
+    expect(screen.getByText(/2 updates from payments refactor · no action needed/)).toBeTruthy();
     // The third digest got a real reply — both render in full.
     expect(screen.getByText("digest three")).toBeTruthy();
     expect(screen.getByText("I'll step in and unblock the task.")).toBeTruthy();
@@ -388,7 +392,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
         thinkingHistory={[{ text: "", timestamp: "2026-10-15T10:00:01Z" }]}
       />,
     );
-    expect(screen.getByText(/1 quiet check · payments refactor/)).toBeTruthy();
+    expect(screen.getByText(/1 update from payments refactor · no action needed/)).toBeTruthy();
     expect(screen.queryByText("thought then noop")).toBeNull();
     // A tool call means the monitor did real work: the pair stays visible.
     expect(screen.getByText("worked then noop")).toBeTruthy();
@@ -415,7 +419,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
         viewedSessionId="leader-id"
       />,
     );
-    const chip = screen.getByRole("button", { name: /2 quiet checks/ });
+    const chip = screen.getByRole("button", { name: /2 updates from payments refactor/ });
     expect(chip.getAttribute("aria-pressed")).toBe("false");
     expect(screen.queryByText("digest one")).toBeNull();
     fireEvent.click(chip);
@@ -555,5 +559,96 @@ describe("ChatRenderer — sends the harness failed", () => {
     expect(screen.queryByText("Login expired · Please run /login")).toBeNull();
     fireEvent.click(count);
     expect(screen.getByText("Login expired · Please run /login")).toBeTruthy();
+  });
+});
+
+describe("ChatRenderer — quiet-update pills", () => {
+  const upd = (source: string, text: string, kind: "digest" | "signal" = "digest", timestamp?: string): TranscriptMessage[] => [
+    { role: "user", text, timestamp, attribution: { source_name: source, kind, relation: "a session you lead" } },
+    { role: "agent", text: "NOOP" },
+  ];
+  const renderPill = (messages: TranscriptMessage[]) => {
+    FLAGS.linkedSessions = true;
+    return render(<ChatRenderer messages={messages} links={[]} viewedSessionId="leader-id" />);
+  };
+
+  it("names one source, singular and plural", () => {
+    renderPill(upd("Pipeline Design Study", "a"));
+    expect(screen.getByText(/^▸ 1 update from Pipeline Design Study · no action needed$/)).toBeTruthy();
+  });
+
+  it("names the source for several updates", () => {
+    renderPill([...upd("MADS Pipeline Design Study", "a"), ...upd("MADS Pipeline Design Study", "b"), ...upd("MADS Pipeline Design Study", "c"), ...upd("MADS Pipeline Design Study", "d")]);
+    expect(screen.getByText(/4 updates from MADS Pipeline Design Study · no action needed/)).toBeTruthy();
+  });
+
+  it("names two sources, and counts three or more", () => {
+    const { unmount } = renderPill([...upd("Pipeline Design Study", "a"), ...upd("Classifier Primer", "b"), ...upd("Pipeline Design Study", "c")]);
+    expect(screen.getByText(/3 updates from Pipeline Design Study and Classifier Primer · no action needed/)).toBeTruthy();
+    unmount();
+    renderPill([...upd("A", "a"), ...upd("B", "b"), ...upd("C", "c"), ...upd("A", "d")]);
+    expect(screen.getByText(/4 updates from 3 sessions · no action needed/)).toBeTruthy();
+  });
+
+  it("expands grouped by session, oldest first, with kind and time", () => {
+    renderPill([
+      ...upd("Pipeline Design Study", "p one", "digest", "2026-10-15T10:00:00Z"),
+      ...upd("Classifier Primer", "c one", "signal"),
+      ...upd("Pipeline Design Study", "p two"),
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: /3 updates/ }));
+    expect(screen.getByText("Pipeline Design Study ×2 · Classifier Primer ×1")).toBeTruthy();
+    const texts = ["p one", "p two", "c one"].map((t) => screen.getByText(t));
+    // Document order: both Pipeline updates, then the Classifier one.
+    expect(texts[0].compareDocumentPosition(texts[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(texts[1].compareDocumentPosition(texts[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText(/⌗ signal/)).toBeTruthy();
+    expect(screen.getAllByText(/⌗ digest/)[0].textContent).toMatch(/·.*\d/);
+  });
+
+  it("keeps a notice out of the pill", () => {
+    renderPill([
+      ...upd("Pipeline Design Study", "a"),
+      { role: "user", text: "A notice.", attribution: { source_name: "mads", kind: "notice" } },
+      { role: "agent", text: "NOOP" },
+      ...upd("Pipeline Design Study", "b"),
+    ]);
+    expect(screen.getAllByText(/1 update from Pipeline Design Study/)).toHaveLength(2);
+    expect(screen.getByText("acknowledged")).toBeTruthy();
+  });
+
+  it("titles the grant notice by what it gives", () => {
+    FLAGS.linkedSessions = true;
+    render(
+      <ChatRenderer
+        messages={[{
+          role: "user",
+          text: 'The user has linked you to the session "Pipeline" (abc) as its leader, and suggests...',
+          attribution: { source_name: "mads", kind: "notice" },
+        }]}
+        links={[]}
+        viewedSessionId="leader-id"
+      />,
+    );
+    expect(screen.getByText("▸ [System] Leader tools provided to this session · expand to show message")).toBeTruthy();
+  });
+
+  it("eases the height a new pill replaces, then lets go", () => {
+    vi.useFakeTimers();
+    let height = 400;
+    const spy = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(() => height);
+    FLAGS.linkedSessions = true;
+    const digest: TranscriptMessage = { role: "user", text: "d", attribution: { source_name: "S", kind: "digest" } };
+    const { container, rerender } = render(<ChatRenderer messages={[digest]} links={[]} viewedSessionId="v" />);
+    height = 300;
+    rerender(<ChatRenderer messages={[digest, { role: "agent", text: "NOOP" }]} links={[]} viewedSessionId="v" />);
+    const pill = container.querySelector("[data-ease]") as HTMLElement;
+    expect(pill.style.getPropertyValue("--ease-from")).toBe("100px");
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(container.querySelector("[data-ease]")).toBeNull();
+    spy.mockRestore();
+    vi.useRealTimers();
   });
 });

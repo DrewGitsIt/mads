@@ -173,6 +173,28 @@
   gap: var(--space-2);
 }
 
+/* A digest folded into the pill: the height it left behind shrinks to
+   nothing, so what's below glides up. (Off under reduced motion, global.css.) */
+.quietGroup[data-ease] {
+  animation: quietEase var(--dur-slow) var(--ease-io) forwards;
+}
+
+@keyframes quietEase {
+  from {
+    margin-bottom: var(--ease-from);
+  }
+  to {
+    margin-bottom: 0;
+  }
+}
+
+/* The sessions behind an expanded pill's updates, with their counts. */
+.quietSessions {
+  text-align: center;
+  font: 500 var(--fs-chip) var(--sans);
+  color: var(--text3);
+}
+
 .digest {
   align-self: stretch;
   border: 1px solid var(--line-soft);
