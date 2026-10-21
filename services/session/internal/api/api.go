@@ -260,7 +260,7 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	replay, ch, unsubscribe := s.runner.SubscribeTerminal()
+	replay, ch, written, unsubscribe := s.runner.SubscribeTerminalAcked()
 	defer unsubscribe()
 
 	var seq int64
@@ -299,6 +299,7 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 			if !writeEvent(ev) {
 				return
 			}
+			written()
 		}
 	}
 }
@@ -344,6 +345,7 @@ func (s *server) handleStreamV2(w http.ResponseWriter, r *http.Request) {
 		if !write(f) {
 			return
 		}
+		sub.Written()
 	}
 	for {
 		select {
@@ -353,6 +355,7 @@ func (s *server) handleStreamV2(w http.ResponseWriter, r *http.Request) {
 			if !ok || !write(f) {
 				return
 			}
+			sub.Written()
 		}
 	}
 }

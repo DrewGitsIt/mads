@@ -137,6 +137,9 @@ type ChatSubscription struct {
 	Frames []ChatFrame
 	Live   <-chan ChatFrame
 	Close  func()
+	// Written is called by the writer after each frame (Frames and Live
+	// alike) is on the wire, so DrainStreams can wait for it.
+	Written func()
 }
 
 // jframe is one journaled frame.
@@ -187,7 +190,7 @@ type chatStream struct {
 	seq    int64
 	limits ChatLimits
 	closed bool
-	subs   map[chan ChatFrame]struct{}
+	subs   map[chan ChatFrame]*delivery
 
 	frames      []*jframe
 	tailBytes   int
@@ -225,7 +228,7 @@ func newChatStream() *chatStream {
 	return &chatStream{
 		epoch:    hex.EncodeToString(b[:]),
 		limits:   ChatLimits{}.withDefaults(),
-		subs:     map[chan ChatFrame]struct{}{},
+		subs:     map[chan ChatFrame]*delivery{},
 		items:    map[string]*tailItem{},
 		settled:  map[string]bool{},
 		started:  map[string]bool{},
@@ -277,9 +280,10 @@ func (c *chatStream) appendLocked(kind, key string, tail bool, live, stored []by
 		c.retainBytes += len(stored)
 	}
 	out := ChatFrame{ID: c.frameID(f.seq), Kind: kind, Data: live}
-	for ch := range c.subs {
+	for ch, d := range c.subs {
 		select {
 		case ch <- out:
+			d.pending.Add(1)
 		default:
 			// Too slow: close rather than leave a silent gap. It resumes
 			// from its Last-Event-ID.
@@ -951,10 +955,12 @@ func (c *chatStream) subscribe(last string, h chatHello) ChatSubscription {
 	ch := make(chan ChatFrame, chatSubBuffer)
 	if c.closed {
 		close(ch)
-		return ChatSubscription{Frames: frames, Live: ch, Close: func() {}}
+		return ChatSubscription{Frames: frames, Live: ch, Close: func() {}, Written: func() {}}
 	}
-	c.subs[ch] = struct{}{}
-	return ChatSubscription{Frames: frames, Live: ch, Close: func() {
+	d := &delivery{}
+	d.pending.Add(int64(len(frames)))
+	c.subs[ch] = d
+	return ChatSubscription{Frames: frames, Live: ch, Written: d.written, Close: func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if _, ok := c.subs[ch]; ok {
@@ -1045,6 +1051,17 @@ func (c *chatStream) snapshotsLocked(id string) []ChatFrame {
 		add(*c.roster)
 	}
 	return out
+}
+
+// undelivered counts frames handed to subscribers not yet written.
+func (c *chatStream) undelivered() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var n int64
+	for _, d := range c.subs {
+		n += d.pending.Load()
+	}
+	return n
 }
 
 // close ends every subscription; nothing journals after it.

@@ -40,6 +40,10 @@ import (
 // Router's 5s SIGTERM grace period before it escalates to SIGKILL.
 const shutdownGrace = 4 * time.Second
 
+// diedDrain bounds how long the provider-died exit waits for connected
+// /output viewers to be sent their last frames (Runner.DrainStreams).
+const diedDrain = 250 * time.Millisecond
+
 // defaultMadsHome mirrors services/data/main.go's defaultDataDir — same env
 // var family, same default — since credentials and the MCP registry are
 // local state, not shared with the Data Service's own data dir.
@@ -257,6 +261,9 @@ func main() {
 		// that bookkeeping belongs to the Router reacting to this OS
 		// process exiting unexpectedly, not to us.
 		log.Print("session: provider died mid-turn, exiting")
+		// Let connected viewers' last frames (unsaved, the error) reach
+		// them first, bounded so a stalled one can't hold the exit.
+		r.DrainStreams(diedDrain)
 		os.Exit(1)
 	case err := <-serveErr:
 		if err != nil && err != http.ErrServerClosed {

@@ -88,3 +88,27 @@ func (r *Runner) chatProcessExit() {
 	r.settleNow(context.Background())
 	r.chat.markUnsaved(0, true)
 }
+
+// SubscribeTerminalAcked is SubscribeTerminal for a writer that calls
+// written after each event it puts on the wire, so DrainStreams can wait
+// for it (GET /output).
+func (r *Runner) SubscribeTerminalAcked() (replay []byte, ch <-chan provider.Event, written, unsubscribe func()) {
+	return r.hub.subscribeAcked(true)
+}
+
+// DrainStreams waits, up to timeout, until every connected /output writer
+// (legacy and v2) has put on the wire what it was handed — the provider-
+// died path's last frames (unsaved, the error) before the process exits.
+// It reports whether everything was written.
+func (r *Runner) DrainStreams(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if r.hub.undelivered() == 0 && r.chat.undelivered() == 0 {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

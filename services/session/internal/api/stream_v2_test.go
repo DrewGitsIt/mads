@@ -835,3 +835,42 @@ func TestV2SnapshotsForFreshViewer(t *testing.T) {
 		t.Fatalf("a resolved request replayed:\n%s", dump(rp))
 	}
 }
+
+// When the provider process dies mid-turn the child exits at once
+// (main.go); DrainStreams first lets every connected writer, legacy and
+// v2, put the last frames — unsaved, the error — on the wire, and gives up
+// after its bound on one that doesn't.
+func TestDrainStreamsBeforeExit(t *testing.T) {
+	p := newScriptProvider("scripted", nil)
+	srv, r := startRunner(t, p, fastSettle)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	legacy := openRaw(t, ctx, srv.URL+"/output", nil)
+	v2 := openV2(t, srv.URL, "", "")
+	v2.replay(t)
+	postMessage(t, srv, "open")
+	p.session().push(provider.Event{Kind: provider.EventText, Key: "k1", Text: "mid"})
+	v2.wait(t, "the text", func(fs []v2Frame) bool { return count(fs, "text_delta") == 1 })
+
+	stalled := r.SubscribeChat("") // a writer that never writes
+	defer stalled.Close()
+	p.session().die()
+	<-r.Died
+	start := time.Now()
+	if r.DrainStreams(100 * time.Millisecond) {
+		t.Fatal("drained with a stalled writer")
+	}
+	if waited := time.Since(start); waited < 100*time.Millisecond || waited > time.Second {
+		t.Fatalf("waited %v on a stalled writer, want the 100 ms bound", waited)
+	}
+	stalled.Close()
+	if !r.DrainStreams(time.Second) {
+		t.Fatal("connected writers didn't drain")
+	}
+	// Drained means written: the frames are already on their way.
+	fs := v2.waitKind(t, "error", 1)
+	if !slices.ContainsFunc(fs, func(f v2Frame) bool { return f.Kind == "unsaved" && slices.Contains(f.keys(), "k1") }) {
+		t.Fatalf("no unsaved for the in-flight item:\n%s", dump(fs))
+	}
+	legacy.waitCount(t, "event: error\n", 1)
+}
