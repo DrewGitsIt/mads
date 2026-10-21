@@ -49,10 +49,15 @@ type session struct {
 	p      *Provider
 	ref    string
 	led    *ledger
+	// keyed: the session was started with StartOptions.SettleHints, the
+	// keyed consumer's opt-in. Only then are a tool's name and result
+	// swapped for what hermes stores (corrections 3 and the result swap);
+	// a consumer that didn't opt in sees the stream exactly as before.
+	keyed bool
 }
 
-func wrapSession(inner provider.Session, p *Provider) *session {
-	s := &session{inner: inner, events: make(chan provider.Event, 256), p: p, ref: inner.Ref()}
+func wrapSession(inner provider.Session, p *Provider, keyed bool) *session {
+	s := &session{inner: inner, events: make(chan provider.Event, 256), p: p, ref: inner.Ref(), keyed: keyed}
 	if p != nil {
 		s.led = p.live.add(s.ref)
 	}
@@ -65,7 +70,7 @@ const toolResultWait = 500 * time.Millisecond
 
 func (s *session) pump() {
 	defer close(s.events)
-	n := normalizer{announced: map[string]bool{}}
+	n := normalizer{announced: map[string]bool{}, storedNames: s.keyed}
 	for ev := range s.inner.Events() {
 		out, ok := n.apply(ev)
 		if !ok {
@@ -80,6 +85,9 @@ func (s *session) pump() {
 			case provider.EventToolUse:
 				s.led.tool(out.Key)
 			case provider.EventToolResult:
+				if !s.keyed {
+					break
+				}
 				if text, found := s.p.storedToolResult(context.Background(), s.ref, out.Key, toolResultWait); found {
 					out.Text = text
 				}
@@ -94,6 +102,9 @@ func (s *session) pump() {
 // normalizer is the per-session state for the wire corrections; only the
 // pump goroutine touches it.
 type normalizer struct {
+	// storedNames cuts a tool's title-name back to hermes's stored name
+	// (keyed sessions only; see session.keyed).
+	storedNames     bool
 	announced       map[string]bool
 	afterTool       bool
 	prevIn, prevOut int
@@ -105,7 +116,7 @@ func (n *normalizer) apply(ev provider.Event) (provider.Event, bool) {
 		if ev.Tool != nil && ev.Tool.ID != "" {
 			n.announced[ev.Tool.ID] = true
 		}
-		if ev.Tool != nil {
+		if ev.Tool != nil && n.storedNames {
 			// The engine names a kind-based call by its title; hermes titles
 			// are "<tool>: <preview>", or the bare tool name when there's no
 			// preview (acp_adapter/tools.py build_tool_title). The name is

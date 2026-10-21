@@ -313,7 +313,7 @@ func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provi
 	if err != nil {
 		return nil, err
 	}
-	return wrapSession(sess, p), nil
+	return wrapSession(sess, p, opts.SettleHints), nil
 }
 
 // The first-send prefix lands inside hermes's stored user row (hermes has

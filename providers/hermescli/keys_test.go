@@ -281,3 +281,58 @@ func TestReplaySurveyKeys(t *testing.T) {
 		}
 	}
 }
+
+// Without the keyed opt-in (StartOptions.SettleHints) a hermes session
+// streams exactly as before C1: a tool keeps the engine's title as its
+// name, and its result keeps the live text hermes streamed, not the row it
+// stored. Only a keyed consumer gets both swapped for the stored ones.
+func TestUnkeyedSessionStreamsAsBefore(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix, err := filepath.Abs(filepath.Join("testdata", "captures", "runc1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolTurn := func(keyed bool) (name, title, result string) {
+		p := New(Config{Bin: exe, Home: t.TempDir(), Env: []string{"MADS_FAKE_HERMES=1", "MADS_FAKE_HERMES_REPLAY=" + prefix}})
+		sess := startSession(t, p, provider.StartOptions{SettleHints: keyed})
+		defer func() { _ = sess.Close() }()
+		for i, prompt := range []string{ // the capture's own prompts: the stand-in stores them as sent
+			"Reply with exactly one line: Hello from hermes.",
+			"Do this in order: first write one short sentence saying you will list the directory. Then call your terminal tool to run: ls. After the tool returns, write one short sentence about what files you found.",
+		} {
+			if err := sess.Send(context.Background(), prompt); err != nil {
+				t.Fatal(err)
+			}
+			for _, ev := range drainTurnWithin(t, sess, 15*time.Second) {
+				if i == 0 {
+					continue
+				}
+				switch ev.Kind {
+				case provider.EventToolUse:
+					name, title = ev.Tool.Name, ev.Tool.Title
+				case provider.EventToolResult:
+					result += ev.Text
+				case provider.EventSettle:
+					if !keyed {
+						t.Fatal("EventSettle without SettleHints")
+					}
+				}
+			}
+		}
+		return name, title, result
+	}
+	name, title, result := toolTurn(false)
+	kName, _, kResult := toolTurn(true)
+	if name != title || !strings.Contains(name, ": ") {
+		t.Errorf("unkeyed tool name %q, want the engine's title %q as before", name, title)
+	}
+	if kName == name || strings.Contains(kName, ": ") {
+		t.Errorf("keyed tool name %q, want the stored name cut from %q", kName, name)
+	}
+	if result == kResult {
+		t.Errorf("unkeyed and keyed results are both %.60q: the capture can't tell the swap apart", result)
+	}
+}

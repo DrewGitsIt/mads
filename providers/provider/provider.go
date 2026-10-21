@@ -150,6 +150,10 @@ type StartOptions struct {
 	// SettleHints opts the session into EventSettle (see that kind): the
 	// adapter marks where its agent's store has likely caught up with the
 	// stream. Off by default, so no consumer that didn't ask sees the kind.
+	// It is the keyed consumer's opt-in more broadly: an adapter that must
+	// change live content to equal its store (hermes's tool names and
+	// results) does so only under it, so a consumer that didn't opt in sees
+	// exactly the stream it always has.
 	SettleHints bool
 	// ToolIntents is the persona-level allow/deny policy expressed as a
 	// closed-set intent vocabulary (agent-concept redesign §2). Allowed
