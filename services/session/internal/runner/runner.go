@@ -515,6 +515,10 @@ func (r *Runner) Start(ctx context.Context) error {
 	// the harness ask at all; carried in baseOpts, a switch to the terminal
 	// transport simply leaves it unused there.
 	opts.Permissions = r.RequestPermission
+	// The keyed contract (settle hints) for a provider whose keys are the
+	// agent's own. Not for an emulated one (hermes): it would have to
+	// change live content to meet it, which a legacy consumer would see.
+	opts.Keyed = p.Matrix()[provider.BehaviorStableKeys] == provider.Native
 	spawnedAt := time.Now()
 	provSess, err := p.Start(ctx, opts)
 	if err != nil {
@@ -1836,6 +1840,12 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 func (r *Runner) pump(sess provider.Session) {
 	var join textJoiner
 	for ev := range sess.Events() {
+		if ev.Kind == provider.EventSettle {
+			// For the v2 tail alone: a contentless hint the legacy
+			// pipeline below never saw before the keyed contract, and
+			// still doesn't.
+			continue
+		}
 		// First, so every consumer below (conversation status, synth,
 		// digest, the live stream) sees text as it always read.
 		ev = join.apply(ev)
@@ -1944,6 +1954,9 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 			defer wg.Done()
 			var join textJoiner
 			for ev := range events {
+				if ev.Kind == provider.EventSettle {
+					continue // v2-only, and terminal mode has no v2 chat frames
+				}
 				ev = join.apply(ev)
 				if ev.Kind == provider.EventTurnEnd {
 					r.sweepDeletedFiles()
