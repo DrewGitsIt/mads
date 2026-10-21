@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -226,5 +228,93 @@ func TestSessionTranscriptFallbackPagesBySubKey(t *testing.T) {
 	}
 	if len(p.Rows) != 1 || p.Rows[0].Key != "user:"+ref+":t1:user#0" || p.Rows[0].Text != "a" || p.HasMore {
 		t.Errorf("page before the second digest = %+v", p)
+	}
+}
+
+// Stored thinking reads the same through the live child and the stored-ref
+// fallback: on the keyed form (?v=2, and paging) as a keyed Role "thinking"
+// row where the agent stored it; never on plain /transcript.
+func TestSessionTranscriptV2ThinkingProxyAndFallbackAlike(t *testing.T) {
+	sc := fake.Scenario{Name: "think", Rules: []fake.Rule{{Match: "ponder", Thinking: "weighing it", Reply: "decided"}}}
+	path := filepath.Join(t.TempDir(), "think.yaml")
+	yml := "name: think\nrules:\n  - match: ponder\n    thinking: weighing it\n    reply: decided\n"
+	if err := os.WriteFile(path, []byte(yml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := supervisor.New(data, []string{sessionBin, "-data-url", base, "-fake-scenario", path}, []string{testChildBin}, nil)
+	t.Cleanup(func() { sup.Shutdown(context.Background()) })
+	fp, err := fake.NewWithScenario(sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := provider.NewRegistry()
+	if err := reg.Register(fp); err != nil {
+		t.Fatal(err)
+	}
+	opts := testOptions(t, data, sup)
+	opts.Providers = reg
+	srv := httptest.NewServer(api.New(opts))
+	t.Cleanup(srv.Close)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "live", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	live := decodeJSON[struct {
+		Session contracts.Session `json:"session"`
+	}](t, resp).Session.ID
+	t.Cleanup(func() { _ = postJSON(t, srv.URL+"/sessions/"+live+"/terminate", nil).Body.Close() })
+	if r := postJSON(t, srv.URL+"/sessions/"+live+"/messages", map[string]string{"text": "ponder"}); r.StatusCode != http.StatusAccepted {
+		t.Fatalf("send: %d", r.StatusCode)
+	}
+	stored := createSessionDirect(t, base, contracts.Session{Name: "stored", Provider: "fake", ProviderRef: driveTurns(t, fp, []string{"ponder"})})
+
+	rows := func(id, q string) []contracts.TranscriptMessage {
+		t.Helper()
+		status, b := getRaw(t, srv.URL+"/sessions/"+id+"/transcript"+q)
+		if status != http.StatusOK {
+			t.Fatalf("%s %s: %d %s", id, q, status, b)
+		}
+		var out []contracts.TranscriptMessage
+		if strings.Contains(q, "limit") {
+			var p contracts.TranscriptPage
+			if err := json.Unmarshal(b, &p); err != nil {
+				t.Fatal(err)
+			}
+			out = p.Rows
+		} else if err := json.Unmarshal(b, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	desc := func(ms []contracts.TranscriptMessage) string {
+		var d []string
+		for _, m := range ms {
+			if m.Key == "" {
+				t.Errorf("row without a key: %+v", m)
+			}
+			d = append(d, m.Role+":"+m.Text)
+		}
+		return strings.Join(d, "|")
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for len(rows(live, "?v=2")) < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("live rows: %+v", rows(live, "?v=2"))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	const want = "user:ponder|thinking:weighing it|agent:decided"
+	for _, q := range []string{"?v=2", "?limit=10"} {
+		if l, s := desc(rows(live, q)), desc(rows(stored, q)); l != want || s != want {
+			t.Errorf("%s:\nlive:   %s\nstored: %s\nwant:   %s", q, l, s, want)
+		}
+	}
+	for _, id := range []string{live, stored} {
+		if d := desc(rows(id, "")); strings.Contains(d, "thinking") {
+			t.Errorf("plain /transcript carries thinking: %s", d)
+		}
 	}
 }

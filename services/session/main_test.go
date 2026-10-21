@@ -43,7 +43,7 @@ func TestHealth(t *testing.T) {
 // caller's passthrough slice.
 func TestBuildProviderRegistryIncludesGoose(t *testing.T) {
 	passthrough := []string{"CUSTOM_VAR"}
-	reg, err := buildProviderRegistry(agentenv.ModeIsolated, passthrough, nil)
+	reg, err := buildProviderRegistry(agentenv.ModeIsolated, passthrough, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

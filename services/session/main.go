@@ -81,7 +81,11 @@ func resolveAgentEnv(cfg contracts.Config, parentEnv []string) (mode agentenv.Mo
 // host; mode/passthrough/credEnv come from resolveAgentEnv. Last
 // hand-registration site of its kind: W7.9's providers/load collapses
 // these blocks into descriptor loading — new providers go there, not here.
-func buildProviderRegistry(mode agentenv.Mode, passthrough, credEnv []string) (*provider.Registry, error) {
+//
+// fakeScenario, when set, scripts the fake provider (the YAML `mads run
+// -fake-scenario` and the pipeline service take), so a test driving a real
+// session child through the Router can script its turns too.
+func buildProviderRegistry(mode agentenv.Mode, passthrough, credEnv []string, fakeScenario string) (*provider.Registry, error) {
 	registry := provider.NewRegistry()
 	if err := registry.Register(claudecode.New(claudecode.Config{
 		EnvMode:        mode,
@@ -134,7 +138,17 @@ func buildProviderRegistry(mode agentenv.Mode, passthrough, credEnv []string) (*
 	})); err != nil {
 		return nil, fmt.Errorf("register codex provider: %w", err)
 	}
-	if err := registry.Register(fake.New()); err != nil {
+	fakeProv := fake.New()
+	if fakeScenario != "" {
+		sc, err := fake.LoadScenario(fakeScenario)
+		if err != nil {
+			return nil, fmt.Errorf("fake scenario: %w", err)
+		}
+		if fakeProv, err = fake.NewWithScenario(sc); err != nil {
+			return nil, fmt.Errorf("fake scenario: %w", err)
+		}
+	}
+	if err := registry.Register(fakeProv); err != nil {
 		return nil, fmt.Errorf("register fake provider: %w", err)
 	}
 	return registry, nil
@@ -166,6 +180,7 @@ func main() {
 	shadowRoot := flag.String("shadow-root", shadow.DefaultRoot(), "base dir for per-session shadow git stores (docs/SHADOW-GIT-DIFFS-ADR.md; empty disables shadowing)")
 	fastModelProvider := flag.String("fast-model", "fake", "registered provider to use for the Fast Model tier (synthesis, etc.)")
 	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root for credentials + MCP server registry (env MADS_HOME)")
+	fakeScenario := flag.String("fake-scenario", "", "scenario YAML for the fake provider (tests; same format as `mads run -fake-scenario`)")
 	madsCmd := flag.String("mads-cmd", "", "mads CLI binary for the orchestrate capability (default: $MADS_BIN, else the mads beside this binary, else $PATH)")
 	flag.Parse()
 
@@ -185,7 +200,7 @@ func main() {
 	}
 	mode, passthrough, credEnv := resolveAgentEnv(cfg, os.Environ())
 
-	registry, err := buildProviderRegistry(mode, passthrough, credEnv)
+	registry, err := buildProviderRegistry(mode, passthrough, credEnv, *fakeScenario)
 	if err != nil {
 		log.Fatalf("session: %v", err)
 	}
