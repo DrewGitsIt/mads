@@ -35,6 +35,8 @@ type lies struct {
 	keysInterleave  bool // the first text part's key comes back after the tool
 	keysUnsupported bool // emits keys while declaring stable_keys unsupported
 	settleUnasked   bool // emits EventSettle without StartOptions.Keyed
+	thinkingDropped bool // streams thinking it declares stored, but never stores it
+	thinkingInPlain bool // puts thinking rows in plain Transcript too
 }
 
 type stub struct {
@@ -167,13 +169,29 @@ func (s *stub) Transcript(_ context.Context, ref string) ([]provider.Message, er
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var out []provider.Message
+	for _, m := range s.sessions[ref] {
+		if m.Role != "thinking" || s.lies.thinkingInPlain {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// KeyedTranscript is Transcript plus the thinking rows the stub stores.
+func (s *stub) KeyedTranscript(_ context.Context, ref string) ([]provider.Message, error) {
+	if !s.matrix[provider.BehaviorTranscript].Works() {
+		return nil, provider.ErrUnsupported
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return append([]provider.Message{}, s.sessions[ref]...), nil
 }
 
 // TranscriptSince is the stub's incremental reader: the cursor is a row
 // index.
 func (s *stub) TranscriptSince(ctx context.Context, ref string, cursor provider.TranscriptCursor) ([]provider.Message, provider.TranscriptCursor, error) {
-	all, err := s.Transcript(ctx, ref)
+	all, err := s.KeyedTranscript(ctx, ref)
 	if err != nil {
 		return nil, cursor, err
 	}
@@ -351,6 +369,13 @@ func (ss *stubSession) send(_ context.Context, text, id string) error {
 		if text == "tool-text" {
 			l := ss.p.lies
 			first, tool, second := ss.key("a"), ss.key("tool"), ss.key("b")
+			if ss.p.matrix[provider.BehaviorStoredThinking].Works() {
+				think := ss.key("think")
+				ss.emit(provider.Event{Kind: provider.EventThinking, Key: think, Text: "List it first."})
+				if !l.thinkingDropped {
+					store(provider.Message{Role: "thinking", Key: think, Text: "List it first."})
+				}
+			}
 			ss.emit(provider.Event{Kind: provider.EventText, Key: first, Text: "Looking. "})
 			ss.emit(provider.Event{Kind: provider.EventToolUse, Key: tool, Tool: &provider.ToolUse{Name: "ls"}})
 			ss.emit(provider.Event{Kind: provider.EventToolResult, Key: tool, Text: "a.txt"})

@@ -150,7 +150,8 @@ func (p *Provider) Matrix() provider.Matrix {
 		// live id has been checked against what kiro stores: the engine's
 		// zero Keys knob emits no keys, live or stored (README "Conversation
 		// keys (unverified)" has the derivation that would apply).
-		provider.BehaviorStableKeys: provider.Unsupported,
+		provider.BehaviorStableKeys:     provider.Unsupported,
+		provider.BehaviorStoredThinking: provider.Unsupported,
 	}
 }
 

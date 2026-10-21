@@ -242,7 +242,8 @@ func (f *Fake) Matrix() provider.Matrix {
 		provider.BehaviorDelegateStop:       provider.Unsupported,
 		// Every item is keyed live and in the in-memory store, and
 		// TranscriptSince reads the store by row index.
-		provider.BehaviorStableKeys: provider.Native,
+		provider.BehaviorStableKeys:     provider.Native,
+		provider.BehaviorStoredThinking: provider.Unsupported,
 	}
 }
 

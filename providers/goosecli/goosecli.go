@@ -273,7 +273,8 @@ func (p *Provider) Matrix() provider.Matrix {
 		// (engineConfig Keys) and in sessions.db (store.go). User rows are
 		// keyed by goose's own id — goose stores no caller id, so no
 		// KeyedSender.
-		provider.BehaviorStableKeys: provider.Native,
+		provider.BehaviorStableKeys:     provider.Native,
+		provider.BehaviorStoredThinking: provider.Unsupported, // C2: flipped with each reader's thinking rows
 		// `goose session` under a pty (pty.go).
 		provider.BehaviorPTY: provider.Native,
 		// goose's own sessions.db, read-only and incrementally (store.go),

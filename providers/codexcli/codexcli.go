@@ -155,7 +155,8 @@ func (p *Provider) Matrix() provider.Matrix {
 		// notifications and in thread/items/list; a user message's is the
 		// clientUserMessageId mads sent it with (SendKeyed). Live text is
 		// per item, exactly the stored text.
-		provider.BehaviorStableKeys: provider.Native,
+		provider.BehaviorStableKeys:     provider.Native,
+		provider.BehaviorStoredThinking: provider.Unsupported, // C2: flipped with each reader's thinking rows
 	}
 }
 

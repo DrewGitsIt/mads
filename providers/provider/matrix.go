@@ -143,6 +143,14 @@ const (
 	// adapter matches live items to stored rows itself (hermes, by
 	// position). Optional; internal plumbing, not a user-facing capability.
 	BehaviorStableKeys Behavior = "stable_keys"
+	// BehaviorStoredThinking — the agent stores the thinking it streams, and
+	// the adapter returns it as keyed Role "thinking" rows from
+	// KeyedTranscriptReader, the same key and text as the live
+	// EventThinking. Native or unsupported (never emulated: a copy mads kept
+	// would be a second conversation log). Unsupported: live thinking is
+	// unsaved, and session.thinking events stay the record. Needs
+	// stable_keys. Internal plumbing, like stable_keys.
+	BehaviorStoredThinking Behavior = "stored_thinking"
 )
 
 // Support is a provider's declared implementation status for one behavior.
@@ -205,7 +213,8 @@ var requirements = map[Behavior]Level{
 	BehaviorDelegateSteer:      LevelOptional,
 	BehaviorDelegateStop:       LevelOptional,
 
-	BehaviorStableKeys: LevelOptional,
+	BehaviorStableKeys:     LevelOptional,
+	BehaviorStoredThinking: LevelOptional,
 }
 
 // Requirement returns the platform's requirement level for a behavior, or ""
@@ -257,6 +266,12 @@ func (m Matrix) Validate() error {
 	}
 	if m[BehaviorCompactionFocus].Works() && !m[BehaviorCompaction].Works() {
 		probs = append(probs, "compaction_focus needs compaction")
+	}
+	if m[BehaviorStoredThinking].Works() && !m[BehaviorStableKeys].Works() {
+		probs = append(probs, "stored_thinking needs stable_keys")
+	}
+	if m[BehaviorStoredThinking] == Emulated {
+		probs = append(probs, `behavior "stored_thinking" cannot be emulated`)
 	}
 	if m[BehaviorStableKeys].Works() && !m[BehaviorTranscript].Works() {
 		probs = append(probs, "stable_keys needs transcript (a key is only stable if a stored row carries it)")

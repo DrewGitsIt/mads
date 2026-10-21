@@ -258,7 +258,8 @@ func (p *Provider) Matrix() provider.Matrix {
 		// hermes stores none of its live ids: live items carry provisional
 		// keys and the readers match stored rows to them by position while
 		// the child lives (keys.go, README "Conversation keys").
-		provider.BehaviorStableKeys: provider.Emulated,
+		provider.BehaviorStableKeys:     provider.Emulated,
+		provider.BehaviorStoredThinking: provider.Unsupported, // C2: flipped with each reader's thinking rows
 		// hermes has session/fork, but mads has no branching surface for
 		// ACP yet; no cwd reroot at all.
 		provider.BehaviorBranching: provider.Unsupported,
