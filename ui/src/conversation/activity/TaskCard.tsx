@@ -36,7 +36,8 @@ function stateTitle(model?: TaskModel): string | undefined {
 /**
  * The card's counters. With `now` (a running task), the duration is a live
  * clock from the run's start — the harness only reports duration_ms when a
- * subagent tool finishes, so read alone it moved in steps between tools.
+ * subagent tool finishes, so read alone it moved in steps between tools —
+ * on top of a resumed delegate's earlier runs.
  */
 export function taskCounters(model: TaskModel, now?: number): string {
   const parts: string[] = [];
@@ -44,7 +45,7 @@ export function taskCounters(model: TaskModel, now?: number): string {
   if (model.toolUses !== undefined) parts.push(`${model.toolUses} tools`);
   const started = model.startedAt ? Date.parse(model.startedAt) : NaN;
   if (now !== undefined && model.running && Number.isFinite(started)) {
-    parts.push(formatElapsed(Math.max(model.durationMs ?? 0, now - started)));
+    parts.push(formatElapsed((model.priorDurationMs ?? 0) + Math.max(model.durationMs ?? 0, now - started)));
   } else if (model.durationMs !== undefined) {
     parts.push(formatMs(model.durationMs));
   }

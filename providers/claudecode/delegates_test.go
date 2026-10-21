@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/delegates"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -147,7 +149,8 @@ func TestDelegateFileRejectsPatterns(t *testing.T) {
 // — as a user line when the parent was idle, an attachment mid-turn:
 //
 //   - bg1 ran twice (the parent messaged it again): enqueue+user, then
-//     enqueue+attachment. Two runs, not four; the last says failed.
+//     enqueue+attachment. Two runs, not four; the last says failed, and
+//     the runs' tools and time add up.
 //   - q1's notice was queued and never delivered: still its ending.
 //   - old has only a delivered notice (no enqueue): the fallback.
 //   - fg1 ran in the foreground: its Agent result carries the ending.
@@ -177,9 +180,10 @@ func TestDelegateHistoryReadsEndingsFromTheParent(t *testing.T) {
 	write(filepath.Join(sub, "agent-bg1.meta.json"), `{"agentType":"general-purpose","description":"Audit errors","toolUseId":"toolu_bg","spawnDepth":1,"requestShape":"background"}`)
 	write(filepath.Join(sub, "agent-fg1.meta.json"), `{"agentType":"Explore","description":"Map the code","toolUseId":"toolu_fg","spawnDepth":1,"requestShape":"foreground"}`)
 
-	text := func(id, status, tokens string) string {
-		return `<task-notification>\n<task-id>` + id + `</task-id>\n<status>` + status + `</status>\n<summary>s</summary>\n<usage><subagent_tokens>` + tokens + `</subagent_tokens><tool_uses>7</tool_uses><duration_ms>60000</duration_ms></usage>\n</task-notification>`
+	notice := func(id, status, tokens, tools, durationMS string) string {
+		return `<task-notification>\n<task-id>` + id + `</task-id>\n<status>` + status + `</status>\n<summary>s</summary>\n<usage><subagent_tokens>` + tokens + `</subagent_tokens><tool_uses>` + tools + `</tool_uses><duration_ms>` + durationMS + `</duration_ms></usage>\n</task-notification>`
 	}
+	text := func(id, status, tokens string) string { return notice(id, status, tokens, "7", "60000") }
 	enqueue := func(at, body string) string {
 		return `{"type":"queue-operation","operation":"enqueue","timestamp":"` + at + `","content":"` + body + `"}`
 	}
@@ -198,8 +202,8 @@ func TestDelegateHistoryReadsEndingsFromTheParent(t *testing.T) {
 		`{"type":"user","uuid":"p3","timestamp":"2026-10-09T10:03:01Z","toolUseResult":{"status":"completed","agentId":"fg1","totalDurationMs":61000,"totalTokens":900,"totalToolUseCount":4},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_fg","content":"report"}]}}`,
 		enqueue("2026-10-09T10:07:05Z", text("q1", "completed", "50")),
 		asUser("p5", "2026-10-09T10:08:40Z", text("old", "killed", "20")),
-		enqueue("2026-10-09T10:09:00Z", text("bg1", "failed", "250")),
-		asAttachment("p6", "2026-10-09T10:09:00Z", text("bg1", "failed", "250")),
+		enqueue("2026-10-09T10:09:00Z", notice("bg1", "failed", "250", "5", "90000")),
+		asAttachment("p6", "2026-10-09T10:09:00Z", notice("bg1", "failed", "250", "5", "90000")),
 		`{"type":"user","uuid":"p7","timestamp":"2026-10-09T10:09:30Z","toolUseResult":"Error: not an Agent result","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"x","content":"e"}]}}`,
 	)
 
@@ -213,12 +217,13 @@ func TestDelegateHistoryReadsEndingsFromTheParent(t *testing.T) {
 	at := func(s string) time.Time { tm, _ := time.Parse(time.RFC3339, s); return tm }
 	bg, fg, lost, q, old := got[0], got[1], got[2], got[3], got[4]
 	if bg.HarnessID != "bg1" || bg.ToolUseID != "toolu_bg" || bg.Description != "Audit errors" || !bg.Background ||
-		bg.Status != "failed" || bg.Runs != 2 || bg.TotalTokens != 250 || bg.ToolUses != 7 || bg.DurationMS != 60000 ||
+		bg.Status != "failed" || bg.Runs != 2 || bg.TotalTokens != 250 ||
+		bg.ToolUses != 12 || bg.DurationMS != 150000 || bg.PriorToolUses != 7 || bg.PriorDurationMS != 60000 ||
 		!bg.StartedAt.Equal(at("2026-10-09T10:00:00Z")) || !bg.EndedAt.Equal(at("2026-10-09T10:09:00Z")) || bg.TranscriptPath == "" {
 		t.Errorf("background, run twice = %+v", bg)
 	}
 	if fg.HarnessID != "fg1" || fg.Type != "Explore" || fg.Background || fg.Status != "completed" || fg.Runs != 1 ||
-		fg.TotalTokens != 900 || fg.DurationMS != 61000 || !fg.EndedAt.Equal(at("2026-10-09T10:03:01Z")) {
+		fg.TotalTokens != 900 || fg.DurationMS != 61000 || fg.PriorDurationMS != 0 || !fg.EndedAt.Equal(at("2026-10-09T10:03:01Z")) {
 		t.Errorf("foreground = %+v", fg)
 	}
 	if lost.HarnessID != "lost" || lost.Status != "" || !lost.EndedAt.IsZero() || lost.Runs != 1 ||
@@ -230,6 +235,25 @@ func TestDelegateHistoryReadsEndingsFromTheParent(t *testing.T) {
 	}
 	if old.HarnessID != "old" || old.Status != "killed" || old.Runs != 1 {
 		t.Errorf("delivered only = %+v", old)
+	}
+
+	// The record rebuilt from history agrees with the one the live tracker
+	// keeps from the same two endings.
+	live := delegates.New("ses_1", 0)
+	live.Task(contracts.SubagentTask{Phase: "started", TaskID: "bg1", ToolUseID: "toolu_bg", IsBackgrounded: true}, at("2026-10-09T10:00:00Z"))
+	live.Task(contracts.SubagentTask{Phase: "notification", TaskID: "bg1", Status: "completed", TotalTokens: 100, ToolUses: 7, DurationMS: 60000}, at("2026-10-09T10:01:05Z"))
+	live.Task(contracts.SubagentTask{Phase: "started", TaskID: "bg1", ToolUseID: "toolu_relay", IsBackgrounded: true}, at("2026-10-09T10:07:30Z"))
+	ds := live.Task(contracts.SubagentTask{Phase: "notification", TaskID: "bg1", Status: "failed", TotalTokens: 250, ToolUses: 5, DurationMS: 90000}, at("2026-10-09T10:09:00Z"))
+	rebuilt := delegates.FromHistory("ses_1", bg, delegates.CapabilityDefaults{})
+	if len(ds) != 1 {
+		t.Fatalf("live ending = %+v", ds)
+	}
+	l := ds[0]
+	if rebuilt.Runs != l.Runs || rebuilt.TotalTokens != l.TotalTokens || rebuilt.ToolUses != l.ToolUses ||
+		rebuilt.DurationMS != l.DurationMS || rebuilt.PriorToolUses != l.PriorToolUses || rebuilt.PriorDurationMS != l.PriorDurationMS {
+		t.Errorf("rebuilt %d runs %d tok %d tools %d ms (prior %d, %d) != live %d runs %d tok %d tools %d ms (prior %d, %d)",
+			rebuilt.Runs, rebuilt.TotalTokens, rebuilt.ToolUses, rebuilt.DurationMS, rebuilt.PriorToolUses, rebuilt.PriorDurationMS,
+			l.Runs, l.TotalTokens, l.ToolUses, l.DurationMS, l.PriorToolUses, l.PriorDurationMS)
 	}
 
 	if none, err := New(Config{TranscriptDir: root}).DelegateHistory(context.Background(), "other"); err != nil || len(none) != 0 {

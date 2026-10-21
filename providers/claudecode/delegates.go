@@ -142,6 +142,7 @@ func (p *Provider) DelegateHistory(_ context.Context, ref string) ([]provider.De
 		if e, ok := endings[id]; ok {
 			rec.Status, rec.EndedAt, rec.Runs = e.status, e.at, e.runs
 			rec.DurationMS, rec.TotalTokens, rec.ToolUses = e.durationMS, e.tokens, e.toolUses
+			rec.PriorDurationMS, rec.PriorToolUses = e.durationMS-e.lastDurationMS, e.toolUses-e.lastToolUses
 			if rec.EndedAt.IsZero() {
 				rec.EndedAt = facts.last
 			}
@@ -207,11 +208,15 @@ func withFileFacts(info provider.DelegateInfo, facts delegateFileFacts) provider
 	return info
 }
 
+// delegateEnding is one subagent's endings, folded: the last one's status,
+// time and tokens; its tools and time summed over every run (each ending
+// reports its run's from zero), with the last run's kept apart.
 type delegateEnding struct {
 	status                       string
 	at                           time.Time
 	runs                         int
 	durationMS, tokens, toolUses int
+	lastDurationMS, lastToolUses int
 }
 
 var (
@@ -283,7 +288,8 @@ func (p *Provider) delegateEndings(ref string) map[string]delegateEnding {
 	end := func(into map[string]delegateEnding, id, status string, at time.Time, durationMS, tokens, toolUses int) {
 		e := into[id]
 		e.status, e.at, e.runs = status, at, e.runs+1
-		e.durationMS, e.tokens, e.toolUses = durationMS, tokens, toolUses
+		e.durationMS, e.tokens, e.toolUses = e.durationMS+durationMS, tokens, e.toolUses+toolUses
+		e.lastDurationMS, e.lastToolUses = durationMS, toolUses
 		into[id] = e
 	}
 	notice := func(into map[string]delegateEnding, raw string, at time.Time) {

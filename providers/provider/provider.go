@@ -350,10 +350,15 @@ type DelegateRecord struct {
 	Status string
 	// Runs is how many times it ran: more than one when the parent messaged
 	// it again after it ended.
-	Runs        int
-	DurationMS  int
-	TotalTokens int
-	ToolUses    int
+	Runs int
+	// DurationMS and ToolUses are totals across its runs; TotalTokens is
+	// the last ending's. PriorDurationMS and PriorToolUses are the totals
+	// of the runs before the last.
+	DurationMS      int
+	TotalTokens     int
+	ToolUses        int
+	PriorDurationMS int
+	PriorToolUses   int
 }
 
 // DelegateInfo is one delegate as the harness's own store records it. Zero

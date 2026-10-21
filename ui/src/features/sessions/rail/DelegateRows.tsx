@@ -107,7 +107,7 @@ export function DelegateRows({
           </span>
           <span className={styles.name}>{d.description || d.type || "Subagent"}</span>
           <span className={styles.meta}>
-            {d.state === "running" ? <LiveElapsed since={d.started_at} /> : <Duration d={d} />}
+            {d.state === "running" ? <LiveElapsed since={d.started_at} priorMs={d.prior_duration_ms} /> : <Duration d={d} />}
           </span>
         </button>
       ))}
@@ -120,16 +120,19 @@ export function DelegateRows({
   );
 }
 
-function LiveElapsed({ since }: { since: string }) {
+/** The live run's clock, on top of a resumed delegate's earlier runs. */
+function LiveElapsed({ since, priorMs = 0 }: { since: string; priorMs?: number }) {
   const now = useElapsedNow();
   const start = Date.parse(since);
   if (!Number.isFinite(start)) return null;
-  return <span className={styles.elapsed}>{formatElapsed(now - start)}</span>;
+  return <span className={styles.elapsed}>{formatElapsed(priorMs + now - start)}</span>;
 }
 
+/** Total time across its runs: the harness's, else the latest run's span plus the earlier runs'. */
 function Duration({ d }: { d: Delegate }) {
   const ms =
-    d.duration_ms ?? (d.ended_at ? Date.parse(d.ended_at) - Date.parse(d.started_at) : NaN);
+    d.duration_ms ??
+    (d.ended_at ? Date.parse(d.ended_at) - Date.parse(d.started_at) + (d.prior_duration_ms ?? 0) : NaN);
   if (!Number.isFinite(ms) || ms < 0) return null;
   return <span className={styles.elapsed}>{formatMs(ms)}</span>;
 }

@@ -134,6 +134,14 @@ describe("TaskCard — live elapsed and delegate states", () => {
     }
   });
 
+  it("runs a resumed delegate's clock on from its earlier runs", () => {
+    const model: TaskModel = {
+      taskId: "a1", running: true, completed: false, durationMs: 3_736, priorDurationMs: 1_745_070, startedAt: "2026-10-08T10:00:00Z",
+    };
+    // 29m 05s before, 13m 53s into this run.
+    expect(taskCounters(model, Date.parse("2026-10-08T10:13:53Z"))).toBe("42m 58s");
+  });
+
   it("never lets the live clock run behind the harness's own report", () => {
     const model: TaskModel = { taskId: "a1", running: true, completed: false, durationMs: 90_000, startedAt: "2026-10-08T10:00:00Z" };
     expect(taskCounters(model, Date.parse("2026-10-08T10:00:30Z"))).toBe("1m 30s");

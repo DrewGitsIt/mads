@@ -290,8 +290,11 @@ export interface TaskModel {
   subagentType?: string;
   isBackgrounded?: boolean;
   totalTokens?: number;
+  /** Tools and time: the live run's, from task lines, until mergeDelegates totals them across runs. */
   toolUses?: number;
   durationMs?: number;
+  /** A running delegate's earlier runs' time (its record's) — the live clock adds the run's own. */
+  priorDurationMs?: number;
   lastToolName?: string;
   status?: string;
   summary?: string;
@@ -341,6 +344,13 @@ export function applyTaskEvent(
   }
   if (task.subagent_type) model.subagentType = task.subagent_type;
   if (task.is_backgrounded !== undefined) model.isBackgrounded = task.is_backgrounded;
+  // The harness counts each run's tools and time from zero, and a resumed
+  // delegate's start line opens its next run; the earlier runs' totals are
+  // its record's (mergeDelegates).
+  if (task.phase === "started") {
+    model.toolUses = undefined;
+    model.durationMs = undefined;
+  }
   if (task.total_tokens !== undefined) model.totalTokens = task.total_tokens;
   if (task.tool_uses !== undefined) model.toolUses = task.tool_uses;
   if (task.duration_ms !== undefined) model.durationMs = task.duration_ms;
@@ -402,9 +412,16 @@ export function finishRunningTasks(tasks: ReadonlyMap<string, TaskModel>): Map<s
  * Lays the server's delegate records over the task-line fold: a record is
  * the one authority on whether a delegate is running and how it ended, so
  * it overrides running/completed (and the turn-edge guesses
- * finishRunningTasks/resumeRunningTasks make) wherever one exists. Live
- * counters and the current step keep coming from the task lines; the
- * anchor, name and start come from the record when the fold lacks them.
+ * finishRunningTasks/resumeRunningTasks make) wherever one exists. The
+ * anchor and start come from the record; the name, type and current step
+ * from the task lines when they have them.
+ *
+ * Counters: the task lines count the live run from zero; the record totals
+ * every run once one ends, and keeps the runs before the live one apart
+ * (prior_*). So a running delegate shows its prior runs plus the task lines'
+ * live run — the record's own totals only change at an ending — and a
+ * finished one shows the record's totals. Tokens are the latest report's
+ * either way, never summed.
  */
 export function mergeDelegates(
   tasks: ReadonlyMap<string, TaskModel>,
@@ -425,12 +442,27 @@ export function mergeDelegates(
       running: d.state === "running",
       completed: d.state === "completed",
       status: d.reason ?? prev.status,
-      totalTokens: d.total_tokens ?? prev.totalTokens,
-      toolUses: d.tool_uses ?? prev.toolUses,
-      durationMs: d.duration_ms ?? prev.durationMs,
+      ...(d.state === "running"
+        ? {
+            totalTokens: prev.totalTokens ?? d.total_tokens,
+            toolUses: withPrior(d.prior_tool_uses, prev.toolUses),
+            durationMs: prev.durationMs,
+            priorDurationMs: d.prior_duration_ms,
+          }
+        : {
+            totalTokens: d.total_tokens ?? prev.totalTokens,
+            toolUses: d.tool_uses ?? prev.toolUses,
+            durationMs: d.duration_ms ?? prev.durationMs,
+            priorDurationMs: undefined,
+          }),
     });
   }
   return next;
+}
+
+/** Earlier runs' count plus the live run's; undefined when neither is known. */
+function withPrior(prior: number | undefined, live: number | undefined): number | undefined {
+  return prior === undefined && live === undefined ? undefined : (prior ?? 0) + (live ?? 0);
 }
 
 export function tasksByToolUse(tasks: ReadonlyMap<string, TaskModel>): Map<string, TaskModel> {
