@@ -62,7 +62,7 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 	if sess != nil {
 		if lt, ok := sess.(transcripter); ok {
 			if msgs := lt.Transcript(); len(msgs) > 0 {
-				return renderTranscript(msgs, r.inboundSourcer(ctx))
+				return renderTranscript(msgs, r.renderOptions(ctx))
 			}
 		}
 	}
@@ -82,14 +82,23 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 		log.Printf("runner: transcript: read %s: %v", r.sessionID, err)
 		return out
 	}
-	return renderTranscript(msgs, r.inboundSourcer(ctx))
+	return renderTranscript(msgs, r.renderOptions(ctx))
 }
 
-// inboundSourcer is renderTranscript's inbound resolution for this session.
-func (r *Runner) inboundSourcer(ctx context.Context) func(*provider.Inbound, time.Time) *contracts.InboundSource {
-	return func(in *provider.Inbound, at time.Time) *contracts.InboundSource {
+// renderOptions is renderTranscript's per-session context.
+func (r *Runner) renderOptions(ctx context.Context) renderOptions {
+	return renderOptions{inbound: func(in *provider.Inbound, at time.Time) *contracts.InboundSource {
 		return r.inboundSource(ctx, in, at)
-	}
+	}}
+}
+
+// renderOptions carries what renderTranscript needs from the session beyond
+// the provider's messages. A struct, so a new per-session input (user-row
+// labels, docs/CHAT-STREAM-DESIGN.md §1) is a field, not a signature change.
+type renderOptions struct {
+	// inbound resolves an inbound message's (Role "inbound") source; nil
+	// leaves it unresolved.
+	inbound func(*provider.Inbound, time.Time) *contracts.InboundSource
 }
 
 // renderTranscript maps normalized provider messages to wire TranscriptMessages,
@@ -102,19 +111,20 @@ func (r *Runner) inboundSourcer(ctx context.Context) func(*provider.Inbound, tim
 // refetch has no turn-end signal to distinguish "still running" from
 // "interrupted" — see conversation.go).
 //
-// An inbound message (Role "inbound") gets its resolved source from inbound
-// (nil leaves it unresolved).
-func renderTranscript(msgs []provider.Message, inbound func(*provider.Inbound, time.Time) *contracts.InboundSource) []contracts.TranscriptMessage {
+// Every row carries its provider key and notice flag (§4 of
+// docs/CHAT-STREAM-DESIGN.md); a split user row's segments get sub-keys
+// (linkwrap.SegmentKey). Paging happens on the result, in the handler.
+func renderTranscript(msgs []provider.Message, opts renderOptions) []contracts.TranscriptMessage {
 	out := make([]contracts.TranscriptMessage, len(msgs))
 	for i, m := range msgs {
-		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp, IsError: m.IsError}
+		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp, IsError: m.IsError, Key: m.Key, Notice: m.Notice}
 		if m.Compact != nil {
 			c := contracts.CompactMarker(*m.Compact)
 			tm.Compact = &c
 		}
 		tm.Tool = contractsToolUse(m.Tool) // full enriched mapping — kind/title/status/locations/server
-		if m.Inbound != nil && inbound != nil {
-			tm.Inbound = inbound(m.Inbound, m.Timestamp)
+		if m.Inbound != nil && opts.inbound != nil {
+			tm.Inbound = opts.inbound(m.Inbound, m.Timestamp)
 		}
 		out[i] = tm
 	}

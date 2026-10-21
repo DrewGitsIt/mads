@@ -254,9 +254,15 @@ never called peer-to-peer.
   `provider.Registry`, so this is the only way a live session's transcript reflects its
   actual conversation. Falls back to a direct read from the bound provider via the
   persisted `ProviderRef` (`Session.ProviderRef`'s documented "transcript pointer") only for
-  sessions with no running child. Always 200 with a JSON array (`[]` for a session with no
-  interactive conversation, e.g. a pipeline-only run, or a provider that doesn't implement
-  transcript reading); 404 only for an unknown session id.
+  sessions with no running child. With no query parameters: always 200 with a JSON array
+  (`[]` for a session with no interactive conversation, e.g. a pipeline-only run, or a
+  provider that doesn't implement transcript reading); 404 only for an unknown session id.
+  Every row carries its provider `key` (and `notice` on a synthetic row the agent wrote).
+  `?before=<key>&limit=<n>` pages it instead, answering `{rows, has_more}`: the query is
+  proxied to the child as is, and the fallback pages its rows through the same
+  `pkg/transcriptpage.Respond`, so both paths agree. Cursor rules, the `<key>#<i>`
+  sub-keys of a split user row, and the 400/410 errors are `contracts.TranscriptPage`'s
+  (and the session service README's `/transcript`).
 
 Errors: `dataclient.ErrNotFound` → 404, `dataclient.ErrConflict` → 409,
 `*contracts.ValidationError` → 400 (this is a deliberate divergence from the Data

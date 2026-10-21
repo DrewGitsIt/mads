@@ -211,9 +211,15 @@ the agent's store doesn't have yet**.
 - Stored-only rows (goose's hidden context row, codex's injected context) are
   filtered by the adapter; stored-only rows the agent shows its own user
   (hermes `failed_turn`) come through as `notice` rows.
-- **Pagination**, which `?page=` pretends to do today: `GET /transcript?before=<key>&limit=<n>`
+- **Pagination**, which `?page=` pretended to do: `GET /transcript?before=<key>&limit=<n>`
   returns the `n` rows before `key` (default: the last `n`). The adapter maps
   it (codex: native `thread/items/list` paging; others: their reader).
+  *Built (C3)*: paged in the serving layer over the rendered rows
+  (`pkg/transcriptpage`), not yet by the adapter. `before` names the first
+  row with that key; a page grows back so a call and its result never split,
+  so `rows[0].key` is the next cursor. Answers `{rows, has_more}` only when
+  paging; split user rows get `<key>#<i>` sub-keys; 410 for an unknown key,
+  400 for `before` over unkeyed rows (contract: `contracts.TranscriptPage`).
 - The Router's stored-ref fallback (no live child) reads the same keyed rows;
   there's no tail to merge then.
 

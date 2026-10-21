@@ -10,6 +10,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/inbound"
 	"github.com/drewkidwell/mads/pkg/linkwrap"
 	"github.com/drewkidwell/mads/pkg/toolstatus"
+	"github.com/drewkidwell/mads/pkg/transcriptpage"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -71,12 +72,15 @@ func (s *server) inboundSources(ctx context.Context, sess contracts.Session) fun
 // Injected messages are labelled from their in-text wrappers by the same
 // parse the live child runs (pkg/linkwrap).
 //
+// Every row carries its provider key and notice flag, as the child's do; a
+// split user row's segments get sub-keys (linkwrap.SegmentKey).
+//
 // src resolves an inbound message's source (inboundSources); nil leaves
 // Inbound unset.
 func normalizeTurns(msgs []provider.Message, src func(*provider.Inbound, time.Time) *contracts.InboundSource) []contracts.TranscriptMessage {
 	result := make([]contracts.TranscriptMessage, len(msgs))
 	for i, m := range msgs {
-		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp, IsError: m.IsError}
+		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp, IsError: m.IsError, Key: m.Key, Notice: m.Notice}
 		if m.Compact != nil {
 			c := contracts.CompactMarker(*m.Compact)
 			tm.Compact = &c
@@ -106,6 +110,11 @@ func normalizeTurns(msgs []provider.Message, src func(*provider.Inbound, time.Ti
 	return result
 }
 
+// handleSessionTranscript answers GET /sessions/{id}/transcript: proxied,
+// query and all, to the session's running child, else read from the stored
+// ref here. ?before=<key>&limit=<n> pages either way through the same
+// transcriptpage.Respond (contracts.TranscriptPage); with neither, the whole
+// transcript as a bare array.
 func (s *server) handleSessionTranscript(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.data.Session(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -116,5 +125,6 @@ func (s *server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		s.proxyTo(w, r, addr, "/transcript")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.transcriptFor(r.Context(), sess))
+	status, body := transcriptpage.Respond(r.URL.Query(), s.transcriptFor(r.Context(), sess))
+	writeJSON(w, status, body)
 }

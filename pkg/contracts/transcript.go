@@ -46,6 +46,11 @@ type ToolLocation struct {
 
 // TranscriptMessage mirrors providers/provider/event.go Message — one
 // normalized transcript entry, as returned by GET /sessions/{id}/transcript.
+//
+// Paging (docs/CHAT-STREAM-DESIGN.md §4): with no query parameters the
+// endpoint answers the whole transcript as a bare []TranscriptMessage, as it
+// always has. With ?limit=<n> and/or ?before=<key> it answers a
+// TranscriptPage instead; see TranscriptPage for the cursor rules.
 type TranscriptMessage struct {
 	Role        string       `json:"role"` // "user", "agent", "tool", "tool_result", "compact", "notification", or "inbound"
 	Text        string       `json:"text,omitempty"`
@@ -67,7 +72,62 @@ type TranscriptMessage struct {
 	// cross-session peer messages). Text is the message body. Not a user
 	// turn: it carries no Attribution and doesn't count as one.
 	Inbound *InboundSource `json:"inbound,omitempty"`
+	// Key is the row's conversation identity (provider.Message.Key): the
+	// same opaque string the live stream carries for the item, compared
+	// only for equality. A tool call and its result share a key (rows
+	// sharing a key are one item); otherwise a key names one row. A user
+	// message pkg/linkwrap splits into n > 1 labelled rows (a coalesced
+	// digest run, a re-root note ahead of its block) gives row i the key
+	// "<key>#<i>" (linkwrap.SegmentKey); one it leaves whole keeps its key.
+	// Empty from an adapter (or stored data) without stable keys.
+	Key string `json:"key,omitempty"`
+	// Notice marks a synthetic row the agent itself wrote and shows (an
+	// interrupt marker, a failed-turn row) rather than a message anyone
+	// sent (provider.Message.Notice). Role is unchanged, so a consumer that
+	// ignores Notice renders the row as before.
+	Notice bool `json:"notice,omitempty"`
 }
+
+// TranscriptPage is GET /transcript's answer when ?limit or ?before is given
+// (the session child's and the Router's GET /sessions/{id}/transcript alike;
+// pkg/transcriptpage implements it once for both).
+//
+//   - ?limit=<n> (n >= 1) alone: the last n rows.
+//   - ?before=<key>&limit=<n>: the n rows immediately before the FIRST row
+//     whose Key is <key>. before without limit: every row before it.
+//
+// A page never splits an item (rows sharing a key: in practice a tool call
+// and its result). When the n-row window would start on a result whose call
+// is earlier (parallel calls may sit between them), it grows back to the
+// call, so a page can hold more than n rows. Hence the cursor is just a key,
+// not (role, key): to page backwards, pass the previous page's Rows[0].Key
+// as before. Rows[0] is always its item's first row, so successive pages
+// neither overlap nor leave gaps, and a call and its result always arrive
+// on the same page. A split user row's segments have distinct sub-keys
+// (TranscriptMessage.Key), so a page may end between them.
+//
+// HasMore reports whether rows exist before Rows[0].
+//
+// Errors, all {"error": <message>, "code": <code>}:
+//   - 400 TranscriptErrBadParam: limit not a positive integer, or before empty.
+//   - 400 TranscriptErrUnkeyed: before given, but some row has no key (an
+//     adapter without stable keys, or data that predates them): there's no
+//     way to name a row. limit alone still works there, by position.
+//   - 410 TranscriptErrUnknownKey: no row has the before key. Not 404, which
+//     the Router uses for an unknown session: the cursor is stale (a hermes
+//     child exited and its rows re-keyed, §1) or bogus, and the client should
+//     refetch the last page and replace what it shows.
+type TranscriptPage struct {
+	Rows    []TranscriptMessage `json:"rows"`
+	HasMore bool                `json:"has_more"`
+}
+
+// TranscriptPage error codes (the "code" field of a paging error body).
+const (
+	TranscriptErrBadParam   = "bad_param"
+	TranscriptErrUnkeyed    = "unkeyed"
+	TranscriptErrUnknownKey = "unknown_key"
+)
 
 // InboundSource says where an inbound message (TranscriptMessage Role
 // "inbound", the live stream's "inbound" event) came from. Built by the

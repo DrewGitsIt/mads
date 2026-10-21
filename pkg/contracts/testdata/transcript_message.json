@@ -20,7 +20,8 @@
         }
       ]
     },
-    "timestamp": "2026-09-09T18:38:15Z"
+    "timestamp": "2026-09-09T18:38:15Z",
+    "key": "toolu_01edit"
   },
   {
     "role": "tool",
@@ -35,6 +36,7 @@
       "status": "in_progress",
       "server": "github"
     },
-    "timestamp": "2026-09-09T18:38:16Z"
+    "timestamp": "2026-09-09T18:38:16Z",
+    "key": "toolu_02mcp"
   }
 ]
