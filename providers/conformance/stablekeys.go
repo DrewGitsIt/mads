@@ -286,6 +286,12 @@ func (c *checker) runKeyedTurn(sess provider.Session, t *keyedTurn) error {
 				}
 				return nil
 			case provider.EventError:
+				if t.interrupt && interrupted {
+					// How some agents close an interrupted turn (claude's
+					// error_during_execution result): the interrupt
+					// working, not a failure of the turn.
+					continue
+				}
 				return fmt.Errorf("provider error mid-turn: %s", ev.Text)
 			}
 		case <-deadline:
