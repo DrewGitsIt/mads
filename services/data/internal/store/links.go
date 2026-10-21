@@ -903,68 +903,157 @@ func linkExistsInTx(tx *Tx, grantingID, subjectID string) (bool, error) {
 
 // linkDigestCap bounds one link's mailbox: appending past it drops the
 // oldest entries first. The kept rows' FromTurn anchors still tell a reader
-// where coverage begins, so no explicit "dropped" marker is needed.
+// where coverage begins, so no explicit "dropped" marker is needed. The cap
+// applies separately to on_signal backlog and to deferred pushes, so a
+// flood of one can't evict the other.
 const linkDigestCap = 32
 
-// AppendDigest queues one compressed digest on link id's mailbox
-// (docs/LINKED-SESSIONS-DESIGN.md decision 4, the on_signal accumulation
-// half), enforcing linkDigestCap by dropping oldest-first. No event is
-// emitted — mailbox traffic is internal plumbing between the Router's
-// digest job and the next signal wake, not activity-feed material.
+// AppendDigest queues one entry on link id's mailbox (docs/LINKED-SESSIONS-
+// DESIGN.md decision 4, the on_signal accumulation half; or a push deferred
+// because its recipient was asleep, d.Deferred), enforcing linkDigestCap by
+// dropping oldest-first within the entry's class. No event is emitted —
+// mailbox traffic is internal plumbing between the Router's jobs and a
+// later wake, not activity-feed material.
 func (l *Links) AppendDigest(ctx context.Context, id string, d *contracts.LinkDigest) error {
 	if d.CreatedAt.IsZero() {
 		d.CreatedAt = time.Now().UTC()
 	}
+	attribution := ""
+	if d.Attribution != nil {
+		raw, err := json.Marshal(d.Attribution)
+		if err != nil {
+			return err
+		}
+		attribution = string(raw)
+	}
 	return l.log.WithTx(ctx, func(tx *Tx) error {
-		if _, err := getLinkInTx(tx, id); err != nil {
+		link, err := getLinkInTx(tx, id)
+		if err != nil {
 			return err
 		}
 		if _, err := tx.Exec(
-			`INSERT INTO link_digests (link_id, text, from_turn, to_turn, created_at) VALUES (?, ?, ?, ?, ?)`,
+			`INSERT INTO link_digests (link_id, text, from_turn, to_turn, created_at, deferred, noop, attribution)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, d.Text, d.FromTurn, d.ToTurn, d.CreatedAt.Format(time.RFC3339Nano),
+			boolInt(d.Deferred), boolInt(d.Noop), attribution,
 		); err != nil {
 			return err
 		}
-		_, err := tx.Exec(
-			`DELETE FROM link_digests WHERE link_id = ? AND id NOT IN
-			 (SELECT id FROM link_digests WHERE link_id = ? ORDER BY id DESC LIMIT ?)`,
-			id, id, linkDigestCap,
-		)
-		return err
+		if _, err := tx.Exec(
+			`DELETE FROM link_digests WHERE link_id = ? AND deferred = ? AND id NOT IN
+			 (SELECT id FROM link_digests WHERE link_id = ? AND deferred = ? ORDER BY id DESC LIMIT ?)`,
+			id, boolInt(d.Deferred), id, boolInt(d.Deferred), linkDigestCap,
+		); err != nil {
+			return err
+		}
+		if d.Deferred {
+			return appendWaitingChanged(tx, link.GrantingSessionID)
+		}
+		return nil
 	})
 }
 
-// DrainDigests atomically returns and clears link id's mailbox, oldest
-// first. An unknown link drains empty rather than erroring — the caller is
-// always on a best-effort delivery path where the link may have been
-// deleted mid-flight.
+// appendWaitingChanged emits session.updated for the recipient of a
+// deferred push (or of its flush): the rail's "N updates waiting" count is
+// derived from the mailbox (Session.WaitingUpdates), and session.updated is
+// what makes every watching browser refetch the list.
+func appendWaitingChanged(tx *Tx, sessionID string) error {
+	return tx.Append(&contracts.Envelope{
+		Type: contracts.SessionUpdated, SessionID: sessionID, Actor: "link-mailbox",
+	})
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// DrainDigests atomically returns and clears link id's on_signal backlog,
+// oldest first. Deferred entries are left alone (DrainDeferred's). An
+// unknown link drains empty rather than erroring — the caller is always on
+// a best-effort delivery path where the link may have been deleted
+// mid-flight.
 func (l *Links) DrainDigests(ctx context.Context, id string) ([]contracts.LinkDigest, error) {
+	return l.drain(ctx, id, false)
+}
+
+// DrainDeferred atomically returns and clears the pushes deferred on link
+// id because its recipient was asleep, oldest first. The delete rides the
+// same transaction as the read, so two racing flushes can't both get an
+// entry.
+func (l *Links) DrainDeferred(ctx context.Context, id string) ([]contracts.LinkDigest, error) {
+	return l.drain(ctx, id, true)
+}
+
+func (l *Links) drain(ctx context.Context, id string, deferred bool) ([]contracts.LinkDigest, error) {
 	var out []contracts.LinkDigest
 	err := l.log.WithTx(ctx, func(tx *Tx) error {
 		rows, err := tx.Query(
-			`SELECT text, from_turn, to_turn, created_at FROM link_digests WHERE link_id = ? ORDER BY id`, id)
+			`SELECT text, from_turn, to_turn, created_at, deferred, noop, attribution
+			 FROM link_digests WHERE link_id = ? AND deferred = ? ORDER BY id`, id, boolInt(deferred))
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
 			var (
-				d         contracts.LinkDigest
-				createdAt string
+				d                 contracts.LinkDigest
+				createdAt, attrib string
+				def, noop         int
 			)
-			if err := rows.Scan(&d.Text, &d.FromTurn, &d.ToTurn, &createdAt); err != nil {
+			if err := rows.Scan(&d.Text, &d.FromTurn, &d.ToTurn, &createdAt, &def, &noop, &attrib); err != nil {
 				_ = rows.Close()
 				return err
 			}
 			d.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+			d.Deferred, d.Noop = def != 0, noop != 0
+			if attrib != "" {
+				var a contracts.Attribution
+				if json.Unmarshal([]byte(attrib), &a) == nil {
+					d.Attribution = &a
+				}
+			}
 			out = append(out, d)
 		}
 		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 			return err
 		}
-		_, err = tx.Exec(`DELETE FROM link_digests WHERE link_id = ?`, id)
-		return err
+		if _, err = tx.Exec(`DELETE FROM link_digests WHERE link_id = ? AND deferred = ?`, id, boolInt(deferred)); err != nil {
+			return err
+		}
+		if deferred && len(out) > 0 {
+			if link, err := getLinkInTx(tx, id); err == nil {
+				return appendWaitingChanged(tx, link.GrantingSessionID)
+			}
+		}
+		return nil
 	})
 	return out, err
+}
+
+// DeferredCounts returns, per granting (recipient) session, how many
+// deferred pushes wait on its links — the rail's "N updates waiting".
+func (l *Links) DeferredCounts(ctx context.Context) (map[string]int, error) {
+	out := map[string]int{}
+	rows, err := l.log.db.QueryContext(ctx,
+		`SELECT k.granting_session_id, COUNT(*) FROM link_digests d
+		 JOIN links k ON k.id = d.link_id WHERE d.deferred = 1 GROUP BY k.granting_session_id`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var (
+			id string
+			n  int
+		)
+		if err := rows.Scan(&id, &n); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
 }
 
 func getLinkInTx(tx *Tx, id string) (*contracts.Link, error) {

@@ -45,6 +45,7 @@ func (s *Sessions) Create(ctx context.Context, sess *contracts.Session, actor st
 	}
 	// Derived on read by the Router, never stored (Session.EffectiveTrust).
 	sess.EffectiveTrust = ""
+	sess.WaitingUpdates = 0
 	if verr := contracts.ValidateSession(sess); verr != nil {
 		return verr
 	}
@@ -74,6 +75,7 @@ func (s *Sessions) Update(ctx context.Context, sess *contracts.Session, actor st
 	// A record read through the Router comes back decorated; writing it
 	// back must not freeze the derivation into the row.
 	sess.EffectiveTrust = ""
+	sess.WaitingUpdates = 0
 	if verr := contracts.ValidateSession(sess); verr != nil {
 		return verr
 	}

@@ -971,6 +971,23 @@ func (c *Client) DrainLinkDigests(ctx context.Context, id string) ([]contracts.L
 	return out, err
 }
 
+// DrainDeferredLinkDigests atomically returns and clears the pushes deferred
+// on a link because its granting session was asleep, oldest first. On_signal
+// backlog is left in place (DrainLinkDigests drains only that).
+func (c *Client) DrainDeferredLinkDigests(ctx context.Context, id string) ([]contracts.LinkDigest, error) {
+	var out []contracts.LinkDigest
+	err := c.do(ctx, http.MethodPost, "/links/"+url.PathEscape(id)+"/digests/drain?deferred=1", nil, &out)
+	return out, err
+}
+
+// DeferredLinkCounts returns, keyed by granting session, how many deferred
+// pushes wait for it.
+func (c *Client) DeferredLinkCounts(ctx context.Context) (map[string]int, error) {
+	var out map[string]int
+	err := c.do(ctx, http.MethodGet, "/links/deferred-counts", nil, &out)
+	return out, err
+}
+
 // CreateHandRaiser creates (or returns the existing) implicit self-referential
 // hand-raiser link for sessionID (docs/LINKED-SESSIONS-DESIGN.md decision 6).
 // System-only: meant to be called by the Router's Supervisor.

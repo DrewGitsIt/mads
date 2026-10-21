@@ -371,7 +371,7 @@ func TestDeliverSignalTaskTerminalWakesDormantImplicitHandRaiser(t *testing.T) {
 
 // The implicit hand-raiser stays excluded from permission and crash signals
 // even when its child is dormant: nothing is delivered and nothing is woken.
-// An ordinary monitor that isn't running is never woken either.
+// An ordinary action-needing signal does wake a dormant monitor.
 func TestDeliverSignalImplicitExcludedForPermissionAndCrash(t *testing.T) {
 	base := datatest.Start(t)
 	data := dataclient.New(base, "router")
@@ -396,11 +396,16 @@ func TestDeliverSignalImplicitExcludedForPermissionAndCrash(t *testing.T) {
 	runSignal(t, base, runner, sess.ID, job.Signal{Kind: job.SignalPermission, Tool: "Bash"})
 	runSignal(t, base, runner, sess.ID, job.Signal{Kind: job.SignalCrash, Reason: "exit 1"})
 
-	if woken := waker.wokenIDs(); len(woken) != 0 {
-		t.Errorf("woken = %v, want none (implicit is excluded; ordinary monitors are never woken)", woken)
+	// The ordinary monitor is woken for each action signal (delivered once
+	// each); the implicit hand-raiser is never woken or delivered to.
+	// (runSignal's completion wait can be satisfied by the first job's
+	// event, so wait for the second delivery explicitly.)
+	eventually(t, 5*time.Second, func() bool { return server.count() == 2 })
+	if woken := waker.wokenIDs(); len(woken) != 2 || woken[0] != monitor.ID || woken[1] != monitor.ID {
+		t.Errorf("woken = %v, want only the ordinary monitor, once per signal (implicit is excluded)", woken)
 	}
-	if got := server.count(); got != 0 {
-		t.Errorf("received %d deliveries, want 0", got)
+	if got := server.count(); got != 2 {
+		t.Errorf("received %d deliveries, want 2 (the monitor's only)", got)
 	}
 }
 

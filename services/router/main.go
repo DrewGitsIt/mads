@@ -239,6 +239,17 @@ func main() {
 	jobs := job.New(data, fm, reg)
 	sup := supervisor.New(data, sessionArgv, pipelineArgv, jobs)
 	jobs.SetResolver(sup)
+	// Pushes deferred while a session slept replay as one forced turn the
+	// moment its child starts, whatever started it (job.FlushDeferred).
+	sup.SetOnSessionStart(func(sessionID string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := jobs.Run(ctx, func(ctx context.Context, deps job.Deps) error {
+			return job.FlushDeferred(ctx, deps, sessionID)
+		}); err != nil {
+			log.Printf("router: flush deferred link pushes for %s: %v", sessionID, err)
+		}
+	})
 
 	// A credstore failure degrades to credential endpoints returning 503, not
 	// a fatal error — same best-effort philosophy as services/session/main.go.

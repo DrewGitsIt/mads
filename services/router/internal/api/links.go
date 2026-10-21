@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/madsbin"
+	"github.com/drewkidwell/mads/services/router/internal/job"
 )
 
 // orchestrateRefreshTimeout bounds notifyOrchestrateRefresh's fire-and-forget
@@ -67,10 +69,6 @@ func (s *server) notifyOrchestrateRefresh(sessionID string) {
 // the session next starts.
 func (s *server) announceOrchestrateGrant(link contracts.Link) {
 	addr, ok := s.sup.SessionAddr(link.GrantingSessionID)
-	if !ok {
-		s.notifyOrchestrateRefresh(link.GrantingSessionID)
-		return
-	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), orchestrateRefreshTimeout)
 		defer cancel()
@@ -78,11 +76,21 @@ func (s *server) announceOrchestrateGrant(link contracts.Link) {
 		if sess, err := s.data.Session(ctx, link.SubjectSessionID); err == nil && sess.Name != "" {
 			subjectName = sess.Name
 		}
+		notice := orchestrateGrantNotice(madsbin.Path(), s.routerURL, link.GrantingSessionID, link.SubjectSessionID, subjectName)
+		attribution := contracts.Attribution{
+			LinkID: link.ID, SourceName: grantNoticeSource, DigestAttributed: true,
+		}
+		if !ok {
+			// Asleep: the tools mount when the session next starts anyway,
+			// so the notice is deferred and replays then (job.FlushDeferred)
+			// rather than waking the leader for it.
+			body, hadNoop := strings.CutSuffix(notice, job.NoopInstruction)
+			job.DeferPush(ctx, job.Deps{Data: s.data}, link, body, hadNoop, attribution)
+			return
+		}
 		if err := postInject(ctx, addr, contracts.InjectRequest{
-			Text: orchestrateGrantNotice(madsbin.Path(), s.routerURL, link.GrantingSessionID, link.SubjectSessionID, subjectName),
-			Attribution: contracts.Attribution{
-				LinkID: link.ID, SourceName: grantNoticeSource, DigestAttributed: true,
-			},
+			Text:        notice,
+			Attribution: attribution,
 		}); err != nil {
 			log.Printf("router: orchestrate grant notice for %s: %v", link.GrantingSessionID, err)
 		}
@@ -291,13 +299,23 @@ func (s *server) handleLinkInject(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "link does not carry the inject grant"})
 		return
 	}
-	addr, ok := s.sup.SessionAddr(link.SubjectSessionID)
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "subject session not running"})
+	// A sleeping subject is woken, not refused: the message needs its
+	// attention. The wake is ensureSession's, minus the composer's
+	// clear-aside (a link message isn't the user changing their mind).
+	addr, err := s.ensureSession(r.Context(), link.SubjectSessionID)
+	if err != nil {
+		writeWakeError(w, err)
 		return
 	}
-	s.postJSONToChild(w, r, addr, "/inject", contracts.InjectRequest{
+	status, resp, err := job.PostInject(r.Context(), addr, contracts.InjectRequest{
 		Text:        body.Text,
 		Attribution: s.resolveLinkAttribution(r.Context(), link),
 	})
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(resp)
 }

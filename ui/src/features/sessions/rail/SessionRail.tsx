@@ -1085,7 +1085,8 @@ function SessionRow({
   ]
     .filter(Boolean)
     .join("\n");
-  const hasMeta = openTaskCount > 0;
+  const waitingUpdates = session.waiting_updates ?? 0;
+  const hasMeta = openTaskCount > 0 || waitingUpdates > 0;
   const showContext = hasRailLabels(labels);
   // The action cluster hangs outside the card, so it is painted position:fixed
   // off the row's rect and only revealed once those coordinates exist.
@@ -1306,6 +1307,14 @@ function SessionRow({
                 )}
                 {openTaskBreakdown.blocked > 0 && (
                   <span className={styles.bucketBlocked}>{openTaskBreakdown.blocked} blocked</span>
+                )}
+                {waitingUpdates > 0 && (
+                  <span
+                    className={styles.bucketWaiting}
+                    title="Link updates held while this session slept; they arrive when it wakes"
+                  >
+                    {waitingUpdates} {waitingUpdates === 1 ? "update" : "updates"} waiting
+                  </span>
                 )}
               </span>
             </div>

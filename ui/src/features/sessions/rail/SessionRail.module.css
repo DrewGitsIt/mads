@@ -596,6 +596,10 @@
   color: var(--text3);
 }
 
+.bucketWaiting {
+  color: var(--accent);
+}
+
 .bucketBlocked {
   color: var(--warn-fg);
   font-weight: 600;

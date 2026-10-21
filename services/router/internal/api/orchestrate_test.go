@@ -157,9 +157,9 @@ func TestOrchestrateMessageRefusedWithoutGrant(t *testing.T) {
 	}
 }
 
-// TestOrchestrateMessage404WhenSubjectNotRunning mirrors
-// TestLinkInject404WhenSubjectNotRunning for the orchestrate send path.
-func TestOrchestrateMessage404WhenSubjectNotRunning(t *testing.T) {
+// TestOrchestrateMessageWakesSleepingSubject mirrors
+// TestLinkInjectWakesSleepingSubject for the orchestrate send path.
+func TestOrchestrateMessageWakesSleepingSubject(t *testing.T) {
 	srv, base := newTestServerWithData(t)
 	setLinkedSessionsFlag(t, srv.URL, true)
 
@@ -182,8 +182,8 @@ func TestOrchestrateMessage404WhenSubjectNotRunning(t *testing.T) {
 	link := decodeJSON[contracts.Link](t, createResp)
 
 	resp := postJSON(t, srv.URL+"/links/"+link.ID+"/orchestrate/message", map[string]string{"text": "hello"})
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("send with subject not running: status %d, want 404", resp.StatusCode)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("send with subject asleep: status %d, want 202 (woken)", resp.StatusCode)
 	}
 }
 

@@ -100,7 +100,7 @@ func DeliverSignal(sessionID string, sig Signal) Func {
 			return nil // e.g. the terminal task was deleted mid-flight
 		}
 
-		delivered := 0
+		heard := 0
 		for _, l := range targets {
 			closing := signalClosing(sig, l.Implicit)
 			source := sess.Name
@@ -110,16 +110,32 @@ func DeliverSignal(sessionID string, sig Signal) Func {
 				// name the source what it actually is.
 				source = implicitSourceName
 			}
-			if wakeMonitor(ctx, deps, l, source, text, closing) {
-				delivered++
+			switch wakeMonitor(ctx, deps, l, source, text, closing, signalWakes(sig)) {
+			case pushDelivered:
+				heard++
+			case pushDeferred:
+				// Waiting for a start is "heard" for an informational signal;
+				// one that needed a wake and couldn't get it is still unheard.
+				if !signalWakes(sig) {
+					heard++
+				}
 			}
 		}
-		if delivered == 0 {
+		if heard == 0 {
 			warnUnheardTaskTerminal(ctx, deps, sessionID, sig,
 				fmt.Sprintf("%d reader(s), none reachable", len(targets)))
 		}
 		return nil
 	}
+}
+
+// signalWakes reports whether sig needs the recipient's action and so wakes
+// a sleeping one: a permission request, a crash, or a task that is blocked,
+// won't-do or waiting on review. A done task is informational and defers
+// until the recipient next starts (docs/LINKED-SESSIONS-DESIGN.md, "Delivery
+// to sleeping sessions").
+func signalWakes(sig Signal) bool {
+	return sig.Kind != SignalTaskTerminal || sig.ToStatus != string(contracts.StatusDone)
 }
 
 // signalClosing is the NOOP offer (or none) that ends sig's notice on one
@@ -182,23 +198,35 @@ const implicitSourceName = "your pipeline run"
 // (per-turn digests, permission and crash wakes, done-task wakes) so a monitor with nothing to do can answer in one cheap,
 // recognizable token — the UI collapses digest-attributed turns answered
 // with exactly NOOP into a quiet-check chip instead of transcript clutter.
-const noopInstruction = "\n\n(If nothing here needs your action, reply with exactly NOOP.)"
+const noopInstruction = NoopInstruction
+
+// NoopInstruction is noopInstruction for callers outside this package.
+const NoopInstruction = "\n\n(If nothing here needs your action, reply with exactly NOOP.)"
 
 // wakeMonitor delivers text to link l's granting session as a forced,
-// digest-attributed turn. A wake carries the link's whole mailbox backlog
-// as context — the monitor catches up on what accumulated between wakes in
-// the same forced turn the wake itself pays for. The backlog is drained
-// only once delivery is possible (address resolved); on delivery failure it
-// is re-queued so it isn't lost, at the cost of a possible interleave with
-// digests appended meanwhile. Returns whether delivery happened, so a
-// caller with somewhere better to put text (the digest job's mailbox) can
-// fall back. closing is appended last (noopInstruction, or "" for a wake
-// that must be acted on, not dismissed). Best-effort: one monitor's failure
-// must not affect the others.
-func wakeMonitor(ctx context.Context, deps Deps, l contracts.Link, sourceName, text, closing string) bool {
-	addr, ok := targetAddr(ctx, deps, l)
+// digest-attributed turn. A wake carries the link's whole on_signal mailbox
+// backlog as context — the monitor catches up on what accumulated between
+// wakes in the same forced turn the wake itself pays for (deferred pushes
+// are not part of it: they replay when the session starts, FlushDeferred).
+// The backlog is drained only once delivery is possible (address resolved);
+// on delivery failure it is re-queued so it isn't lost, at the cost of a
+// possible interleave with digests appended meanwhile. wake says a dormant
+// recipient must be started for this push (targetAddr); without it, or when
+// it can't be started, the push is deferred to the recipient's next start
+// instead of dropped. Returns what happened to the push.
+// closing is appended last (noopInstruction, or "" for a wake that must be
+// acted on, not dismissed). Best-effort: one monitor's failure must not
+// affect the others.
+func wakeMonitor(ctx context.Context, deps Deps, l contracts.Link, sourceName, text, closing string, wake bool) pushOutcome {
+	attribution := contracts.Attribution{
+		LinkID: l.ID, SourceName: sourceName, DigestAttributed: true,
+	}
+	addr, ok := targetAddr(ctx, deps, l, wake)
 	if !ok {
-		return false
+		if deferPush(ctx, deps, l, text, closing != "", attribution) {
+			return pushDeferred
+		}
+		return pushFailed
 	}
 	body := text
 	backlog, err := deps.Data.DrainLinkDigests(ctx, l.ID)
@@ -210,38 +238,44 @@ func wakeMonitor(ctx context.Context, deps Deps, l contracts.Link, sourceName, t
 		body = text + "\n\n" + renderBacklog(backlog)
 	}
 	body += closing
-	if err := deliverDigest(ctx, addr, body, contracts.Attribution{
-		LinkID: l.ID, SourceName: sourceName, DigestAttributed: true,
-	}); err != nil {
+	if err := deliverDigest(ctx, addr, body, attribution); err != nil {
 		log.Printf("wake: deliver to %s via link %s: %v", l.GrantingSessionID, l.ID, err)
 		for _, d := range backlog {
 			if err := deps.Data.AppendLinkDigest(ctx, l.ID, d); err != nil {
 				log.Printf("wake: requeue mailbox digest for link %s: %v", l.ID, err)
 			}
 		}
-		return false
+		return pushFailed
 	}
-	return true
+	return pushDelivered
 }
 
+// pushOutcome is what wakeMonitor did with a push.
+type pushOutcome int
+
+const (
+	pushFailed    pushOutcome = iota // neither delivered nor stored
+	pushDeferred                     // stored for the recipient's next start
+	pushDelivered                    // injected into a live child
+)
+
 // targetAddr resolves the live child address of link l's granting session.
-// An ordinary monitor that isn't running is a best-effort skip: its mailbox
-// keeps the backlog for later. An implicit hand-raiser is different. Its
-// granting session is the run's own session, the one agent that has to hear
-// about its own run, so a dormant child is woken through deps.Waker (the
-// same wake a composer send gets) instead of being skipped. The forced turn
-// stays digest-attributed, so the UI treats it as a push rather than
-// the user's own message.
-func targetAddr(ctx context.Context, deps Deps, l contracts.Link) (string, bool) {
+// A recipient that isn't running is woken through deps.Waker (the same wake
+// a composer send gets) when wake is set, or when l is the implicit
+// hand-raiser: the run's own session is the one agent that has to hear about
+// its own run. The forced turn stays digest-attributed, so the UI treats it
+// as a push rather than the user's own message. Otherwise, or when the wake
+// fails, the caller defers the push (deferPush) rather than dropping it.
+func targetAddr(ctx context.Context, deps Deps, l contracts.Link, wake bool) (string, bool) {
 	if addr, ok := deps.Resolver.SessionAddr(l.GrantingSessionID); ok {
 		return addr, true
 	}
-	if !l.Implicit || deps.Waker == nil {
-		return "", false // monitor not running: best-effort skip, not a failure
+	if !(wake || l.Implicit) || deps.Waker == nil {
+		return "", false
 	}
 	addr, err := deps.Waker.WakeSession(ctx, l.GrantingSessionID)
 	if err != nil {
-		log.Printf("wake: start %s for its implicit hand-raiser link %s: %v", l.GrantingSessionID, l.ID, err)
+		log.Printf("wake: start %s for link %s: %v", l.GrantingSessionID, l.ID, err)
 		return "", false
 	}
 	return addr, true
@@ -255,15 +289,22 @@ func renderBacklog(digests []contracts.LinkDigest) string {
 	b.WriteString("Activity since your last update:")
 	for _, d := range digests {
 		b.WriteString("\n\n")
-		switch {
-		case d.FromTurn > 0 && d.ToTurn > d.FromTurn:
-			fmt.Fprintf(&b, "[turns %d-%d] ", d.FromTurn, d.ToTurn)
-		case d.FromTurn > 0:
-			fmt.Fprintf(&b, "[turn %d] ", d.FromTurn)
-		}
+		b.WriteString(anchorPrefix(d))
 		b.WriteString(d.Text)
 	}
 	return b.String()
+}
+
+// anchorPrefix is d's turn anchors as a "[turns a-b] " lead-in, or "" when
+// none are known.
+func anchorPrefix(d contracts.LinkDigest) string {
+	switch {
+	case d.FromTurn > 0 && d.ToTurn > d.FromTurn:
+		return fmt.Sprintf("[turns %d-%d] ", d.FromTurn, d.ToTurn)
+	case d.FromTurn > 0:
+		return fmt.Sprintf("[turn %d] ", d.FromTurn)
+	}
+	return ""
 }
 
 // signalNotice renders sig as the one-line (plus optional blocker line)
