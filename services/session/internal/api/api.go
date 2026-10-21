@@ -243,7 +243,13 @@ func writeCommitError(w http.ResponseWriter, err error) {
 // a newly attached terminal (reattach, or first attach after PTY bytes
 // already flowed) gets scrollback instead of only bytes from here on —
 // scoped to that event kind, so chat-mode consumers are unaffected.
+//
+// ?v=2 opts into the keyed chat stream instead (handleStreamV2).
 func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("v") == "2" {
+		s.handleStreamV2(w, r)
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming unsupported"})
@@ -291,6 +297,60 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !writeEvent(ev) {
+				return
+			}
+		}
+	}
+}
+
+// handleStreamV2 is the keyed chat stream (docs/CHAT-STREAM-DESIGN.md §2,
+// §5): a hello frame, the replay the client's cursor calls for (its
+// Last-Event-ID header, or ?after= for a client that can't set one), a
+// replay_end, then live frames — each "id: <epoch>:<seq>" (hello and
+// resync have none, so they never move the cursor), "event: <kind>",
+// "data: <JSON with kind>", flushed one by one. Chat transport only: PTY
+// bytes stay on the legacy stream.
+func (s *server) handleStreamV2(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming unsupported"})
+		return
+	}
+	last := r.Header.Get("Last-Event-ID")
+	if last == "" {
+		last = r.URL.Query().Get("after")
+	}
+	sub := s.runner.SubscribeChat(last)
+	defer sub.Close()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+
+	write := func(f runner.ChatFrame) bool {
+		var err error
+		if f.ID != "" {
+			_, err = fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", f.ID, f.Kind, f.Data)
+		} else {
+			_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", f.Kind, f.Data)
+		}
+		if err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	for _, f := range sub.Frames {
+		if !write(f) {
+			return
+		}
+	}
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case f, ok := <-sub.Live:
+			if !ok || !write(f) {
 				return
 			}
 		}
@@ -451,8 +511,16 @@ func (s *server) handleCommits(w http.ResponseWriter, r *http.Request) {
 // ?before=<key>&limit=<n> pages it (contracts.TranscriptPage); with neither,
 // the answer is the whole transcript as a bare array, as it always was. The
 // Router's stored-ref fallback pages through the same transcriptpage.Respond.
+//
+// ?v=2 reads the agent's own store for a provider with stable keys, never a
+// session's live buffer (runner.KeyedTranscript) — what a keyed v2 viewer
+// merges with the stream's tail. Either read settles the tail first.
 func (s *server) handleTranscript(w http.ResponseWriter, r *http.Request) {
-	status, body := transcriptpage.Respond(r.URL.Query(), s.runner.Transcript(r.Context()))
+	rows := s.runner.Transcript
+	if r.URL.Query().Get("v") == "2" {
+		rows = s.runner.KeyedTranscript
+	}
+	status, body := transcriptpage.Respond(r.URL.Query(), rows(r.Context()))
 	writeJSON(w, status, body)
 }
 

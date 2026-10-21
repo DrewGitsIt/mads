@@ -51,6 +51,24 @@ func (p *scriptProvider) Transcript(context.Context, string) ([]provider.Message
 	return append([]provider.Message(nil), p.rows...), nil
 }
 
+func (p *scriptProvider) store(rows ...provider.Message) {
+	p.mu.Lock()
+	p.rows = append(p.rows, rows...)
+	p.mu.Unlock()
+}
+
+func (p *scriptProvider) session() *scriptSession {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.sess
+}
+
+func (p *scriptProvider) startOptions() provider.StartOptions {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.opts
+}
+
 type scriptSession struct {
 	p      *scriptProvider
 	mu     sync.Mutex
@@ -97,5 +115,8 @@ func (s *scriptSession) push(ev provider.Event) {
 		s.events <- ev
 	}
 }
+
+// die closes the stream as a crashed harness process would.
+func (s *scriptSession) die() { _ = s.Close() }
 
 func rawJSON(s string) json.RawMessage { return json.RawMessage(s) }

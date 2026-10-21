@@ -41,6 +41,11 @@ type hub struct {
 	// subscriber: the list is live-only, so a viewer that connects while a
 	// process runs has no other way to learn of it. nil until one arrives.
 	background *provider.Event
+
+	// tap, when set, also sees every event broadcast (not broadcastLegacy):
+	// the v2 chat stream's feed for events the runner raises itself
+	// (permission requests, a crash's error, the background list cleared).
+	tap func(provider.Event)
 }
 
 func newHub() *hub {
@@ -154,6 +159,15 @@ func (h *hub) clearBackground() {
 }
 
 func (h *hub) broadcast(ev provider.Event) {
+	if h.tap != nil {
+		h.tap(ev)
+	}
+	h.broadcastLegacy(ev)
+}
+
+// broadcastLegacy sends ev to the legacy subscribers only: the pump, which
+// feeds the v2 stream itself (raw text, turn end ahead of the next turn).
+func (h *hub) broadcastLegacy(ev provider.Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	switch ev.Kind {

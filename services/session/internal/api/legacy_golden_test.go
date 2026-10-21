@@ -91,8 +91,8 @@ var legacyTurns = []string{"claude", "codex", "fake", "kiro"}
 // (e73db680): the same kinds, data, per-connection ids and text joins. The
 // golden was written on main with -update, which plays the scripts minus
 // their settle hints — the one kind main would have written and v2 keeps
-// off the legacy stream. Here the scripts play in full, and the legacy
-// bytes must not move.
+// off the legacy stream. Here the scripts play in full, with a v2
+// subscriber attached too, and the legacy bytes must not move.
 func TestLegacyOutputGolden(t *testing.T) {
 	p := newScriptProvider("scripted", legacyScripts)
 	if *updateGolden {
@@ -103,6 +103,10 @@ func TestLegacyOutputGolden(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	legacy := openRaw(t, ctx, srv.URL+"/output", nil)
+	var v2 *rawStream
+	if !*updateGolden {
+		v2 = openRaw(t, ctx, srv.URL+"/output?v=2", nil)
+	}
 
 	for i, turn := range legacyTurns {
 		postMessage(t, srv, turn)
@@ -127,10 +131,24 @@ func TestLegacyOutputGolden(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatalf("legacy /output moved from main's bytes:\n--- got\n%s\n--- want\n%s", got, want)
 	}
+
+	// The v2 stream saw the same turns, as its own frames.
+	v2.waitCount(t, "event: turn_end\n", len(legacyTurns))
+	for _, s := range []string{"event: hello\n", "event: user_message\n", "event: item_start\n", "event: text_delta\n", "event: tool_result\n"} {
+		if !strings.Contains(string(v2.bytes()), s) {
+			t.Errorf("v2 stream has no %q", strings.TrimSpace(s))
+		}
+	}
 }
 
 // startScripted runs a runner over p behind the session API.
 func startScripted(t *testing.T, p provider.Provider) (*httptest.Server, *runner.Runner) {
+	t.Helper()
+	return startRunner(t, p, runner.ChatLimits{})
+}
+
+// startRunner is startScripted with the v2 journal's limits set.
+func startRunner(t *testing.T, p provider.Provider, limits runner.ChatLimits) (*httptest.Server, *runner.Runner) {
 	t.Helper()
 	ctx := context.Background()
 	base := datatest.Start(t)
@@ -143,6 +161,7 @@ func startScripted(t *testing.T, p provider.Provider) (*httptest.Server, *runner
 		t.Fatal(err)
 	}
 	r := runner.New(rec.ID, dataclient.New(base, rec.ID), reg)
+	r.SetChatLimits(limits)
 	if err := r.Start(ctx); err != nil {
 		t.Fatal(err)
 	}

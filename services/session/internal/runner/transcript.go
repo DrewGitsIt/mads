@@ -38,31 +38,34 @@ type transcripter interface {
 //     switch's full duration. There providerName never changes and the
 //     TranscriptReader only needs the ref string, not a live session object.
 func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
+	return r.transcript(ctx, false)
+}
+
+// KeyedTranscript is Transcript as a keyed (v2) consumer reads it
+// (GET /transcript?v=2): for a provider with stable keys, always the
+// agent's own store through its TranscriptReader, never a session's live
+// buffer — the buffer (acprpc's, goose) holds in-flight items the v2 stream
+// carries itself, mostly without keys (docs/CHAT-STREAM-DESIGN.md §3,
+// "ACP"). Elsewhere it is Transcript.
+func (r *Runner) KeyedTranscript(ctx context.Context) []contracts.TranscriptMessage {
+	return r.transcript(ctx, true)
+}
+
+func (r *Runner) transcript(ctx context.Context, keyed bool) []contracts.TranscriptMessage {
 	out := []contracts.TranscriptMessage{}
-	r.mu.Lock()
-	ref := r.lastRef
-	providerName := r.providerName
-	sess := r.sess
-	if sess != nil {
-		ref = sess.Ref()
-	}
-	if ref == "" {
-		// A fork that doesn't exist yet reads as its source: it starts as a
-		// copy, so until the first turn the original is the history.
-		ref = r.forkFrom
-	}
-	r.mu.Unlock()
+	ref, providerName, sess := r.transcriptRef()
 	if ref == "" {
 		return out // Start hasn't finished yet
 	}
+	_, storeKeyed := r.chatReader()
 
 	// Preferred while a live session is bound and non-empty: its own buffer is
 	// the only record of an in-flight turn (an ACP agent has nothing on disk).
 	// Fall through only when the live buffer is unavailable (sess nil) or empty.
-	if sess != nil {
+	if sess != nil && (!keyed || !storeKeyed) {
 		if lt, ok := sess.(transcripter); ok {
 			if msgs := lt.Transcript(); len(msgs) > 0 {
-				return renderTranscript(msgs, r.renderOptions(ctx))
+				return r.renderRows(ctx, msgs, false)
 			}
 		}
 	}
@@ -82,7 +85,24 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 		log.Printf("runner: transcript: read %s: %v", r.sessionID, err)
 		return out
 	}
-	return renderTranscript(msgs, r.renderOptions(ctx))
+	return r.renderRows(ctx, msgs, storeKeyed)
+}
+
+// renderRows renders a transcript read, which is also a settle point
+// (docs/CHAT-STREAM-DESIGN.md §3): fromStore says msgs are the whole store
+// as settling reads it, so they settle the v2 tail before the rows are
+// served — no row served here shares a key with a frame still in the tail.
+// Rows from elsewhere (a live buffer) only prompt a read of the store.
+func (r *Runner) renderRows(ctx context.Context, msgs []provider.Message, fromStore bool) []contracts.TranscriptMessage {
+	if fromStore {
+		r.settleWith(msgs)
+	} else {
+		r.labeler.assign(msgs, true)
+		r.scheduleSettle()
+	}
+	opts := r.renderOptions(ctx)
+	opts.userKeys = r.labeler.snapshot()
+	return renderTranscript(msgs, opts)
 }
 
 // renderOptions is renderTranscript's per-session context.
@@ -99,6 +119,11 @@ type renderOptions struct {
 	// inbound resolves an inbound message's (Role "inbound") source; nil
 	// leaves it unresolved.
 	inbound func(*provider.Inbound, time.Time) *contracts.InboundSource
+	// userKeys labels stored user rows that carry the agent's own key with
+	// the key of the user_message that sent them (userLabeler): native key
+	// → "user:<id>". Applied before linkwrap.Expand, so a split row's
+	// segments get sub-keys of the label.
+	userKeys map[string]string
 }
 
 // renderTranscript maps normalized provider messages to wire TranscriptMessages,
@@ -118,6 +143,9 @@ func renderTranscript(msgs []provider.Message, opts renderOptions) []contracts.T
 	out := make([]contracts.TranscriptMessage, len(msgs))
 	for i, m := range msgs {
 		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp, IsError: m.IsError, Key: m.Key, Notice: m.Notice}
+		if l, ok := opts.userKeys[m.Key]; ok && m.Role == "user" {
+			tm.Key = l
+		}
 		if m.Compact != nil {
 			c := contracts.CompactMarker(*m.Compact)
 			tm.Compact = &c
