@@ -4,6 +4,7 @@ import path from "node:path";
 import { bootTopology } from "./lib/topology";
 import { startFastModelFixture } from "./lib/fastModelFixture";
 import { PIPELINE_SCENARIO } from "./lib/pipelineScenario";
+import { SESSION_SCENARIO } from "./lib/sessionScenario";
 import { createWorkspace, setConfig, setupWorkspace } from "./lib/seed";
 
 /**
@@ -14,7 +15,11 @@ import { createWorkspace, setConfig, setupWorkspace } from "./lib/seed";
  */
 export default async function globalSetup(): Promise<() => Promise<void>> {
   const fastModel = await startFastModelFixture();
-  const topology = await bootTopology({ fastModelURL: fastModel.url, pipelineScenario: PIPELINE_SCENARIO });
+  const topology = await bootTopology({
+    fastModelURL: fastModel.url,
+    pipelineScenario: PIPELINE_SCENARIO,
+    sessionScenario: SESSION_SCENARIO,
+  });
 
   const workspaceDir = mkdtempSync(path.join(tmpdir(), "mads-ui-smoke-workspace-"));
   setupWorkspace(workspaceDir);
