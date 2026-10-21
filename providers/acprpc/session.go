@@ -77,6 +77,7 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 		toolCalls: make(map[string]toolCallInfo),
 		asker:     opts.Permissions,
 		asks:      make(map[string]*permAsk),
+		settle:    opts.SettleHints,
 	}
 	if e.cfg.OwnProcessTree {
 		s.reaper = procreap.New(cmd.Process.Pid)
@@ -428,6 +429,27 @@ type streamSession struct {
 	// value); last-write-wins is exactly right for "occupancy now".
 	ctxUsed int
 	ctxSize int
+	// settle — the session asked for EventSettle (StartOptions.SettleHints);
+	// cfg.Settle says where. item is the message the latest text or
+	// thinking chunk belonged to (Config.Keys); anonSeq numbers the
+	// messages of chunks that carried no messageId. Both are read-loop
+	// state, guarded by mu like the rest.
+	settle  bool
+	item    itemState
+	anonSeq int
+}
+
+// itemState tracks the open message for KeyModeMessageRun: its id (with
+// the created stamp, when the strategy reads one), the current run and the
+// kind ("text" or "thinking") of that run. open is false after a boundary
+// — a tool call, a tool result, a turn's start or end — so the next chunk
+// opens a new message even under the same messageId.
+type itemState struct {
+	open  bool
+	msgID string // the wire messageId, "" for an anonymous message
+	id    string // the key's message part
+	kind  string
+	run   int
 }
 
 // read is the sole owner of the events channel: it decodes stdout lines
@@ -528,6 +550,10 @@ func (s *streamSession) handleLine(raw []byte) {
 // acp-transcript-1.48.0.jsonl lines 86-105) — so the engine's own flag is
 // what reliably detects interruption.
 func (s *streamSession) finishTurn(resp rpcMessage, interrupted bool, ctxUsed, ctxSize int) {
+	s.endItem()
+	if s.cfg.Settle.PromptResponse {
+		s.emitSettle("")
+	}
 	if resp.Error != nil {
 		// auth_required (-32000), credits_exhausted, "session already has
 		// active run" on a concurrent prompt, generic stream failures — all
@@ -913,7 +939,7 @@ func (s *streamSession) handleUpdate(raw json.RawMessage) {
 				return
 			}
 			select {
-			case s.events <- provider.Event{Kind: provider.EventText, Text: text}:
+			case s.events <- provider.Event{Kind: provider.EventText, Key: s.chunkKey("text", &u), Text: text}:
 			default:
 			}
 		}
@@ -922,7 +948,7 @@ func (s *streamSession) handleUpdate(raw json.RawMessage) {
 			return // Message has no thinking role; replay keeps the reply only
 		}
 		if text := u.chunkText(); text != "" {
-			s.events <- provider.Event{Kind: provider.EventThinking, Text: text}
+			s.events <- provider.Event{Kind: provider.EventThinking, Key: s.chunkKey("thinking", &u), Text: text}
 		}
 	case "user_message_chunk":
 		s.mu.Lock()
@@ -959,7 +985,11 @@ func (s *streamSession) handleUpdate(raw json.RawMessage) {
 		if replaying {
 			return
 		}
-		s.events <- provider.Event{Kind: provider.EventToolUse, Tool: tool}
+		key := s.toolKey(u.ToolCallID)
+		s.events <- provider.Event{Kind: provider.EventToolUse, Key: key, Tool: tool}
+		if s.cfg.Settle.ToolCall {
+			s.emitSettle(key)
+		}
 	case "tool_call_update":
 		// Live updates also arrive in a non-terminal in_progress variant
 		// (goose's carry _meta.toolNotification output chunks) — skip
@@ -973,11 +1003,16 @@ func (s *streamSession) handleUpdate(raw json.RawMessage) {
 		if replaying {
 			return
 		}
+		key := s.toolKey(u.ToolCallID)
 		s.events <- provider.Event{
 			Kind:    provider.EventToolResult,
+			Key:     key,
 			Tool:    &provider.ToolUse{ID: u.ToolCallID},
 			Text:    text,
 			IsError: isError,
+		}
+		if s.cfg.Settle.ToolDone {
+			s.emitSettle(key)
 		}
 	case "usage_update":
 		// Not an Event of its own — snapshotted and ridden onto the next
@@ -1011,6 +1046,65 @@ func (s *streamSession) recordCompaction(pre, post int, began time.Time) {
 	defer s.mu.Unlock()
 	s.transcript = append(s.transcript, provider.Message{Role: "compact", Compact: m, Timestamp: time.Now().UTC()})
 	s.lastAgentMsgID = ""
+}
+
+// chunkKey is Event.Key for a live text or thinking chunk under
+// Config.Keys (see KeyModeMessageRun); "" when the strategy emits none.
+func (s *streamSession) chunkKey(kind string, u *sessionUpdate) string {
+	if s.cfg.Keys.Mode != KeyModeMessageRun {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	it := &s.item
+	switch {
+	// Same message: still open, same messageId (both empty for an
+	// anonymous one). The created stamp isn't compared — it moves on within
+	// one message; the first chunk's is the one the message keeps.
+	case it.open && it.msgID == u.MessageID:
+		if it.kind != kind {
+			it.run++
+			it.kind = kind
+		}
+	default:
+		id := u.MessageID
+		if id == "" {
+			s.anonSeq++
+			id = fmt.Sprintf("acp-anon-%d", s.anonSeq)
+		} else if ns := s.cfg.Keys.CreatedNamespace; ns != "" {
+			if created := decodeNSCreated(u.Meta, ns); created != "" {
+				id += "@" + created
+			}
+		}
+		*it = itemState{open: true, msgID: u.MessageID, id: id, kind: kind}
+	}
+	return it.id + ":" + strconv.Itoa(it.run)
+}
+
+// toolKey is Event.Key for a tool call and its result: the toolCallId,
+// under any key strategy.
+func (s *streamSession) toolKey(toolCallID string) string {
+	if s.cfg.Keys.Mode == KeyModeNone {
+		return ""
+	}
+	s.endItem() // a tool call or result ends the message before it
+	return toolCallID
+}
+
+// endItem closes the open message (a boundary: see itemState).
+func (s *streamSession) endItem() {
+	s.mu.Lock()
+	s.item.open = false
+	s.mu.Unlock()
+}
+
+// emitSettle sends an EventSettle for a session that asked for them. Like
+// every event, from the read loop only.
+func (s *streamSession) emitSettle(key string) {
+	if !s.settle {
+		return
+	}
+	s.events <- provider.Event{Kind: provider.EventSettle, Key: key}
 }
 
 func (s *streamSession) appendReplay(msg provider.Message) {
@@ -1197,6 +1291,7 @@ func (s *streamSession) prompt(text string, compact bool) error {
 	s.nextID++
 	id := s.nextID
 	s.turnID = id
+	s.item.open = false // a turn's first chunk opens a new message
 	s.compacting, s.compactStarted = compact, false
 	ref := s.ref
 	if compact {

@@ -38,6 +38,8 @@ func gooseConfig() Config {
 			{Extension: "todo", Name: "todo__todo_write", Class: "think"},
 		},
 		PermissionAsksEveryCall: true,
+		Keys:                    KeyStrategy{Mode: KeyModeMessageRun, CreatedNamespace: "goose"},
+		Settle:                  SettlePoints{ToolDone: true, PromptResponse: true},
 	}
 }
 
