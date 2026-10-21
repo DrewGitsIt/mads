@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -19,7 +20,27 @@ func (s *server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	for i := range sessions {
 		s.decorateSession(&sessions[i])
 	}
+	ptrs := make([]*contracts.Session, len(sessions))
+	for i := range sessions {
+		ptrs[i] = &sessions[i]
+	}
+	s.decorateWaiting(r.Context(), ptrs...)
 	writeJSON(w, http.StatusOK, sessions)
+}
+
+// decorateWaiting fills Session.WaitingUpdates: how many link pushes sit
+// deferred for each session because it was asleep when they came
+// (docs/LINKED-SESSIONS-DESIGN.md, "Delivery to sleeping sessions"). One
+// Data Service call covers the whole list. Best-effort — a failed lookup
+// leaves the field zero rather than failing the read.
+func (s *server) decorateWaiting(ctx context.Context, sessions ...*contracts.Session) {
+	counts, err := s.data.DeferredLinkCounts(ctx)
+	if err != nil || len(counts) == 0 {
+		return
+	}
+	for i := range sessions {
+		sessions[i].WaitingUpdates = counts[sessions[i].ID]
+	}
 }
 
 // decorateSession fills the record's derived fields before it leaves the

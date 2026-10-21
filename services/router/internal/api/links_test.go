@@ -438,10 +438,10 @@ func TestLinkInjectRefusedWithoutGrant(t *testing.T) {
 	}
 }
 
-// TestLinkInject404WhenSubjectNotRunning proves inject 404s when the
-// subject session has no running child — even though the link itself and
-// its grant are valid.
-func TestLinkInject404WhenSubjectNotRunning(t *testing.T) {
+// TestLinkInjectWakesSleepingSubject proves inject wakes a subject session
+// that has no running child instead of refusing (2026-10-20), and leaves its
+// "set aside" tag alone: a link message isn't the user changing their mind.
+func TestLinkInjectWakesSleepingSubject(t *testing.T) {
 	srv, base := newTestServerWithData(t)
 	setLinkedSessionsFlag(t, srv.URL, true)
 
@@ -451,7 +451,7 @@ func TestLinkInject404WhenSubjectNotRunning(t *testing.T) {
 	// POST /sessions (which spawns a child) — this session exists but has
 	// no running process.
 	bootstrap := dataclient.New(base, "test-bootstrap")
-	subject := contracts.Session{Name: "subject", Provider: "fake"}
+	subject := contracts.Session{Name: "subject", Provider: "fake", Tags: []string{contracts.SessionTagAside}}
 	if err := bootstrap.CreateSession(context.Background(), &subject); err != nil {
 		t.Fatalf("create subject session: %v", err)
 	}
@@ -467,8 +467,15 @@ func TestLinkInject404WhenSubjectNotRunning(t *testing.T) {
 	link := decodeJSON[contracts.Link](t, createResp)
 
 	resp := postJSON(t, srv.URL+"/links/"+link.ID+"/inject", map[string]string{"text": "hello"})
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("inject with subject not running: status %d, want 404", resp.StatusCode)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("inject with subject asleep: status %d, want 202 (woken)", resp.StatusCode)
+	}
+	got, err := bootstrap.Session(context.Background(), subject.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.IsAside() {
+		t.Errorf("link wake cleared the subject's set-aside tag: %v", got.Tags)
 	}
 }
 

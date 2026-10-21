@@ -71,6 +71,21 @@ describe("SessionRail", () => {
     expect(screen.getByText("1 blocked")).toBeTruthy();
   });
 
+  it("shows 'N updates waiting' on a sleeping session holding deferred link pushes, and drops it once flushed", () => {
+    const rail = (waiting?: number) => (
+      <SessionRail
+        sessions={[makeSession({ id: "w1", activity: "inactive", name: "asleep", waiting_updates: waiting })]}
+        openTaskCounts={{}}
+      />
+    );
+    const { rerender } = render(rail(2));
+    expect(screen.getByText("2 updates waiting")).toBeTruthy();
+    rerender(rail(1));
+    expect(screen.getByText("1 update waiting")).toBeTruthy();
+    rerender(rail());
+    expect(screen.queryByText(/updates? waiting/)).toBeNull();
+  });
+
   it("stays plain 'Idle' in the idle tone when the open work is only running/ready", () => {
     render(
       <SessionRail

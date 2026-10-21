@@ -174,6 +174,17 @@ type LinkDigest struct {
 	FromTurn  int       `json:"from_turn,omitempty"`
 	ToTurn    int       `json:"to_turn,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+
+	// Deferred marks an entry queued because its recipient's child wasn't
+	// running when the push happened (docs/LINKED-SESSIONS-DESIGN.md,
+	// "Delivery to sleeping sessions"), as opposed to on_signal backlog,
+	// which keeps waiting for check_mailbox or the next signal wake.
+	// Deferred entries replay on the recipient's next start: Text is the
+	// push body and Attribution the one it carried, stored whole.
+	Deferred bool `json:"deferred,omitempty"`
+	// Noop says a deferred push may close with the NOOP offer.
+	Noop        bool         `json:"noop,omitempty"`
+	Attribution *Attribution `json:"attribution,omitempty"`
 }
 
 // NewSessionPlaceholder marks the to-be-created session's slot in a staged

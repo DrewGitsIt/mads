@@ -208,6 +208,12 @@ type Session struct {
 	// Service drops whatever a write carries, so a stale value can't outlive
 	// a provider that has since grown the capability.
 	EffectiveTrust SessionTrust `json:"effective_trust,omitempty"`
+	// WaitingUpdates counts link pushes deferred because this session was
+	// asleep (digests, done signals, the orchestrate grant notice) that will
+	// replay when its child next starts. Derived like EffectiveTrust: the
+	// Router fills it from the Data Service's mailbox on every read and the
+	// Data Service drops whatever a write carries.
+	WaitingUpdates int `json:"waiting_updates,omitempty"`
 	// WorktreeDir is the absolute path of this session's isolated worktree
 	// (spec §17; docs/SESSION-WORKTREES-DESIGN.md D1), set at its first start
 	// when Isolation is "worktree" and Dir is a git repo. Empty means the

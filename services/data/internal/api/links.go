@@ -177,7 +177,11 @@ func linkRoutes(mux *http.ServeMux, log *store.Log) {
 	})
 
 	mux.HandleFunc("POST /links/{id}/digests/drain", func(w http.ResponseWriter, r *http.Request) {
-		list, err := links.DrainDigests(r.Context(), r.PathValue("id"))
+		drain := links.DrainDigests
+		if r.URL.Query().Get("deferred") == "1" {
+			drain = links.DrainDeferred
+		}
+		list, err := drain(r.Context(), r.PathValue("id"))
 		if err != nil {
 			writeStoreError(w, err)
 			return
@@ -186,6 +190,17 @@ func linkRoutes(mux *http.ServeMux, log *store.Log) {
 			list = []contracts.LinkDigest{}
 		}
 		writeJSON(w, http.StatusOK, list)
+	})
+
+	// Per-recipient count of pushes deferred while the recipient slept — the
+	// Router decorates session reads with it (Session.WaitingUpdates).
+	mux.HandleFunc("GET /links/deferred-counts", func(w http.ResponseWriter, r *http.Request) {
+		counts, err := links.DeferredCounts(r.Context())
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, counts)
 	})
 
 	// Both hand-raiser routes are meant to be called by the Router's

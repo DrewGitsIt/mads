@@ -37,8 +37,9 @@ type Supervisor struct {
 	data         *dataclient.Client // actor = "router"
 	sessionArgv  []string           // e.g. []string{"go", "run", "./services/session"}
 	pipelineArgv []string
-	jobs         *job.Runner      // nil in tests that don't exercise summary generation
-	creds        *credstore.Store // nil disables credential injection entirely (SetCreds)
+	jobs         *job.Runner            // nil in tests that don't exercise summary generation
+	creds        *credstore.Store       // nil disables credential injection entirely (SetCreds)
+	onStart      func(sessionID string) // see SetOnSessionStart
 
 	mu        sync.Mutex
 	sessions  map[string]*child.Process
@@ -74,6 +75,14 @@ func New(data *dataclient.Client, sessionArgv, pipelineArgv []string, jobs *job.
 // optional dependency in this package.
 func (s *Supervisor) SetCreds(creds *credstore.Store) {
 	s.creds = creds
+}
+
+// SetOnSessionStart registers fn to run (on its own goroutine) each time a
+// session's child has been spawned and is tracked, whatever started it: a
+// composer send, a link wake, a manual resume. This is where deferred link
+// pushes replay (job.FlushDeferred). Optional; nil does nothing.
+func (s *Supervisor) SetOnSessionStart(fn func(sessionID string)) {
+	s.onStart = fn
 }
 
 // credentialEnv resolves the env vars a newly spawned child should receive:
@@ -138,6 +147,9 @@ func (s *Supervisor) SpawnSession(ctx context.Context, sessionID string) (string
 		// interactive child is activating while a pipeline run is already in
 		// flight for it — grant the implicit hand-raiser now.
 		go s.grantImplicitHandRaiser(context.Background(), sessionID)
+	}
+	if s.onStart != nil {
+		go s.onStart(sessionID)
 	}
 	return p.Addr, nil
 }

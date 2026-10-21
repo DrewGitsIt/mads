@@ -1,9 +1,7 @@
 package job
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -104,14 +102,19 @@ func GenerateDigest(sessionID string, deltas []string) Func {
 		turn := subjectTurn(ctx, deps, sessionID, len(deliver) > 0)
 
 		for _, l := range deliver {
-			addr, ok := deps.Resolver.SessionAddr(l.GrantingSessionID)
-			if !ok {
-				continue // monitor not running: best-effort skip, not a failure
-			}
-			if err := deliverDigest(ctx, addr, text+noopInstruction, contracts.Attribution{
+			attribution := contracts.Attribution{
 				LinkID: l.ID, SourceName: sess.Name, DigestAttributed: true,
 				Kind: linkwrap.KindDigest, Relation: linkwrap.ToGranting(l), Turn: turn,
-			}); err != nil {
+			}
+			addr, ok := deps.Resolver.SessionAddr(l.GrantingSessionID)
+			if !ok {
+				// Monitor asleep: a digest never wakes anyone (no wake chain);
+				// it waits in the mailbox and replays when the monitor next
+				// starts (FlushDeferred).
+				deferPush(ctx, deps, l, text, true, attribution)
+				continue
+			}
+			if err := deliverDigest(ctx, addr, text+noopInstruction, attribution); err != nil {
 				log.Printf("digest: deliver to %s via link %s: %v", l.GrantingSessionID, l.ID, err)
 				continue // one monitor's failure must not affect the others
 			}
@@ -137,26 +140,16 @@ func GenerateDigest(sessionID string, deltas []string) Func {
 }
 
 // deliverDigest POSTs an attributed digest to a monitor child's /inject
-// endpoint. A standalone helper (not api.postJSONToChild) because this runs
-// detached inside a job goroutine, with no inbound request to proxy a
-// response back to.
+// endpoint, retrying a still-starting child's 503 (PostInject). A standalone
+// helper (not api.postJSONToChild) because this runs detached inside a job
+// goroutine, with no inbound request to proxy a response back to.
 func deliverDigest(ctx context.Context, addr, text string, attribution contracts.Attribution) error {
-	raw, err := json.Marshal(contracts.InjectRequest{Text: text, Attribution: attribution})
+	status, _, err := PostInject(ctx, addr, contracts.InjectRequest{Text: text, Attribution: attribution})
 	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
+		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/inject", bytes.NewReader(raw))
-	if err != nil {
-		return fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("post: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("status %d", resp.StatusCode)
+	if status != http.StatusAccepted {
+		return fmt.Errorf("status %d", status)
 	}
 	return nil
 }

@@ -1,17 +1,19 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/linkwrap"
 	"github.com/drewkidwell/mads/pkg/turndigest"
+	"github.com/drewkidwell/mads/services/router/internal/job"
 )
 
 // orchestrateTranscriptTailLen bounds get_session_summary's live-transcript
@@ -366,39 +368,29 @@ func (s *server) resolveLinkAttribution(ctx context.Context, link contracts.Link
 }
 
 // deliverLinkMessage POSTs text into link's subject session's /inject
-// endpoint. It duplicates deliverDigest's POST logic (job/digest.go) rather
-// than reusing postJSONToChild: message_session composes its own response
-// (optionally augmented with a bounded-wait reply below), so there is
-// nothing for postJSONToChild's direct-to-ResponseWriter write to attach to
-// — the same "different execution context" reasoning that already justifies
-// deliverDigest's duplication. delivered is false with a nil error when the
-// subject isn't currently running.
-func (s *server) deliverLinkMessage(ctx context.Context, link contracts.Link, text string) (delivered bool, err error) {
-	addr, ok := s.sup.SessionAddr(link.SubjectSessionID)
-	if !ok {
-		return false, nil
+// endpoint, waking the subject first if it is asleep (the same wake a
+// composer send gets, minus its clear-aside: a link message isn't the user
+// changing their mind). A just-woken child answers 503 until its runner is
+// ready, which job.PostInject rides out. message_session composes its own
+// response (optionally augmented with a bounded-wait reply below), so there
+// is nothing for postJSONToChild's direct-to-ResponseWriter write to attach
+// to.
+func (s *server) deliverLinkMessage(ctx context.Context, link contracts.Link, text string) error {
+	addr, err := s.ensureSession(ctx, link.SubjectSessionID)
+	if err != nil {
+		return err
 	}
-	raw, err := json.Marshal(contracts.InjectRequest{
+	status, _, err := job.PostInject(ctx, addr, contracts.InjectRequest{
 		Text:        text,
 		Attribution: s.resolveLinkAttribution(ctx, link),
 	})
 	if err != nil {
-		return false, err
+		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/inject", bytes.NewReader(raw))
-	if err != nil {
-		return false, err
+	if status != http.StatusAccepted {
+		return fmt.Errorf("child inject: status %d", status)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusAccepted {
-		return false, fmt.Errorf("child inject: status %d", resp.StatusCode)
-	}
-	return true, nil
+	return nil
 }
 
 // handleOrchestrateMessage delivers a leader's message_session tool call into
@@ -436,13 +428,13 @@ func (s *server) handleOrchestrateMessage(w http.ResponseWriter, r *http.Request
 	}
 
 	sendTime := time.Now()
-	delivered, err := s.deliverLinkMessage(r.Context(), link, body.Text)
-	if err != nil {
+	if err := s.deliverLinkMessage(r.Context(), link, body.Text); err != nil {
+		var we *wakeError
+		if errors.As(err, &we) || errors.Is(err, dataclient.ErrNotFound) {
+			writeWakeError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-	if !delivered {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "subject session not running"})
 		return
 	}
 

@@ -435,3 +435,51 @@ label in the text, the way Claude Code wraps its own peer messages:
    links were sent. Any invalid staged entry fails the whole create —
    never an orphan unlinked session. Flag-off, the `links` field itself is
    a 400 (plain creates keep working; only /links routes 404 wholesale).
+
+## Delivery to sleeping sessions (2026-10-20)
+
+A push to a session whose child isn't running used to vanish: `message_session`
+and link inject answered "subject session not running", per-turn digests were
+"best-effort skipped", signals woke only the implicit hand-raiser, and the
+grant notice was dropped. Undelivered digests and signals mean the channel is
+quietly not doing its job, so every push now either wakes its recipient or
+waits for it. Drew's call (option b):
+
+- **Wake for anything that needs action.** `message_session`, link inject, and
+  the signals permission-requested, crashed, and task blocked / won't-do /
+  needs-review. The wake is the Router's `ensureSession` (per-session lock),
+  the same wake a composer send gets, and it does **not** clear the session's
+  "set aside" tag: a link message isn't the user changing their mind. A
+  just-woken child answers `/inject` with a retryable 503 while its runner
+  starts, so delivery retries with backoff for about 15s (`job.PostInject`)
+  instead of failing. A wake that can't happen (unknown provider, spawn
+  failure) falls back to deferring the signal; `message_session` and inject
+  return the structured wake error.
+- **Defer, then flush on start** for everything informational: per-turn
+  digests, done signals, and the orchestrate grant notice. They are stored in
+  the link's mailbox (`link_digests`) flagged `deferred`, with the push's text
+  and its full `Attribution` (migration 0032 adds `deferred`, `noop`,
+  `attribution`), and replay unchanged later. A digest never wakes anyone, so
+  there is no wake chain (a woken monitor's own forced turn is still
+  digest-attributed and doesn't re-trigger digestwatch). The implicit
+  hand-raiser still wakes for every task terminal, as before (decision 6).
+- **on_signal backlog is untouched.** Deferred entries are a separate class
+  from the on_signal accumulation in the same table. `DrainLinkDigests` (the
+  signal wake and `check_mailbox`) drains only the backlog; the start-time flush
+  drains only deferred entries. The 32-entry cap applies per class.
+- **Flush on start.** `Supervisor.SpawnSession` calls a start hook once the
+  child is tracked, whatever started it (composer send, link wake, manual
+  resume). The hook (`job.FlushDeferred`) gathers the deferred entries of every
+  link where the session is the granting side and delivers them as ONE forced
+  turn, oldest first: a single entry replays verbatim; several are joined under
+  a short header, prefixed with their source when they come from different
+  links. The NOOP line closes the turn only if every entry is NOOP-able. The
+  turn carries the oldest entry's Attribution whole (`DigestAttributed` only if
+  all are). It is idempotent because the drain is one Data Service transaction:
+  racing flushes can't both receive an entry. A failed replay re-queues the
+  entries for the next start.
+- **Visible while asleep.** `Session.waiting_updates` (derived by the Router
+  from `GET /links/deferred-counts` on the Data Service, like `effective_trust`)
+  is the count of deferred entries where the session is the recipient. The rail
+  card shows "N updates waiting" until the flush clears it; deferring and
+  flushing emit `session.updated` so every open browser refetches.

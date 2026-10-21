@@ -219,6 +219,14 @@ func (r *Runner) invoke(ctx context.Context, fn Func) (err error) {
 	return fn(ctx, Deps{Data: r.data, FastModel: r.fm, Registry: r.registry, Resolver: resolver, Waker: waker})
 }
 
+// Run executes fn synchronously with the Runner's Deps, outside the
+// spawn-run-exit event pattern: for lightweight housekeeping (the flush of
+// deferred link pushes when a session starts) that would only be event noise
+// as a job. A panic in fn is recovered into the error, like a job body.
+func (r *Runner) Run(ctx context.Context, fn Func) error {
+	return r.invoke(ctx, fn)
+}
+
 // Shutdown waits for in-flight jobs to finish, bounded by ctx.
 func (r *Runner) Shutdown(ctx context.Context) {
 	done := make(chan struct{})

@@ -29,6 +29,13 @@ export interface Session {
    * declaration on every read, never stored — show it, never write it back.
    */
   effective_trust?: SessionTrust;
+  /**
+   * Link pushes (digests, done signals, the orchestrate grant notice) held
+   * back because this session was asleep; they replay when its agent next
+   * starts. Derived by the Router from the link mailbox on every read, never
+   * stored — show it, never write it back.
+   */
+  waiting_updates?: number;
   worktree_dir?: string;
   worktree_branch?: string;
   /** The branch the checkout had open when this session's worktree was made — the Land target. Absent for a session working in place. */

@@ -23,6 +23,7 @@ func (s *server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.decorateSession(&sess)
+	s.decorateWaiting(r.Context(), &sess)
 	writeJSON(w, http.StatusOK, sess)
 }
 
