@@ -486,3 +486,35 @@ func closeWait(cmd *exec.Cmd, grace time.Duration) {
 		<-done
 	}
 }
+
+// DefaultAccount is the login key (accountKey) of a session started with
+// this provider's own environment — what a session that reported limits
+// before keys existed most likely ran on.
+func (p *Provider) DefaultAccount() string { return accountKey(p.env(nil)) }
+
+// accountKey names the login a claude process with environment env runs
+// on, for sharing plan limits between sessions: the provider plus its
+// config dir — $CLAUDE_CONFIG_DIR, else ~/.claude. Two sessions with the
+// same key draw down the same windows.
+func accountKey(env []string) string {
+	var dir, home string
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		switch k {
+		case "CLAUDE_CONFIG_DIR":
+			dir = v
+		case "HOME":
+			home = v
+		}
+	}
+	if dir == "" {
+		if home == "" {
+			home, _ = os.UserHomeDir()
+		}
+		if home == "" {
+			return ""
+		}
+		dir = filepath.Join(home, ".claude")
+	}
+	return "claude-code:" + filepath.Clean(dir)
+}

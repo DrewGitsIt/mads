@@ -31,6 +31,8 @@ type usageTally struct {
 	// rule delegates.Tracker.Usage dedupes its record by).
 	lastCall map[string]contracts.TokenCounts
 	billing  contracts.SessionBilling
+	// limitsWritten is when billing.Limits was last persisted.
+	limitsWritten time.Time
 	// compactTurn is set while the in-flight turn is a compaction pass the
 	// Runner requested (beginCompactLocked), and consumed by that turn's
 	// end (countTurn).
@@ -172,6 +174,10 @@ func (r *Runner) flushUsage() bool {
 	return true
 }
 
+// limitsRefresh is how often an unchanged limits reading is written again,
+// so its timestamp keeps saying how fresh it is.
+const limitsRefresh = 5 * time.Minute
+
 // persistAccount writes the harness's billing report onto the record when
 // it changes what was last written. Held under the tally's lock across the
 // write so two reports can't land out of order.
@@ -193,8 +199,12 @@ func (r *Runner) persistAccount(a *provider.AccountStatus) {
 				ID: w.ID, Label: contracts.RateLimitLabel(w.ID), UsedPct: w.UsedPct, ResetsAt: w.ResetsAt, Scope: "account",
 			})
 		}
-		if !slices.Equal(limits, t.billing.Limits) {
+		// An unchanged reading is still news after a while: other
+		// sessions on the account take the freshest, and the card ages it.
+		if !slices.Equal(limits, t.billing.Limits) || a.Account != t.billing.Account ||
+			patch.At.Sub(t.limitsWritten) >= limitsRefresh {
 			patch.Limits = limits
+			patch.Account = a.Account
 		}
 	}
 	if patch.Mode == "" && patch.Limits == nil {
@@ -208,7 +218,8 @@ func (r *Runner) persistAccount(a *provider.AccountStatus) {
 		t.billing.Mode = patch.Mode
 	}
 	if patch.Limits != nil {
-		t.billing.Limits = patch.Limits
+		t.billing.Limits, t.billing.Account = patch.Limits, patch.Account
+		t.limitsWritten = patch.At
 	}
 	r.publishUsageUpdated()
 }

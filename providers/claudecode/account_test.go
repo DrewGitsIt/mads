@@ -207,3 +207,20 @@ func TestResumedStreamSessionStartsFromTheRestoredCost(t *testing.T) {
 		t.Errorf("fresh session's first turn cost = %v, want 0.0183063", cost)
 	}
 }
+
+func TestAccountKey(t *testing.T) {
+	cases := []struct {
+		env  []string
+		want string
+	}{
+		{[]string{"HOME=/Users/me"}, "claude-code:/Users/me/.claude"},
+		{[]string{"HOME=/Users/me", "CLAUDE_CONFIG_DIR=/Users/me/.claude-work/"}, "claude-code:/Users/me/.claude-work"},
+		// The last assignment wins, as it does for the process.
+		{[]string{"CLAUDE_CONFIG_DIR=/a", "HOME=/Users/me", "CLAUDE_CONFIG_DIR=/b"}, "claude-code:/b"},
+	}
+	for _, c := range cases {
+		if got := accountKey(c.env); got != c.want {
+			t.Errorf("accountKey(%q) = %q, want %q", c.env, got, c.want)
+		}
+	}
+}

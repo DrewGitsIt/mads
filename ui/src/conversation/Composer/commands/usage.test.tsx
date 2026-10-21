@@ -144,9 +144,11 @@ describe("/usage", () => {
   it("refetches on the session's turn, agent-state, compact and usage events", async () => {
     const { client } = open(fixtureSessionReportPlan.session_id, { compact: vi.fn() });
     await loaded();
-    expect(subs).toHaveLength(1);
-    expect(subs[0].sessionId).toBe(fixtureSessionReportPlan.session_id);
-    expect(subs[0].types).toEqual(
+    // This session's events, plus every session's usage (the next test).
+    expect(subs).toHaveLength(2);
+    const own = subs.find((sub) => sub.sessionId)!;
+    expect(own.sessionId).toBe(fixtureSessionReportPlan.session_id);
+    expect(own.types).toEqual(
       expect.arrayContaining([
         "session.turn_ended",
         "session.agent_state",
@@ -160,7 +162,7 @@ describe("/usage", () => {
     next.context!.used = 150_000;
     client.sessionReports.set(next.session_id, next);
     act(() =>
-      subs[0].onEvent({ seq: 1, timestamp: "", type: "session.turn_ended", actor: "t" }),
+      own.onEvent({ seq: 1, timestamp: "", type: "session.turn_ended", actor: "t" }),
     );
     await screen.findByText("38");
     expect(screen.getByText("150k / 200k")).toBeTruthy();
@@ -170,12 +172,12 @@ describe("/usage", () => {
     landed.tokens!.turns = 39;
     client.sessionReports.set(landed.session_id, landed);
     act(() =>
-      subs[0].onEvent({ seq: 10, timestamp: "", type: "session.usage_updated", actor: "t" }),
+      own.onEvent({ seq: 10, timestamp: "", type: "session.usage_updated", actor: "t" }),
     );
     await screen.findByText("39");
 
     act(() =>
-      subs[0].onEvent({
+      own.onEvent({
         seq: 2, timestamp: "", type: "session.compact", actor: "t",
         payload: { phase: "start" },
       }),
@@ -183,7 +185,7 @@ describe("/usage", () => {
     await screen.findByText("Compacting…");
     expect(screen.queryByRole("button", { name: "Compact now" })).toBeNull();
     act(() =>
-      subs[0].onEvent({
+      own.onEvent({
         seq: 3, timestamp: "", type: "session.compact", actor: "t",
         payload: { phase: "done", success: true },
       }),
@@ -211,4 +213,28 @@ describe("/usage in the composer", () => {
       expect(textarea.value).toBe("");
     },
   );
+
+  it("plan limits are the login's: another session's reading refetches, and an old one says its age", async () => {
+    const now = Date.parse("2026-10-21T15:00:00Z");
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const { client } = open(fixtureSessionReportPlan.session_id);
+    await loaded();
+    expect(sections()).toContain("Plan limits");
+
+    const anySession = subs.find((sub) => !sub.sessionId)!;
+    expect(anySession.types).toEqual(["session.usage_updated"]);
+    const old: SessionReport = structuredClone(fixtureSessionReportPlan);
+    old.limits_at = new Date(now - (3 * 60 + 20) * 60_000).toISOString();
+    client.sessionReports.set(old.session_id, old);
+    act(() =>
+      anySession.onEvent({ seq: 5, timestamp: "", type: "session.usage_updated", actor: "t", session_id: "ses_other" }),
+    );
+    await waitFor(() => expect(sections()).toContain("Plan limits · as of 3h 20m ago"));
+  });
+
+  it("listens for other sessions' readings only on a plan", async () => {
+    open(fixtureSessionReportApiKey.session_id);
+    await loaded();
+    expect(subs.filter((sub) => !sub.sessionId)).toHaveLength(0);
+  });
 });

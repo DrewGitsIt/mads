@@ -105,6 +105,14 @@ export function UsageCard({
     };
   }, [sessionId, load]);
 
+  // Plan limits are the login's, shared by its sessions: another session's
+  // newer reading changes this card too.
+  const plan = report?.billing.mode === "plan";
+  useEffect(() => {
+    if (!plan) return;
+    return subscribeToEvents({ types: ["session.usage_updated"] }, () => void load());
+  }, [plan, load]);
+
   const now = useElapsedNow();
 
   if (!report) {
@@ -122,7 +130,7 @@ export function UsageCard({
     return Number.isNaN(t) ? "" : formatElapsed(now - t);
   };
 
-  const { health, context, tokens, limits, cost } = report;
+  const { health, context, tokens, limits, limits_at, cost } = report;
   const since = ago(health.since);
   const up = ago(health.process_started_at);
   const last = ago(health.last_event_at);
@@ -198,7 +206,7 @@ export function UsageCard({
 
       {limits && limits.length > 0 && (
         <>
-          <Section title="Plan limits" />
+          <Section title={limitsTitle(limits_at, now)} />
           {limits.map((l) => {
             const pct = Math.round(l.used_pct);
             const resets = formatResetTime(l.resets_at, now);
@@ -269,6 +277,15 @@ function ContextSection({
       )}
     </>
   );
+}
+
+/** Readings older than this say how old they are: no session on the login has heard since. */
+const LIMITS_STALE_MS = 15 * 60_000;
+
+function limitsTitle(at: string | undefined, now: number): string {
+  const t = at ? Date.parse(at) : NaN;
+  if (Number.isNaN(t) || now - t < LIMITS_STALE_MS) return "Plan limits";
+  return `Plan limits · as of ${formatElapsed(now - t)} ago`;
 }
 
 function Section({ title }: { title: string }) {

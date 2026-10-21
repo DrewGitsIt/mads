@@ -117,6 +117,10 @@ type SessionBilling struct {
 	Limits []RateLimit `json:"limits,omitempty"`
 	// LimitsAt is when Limits was reported.
 	LimitsAt *time.Time `json:"limits_at,omitempty"`
+	// Account is the login Limits belong to (provider.AccountStatus.Account):
+	// sessions with the same Account share their windows, so the report
+	// shows whichever of them heard most recently.
+	Account string `json:"account,omitempty"`
 }
 
 // SessionBillingPatch is PUT /sessions/{id}/billing's body: an empty Mode
@@ -126,6 +130,8 @@ type SessionBillingPatch struct {
 	Mode   string      `json:"mode,omitempty"`
 	Limits []RateLimit `json:"limits,omitempty"`
 	At     time.Time   `json:"at,omitzero"`
+	// Account rides with Limits; ignored without them.
+	Account string `json:"account,omitempty"`
 }
 
 // Session health states (SessionHealth.State): the agent states while a
@@ -207,7 +213,10 @@ type SessionReport struct {
 	Tokens    *ReportTokens  `json:"tokens,omitempty"`
 	Billing   ReportBilling  `json:"billing"`
 	Limits    []RateLimit    `json:"limits,omitempty"`
-	Cost      *ReportCost    `json:"cost,omitempty"`
+	// LimitsAt is when Limits were reported — by this session or another on
+	// the same account, whichever heard last.
+	LimitsAt *time.Time  `json:"limits_at,omitempty"`
+	Cost     *ReportCost `json:"cost,omitempty"`
 }
 
 // rateLimitLabels names the windows claude-code reports.
@@ -232,6 +241,10 @@ type ReportInputs struct {
 	Health     SessionHealth
 	CanCompact bool
 	Now        time.Time
+	// AccountBilling is the freshest billing among the sessions sharing
+	// this one's Account (NewestAccountBilling); its limits stand in when
+	// they're newer than the session's own. Nil: the session's own only.
+	AccountBilling *SessionBilling
 }
 
 // BuildSessionReport assembles a SessionReport from a session record. The
@@ -262,13 +275,22 @@ func BuildSessionReport(sess Session, in ReportInputs) SessionReport {
 	}
 	switch rep.Billing.Mode {
 	case BillingPlan:
+		// The windows are the account's, not the session's: another
+		// session on the same login may have heard since this one slept.
+		src := sess.Billing
+		if a := in.AccountBilling; a != nil && newerLimits(a, src) {
+			src = a
+		}
 		// A window whose reset has passed says nothing true any more: its
 		// usage started over, and the harness hasn't reported since.
-		for _, l := range sess.Billing.Limits {
+		for _, l := range src.Limits {
 			if !l.ResetsAt.IsZero() && !l.ResetsAt.After(in.Now) {
 				continue
 			}
 			rep.Limits = append(rep.Limits, l)
+		}
+		if len(rep.Limits) > 0 {
+			rep.LimitsAt = src.LimitsAt
 		}
 	case BillingUsage:
 		if t := sess.UsageTotals; t != nil && t.CostUSD > 0 {
@@ -276,4 +298,32 @@ func BuildSessionReport(sess Session, in ReportInputs) SessionReport {
 		}
 	}
 	return rep
+}
+
+// newerLimits reports whether a's limits were heard after b's.
+func newerLimits(a, b *SessionBilling) bool {
+	if a.LimitsAt == nil || len(a.Limits) == 0 {
+		return false
+	}
+	return b.LimitsAt == nil || a.LimitsAt.After(*b.LimitsAt)
+}
+
+// NewestAccountBilling is the billing, among sessions, whose limits are the
+// most recently heard for account — the input BuildSessionReport takes as
+// ReportInputs.AccountBilling. Nil when account is empty or none match.
+func NewestAccountBilling(sessions []Session, account string) *SessionBilling {
+	if account == "" {
+		return nil
+	}
+	var best *SessionBilling
+	for i := range sessions {
+		b := sessions[i].Billing
+		if b == nil || b.Account != account || b.Mode != BillingPlan {
+			continue
+		}
+		if best == nil || newerLimits(b, best) {
+			best = b
+		}
+	}
+	return best
 }

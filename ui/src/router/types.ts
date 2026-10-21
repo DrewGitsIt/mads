@@ -603,6 +603,8 @@ export interface SessionReport {
   tokens?: TokenCounts & { turns: number; delegates?: TokenCounts };
   billing: { mode: BillingMode };
   limits?: RateLimit[];
+  /** When `limits` were heard — by this session or another on the same login, whichever heard last. */
+  limits_at?: string;
   /** basis "list_price": the harness's estimate at published API rates. */
   cost?: { usd: number; basis: string };
 }

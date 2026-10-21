@@ -241,6 +241,10 @@ type AccountStatus struct {
 	// Limits is the plan's rate-limit windows; nil when this event doesn't
 	// say.
 	Limits []RateLimitWindow `json:"limits,omitempty"`
+	// Account names the login the limits belong to: an opaque key, equal
+	// for every session drawing down the same windows (claude-code: the
+	// provider plus its config dir). Empty when the provider can't say.
+	Account string `json:"account,omitempty"`
 }
 
 // RateLimitWindow is one plan rate-limit window's current standing.

@@ -279,6 +279,13 @@ type Model struct {
 // vary by harness (transcript access, model discovery) are optional strategy
 // interfaces below — the matrix declares which are present, and conformance
 // holds the two in agreement.
+// AccountKeyer is implemented by a provider that can name the login its
+// sessions run on (AccountStatus.Account) without starting one: the key a
+// session launched with no extra environment would report.
+type AccountKeyer interface {
+	DefaultAccount() string
+}
+
 type Provider interface {
 	// Name is the registry key ("claude-code", "fake", ...).
 	Name() string

@@ -103,6 +103,7 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 		asks:             map[string]context.CancelFunc{},
 		hasAgentFile:     p.hasDelegateFile,
 		settle:           opts.Keyed,
+		account:          accountKey(cmd.Env),
 	}
 	s.askCtx, s.askStop = context.WithCancel(context.Background())
 	for _, srv := range opts.MCPServers {
@@ -135,6 +136,8 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 
 // streamSession owns one claude process on the structured transport.
 type streamSession struct {
+	// account keys this process's login for its plan limits (accountKey).
+	account          string
 	cmd              *exec.Cmd
 	events           chan provider.Event
 	mcpConfigPath    string
@@ -372,6 +375,9 @@ func (s *streamSession) handleLine(raw []byte) {
 		evs = settleAfter(&l, evs)
 	}
 	for _, ev := range evs {
+		if ev.Account != nil {
+			ev.Account.Account = s.account
+		}
 		if ev.Kind == provider.EventSubagentUsage {
 			ev.Usage.ContextWindow = subagentWindow
 		} else if ev.Usage != nil {

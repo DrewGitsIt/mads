@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
@@ -72,6 +73,42 @@ func TestSessionReportDormant(t *testing.T) {
 	}
 	if rep := getReport(t, srv.URL, sess.ID); rep.Health.State != contracts.HealthSleeping {
 		t.Errorf("after waking and sleeping again: state %q, want sleeping", rep.Health.State)
+	}
+}
+
+// Plan limits belong to the login: a sleeping session's card shows what
+// another session on the same provider and config dir heard since, never
+// a different login's.
+func TestSessionReportSharesAccountLimits(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	ctx := context.Background()
+	data := dataclient.New(base, "session")
+	weekly := func(pct float64) []contracts.RateLimit {
+		return []contracts.RateLimit{{ID: "seven_day", Label: "Weekly", UsedPct: pct, ResetsAt: time.Now().Add(96 * time.Hour), Scope: "account"}}
+	}
+	mk := func(name, account string, pct float64, at time.Time) contracts.Session {
+		t.Helper()
+		sess := contracts.Session{Name: name, Provider: "claude-code", Activity: contracts.SessionInactive}
+		if err := data.CreateSession(ctx, &sess); err != nil {
+			t.Fatal(err)
+		}
+		if err := data.SetSessionBilling(ctx, sess.ID, contracts.SessionBillingPatch{
+			Mode: contracts.BillingPlan, Limits: weekly(pct), At: at, Account: account,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return sess
+	}
+	now := time.Now()
+	asleep := mk("asleep", "claude-code:/home/me/.claude", 12, now.Add(-21*time.Hour))
+	mk("active", "claude-code:/home/me/.claude", 21, now.Add(-time.Minute))
+	work := mk("work login", "claude-code:/home/me/.claude-work", 90, now)
+
+	if rep := getReport(t, srv.URL, asleep.ID); len(rep.Limits) != 1 || rep.Limits[0].UsedPct != 21 || rep.LimitsAt == nil {
+		t.Errorf("sleeping session: limits %+v at %v, want the active session's 21%%", rep.Limits, rep.LimitsAt)
+	}
+	if rep := getReport(t, srv.URL, work.ID); len(rep.Limits) != 1 || rep.Limits[0].UsedPct != 90 {
+		t.Errorf("other login: limits %+v, want its own 90%%", rep.Limits)
 	}
 }
 

@@ -157,6 +157,47 @@ func TestSessionReportBillingRules(t *testing.T) {
 	}
 }
 
+// Plan limits are the account's: a session asleep since its last reading
+// shows a fresher one heard by another session on the same login.
+func TestSessionReportAccountLimits(t *testing.T) {
+	const acct = "claude-code:/Users/me/.claude"
+	old, fresh := reportNow.Add(-21*time.Hour), reportNow.Add(-10*time.Second)
+	weekly := func(pct float64) []contracts.RateLimit {
+		return []contracts.RateLimit{{ID: "seven_day", Label: "Weekly", UsedPct: pct, ResetsAt: reportNow.Add(96 * time.Hour), Scope: "account"}}
+	}
+	sleeping := contracts.Session{ID: "ses_asleep", Billing: &contracts.SessionBilling{
+		Mode: contracts.BillingPlan, Limits: weekly(12), LimitsAt: &old, Account: acct,
+	}}
+	active := contracts.Session{ID: "ses_active", Billing: &contracts.SessionBilling{
+		Mode: contracts.BillingPlan, Limits: weekly(21), LimitsAt: &fresh, Account: acct,
+	}}
+	otherLogin := contracts.Session{ID: "ses_other", Billing: &contracts.SessionBilling{
+		Mode: contracts.BillingPlan, Limits: weekly(90), LimitsAt: reportTime(reportNow), Account: "claude-code:/Users/me/.claude-work",
+	}}
+	apiKey := contracts.Session{ID: "ses_api", Billing: &contracts.SessionBilling{
+		Mode: contracts.BillingUsage, Limits: weekly(50), LimitsAt: reportTime(reportNow), Account: acct,
+	}}
+	all := []contracts.Session{sleeping, active, otherLogin, apiKey}
+
+	shared := contracts.NewestAccountBilling(all, acct)
+	if shared == nil || shared.Limits[0].UsedPct != 21 {
+		t.Fatalf("newest for the account = %+v, want the active session's 21%%", shared)
+	}
+	if contracts.NewestAccountBilling(all, "") != nil {
+		t.Error("an empty account matched sessions")
+	}
+
+	rep := contracts.BuildSessionReport(sleeping, contracts.ReportInputs{Now: reportNow, AccountBilling: shared})
+	if len(rep.Limits) != 1 || rep.Limits[0].UsedPct != 21 || rep.LimitsAt == nil || !rep.LimitsAt.Equal(fresh) {
+		t.Errorf("sleeping session's report: limits %+v at %v; want 21%% heard %v", rep.Limits, rep.LimitsAt, fresh)
+	}
+	// The session's own reading wins when it is the newer one.
+	rep = contracts.BuildSessionReport(active, contracts.ReportInputs{Now: reportNow, AccountBilling: sleeping.Billing})
+	if rep.Limits[0].UsedPct != 21 || !rep.LimitsAt.Equal(fresh) {
+		t.Errorf("active session's report took an older reading: %+v at %v", rep.Limits, rep.LimitsAt)
+	}
+}
+
 // A session that hasn't finished a turn has only its health.
 func TestSessionReportOmitsUnknownSections(t *testing.T) {
 	rep := contracts.BuildSessionReport(contracts.Session{ID: "ses_new", Provider: "kiro-cli"}, contracts.ReportInputs{

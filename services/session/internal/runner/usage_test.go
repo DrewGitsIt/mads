@@ -93,7 +93,7 @@ func TestAccountEventsPersistBilling(t *testing.T) {
 	resets := time.Date(2026, 10, 12, 14, 10, 0, 0, time.UTC)
 	window := []provider.RateLimitWindow{{ID: "five_hour", UsedPct: 62, ResetsAt: resets}, {ID: "seven_day", UsedPct: 31}}
 	r.observeUsage(provider.Event{Kind: provider.EventAccount, Account: &provider.AccountStatus{BillingMode: provider.BillingPlan}})
-	r.observeUsage(provider.Event{Kind: provider.EventAccount, Account: &provider.AccountStatus{Limits: window}})
+	r.observeUsage(provider.Event{Kind: provider.EventAccount, Account: &provider.AccountStatus{Limits: window, Account: "claude-code:/home/me/.claude"}})
 
 	cur, err := data.Session(ctx, sess.ID)
 	if err != nil {
@@ -106,15 +106,28 @@ func TestAccountEventsPersistBilling(t *testing.T) {
 	if l := b.Limits[0]; l.ID != "five_hour" || l.Label != "5-hour" || l.UsedPct != 62 || !l.ResetsAt.Equal(resets) || l.Scope != "account" {
 		t.Errorf("first window = %+v", l)
 	}
+	if b.Account != "claude-code:/home/me/.claude" {
+		t.Errorf("account = %q, want the provider's login key", b.Account)
+	}
 	if b.Limits[1].Label != "Weekly" {
 		t.Errorf("second window label = %q, want Weekly", b.Limits[1].Label)
 	}
 
 	stamped := *b.LimitsAt
 	time.Sleep(5 * time.Millisecond)
-	r.observeUsage(provider.Event{Kind: provider.EventAccount, Account: &provider.AccountStatus{Limits: window}})
+	same := &provider.AccountStatus{Limits: window, Account: "claude-code:/home/me/.claude"}
+	r.observeUsage(provider.Event{Kind: provider.EventAccount, Account: same})
 	if again, _ := data.Session(ctx, sess.ID); again.Billing == nil || !again.Billing.LimitsAt.Equal(stamped) {
 		t.Errorf("an unchanged report was written again: %+v", again.Billing)
+	}
+	// …until limitsRefresh has passed: the timestamp has to keep saying
+	// how fresh the reading is, for the other sessions on the account.
+	r.tally.mu.Lock()
+	r.tally.limitsWritten = r.tally.limitsWritten.Add(-limitsRefresh)
+	r.tally.mu.Unlock()
+	r.observeUsage(provider.Event{Kind: provider.EventAccount, Account: same})
+	if again, _ := data.Session(ctx, sess.ID); again.Billing == nil || !again.Billing.LimitsAt.After(stamped) {
+		t.Errorf("an unchanged report past the refresh wasn't rewritten: %+v", again.Billing)
 	}
 	if st := r.Status(); st.LastEventAt.IsZero() {
 		t.Error("status has no last event after several")

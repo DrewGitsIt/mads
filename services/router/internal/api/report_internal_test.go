@@ -43,3 +43,25 @@ func TestCanCompactFollowsMatrix(t *testing.T) {
 		t.Error("canCompact with no provider registry = true, want false")
 	}
 }
+
+// Limits written before account keys carry none: they're taken to be the
+// provider's default login, so a long-asleep session still finds its
+// account's fresher reading.
+func TestDefaultAccountForUnkeyedLimits(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "/home/me/.claude")
+	reg := provider.NewRegistry()
+	for _, p := range []provider.Provider{claudecode.New(claudecode.Config{}), goosecli.New(goosecli.Config{})} {
+		if err := reg.Register(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &server{providers: reg}
+	if got := s.defaultAccount("claude-code"); got != "claude-code:/home/me/.claude" {
+		t.Errorf("claude-code default account = %q", got)
+	}
+	for _, name := range []string{"goose", "nonesuch", ""} {
+		if got := s.defaultAccount(name); got != "" {
+			t.Errorf("defaultAccount(%q) = %q, want none", name, got)
+		}
+	}
+}

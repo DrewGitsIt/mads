@@ -57,11 +57,51 @@ func (s *server) handleSessionReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rep := contracts.BuildSessionReport(sess, contracts.ReportInputs{
-		Health:     s.sessionHealth(r.Context(), sess),
-		CanCompact: s.canCompact(sess),
-		Now:        time.Now(),
+		Health:         s.sessionHealth(r.Context(), sess),
+		CanCompact:     s.canCompact(sess),
+		Now:            time.Now(),
+		AccountBilling: s.accountBilling(r.Context(), sess),
 	})
 	writeJSON(w, http.StatusOK, rep)
+}
+
+// accountBilling finds the freshest plan limits heard by any session on
+// sess's login (same provider and config dir), so every session's card
+// shows the account's windows, not what it last heard before sleeping.
+// Can't list: the session's own limits stand.
+func (s *server) accountBilling(ctx context.Context, sess contracts.Session) *contracts.SessionBilling {
+	if sess.Billing == nil || sess.Billing.Mode != contracts.BillingPlan {
+		return nil
+	}
+	account := sess.Billing.Account
+	if account == "" {
+		// Its limits predate account keys: assume the provider's default login.
+		account = s.defaultAccount(sess.Provider)
+	}
+	if account == "" {
+		return nil
+	}
+	all, err := s.data.Sessions(ctx, "")
+	if err != nil {
+		return nil
+	}
+	return contracts.NewestAccountBilling(all, account)
+}
+
+// defaultAccount is the provider's own login key (provider.AccountKeyer),
+// or "" when it can't say.
+func (s *server) defaultAccount(name string) string {
+	if s.providers == nil || name == "" {
+		return ""
+	}
+	p, err := s.providers.Get(name)
+	if err != nil {
+		return ""
+	}
+	if k, ok := p.(provider.AccountKeyer); ok {
+		return k.DefaultAccount()
+	}
+	return ""
 }
 
 // canCompact says whether the session's harness compacts natively, so the

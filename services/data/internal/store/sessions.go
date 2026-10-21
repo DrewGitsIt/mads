@@ -395,6 +395,9 @@ func (s *Sessions) SetBilling(ctx context.Context, id string, p contracts.Sessio
 			}
 			at = at.UTC()
 			b.Limits, b.LimitsAt = p.Limits, &at
+			if p.Account != "" {
+				b.Account = p.Account
+			}
 		}
 		sess.Billing = &b
 		return s.write(tx, sess)
