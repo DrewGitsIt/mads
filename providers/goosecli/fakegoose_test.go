@@ -392,11 +392,13 @@ func fgServe() {
 	// toolRows are the rows goose stores for a finished tool call: the
 	// request as an assistant row of its own and the response as a user
 	// row, both msg_<uuid>.
-	toolRows := func(callID, name string, input map[string]any, status, text string) []fgRow {
+	toolRows := func(callID, ext, name string, input map[string]any, status, text string) []fgRow {
 		return []fgRow{
 			{id: "msg_" + fgUUID(), role: "assistant", created: clock, meta: fgVisible, content: []map[string]any{{
 				"type": "toolRequest", "id": callID,
 				"toolCall": map[string]any{"status": "success", "value": map[string]any{"name": name, "arguments": input}},
+				// The extension rides tool_meta (captures/keys run.store.jsonl).
+				"_meta": map[string]any{"goose.toolCall.providerIndex": 0, "goose_extension": ext},
 			}}},
 			{id: "msg_" + fgUUID(), role: "user", created: clock, meta: fgVisible, content: []map[string]any{{
 				"type": "toolResponse", "id": callID,
@@ -494,11 +496,11 @@ func fgServe() {
 		}
 		if allowed {
 			toolDone(callID, "completed", "ran "+a.title)
-			insert(toolRows(callID, a.name, a.input, "completed", "ran "+a.title)...)
+			insert(toolRows(callID, a.ext, a.name, a.input, "completed", "ran "+a.title)...)
 			return "used " + a.title
 		}
 		toolDone(callID, "failed", "The user has declined to run this tool")
-		insert(toolRows(callID, a.name, a.input, "failed", "The user has declined to run this tool")...)
+		insert(toolRows(callID, a.ext, a.name, a.input, "failed", "The user has declined to run this tool")...)
 		return "denied via " + outcome
 	}
 
@@ -701,7 +703,7 @@ func fgServe() {
 						"sequence": 1, "chunks": []map[string]any{{"stream": "stdout", "output": "alpha.txt\n"}}}}}})
 				time.Sleep(50 * time.Millisecond)
 				toolDone(callID, "completed", "alpha.txt\nbeta.txt")
-				tools := toolRows(callID, a.name, a.input, "completed", "alpha.txt\nbeta.txt")
+				tools := toolRows(callID, a.ext, a.name, a.input, "completed", "alpha.txt\nbeta.txt")
 				if thinking {
 					// goose 1.48.0 agents/agent.rs ("Thinking/reasoning belongs
 					// on the tool-call messages"): the model call's thinking
@@ -783,7 +785,7 @@ func fgServe() {
 				a := fgAttempts["attempt-shell"]
 				toolCall(callID, a)
 				toolDone(callID, "failed", "boom: exit 1")
-				insert(toolRows(callID, a.name, a.input, "failed", "boom: exit 1")...)
+				insert(toolRows(callID, a.ext, a.name, a.input, "failed", "boom: exit 1")...)
 				reply = "the tool failed"
 			default:
 				if a, ok := fgAttempts[lastWord(prompt)]; ok {

@@ -204,9 +204,7 @@ function mergePage(s: ConvState, page: KeyedRow[], hasMore: boolean): ConvState 
     if (prev?.failed) merged.failed = true;
     if (prev?.streamed) merged.streamed = true;
     if (prev?.tool && merged.tool) {
-      merged.tool = withLiveDisplay(merged.tool, prev.tool, !!prev.streamed);
-      // A call watched live keeps its measured duration: stores stamp
-      // coarser (goose: whole seconds) than the arrival times.
+      merged.tool = withLiveDisplay(r.key, merged.tool, prev.tool, !!prev.streamed);
       if (prev.streamed && prev.timestamp) merged.timestamp = prev.timestamp;
     }
     rows[r.key] = merged;
@@ -225,18 +223,39 @@ function mergePage(s: ConvState, page: KeyedRow[], hasMore: boolean): ConvState 
 }
 
 /**
- * A stored tool call keeps what the live one showed where the store has
- * nothing: an ACP agent's store (goose, hermes) keeps the call's name and
- * input but not the display kind and title the wire carried, and the
- * stored row replacing the live one mustn't change the row at turn end
- * (nor its duration, for a call this tab watched live).
+ * A stored tool row normally carries the display kind and title its live
+ * call did (stored_tool_display: claude, codex, goose). Where it lacks them
+ * (a provider that can't rebuild them: hermes's titles), the row keeps
+ * what it showed live rather than change at turn end — a defensive
+ * fallback that warns in development, so a real mismatch isn't hidden.
+ * A stored value that differs from the live one wins, also with a warning.
+ * Separately, a call this tab watched live keeps its measured duration:
+ * stores stamp coarser (goose: whole seconds) than the arrival times.
  */
-function withLiveDisplay(stored: ToolUse, live: ToolUse, watched: boolean): ToolUse {
+function withLiveDisplay(key: string, stored: ToolUse, live: ToolUse, watched: boolean): ToolUse {
+  const filled: string[] = [];
+  const differs: string[] = [];
+  for (const f of ["kind", "title"] as const) {
+    if (live[f] === undefined || live[f] === "") continue;
+    if (stored[f] === undefined || stored[f] === "") filled.push(f);
+    else if (stored[f] !== live[f]) differs.push(`${f} ${JSON.stringify(live[f])} → ${JSON.stringify(stored[f])}`);
+  }
+  if (import.meta.env.DEV && (filled.length > 0 || differs.length > 0)) {
+    console.warn(
+      `keyed conversation: tool ${key} (${stored.name}): ` +
+        [
+          filled.length > 0 ? `the stored row lacks ${filled.join(" and ")}; kept the live one` : "",
+          differs.length > 0 ? `stored differs from live: ${differs.join(", ")}` : "",
+        ]
+          .filter(Boolean)
+          .join("; "),
+    );
+  }
   const result = stored.result && watched && live.result?.timestamp ? { ...stored.result, timestamp: live.result.timestamp } : stored.result;
   return {
     ...stored,
-    kind: stored.kind ?? live.kind,
-    title: stored.title ?? live.title,
+    kind: stored.kind || live.kind,
+    title: stored.title || live.title,
     locations: stored.locations ?? live.locations,
     server: stored.server ?? live.server,
     path: stored.path ?? live.path,

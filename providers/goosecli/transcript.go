@@ -138,6 +138,11 @@ type exportBlock struct {
 			Arguments json.RawMessage `json:"arguments"`
 		} `json:"value"`
 	} `json:"toolCall"`
+	// Meta is a toolRequest's tool_meta: goose_extension names the
+	// extension a bare tool name belongs to.
+	Meta struct {
+		Extension string `json:"goose_extension"`
+	} `json:"_meta"`
 	// ToolResult is a toolResponse's payload: {status, value:{content[],
 	// structuredContent, isError}}.
 	ToolResult *struct {
@@ -226,9 +231,10 @@ func normalizeExport(conv []exportMessage) []provider.Message {
 					if b.ToolCall == nil {
 						continue
 					}
+					kind, title := storedToolDisplay(b.ToolCall.Value.Name, b.ToolCall.Value.Arguments, b.Meta.Extension)
 					msgs = append(msgs, provider.Message{
 						Role:      "tool",
-						Tool:      &provider.ToolUse{ID: b.ID, Name: b.ToolCall.Value.Name, Input: b.ToolCall.Value.Arguments},
+						Tool:      &provider.ToolUse{ID: b.ID, Name: b.ToolCall.Value.Name, Input: b.ToolCall.Value.Arguments, Kind: kind, Title: title},
 						Timestamp: ts,
 						Key:       b.ID,
 					})

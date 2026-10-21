@@ -82,6 +82,7 @@ below; the design must hold for all four columns.
 | User message id round-trips | yes (stdin `uuid`) | yes (`clientUserMessageId`) | no (text identical) | no (whitespace stripped; rewritten after a cancel) |
 | Mid-turn send | `queued_command` attachment, written at the next tool result | `turn/steer` | queued by mads | queued prompt, echoed when drained |
 | Live ≠ stored text | — | — | — | leading `"\n\n"` live after a tool |
+| Stored tool kind and title (`stored_tool_display`) | native | native | native: rebuilt from the stored name, args and extension by goose's own title rule | kind only (ported kind map); hermes stores no title |
 | Stored thinking (`stored_thinking`) | native: thinking blocks in the JSONL | native: reasoning summaries | unsupported: stored, but moved onto tool-call rows under other keys | native: reasoning columns |
 | Live-only / stored-only rows | interrupt markers; "No response requested." after a resume | interrupted partials (live only); injected context (rollout only) | hidden `<turn-context>` row (store only) | `failed_turn` "Your request was not processed." (store only) |
 
@@ -302,6 +303,10 @@ the agent's store doesn't have yet**.
   it (claude JSONL with summaries on, codex reasoning summaries, goose,
   hermes) and is placed by key; `session.thinking` events stay only as the
   fallback for agents that don't store it.
+- A stored tool row carries the display `kind` and `title` its live call
+  did where the provider declares `stored_tool_display` (the stable_keys
+  probe holds it to that). Where a stored row lacks them, the chat keeps
+  what it showed live for rows it streamed, with a dev-console warning.
 - Stored-only rows (goose's hidden context row, codex's injected context) are
   filtered by the adapter; stored-only rows the agent shows its own user
   (hermes `failed_turn`) come through as `notice` rows.

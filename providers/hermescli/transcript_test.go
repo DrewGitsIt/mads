@@ -257,14 +257,20 @@ func TestTranscriptErrors(t *testing.T) {
 	if _, err := p.Transcript(context.Background(), ""); err == nil {
 		t.Error("empty ref: want error")
 	}
-	if _, err := p.Transcript(context.Background(), "nope"); err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Errorf("unknown ref = %v, want not found", err)
+	// hermes writes state.db and the sessions row with the first prompt: a
+	// session not stored yet reads as empty, quietly (the session child
+	// reads the store as soon as it starts).
+	if msgs, err := p.Transcript(context.Background(), "nope"); err != nil || len(msgs) != 0 {
+		t.Errorf("session not stored yet = %v, %v; want empty, no error", msgs, err)
+	}
+	if rows, _, err := p.TranscriptSince(context.Background(), "nope", nil); err != nil || len(rows) != 0 {
+		t.Errorf("TranscriptSince, session not stored yet = %v, %v; want empty, no error", rows, err)
 	}
 	if msgs, err := p.Transcript(context.Background(), "s1"); err != nil || len(msgs) != 0 {
 		t.Errorf("empty session = %v, %v", msgs, err)
 	}
-	if _, err := New(Config{Home: t.TempDir()}).Transcript(context.Background(), "s1"); err == nil || !strings.Contains(err.Error(), "no hermes state.db") {
-		t.Errorf("no store = %v", err)
+	if msgs, err := New(Config{Home: t.TempDir()}).Transcript(context.Background(), "s1"); err != nil || len(msgs) != 0 {
+		t.Errorf("no store yet = %v, %v; want empty, no error", msgs, err)
 	}
 }
 

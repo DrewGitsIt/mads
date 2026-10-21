@@ -201,6 +201,15 @@ wire of five turns next to every row goose inserted into its store).
 | Tool call / result | `toolCallId` | Live, a tool call's `_meta` carries the *preceding text's* messageId; stored, the call is a row of its own (`msg_<uuid>`, sometimes a chatcmpl id), so only the call id is the same on both sides. |
 | User message | `user:<stored message id>` | goose doesn't echo the prompt and stores no caller id (no `KeyedSender`), but stores the text byte-identical; the session child matches mads's send to this row on settle. |
 
+**Stored tool display** (`stored_tool_display: native`): goose stores a
+call's name, arguments and extension (`_meta.goose_extension`), not the
+ACP title, so the reader rebuilds both the way the live side got them
+(`tooldisplay.go`): the kind by the engine's own ToolClassTable lookup, the
+title by goose's `default_tool_title`
+(`crates/goose/src/acp/server/tool_calls/conversion.rs`, v1.50.1:
+`shell · ls`, `todo: todo write`). goose only puts an LLM-generated title
+there for a client that asks for label enrichment, which mads doesn't.
+
 **Stored thinking: unsupported.** goose does store thinking (a
 `{"type":"thinking","thinking":…}` block; 1.48.0 replays it on load), but
 not where the live key says. Live, a model call's thought chunks carry

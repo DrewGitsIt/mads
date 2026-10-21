@@ -281,7 +281,8 @@ func (p *Provider) Matrix() provider.Matrix {
 		// thinking onto its tool-call rows (a later created, generated
 		// ids for parallel calls), so the stored key isn't the live one
 		// (README "Stored thinking: unsupported").
-		provider.BehaviorStoredThinking: provider.Unsupported,
+		provider.BehaviorStoredThinking:    provider.Unsupported,
+		provider.BehaviorStoredToolDisplay: provider.Native,
 		// `goose session` under a pty (pty.go).
 		provider.BehaviorPTY: provider.Native,
 		// goose's own sessions.db, read-only and incrementally (store.go),

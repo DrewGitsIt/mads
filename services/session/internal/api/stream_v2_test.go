@@ -724,6 +724,7 @@ func TestV2UnkeyedResyncsAtTurnEnd(t *testing.T) {
 		p.matrix[b] = s
 	}
 	p.matrix[provider.BehaviorStableKeys] = provider.Unsupported
+	p.matrix[provider.BehaviorStoredToolDisplay] = provider.Unsupported
 	p.matrix[provider.BehaviorStoredThinking] = provider.Unsupported
 	srv, _ := startRunner(t, p, fastSettle)
 	if p.startOptions().Keyed {
@@ -765,6 +766,7 @@ func TestV2KeyedStartOption(t *testing.T) {
 		}
 		p.matrix[provider.BehaviorStableKeys] = tc.support
 		p.matrix[provider.BehaviorStoredThinking] = provider.Unsupported
+		p.matrix[provider.BehaviorStoredToolDisplay] = provider.Unsupported
 		startRunner(t, p, fastSettle)
 		if got := p.startOptions().Keyed; got != tc.keyed {
 			t.Errorf("stable_keys %s: Keyed = %v, want %v", tc.support, got, tc.keyed)

@@ -52,6 +52,8 @@ func TestMatrixValidate(t *testing.T) {
 		{"emulated stable keys", fullMatrix(map[Behavior]Support{BehaviorStableKeys: Emulated}), ""},
 		{"stored thinking without keys", fullMatrix(map[Behavior]Support{BehaviorStableKeys: Unsupported}), "stored_thinking needs stable_keys"},
 		{"emulated stored thinking", fullMatrix(map[Behavior]Support{BehaviorStoredThinking: Emulated}), `behavior "stored_thinking" cannot be emulated`},
+		{"stored tool display without keys", fullMatrix(map[Behavior]Support{BehaviorStableKeys: Unsupported, BehaviorStoredThinking: Unsupported}), "stored_tool_display needs stable_keys"},
+		{"emulated stored tool display", fullMatrix(map[Behavior]Support{BehaviorStoredToolDisplay: Emulated}), `behavior "stored_tool_display" cannot be emulated`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -97,8 +99,9 @@ func TestRequirementLevels(t *testing.T) {
 		BehaviorCompaction:      LevelOptional,
 		BehaviorCompactionFocus: LevelOptional,
 		// Conversation plumbing: without it the chat merges by position.
-		BehaviorStableKeys:     LevelOptional,
-		BehaviorStoredThinking: LevelOptional,
+		BehaviorStableKeys:        LevelOptional,
+		BehaviorStoredThinking:    LevelOptional,
+		BehaviorStoredToolDisplay: LevelOptional,
 	} {
 		if got := Requirement(b); got != want {
 			t.Errorf("Requirement(%s) = %s, want %s", b, got, want)
@@ -107,8 +110,8 @@ func TestRequirementLevels(t *testing.T) {
 	if Requirement("telepathy") != "" {
 		t.Error("unknown behavior should have no level")
 	}
-	if n := len(Behaviors()); n != 26 {
-		t.Errorf("Behaviors() = %d entries, want 26", n)
+	if n := len(Behaviors()); n != 27 {
+		t.Errorf("Behaviors() = %d entries, want 27", n)
 	}
 }
 

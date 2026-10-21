@@ -574,6 +574,26 @@ func TestTranscriptPrefersTheLiveProcess(t *testing.T) {
 	}
 }
 
+// Before its first turn is written, codex answers thread/items/list with
+// -32601 "not supported yet": the transcript is empty, not an error, for
+// both the live session's reads and the incremental reader.
+func TestTranscriptOfAThreadNotStoredYetIsEmpty(t *testing.T) {
+	p := fakeProvider(t)
+	s := startSession(t, p, provider.StartOptions{})
+	msgs, err := p.Transcript(context.Background(), s.Ref())
+	if err != nil || len(msgs) != 0 {
+		t.Fatalf("Transcript before the first turn = %v, %v; want empty, no error", msgs, err)
+	}
+	rows, _, err := p.TranscriptSince(context.Background(), s.Ref(), nil)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("TranscriptSince before the first turn = %v, %v; want empty, no error", rows, err)
+	}
+	sendTurn(t, s, "echo mk-after")
+	if msgs, err := p.Transcript(context.Background(), s.Ref()); err != nil || len(msgs) != 2 {
+		t.Fatalf("Transcript after a turn = %+v, %v", msgs, err)
+	}
+}
+
 func TestOneShotFinalAnswerAndRef(t *testing.T) {
 	p := fakeProvider(t)
 	var sawRef string

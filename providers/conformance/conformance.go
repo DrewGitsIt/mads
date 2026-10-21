@@ -220,6 +220,7 @@ func Check(ctx context.Context, p provider.Provider, s Script) []Result {
 		thinkErr = errors.New("declared working but the provider doesn't implement KeyedTranscriptReader")
 	}
 	c.add(provider.BehaviorStoredThinking, thinkErr, "the rows themselves are probed inside stable_keys")
+	c.add(provider.BehaviorStoredToolDisplay, nil, "probed inside stable_keys: a tool call's kind and title must match streamed and stored")
 
 	switch {
 	case !structured:
@@ -307,6 +308,9 @@ type checker struct {
 	// thinkingStored: the matrix declares stored_thinking working, so the
 	// stable_keys probe compares thinking items too.
 	thinkingStored bool
+	// toolDisplay: the matrix declares stored_tool_display working, so the
+	// stable_keys probe compares a tool call's kind and title too.
+	toolDisplay bool
 	// unaskedSettle: collect saw an EventSettle on a session that never set
 	// StartOptions.Keyed (the stable_keys result reports it).
 	unaskedSettle bool

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import type { TranscriptMessage } from "../../router/types";
+import { describe, expect, it, vi } from "vitest";
+import type { ToolUse, TranscriptMessage } from "../../router/types";
 import {
   conversationReducer,
   emptyConversation,
@@ -233,7 +233,29 @@ describe("conversationReducer", () => {
     expect(t.turn.active).toBe(true);
   });
 
+  it("a stored tool row with the live kind and title merges silently", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let s = run(emptyConversation(), hello(), f("replay_end"));
+    const tool: ToolUse = { id: "c", name: "Bash", kind: "execute", title: "List files" };
+    s = run(s, f("item_start", { key: "c", item: "tool_use" }), f("tool_use", { key: "c", tool }));
+    s = run(s, page([{ role: "tool", key: "c", tool: { ...tool, status: "completed" } }]));
+    expect(s.rows.c.tool).toMatchObject(tool);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("a stored value that differs from the live one wins, with a dev warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let s = run(emptyConversation(), hello(), f("replay_end"));
+    s = run(s, f("item_start", { key: "c", item: "tool_use" }), f("tool_use", { key: "c", tool: { id: "c", name: "shell", kind: "execute", title: "shell · ls" } }));
+    s = run(s, page([{ role: "tool", key: "c", tool: { id: "c", name: "shell", kind: "other", title: "shell · ls" } }]));
+    expect(s.rows.c.tool?.kind).toBe("other");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('stored differs from live: kind "execute" → "other"'));
+    warn.mockRestore();
+  });
+
   it("a stored tool row keeps the live display kind and title the store doesn't have", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     let s = run(emptyConversation(), hello(), f("replay_end"));
     s = run(
       s,
@@ -251,6 +273,8 @@ describe("conversationReducer", () => {
     expect(s.rows.call_1.tool).toMatchObject({ name: "shell", kind: "execute", title: "shell · ls", status: "completed" });
     expect(s.rows.call_1.tool?.result?.text).toBe("a.txt");
     expect(s.rows.call_1.live).toBeFalsy();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("the stored row lacks kind and title; kept the live one"));
+    warn.mockRestore();
   });
 
   it("a tool call watched live keeps its measured duration through the stored merge", () => {

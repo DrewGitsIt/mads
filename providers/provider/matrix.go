@@ -151,6 +151,14 @@ const (
 	// unsaved, and session.thinking events stay the record. Needs
 	// stable_keys. Internal plumbing, like stable_keys.
 	BehaviorStoredThinking Behavior = "stored_thinking"
+	// BehaviorStoredToolDisplay — a stored tool call carries the display
+	// Kind and Title its live EventToolUse did (same key), so reloaded
+	// history shows a call as it streamed. Native: the store has them, or
+	// the adapter rebuilds them from the stored call by the agent's own
+	// rule (goose). Unsupported: the stored row may lack or differ in them
+	// (the UI then keeps what it showed live, for rows it streamed). Never
+	// emulated. Needs stable_keys. Internal plumbing, like stable_keys.
+	BehaviorStoredToolDisplay Behavior = "stored_tool_display"
 )
 
 // Support is a provider's declared implementation status for one behavior.
@@ -213,8 +221,9 @@ var requirements = map[Behavior]Level{
 	BehaviorDelegateSteer:      LevelOptional,
 	BehaviorDelegateStop:       LevelOptional,
 
-	BehaviorStableKeys:     LevelOptional,
-	BehaviorStoredThinking: LevelOptional,
+	BehaviorStableKeys:        LevelOptional,
+	BehaviorStoredThinking:    LevelOptional,
+	BehaviorStoredToolDisplay: LevelOptional,
 }
 
 // Requirement returns the platform's requirement level for a behavior, or ""
@@ -272,6 +281,12 @@ func (m Matrix) Validate() error {
 	}
 	if m[BehaviorStoredThinking] == Emulated {
 		probs = append(probs, `behavior "stored_thinking" cannot be emulated`)
+	}
+	if m[BehaviorStoredToolDisplay].Works() && !m[BehaviorStableKeys].Works() {
+		probs = append(probs, "stored_tool_display needs stable_keys")
+	}
+	if m[BehaviorStoredToolDisplay] == Emulated {
+		probs = append(probs, `behavior "stored_tool_display" cannot be emulated`)
 	}
 	if m[BehaviorStableKeys].Works() && !m[BehaviorTranscript].Works() {
 		probs = append(probs, "stable_keys needs transcript (a key is only stable if a stored row carries it)")

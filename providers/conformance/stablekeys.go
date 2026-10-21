@@ -39,6 +39,8 @@ const (
 
 type liveItem struct {
 	key, role, text, tool string
+	// kind, title: a tool call's display, as its latest tool_use carried it.
+	kind, title string
 }
 
 func (i liveItem) id() string { return i.role + "\x00" + i.key }
@@ -105,6 +107,7 @@ func (c *checker) stableKeys(structured bool) (string, error) {
 		reader = keyedReader.KeyedTranscript
 	}
 	c.thinkingStored = c.m[provider.BehaviorStoredThinking].Works()
+	c.toolDisplay = c.m[provider.BehaviorStoredToolDisplay].Works()
 	if c.thinkingStored && !hasKeyed {
 		errs = append(errs, "stored_thinking declared working but the provider doesn't implement KeyedTranscriptReader")
 		return fail("")
@@ -156,7 +159,7 @@ func (c *checker) stableKeys(structured bool) (string, error) {
 		}
 	}
 
-	errs = append(errs, compareKeyed(turns, stored, keyed, c.thinkingStored)...)
+	errs = append(errs, compareKeyed(turns, stored, keyed, c.thinkingStored, c.toolDisplay)...)
 	if rows, err := plain.Transcript(c.ctx, sess.Ref()); err == nil {
 		for _, m := range rows {
 			if m.Role == roleThinking {
@@ -252,6 +255,9 @@ func (c *checker) runKeyedTurn(sess provider.Session, t *keyedTurn) error {
 	add := func(it liveItem) {
 		if pos, ok := index[it.id()]; ok {
 			t.items[pos].text += it.text
+			if it.role == roleTool {
+				t.items[pos].kind, t.items[pos].title = it.kind, it.title
+			}
 			return
 		}
 		index[it.id()] = len(t.items)
@@ -297,7 +303,7 @@ func (c *checker) runKeyedTurn(sess provider.Session, t *keyedTurn) error {
 				}
 				it := liveItem{key: ev.Key, role: roleTool}
 				if ev.Tool != nil {
-					it.tool = ev.Tool.Name
+					it.tool, it.kind, it.title = ev.Tool.Name, string(ev.Tool.Kind), ev.Tool.Title
 				}
 				add(it)
 				last = it.id()
@@ -368,7 +374,7 @@ func (c *checker) awaitStored(reader readerFunc, ref string, turns []*keyedTurn)
 }
 
 // compareKeyed checks the stored rows against what the turns streamed.
-func compareKeyed(turns []*keyedTurn, stored []provider.Message, keyed, thinkingStored bool) []string {
+func compareKeyed(turns []*keyedTurn, stored []provider.Message, keyed, thinkingStored, toolDisplay bool) []string {
 	comparedRole := func(role string) bool { return comparedRoleWith(role, thinkingStored) }
 	var errs []string
 	seen := map[string]bool{}
@@ -429,7 +435,7 @@ func compareKeyed(turns []*keyedTurn, stored []provider.Message, keyed, thinking
 				errs = append(errs, fmt.Sprintf("turn %q: streamed %s %q never stored", t.name, it.role, it.key))
 			default:
 				liveOrder = append(liveOrder, it.id())
-				if msg := textMismatch(it, m, it.id() == t.inflight); msg != "" {
+				if msg := textMismatch(it, m, it.id() == t.inflight, toolDisplay); msg != "" {
 					errs = append(errs, fmt.Sprintf("turn %q: %s %q %s", t.name, it.role, it.key, msg))
 				}
 			}
@@ -466,11 +472,21 @@ func comparedRoleWith(role string, thinkingStored bool) bool {
 
 // textMismatch compares an item's streamed and stored content. The
 // interrupted item may legitimately be cut at a different point on each side,
-// so it only has to agree on a common prefix.
-func textMismatch(it liveItem, m provider.Message, inflight bool) string {
+// so it only has to agree on a common prefix. A tool call compares its name,
+// and with stored_tool_display declared its display kind and title too.
+func textMismatch(it liveItem, m provider.Message, inflight, toolDisplay bool) string {
 	if it.role == roleTool {
 		if m.Tool != nil && it.tool != "" && m.Tool.Name != it.tool {
 			return fmt.Sprintf("tool name streamed %q, stored %q", it.tool, m.Tool.Name)
+		}
+		if toolDisplay {
+			var kind, title string
+			if m.Tool != nil {
+				kind, title = string(m.Tool.Kind), m.Tool.Title
+			}
+			if kind != it.kind || title != it.title {
+				return fmt.Sprintf("tool display streamed %q %q, stored %q %q (stored_tool_display)", it.kind, it.title, kind, title)
+			}
 		}
 		return ""
 	}

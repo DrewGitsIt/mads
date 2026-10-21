@@ -151,17 +151,26 @@ func (p *Provider) TranscriptSince(ctx context.Context, ref string, cursor provi
 	return normalizeRows(served, al), hermesCursor{uid: last.uid, n: to}, nil
 }
 
-// readRows is the display projection of ref's rows.
+// readRows is the display projection of ref's rows. A session hermes
+// hasn't stored yet — no state.db, or no sessions row: hermes writes both
+// with the first prompt — has no rows, which is not an error: the session
+// child reads the store as soon as it starts.
 func (p *Provider) readRows(ctx context.Context, ref string) ([]storedRow, error) {
 	if ref == "" {
 		return nil, fmt.Errorf("empty session ref")
 	}
 	db, path, err := p.openStore()
+	if errors.Is(err, errNoStore) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = db.Close() }()
 	rows, err := readDisplayRows(ctx, db, ref)
+	if errors.Is(err, errSessionNotFound) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s in %s: %w", ref, path, err)
 	}
@@ -572,7 +581,7 @@ func toolCallMessages(raw string, ts time.Time) []provider.Message {
 		}
 		msgs = append(msgs, provider.Message{
 			Role:      "tool",
-			Tool:      &provider.ToolUse{ID: c.ID, Name: c.Function.Name, Input: input},
+			Tool:      &provider.ToolUse{ID: c.ID, Name: c.Function.Name, Input: input, Kind: hermesToolKind(c.Function.Name)},
 			Timestamp: ts,
 		})
 	}

@@ -862,23 +862,34 @@ func (s *streamSession) classify(u *sessionUpdate) (class, name string) {
 		if name == "" {
 			name = u.Title
 		}
-		for _, rule := range s.cfg.ToolClassTable {
-			if rule.Extension != meta.ExtensionName || rule.Name != meta.ToolName {
-				continue
-			}
-			if c, ok := rule.ByCommand[rawInputCommand(u.RawInput)]; ok {
-				return c, name
-			}
-			if rule.Class != "" {
-				return rule.Class, name
-			}
-			return "unknown", name
-		}
-		return "unknown", name
+		return ClassFromTable(s.cfg.ToolClassTable, meta.ExtensionName, meta.ToolName, u.RawInput), name
 	default: // ToolIdentityTitleOnly
 		return "unknown", u.Title
 	}
 }
+
+// ClassFromTable is a ToolClassTable lookup (ToolIdentityMetaNamespace): the
+// rule for this extension and tool, by command where it has ByCommand
+// entries; "unknown" when no rule names it. Exported so an adapter's store
+// reader classifies a stored call exactly as the live one was.
+func ClassFromTable(table []ToolClassRule, extension, toolName string, rawInput json.RawMessage) string {
+	for _, rule := range table {
+		if rule.Extension != extension || rule.Name != toolName {
+			continue
+		}
+		if c, ok := rule.ByCommand[rawInputCommand(rawInput)]; ok {
+			return c
+		}
+		if rule.Class != "" {
+			return rule.Class
+		}
+		return "unknown"
+	}
+	return "unknown"
+}
+
+// ToolKindFor is toolKindFor, for an adapter's store reader.
+func ToolKindFor(class string) provider.ToolKind { return toolKindFor(class) }
 
 // toolKindFor maps a trust class onto the provider.ToolKind vocabulary
 // for rendering; anything outside it is ToolKindOther, never a guess.

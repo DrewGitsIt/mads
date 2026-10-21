@@ -52,7 +52,7 @@ const BEHAVIOR_LABELS: Record<string, string> = {
  * capability tags. `stable_keys` is the conversation-key contract
  * (docs/CHAT-STREAM-DESIGN.md §1).
  */
-export const INTERNAL_BEHAVIORS: ReadonlySet<string> = new Set(["stable_keys", "stored_thinking"]);
+export const INTERNAL_BEHAVIORS: ReadonlySet<string> = new Set(["stable_keys", "stored_thinking", "stored_tool_display"]);
 
 export function behaviorLabel(behavior: string): string {
   const known = BEHAVIOR_LABELS[behavior];

@@ -171,7 +171,8 @@ func (p *Provider) Matrix() provider.Matrix {
 		// stores the same text in the JSONL under the same
 		// <message.id>:<index>; KeyedTranscript returns it. Default
 		// (signature-only) thinking is empty on both sides: no item, no row.
-		provider.BehaviorStoredThinking: provider.Native,
+		provider.BehaviorStoredThinking:    provider.Native,
+		provider.BehaviorStoredToolDisplay: provider.Native,
 	}
 }
 
