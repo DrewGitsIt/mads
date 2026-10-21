@@ -344,10 +344,25 @@ type TranscriptCursor any
 // session's store as it grows (docs/CHAT-STREAM-DESIGN.md §3): the rows
 // stored after cursor, in conversation order, each with the same Key a full
 // Transcript gives it, and the cursor after them. Chained calls from nil
-// add up to exactly Transcript. ErrCursorStale means the store was
+// add up to exactly Transcript — or KeyedTranscript, thinking rows
+// included, for an adapter that implements KeyedTranscriptReader. ErrCursorStale means the store was
 // rewritten under the cursor; the caller re-reads with Transcript.
 type IncrementalTranscriptReader interface {
 	TranscriptSince(ctx context.Context, ref string, cursor TranscriptCursor) ([]Message, TranscriptCursor, error)
+}
+
+// KeyedTranscriptReader is the keyed-consumer form of TranscriptReader
+// (docs/CHAT-STREAM-DESIGN.md §4): Transcript's rows plus a keyed
+// Role "thinking" row for every thinking item the agent stores (claude's
+// summaries, codex's reasoning summaries, goose, hermes's reasoning
+// columns), in conversation order, each with the Key its live
+// EventThinking carried. Transcript itself never carries thinking, so the
+// consumers that read it (digest, synth, retro, pipeline turns, export)
+// are unchanged. An adapter that implements IncrementalTranscriptReader
+// and this returns the keyed form from TranscriptSince too: chained reads
+// add up to KeyedTranscript.
+type KeyedTranscriptReader interface {
+	KeyedTranscript(ctx context.Context, ref string) ([]Message, error)
 }
 
 // ErrCursorStale is IncrementalTranscriptReader's "start over" answer.

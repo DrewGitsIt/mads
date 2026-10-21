@@ -157,3 +157,62 @@ func TestCheckStableKeysAlone(t *testing.T) {
 	}
 	t.Log(r.Note)
 }
+
+// thinking: streamed as one keyed EventThinking before the reply and stored
+// under the same key — in KeyedTranscript and TranscriptSince only; plain
+// Transcript reads exactly as a turn without it.
+func TestThinkingIsStoredOnlyInTheKeyedForm(t *testing.T) {
+	f := scenarioFake(t, fake.Rule{Match: "go", Thinking: "Weigh it first.", Reply: "done"})
+	sess, err := f.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sess.Close() }()
+	if err := sess.Send(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	var thinking []provider.Event
+	var firstText = -1
+	for i, ev := range drain(t, sess) {
+		switch ev.Kind {
+		case provider.EventThinking:
+			thinking = append(thinking, ev)
+			if firstText >= 0 {
+				t.Error("thinking after the reply")
+			}
+		case provider.EventText:
+			if firstText < 0 {
+				firstText = i
+			}
+		}
+	}
+	if len(thinking) != 1 || thinking[0].Key == "" || thinking[0].Text != "Weigh it first." {
+		t.Fatalf("live thinking %+v", thinking)
+	}
+	ctx := context.Background()
+	plain, _ := f.Transcript(ctx, sess.Ref())
+	keyed, _ := f.KeyedTranscript(ctx, sess.Ref())
+	since, _, _ := f.TranscriptSince(ctx, sess.Ref(), nil)
+	for _, m := range plain {
+		if m.Role == "thinking" {
+			t.Errorf("plain Transcript carries thinking: %+v", m)
+		}
+	}
+	if len(keyed) != len(plain)+1 || keyed[1].Role != "thinking" || keyed[1].Key != thinking[0].Key || keyed[1].Text != thinking[0].Text {
+		t.Errorf("KeyedTranscript = %+v", keyed)
+	}
+	if len(since) != len(keyed) {
+		t.Errorf("TranscriptSince from nil: %d rows, want KeyedTranscript's %d", len(since), len(keyed))
+	}
+}
+
+// The stable_keys probe holds a thinking turn to the key-and-text contract
+// (stored_thinking is native): a text, tool, text turn that thinks first.
+func TestCheckStableKeysWithThinking(t *testing.T) {
+	f := scenarioFake(t, fake.Rule{Match: "tool-text", Thinking: "List it first.",
+		Blocks: [][]string{{"Looking. "}, {"One file."}}, Tools: []fake.ToolStep{{Name: "ls", Result: "a.txt"}}})
+	r := conformance.CheckStableKeys(context.Background(), f, script())
+	if r.Err != nil {
+		t.Fatalf("stable_keys = %+v", r)
+	}
+}

@@ -1,0 +1,132 @@
+id: 1
+event: thinking
+data: {"kind":"thinking","thinking_tokens":12}
+
+id: 2
+event: thinking
+data: {"kind":"thinking","key":"msg_01:0","text":"Let me look."}
+
+id: 3
+event: text
+data: {"kind":"text","key":"msg_01:1","text":"I'll check"}
+
+id: 4
+event: text
+data: {"kind":"text","key":"msg_01:1","text":" the file."}
+
+id: 5
+event: tool_use
+data: {"kind":"tool_use","key":"toolu_01","tool":{"id":"toolu_01","name":"Read","input":{"file_path":"a.go"},"path":"a.go","kind":"read","title":"a.go","status":"in_progress"}}
+
+id: 6
+event: task
+data: {"kind":"task","task":{"phase":"started","task_id":"task-1","tool_use_id":"toolu_01","description":"look"}}
+
+id: 7
+event: text
+data: {"kind":"text","key":"msg_sub:0","text":"sub says","parent_tool_use_id":"toolu_01","subagent_type":"general-purpose","task_description":"look"}
+
+id: 8
+event: tool_result
+data: {"kind":"tool_result","key":"toolu_01","text":"package a","tool":{"id":"toolu_01","name":"Read","status":"completed"}}
+
+id: 9
+event: text
+data: {"kind":"text","key":"msg_02:0","text":"Done."}
+
+id: 10
+event: text
+data: {"kind":"text","key":"msg_03:0","text":"\n\nAlso this."}
+
+id: 11
+event: turn_end
+data: {"kind":"turn_end","usage":{"input_tokens":10,"output_tokens":5,"model":"claude-x","cost_usd":0.01}}
+
+id: 12
+event: text
+data: {"kind":"text","key":"item_1","text":"Checking now."}
+
+id: 13
+event: text
+data: {"kind":"text","key":"item_2","text":"\n\nThe workspace"}
+
+id: 14
+event: text
+data: {"kind":"text","key":"item_2","text":" is clean.\n"}
+
+id: 15
+event: text
+data: {"kind":"text","key":"item_2b","text":"Next."}
+
+id: 16
+event: tool_use
+data: {"kind":"tool_use","key":"item_3","tool":{"id":"item_3","name":"shell","input":{"command":"ls"},"kind":"execute","title":"ls","status":"in_progress"}}
+
+id: 17
+event: tool_result
+data: {"kind":"tool_result","key":"item_3","text":"a.txt","tool":{"id":"item_3","name":"shell","status":"completed"}}
+
+id: 18
+event: text
+data: {"kind":"text","key":"item_4","text":"Partial"}
+
+id: 19
+event: turn_end
+data: {"kind":"turn_end","interrupted":true}
+
+id: 20
+event: text
+data: {"kind":"text","key":"fake-1:t3:b0","text":"Looking. "}
+
+id: 21
+event: tool_use
+data: {"kind":"tool_use","key":"fake-1:t3:tool0","tool":{"id":"fake-1:t3:tool0","name":"ls","status":"in_progress"}}
+
+id: 22
+event: tool_result
+data: {"kind":"tool_result","key":"fake-1:t3:tool0","text":"a.txt","tool":{"name":"ls"}}
+
+id: 23
+event: text
+data: {"kind":"text","key":"fake-1:t3:b1","text":"One file."}
+
+id: 24
+event: error
+data: {"kind":"error","text":"scripted error"}
+
+id: 25
+event: compact
+data: {"kind":"compact","compact":{"phase":"start"}}
+
+id: 26
+event: compact
+data: {"kind":"compact","compact":{"phase":"done","success":true}}
+
+id: 27
+event: turn_end
+data: {"kind":"turn_end","usage":{"input_tokens":3,"output_tokens":2,"model":"fake-fast"}}
+
+id: 28
+event: text
+data: {"kind":"text","text":"plain "}
+
+id: 29
+event: text
+data: {"kind":"text","text":"text"}
+
+id: 30
+event: tool_use
+data: {"kind":"tool_use","tool":{"id":"call-1","name":"fs_read","kind":"read","status":"in_progress"}}
+
+id: 31
+event: tool_result
+data: {"kind":"tool_result","text":"ok","tool":{"id":"call-1","name":"fs_read","status":"completed"}}
+
+id: 32
+event: text
+data: {"kind":"text","text":"after"}
+
+id: 33
+event: turn_end
+data: {"kind":"turn_end"}
+

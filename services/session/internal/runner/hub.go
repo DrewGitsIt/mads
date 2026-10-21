@@ -2,6 +2,7 @@ package runner
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -25,8 +26,11 @@ const ptyReplayCap = 4 << 20 // 4 MiB
 // instead of losing everything that flowed while nothing was attached —
 // GET /output's SSE feed itself stays ephemeral for chat events.
 type hub struct {
-	mu     sync.Mutex
-	subs   map[chan provider.Event]struct{}
+	mu   sync.Mutex
+	subs map[chan provider.Event]struct{}
+	// acked are the subscriptions whose writer reports each event written
+	// (subscribeAcked), for DrainStreams.
+	acked  map[chan provider.Event]*delivery
 	closed bool
 
 	// ptyBuf/ptyBufStart/ptyBufSize implement a fixed-capacity circular
@@ -41,10 +45,15 @@ type hub struct {
 	// subscriber: the list is live-only, so a viewer that connects while a
 	// process runs has no other way to learn of it. nil until one arrives.
 	background *provider.Event
+
+	// tap, when set, also sees every event broadcast (not broadcastLegacy):
+	// the v2 chat stream's feed for events the runner raises itself
+	// (permission requests, a crash's error, the background list cleared).
+	tap func(provider.Event)
 }
 
 func newHub() *hub {
-	return &hub{subs: map[chan provider.Event]struct{}{}, ptyBuf: make([]byte, ptyReplayCap)}
+	return &hub{subs: map[chan provider.Event]struct{}{}, acked: map[chan provider.Event]*delivery{}, ptyBuf: make([]byte, ptyReplayCap)}
 }
 
 // writePTY appends p to the ring buffer, overwriting the oldest bytes once
@@ -110,24 +119,36 @@ func (h *hub) subscribe() (<-chan provider.Event, func()) {
 // otherwise either land only in the snapshot, only on the channel, or be
 // lost — this makes it exactly one or the other).
 func (h *hub) subscribeWithPTYReplay() (replay []byte, ch <-chan provider.Event, unsubscribe func()) {
+	replay, ch, _, unsubscribe = h.subscribeAcked(false)
+	return replay, ch, unsubscribe
+}
+
+// subscribeAcked is subscribeWithPTYReplay whose writer, when acked, calls
+// written after each event it has put on the wire.
+func (h *hub) subscribeAcked(acked bool) (replay []byte, ch <-chan provider.Event, written, unsubscribe func()) {
 	c := make(chan provider.Event, 1024)
+	d := &delivery{}
 
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
 		close(c)
-		return nil, c, func() {}
+		return nil, c, func() {}, func() {}
 	}
 	replay = h.ptySnapshot()
+	if acked {
+		h.acked[c] = d
+	}
 	h.primeLocked(c)
 	h.subs[c] = struct{}{}
 	h.mu.Unlock()
 
-	return replay, c, func() {
+	return replay, c, d.written, func() {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		if _, ok := h.subs[c]; ok {
 			delete(h.subs, c)
+			delete(h.acked, c)
 			close(c)
 		}
 	}
@@ -139,6 +160,9 @@ func (h *hub) subscribeWithPTYReplay() (replay []byte, ch <-chan provider.Event,
 func (h *hub) primeLocked(ch chan provider.Event) {
 	if h.background != nil {
 		ch <- *h.background
+		if d := h.acked[ch]; d != nil {
+			d.pending.Add(1)
+		}
 	}
 }
 
@@ -154,6 +178,15 @@ func (h *hub) clearBackground() {
 }
 
 func (h *hub) broadcast(ev provider.Event) {
+	if h.tap != nil {
+		h.tap(ev)
+	}
+	h.broadcastLegacy(ev)
+}
+
+// broadcastLegacy sends ev to the legacy subscribers only: the pump, which
+// feeds the v2 stream itself (raw text, turn end ahead of the next turn).
+func (h *hub) broadcastLegacy(ev provider.Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	switch ev.Kind {
@@ -165,6 +198,9 @@ func (h *hub) broadcast(ev provider.Event) {
 	for ch := range h.subs {
 		select {
 		case ch <- ev:
+			if d := h.acked[ch]; d != nil {
+				d.pending.Add(1)
+			}
 		default:
 			// PTY floods are recoverable: a dropped frame's bytes are in the
 			// ring buffer and the next attach replays them.
@@ -177,6 +213,7 @@ func (h *hub) broadcast(ev provider.Event) {
 			// client's auto-reconnect refetches the transcript and resumes
 			// cleanly, which is honest where a gap-with-no-signal is not.
 			delete(h.subs, ch)
+			delete(h.acked, ch)
 			close(ch)
 		}
 	}
@@ -192,5 +229,23 @@ func (h *hub) close() {
 	for ch := range h.subs {
 		close(ch)
 		delete(h.subs, ch)
+		delete(h.acked, ch)
 	}
 }
+
+// undelivered counts events handed to acked subscribers not yet written.
+func (h *hub) undelivered() int64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var n int64
+	for _, d := range h.acked {
+		n += d.pending.Load()
+	}
+	return n
+}
+
+// delivery counts what a stream writer has been handed but not yet put on
+// the wire.
+type delivery struct{ pending atomic.Int64 }
+
+func (d *delivery) written() { d.pending.Add(-1) }

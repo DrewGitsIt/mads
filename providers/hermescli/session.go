@@ -82,6 +82,10 @@ func (s *session) pump() {
 				if out.Text != "" {
 					s.led.text(out.Key)
 				}
+			case provider.EventThinking:
+				if out.Text != "" {
+					s.led.thinking(out.Key)
+				}
 			case provider.EventToolUse:
 				s.led.tool(out.Key)
 			case provider.EventToolResult:

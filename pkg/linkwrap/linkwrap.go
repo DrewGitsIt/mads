@@ -245,6 +245,11 @@ func parseAttrs(raw string) (contracts.Attribution, bool) {
 // wrappers (the re-root note) becomes a notice from mads of its own, ahead of
 // the block it preceded. Every other message passes through untouched —
 // including any Attribution it already carries.
+//
+// Keys: a message Expand leaves whole (not wrapped, or one segment) keeps
+// its Key; one split into n > 1 rows gives row i the key SegmentKey(key, i,
+// n), so every rendered row stays nameable on its own (paging by key,
+// docs/CHAT-STREAM-DESIGN.md §4).
 func Expand(msgs []contracts.TranscriptMessage) []contracts.TranscriptMessage {
 	var out []contracts.TranscriptMessage
 	for i, m := range msgs {
@@ -262,8 +267,9 @@ func Expand(msgs []contracts.TranscriptMessage) []contracts.TranscriptMessage {
 		if out == nil {
 			out = append(make([]contracts.TranscriptMessage, 0, len(msgs)+len(segs)), msgs[:i]...)
 		}
-		for _, s := range segs {
+		for j, s := range segs {
 			tm := m
+			tm.Key = SegmentKey(m.Key, j, len(segs))
 			if s.Block != nil {
 				a := s.Block.Attribution
 				tm.Attribution = &a
@@ -279,6 +285,18 @@ func Expand(msgs []contracts.TranscriptMessage) []contracts.TranscriptMessage {
 		return msgs
 	}
 	return out
+}
+
+// SegmentKey is the key of segment i (0-based, in Parse order, a notice
+// segment included) of a wrapped user message with key key that Parse split
+// into n segments: key itself when n is 1, otherwise key+"#"+i. An empty key
+// stays empty (an adapter without stable keys). The live user_message frames
+// segment a sent message the same way, so both sides name a segment alike.
+func SegmentKey(key string, i, n int) string {
+	if key == "" || n <= 1 {
+		return key
+	}
+	return key + "#" + strconv.Itoa(i)
 }
 
 // SameSend reports whether user message cur continues the send prev began:

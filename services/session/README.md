@@ -80,6 +80,15 @@ One process, one session — no `:id` in any path.
   lets a UI reattaching to a session mid-turn (or after missing PTY output entirely) restore
   terminal scrollback instead of losing it. Chat events (`text`, `tool_use`, `turn_end`,
   `error`) never go through this buffer and stay purely ephemeral.
+  - **`?v=2`: the keyed chat stream** (`docs/CHAT-STREAM-DESIGN.md` §2 and §5 are the
+    contract). Opt-in; the legacy stream above is byte-for-byte what it was (pinned by
+    `internal/api/legacy_golden_test.go`), except that settle hints never reach it. Every
+    frame has `id: <epoch>:<seq>` (one counter per child, a new epoch per child) except the
+    leading `hello` and a `resync`. Keyed items (`user_message`, `item_start`, deltas,
+    `item_stop`, `tool_use`, `tool_result`, `inbound`) and today's status kinds; a memory-only
+    journal (`runner/chatstream.go`) keeps the unsettled tail (until the agent's store holds
+    each key; `runner/settle.go`) for a fresh viewer and recent frames for a reconnect with
+    `Last-Event-ID` (or `?after=`). Chat transport only.
 - `POST /transport` — switches this session between its `chat` and `terminal` transports.
   Body `{"mode": "chat" | "terminal"}`. Chat and Terminal are two transports over one
   provider conversation, not simultaneous mirrors: the old transport's provider process is
@@ -108,6 +117,30 @@ One process, one session — no `:id` in any path.
   `provider.Registry` has no visibility into this process's provider session, so this is
   the only place a live turn's history can be read from. Never errors outward: degrades to
   `[]` the same way the Router's own durable-transcript fallback does.
+  - **`?v=2`** reads the agent's own store for a provider with stable keys (for goose, not
+    acprpc's live buffer), as a keyed client merging with the `/output?v=2` tail must. Any
+    read settles that tail first; stored user rows a provider can't key itself (goose,
+    hermes) are served under the key of the `user_message` that sent them.
+  - **Keys.** Every row carries `key`, the provider's `Message.Key` (the same key the live
+    stream uses for the item; `docs/CHAT-STREAM-DESIGN.md` §1), and `notice: true` on a
+    synthetic row the agent wrote itself. A tool call and its result share a key; every
+    other key names one row. A user row `pkg/linkwrap` splits into n > 1 labelled rows (a
+    coalesced digest run, a re-root note ahead of its block) gives segment i the key
+    `<key>#<i>` (`linkwrap.SegmentKey`); a row it leaves whole keeps its key.
+  - **Paging** (`pkg/transcriptpage`, contract in `contracts.TranscriptPage`). No query
+    parameters: the whole transcript as a bare array, unchanged. With `?limit=<n>` and/or
+    `?before=<key>` the answer is `{"rows": [...], "has_more": bool}`: `limit` alone is the
+    last n rows; `before` is the n rows before the **first** row with that key (all of them
+    without `limit`). A page never splits a call from its result: a window that would
+    start on a result grows back to its call, so a page can exceed n. To page backwards,
+    pass the previous page's `rows[0].key` as `before`; pages then neither overlap nor
+    leave gaps. `has_more` says whether rows exist before `rows[0]`.
+  - **Errors** (`{"error", "code"}`): 400 `bad_param` (limit not a positive integer, empty
+    before); 400 `unkeyed` for `before` over a transcript with any keyless row (an adapter
+    without stable keys, or old data; `limit` alone still pages by position); 410
+    `unknown_key` when no row has the `before` key (a stale cursor, e.g. a hermes child
+    exited and its rows re-keyed): refetch the last page and replace. 410, not 404, so it
+    can't be confused with the Router's unknown-session 404.
 - `POST /skills/{name}/inject` — sends a declared skill capability's content as a turn
   (spec §12.4); 202 once relayed. The system-directed and `/command` injection paths both
   resolve to this one endpoint; user-directed injection needs no separate route (asking the

@@ -112,7 +112,7 @@ The **+ menu** holds everything about input and display: Attach files…, Mentio
 | Chat ⇄ Terminal | ⌘⇧T | Ctrl+Shift+T |
 | Attach files | ⌘⇧A | Ctrl+Shift+A |
 
-- **Reads:** `GET /sessions/:id/transcript?page=` (normalized, §11), `GET /sessions/:id` (summary field)
+- **Reads:** `GET /sessions/:id/transcript` (normalized, §11; `?before=<key>&limit=<n>` pages it, see `contracts.TranscriptPage`), `GET /sessions/:id` (summary field)
 - **Subscribes:** **data-plane** `GET /sessions/:id/stream` (SSE: tokens, tool events, live status); control: `session.activity_changed`
 - **Actions:** `POST /sessions/:id/messages` (text + attachments + @-mentions + /skill injections), `/interrupt`, `/bounce`, `/shell`, `/fork` (rewind §2.11), `PATCH /sessions/:id` (model/agent/trust)
 

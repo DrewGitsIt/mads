@@ -2,16 +2,16 @@ package runner
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
-// EventSettle is opt-in (StartOptions.Keyed, which the runner doesn't
-// set yet), but a consumer that does see one must be unmoved by it: it
-// neither ends nor opens a turn, and the turn still ends on its own
-// EventTurnEnd. The kind carries no content, so nothing records it either.
+// EventSettle is the v2 tail's alone: the legacy stream never carries one,
+// and the runner is unmoved by it — it neither ends nor opens a turn, and
+// the turn still ends on its own EventTurnEnd.
 func TestSettleHintIsHarmlessToTheRunner(t *testing.T) {
 	ctx := context.Background()
 	rig := startPeer(t)
@@ -23,7 +23,10 @@ func TestSettleHintIsHarmlessToTheRunner(t *testing.T) {
 	}
 	rig.sess.events <- provider.Event{Kind: provider.EventText, Key: "m1:0", Text: "hi"}
 	rig.sess.events <- provider.Event{Kind: provider.EventSettle, Key: "m1:0"}
-	waitStream(t, stream, provider.EventSettle)
+	rig.sess.events <- provider.Event{Kind: provider.EventText, Key: "m1:0", Text: " there"}
+	if got := streamUntil(t, stream, provider.EventText, 2); slices.Contains(got, provider.EventSettle) {
+		t.Fatalf("a settle hint reached the legacy stream: %v", got)
+	}
 	if !rig.r.isBusy() {
 		t.Fatal("a settle hint ended the turn")
 	}
@@ -34,9 +37,33 @@ func TestSettleHintIsHarmlessToTheRunner(t *testing.T) {
 
 	// A hint between turns opens nothing.
 	rig.sess.events <- provider.Event{Kind: provider.EventSettle}
-	waitStream(t, stream, provider.EventSettle)
+	rig.sess.events <- provider.Event{Kind: provider.EventError, Text: "fence"}
+	if got := streamUntil(t, stream, provider.EventError, 1); slices.Contains(got, provider.EventSettle) {
+		t.Fatalf("a settle hint reached the legacy stream: %v", got)
+	}
 	if rig.r.isBusy() {
 		t.Fatal("a settle hint between turns opened one")
+	}
+}
+
+// streamUntil reads the stream until the nth event of kind, returning
+// every kind seen.
+func streamUntil(t *testing.T, stream <-chan provider.Event, kind provider.EventKind, n int) []provider.EventKind {
+	t.Helper()
+	var seen []provider.EventKind
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case ev := <-stream:
+			seen = append(seen, ev.Kind)
+			if ev.Kind == kind {
+				if n--; n == 0 {
+					return seen
+				}
+			}
+		case <-deadline:
+			t.Fatalf("no %s on the stream (saw %v)", kind, seen)
+		}
 	}
 }
 

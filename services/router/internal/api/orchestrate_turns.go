@@ -48,7 +48,7 @@ func (s *server) subjectTranscript(ctx context.Context, subject contracts.Sessio
 		}
 	}
 	if msgs == nil {
-		msgs = s.transcriptFor(ctx, subject)
+		msgs = s.transcriptFor(ctx, subject, false)
 	}
 	return msgs
 }

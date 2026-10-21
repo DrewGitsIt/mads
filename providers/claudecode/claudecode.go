@@ -167,6 +167,11 @@ func (p *Provider) Matrix() provider.Matrix {
 		// JSONL: message id + block index, tool_use id, the user line's
 		// uuid (stdin "uuid" through SendKeyed) — keys.go, README.
 		provider.BehaviorStableKeys: provider.Native,
+		// With showThinkingSummaries on, claude streams thinking text and
+		// stores the same text in the JSONL under the same
+		// <message.id>:<index>; KeyedTranscript returns it. Default
+		// (signature-only) thinking is empty on both sides: no item, no row.
+		provider.BehaviorStoredThinking: provider.Native,
 	}
 }
 

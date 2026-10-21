@@ -257,10 +257,10 @@ func TestRenderTranscriptInboundKeepsAttributions(t *testing.T) {
 		{Role: "user", Text: linkwrap.Wrap("injected", attr)},
 	}
 	var asked []string
-	out := renderTranscript(msgs, func(in *provider.Inbound, _ time.Time) *contracts.InboundSource {
+	out := renderTranscript(msgs, renderOptions{inbound: func(in *provider.Inbound, _ time.Time) *contracts.InboundSource {
 		asked = append(asked, in.From)
 		return &contracts.InboundSource{Channel: in.Channel, Provider: "p", FromName: in.FromName}
-	})
+	}})
 	if out[0].Attribution != nil || out[1].Attribution != nil {
 		t.Errorf("attribution on the wrong entry: %+v", out)
 	}

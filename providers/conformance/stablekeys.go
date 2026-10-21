@@ -21,7 +21,10 @@ import (
 //
 // Items on only one side are allowed only where the agent genuinely keeps
 // them on one side: the interrupted turn's in-flight item, notices
-// (Message.Notice), and live thinking (transcript rows carry no thinking).
+// (Message.Notice), and live thinking from an agent that doesn't store it
+// (stored_thinking unsupported). Where it is stored, thinking is held to
+// the same key-and-text contract through KeyedTranscript; plain Transcript
+// must never carry a thinking row, whatever the declaration.
 // Anything else one-sided in the first two turns fails: that is a dropped or
 // renamed item, which is exactly what the probe exists to catch.
 
@@ -91,9 +94,19 @@ func (c *checker) stableKeys(structured bool) (string, error) {
 		}
 		return fail("")
 	}
-	reader, ok := c.p.(provider.TranscriptReader)
+	plain, ok := c.p.(provider.TranscriptReader)
 	if !ok || !c.m[provider.BehaviorTranscript].Works() {
 		errs = append(errs, "declared working but stable keys need a working TranscriptReader")
+		return fail("")
+	}
+	reader := readerFunc(plain.Transcript)
+	keyedReader, hasKeyed := c.p.(provider.KeyedTranscriptReader)
+	if hasKeyed {
+		reader = keyedReader.KeyedTranscript
+	}
+	c.thinkingStored = c.m[provider.BehaviorStoredThinking].Works()
+	if c.thinkingStored && !hasKeyed {
+		errs = append(errs, "stored_thinking declared working but the provider doesn't implement KeyedTranscriptReader")
 		return fail("")
 	}
 	if c.s.ToolTurn == nil {
@@ -143,9 +156,25 @@ func (c *checker) stableKeys(structured bool) (string, error) {
 		}
 	}
 
-	errs = append(errs, compareKeyed(turns, stored, keyed)...)
+	errs = append(errs, compareKeyed(turns, stored, keyed, c.thinkingStored)...)
+	if rows, err := plain.Transcript(c.ctx, sess.Ref()); err == nil {
+		for _, m := range rows {
+			if m.Role == roleThinking {
+				errs = append(errs, "Transcript carries a thinking row: thinking belongs only on KeyedTranscript, so plain consumers are unchanged")
+				break
+			}
+		}
+	}
+	if !c.thinkingStored {
+		for _, m := range stored {
+			if m.Role == roleThinking {
+				errs = append(errs, "stored_thinking declared unsupported but KeyedTranscript returns thinking rows")
+				break
+			}
+		}
+	}
 	if incremental {
-		final, err := reader.Transcript(c.ctx, sess.Ref())
+		final, err := reader(c.ctx, sess.Ref())
 		switch {
 		case err != nil:
 			errs = append(errs, fmt.Sprintf("Transcript: %v", err))
@@ -305,18 +334,21 @@ func (c *checker) runKeyedTurn(sess provider.Session, t *keyedTurn) error {
 // awaitStored polls the store until every item the turns streamed (bar the
 // exempt ones) is there, or the store wait runs out; the comparison reports
 // whatever is still missing.
-func (c *checker) awaitStored(reader provider.TranscriptReader, ref string, turns []*keyedTurn) []provider.Message {
+// readerFunc is Transcript or KeyedTranscript, whichever the probe compares.
+type readerFunc func(ctx context.Context, ref string) ([]provider.Message, error)
+
+func (c *checker) awaitStored(reader readerFunc, ref string, turns []*keyedTurn) []provider.Message {
 	want := map[string]bool{}
 	for _, t := range turns {
 		for _, it := range t.items {
-			if it.role != roleThinking && it.id() != t.inflight {
+			if (it.role != roleThinking || c.thinkingStored) && it.id() != t.inflight {
 				want[it.id()] = true
 			}
 		}
 	}
 	var msgs []provider.Message
 	for deadline := time.Now().Add(c.storeWait()); ; time.Sleep(100 * time.Millisecond) {
-		msgs, _ = reader.Transcript(c.ctx, ref)
+		msgs, _ = reader(c.ctx, ref)
 		have := map[string]bool{}
 		users := 0
 		for _, m := range msgs {
@@ -336,7 +368,8 @@ func (c *checker) awaitStored(reader provider.TranscriptReader, ref string, turn
 }
 
 // compareKeyed checks the stored rows against what the turns streamed.
-func compareKeyed(turns []*keyedTurn, stored []provider.Message, keyed bool) []string {
+func compareKeyed(turns []*keyedTurn, stored []provider.Message, keyed, thinkingStored bool) []string {
+	comparedRole := func(role string) bool { return comparedRoleWith(role, thinkingStored) }
 	var errs []string
 	seen := map[string]bool{}
 	for _, m := range stored {
@@ -385,7 +418,7 @@ func compareKeyed(turns []*keyedTurn, stored []provider.Message, keyed bool) []s
 		}
 		var liveOrder []string
 		for _, it := range t.items {
-			if it.role == roleThinking {
+			if it.role == roleThinking && !thinkingStored {
 				continue
 			}
 			m, ok := rows[it.id()]
@@ -421,10 +454,12 @@ func compareKeyed(turns []*keyedTurn, stored []provider.Message, keyed bool) []s
 	return errs
 }
 
-func comparedRole(role string) bool {
+func comparedRoleWith(role string, thinkingStored bool) bool {
 	switch role {
 	case roleUser, roleText, roleTool, roleToolResult:
 		return true
+	case roleThinking:
+		return thinkingStored
 	}
 	return false
 }

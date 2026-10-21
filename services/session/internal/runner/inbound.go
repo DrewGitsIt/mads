@@ -66,8 +66,12 @@ func (r *Runner) onInbound(ev provider.Event) provider.Event {
 		opens := !r.busy
 		if opens {
 			r.busy = true
+			r.turnStartedAt, r.interrupted = time.Now(), false
 		}
 		r.mu.Unlock()
+		if opens {
+			r.chat.beginTurn()
+		}
 		r.digest.recordInbound(inboundLabel(src), ev.Text)
 		if opens {
 			// Not markAgentWorking(ev.Text): someone else's words must not

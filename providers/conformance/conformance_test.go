@@ -46,6 +46,7 @@ func TestHonestPartialStubPasses(t *testing.T) {
 		provider.BehaviorOneShotResume:   provider.Unsupported,
 		provider.BehaviorTranscript:      provider.Unsupported,
 		provider.BehaviorStableKeys:      provider.Unsupported,
+		provider.BehaviorStoredThinking:  provider.Unsupported,
 		provider.BehaviorModelDiscovery:  provider.Unsupported,
 		provider.BehaviorPTY:             provider.Unsupported,
 		provider.BehaviorCompaction:      provider.Unsupported,
@@ -112,8 +113,9 @@ func TestMismatchesAreCaught(t *testing.T) {
 		{
 			"declared-unsupported transcript quietly works",
 			newStub(map[provider.Behavior]provider.Support{
-				provider.BehaviorTranscript: provider.Unsupported,
-				provider.BehaviorStableKeys: provider.Unsupported,
+				provider.BehaviorTranscript:     provider.Unsupported,
+				provider.BehaviorStableKeys:     provider.Unsupported,
+				provider.BehaviorStoredThinking: provider.Unsupported,
 			}, lies{secretTranscript: true}),
 			provider.BehaviorTranscript, "declared unsupported but Transcript returns data",
 		},
@@ -183,9 +185,20 @@ func TestMismatchesAreCaught(t *testing.T) {
 		{
 			"declared-unsupported stable keys quietly emitted",
 			newStub(map[provider.Behavior]provider.Support{
-				provider.BehaviorStableKeys: provider.Unsupported,
+				provider.BehaviorStableKeys:     provider.Unsupported,
+				provider.BehaviorStoredThinking: provider.Unsupported,
 			}, lies{keysUnsupported: true}),
 			provider.BehaviorStableKeys, "declared unsupported but",
+		},
+		{
+			"stored thinking that never lands in the store",
+			newStub(nil, lies{thinkingDropped: true}),
+			provider.BehaviorStableKeys, "streamed thinking",
+		},
+		{
+			"thinking leaking into plain Transcript",
+			newStub(nil, lies{thinkingInPlain: true}),
+			provider.BehaviorStableKeys, "Transcript carries a thinking row",
 		},
 		{
 			"a settle hint nobody asked for",

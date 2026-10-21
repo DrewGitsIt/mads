@@ -213,6 +213,13 @@ type Runner struct {
 
 	hub *hub
 
+	// chat is the keyed v2 stream and its journal (chatstream.go), fed
+	// beside the hub from the same events; settle and labeler keep its
+	// tail in step with the agent's store (settle.go).
+	chat    *chatStream
+	settle  settleState
+	labeler userLabeler
+
 	// opMu serializes SwitchTransport against Shutdown — both hold this for
 	// their entire duration (closing the old provider process blocks on it
 	// actually exiting), so a Shutdown can't tear down mid-switch and a
@@ -225,7 +232,11 @@ type Runner struct {
 	sess         provider.Session
 	providerName string // sess's provider name, set alongside sess so Transcript can look the provider back up
 	busy         bool   // a turn is in flight (Send called, or an inbound message woke the agent; no EventTurnEnd yet)
-	closing      bool   // Shutdown has started tearing this session down
+	// turnStartedAt is when the in-flight turn began, and interrupted
+	// whether Interrupt was asked of it since (the v2 hello's turn).
+	turnStartedAt time.Time
+	interrupted   bool
+	closing       bool // Shutdown has started tearing this session down
 
 	// landing is set while Land runs (worktreeops.go): no turn may start,
 	// so Send refuses, and SendOrQueue and Inject queue behind it exactly
@@ -374,19 +385,26 @@ type pendingInjection struct {
 	// user turn (no Attribution) and is the only kind the queue API exposes.
 	userID   string
 	queuedAt time.Time
+	// msgID is the send's message id, minted when it was accepted into the
+	// queue: its user_message key is "user:"+msgID (chatstream.go).
+	msgID string
 }
 
 // New builds a Runner for sessionID. data's actor must be sessionID (spec
 // §15's per-service actor convention) so events and lease claims attribute
 // correctly.
 func New(sessionID string, data *dataclient.Client, providers *provider.Registry) *Runner {
+	chat := newChatStream()
+	h := newHub()
+	h.tap = chat.event
 	return &Runner{
 		sessionID:     sessionID,
 		data:          data,
 		providers:     providers,
 		Cwd:           ".",
 		Died:          make(chan struct{}),
-		hub:           newHub(),
+		hub:           h,
+		chat:          chat,
 		touched:       make(map[string]string),
 		toolTouchedAt: make(map[string]time.Time),
 		shutdownCh:    make(chan struct{}),
@@ -515,6 +533,11 @@ func (r *Runner) Start(ctx context.Context) error {
 	// the harness ask at all; carried in baseOpts, a switch to the terminal
 	// transport simply leaves it unused there.
 	opts.Permissions = r.RequestPermission
+	// The keyed contract (settle hints) for a provider whose keys are the
+	// agent's own. Not for an emulated one (hermes): it would have to
+	// change live content to meet it, which a legacy consumer would see.
+	opts.Keyed = p.Matrix()[provider.BehaviorStableKeys] == provider.Native
+	r.chat.setKeyed(p.Matrix()[provider.BehaviorStableKeys].Works())
 	spawnedAt := time.Now()
 	provSess, err := p.Start(ctx, opts)
 	if err != nil {
@@ -580,6 +603,10 @@ func (r *Runner) Start(ctx context.Context) error {
 	// Decided before the session is installed so the pass is in flight
 	// from the moment anything can reach the session (beginCompactLocked).
 	resumeCompact := resumeCompactor(provSess, sess.LastUsage, sess.Model)
+
+	// Before the session is installed, so no send can land first: what
+	// the store holds now predates this child, for user-row labelling.
+	r.startLabelling(ctx, p, provSess, opts)
 
 	r.mu.Lock()
 	r.sess = provSess
@@ -900,6 +927,8 @@ func (r *Runner) refreshCountsAsync() {
 func (r *Runner) deliverLocked() {
 	r.busy = true
 	r.sentAny = true
+	r.turnStartedAt = time.Now()
+	r.interrupted = false
 }
 
 // Send relays one user turn. Returns ErrTurnInFlight (surfaced as HTTP 409)
@@ -946,7 +975,7 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 	r.digest.recordUser(text, false)
 
 	r.markAgentWorking(text)
-	if err := sess.Send(ctx, wire); err != nil {
+	if err := r.sendTurn(ctx, sess, wire, newMessageID(), false); err != nil {
 		r.mu.Lock()
 		r.busy = false
 		r.mu.Unlock()
@@ -1007,7 +1036,7 @@ func (r *Runner) InjectParts(ctx context.Context, parts []contracts.InjectPart) 
 		return ErrNotReady
 	}
 	if r.busy || r.landing {
-		entry := pendingInjection{text: text, attribution: attribution}
+		entry := pendingInjection{text: text, attribution: attribution, msgID: newMessageID()}
 		if len(parts) > 1 {
 			// Already a combined turn: delivered as built, never coalesced
 			// further (drainNextLocked).
@@ -1030,7 +1059,7 @@ func (r *Runner) InjectParts(ctx context.Context, parts []contracts.InjectPart) 
 	audit()
 
 	r.markAgentWorking(text)
-	if err := sess.Send(ctx, wire); err != nil {
+	if err := r.sendTurn(ctx, sess, wire, newMessageID(), false); err != nil {
 		r.mu.Lock()
 		r.busy = false
 		r.mu.Unlock()
@@ -1084,7 +1113,13 @@ func (r *Runner) recordInjectionAudit(ctx context.Context, attribution contracts
 // (docs/LINKED-SESSIONS-DESIGN.md decision 4) before clearing busy, so a
 // concurrent Send/Inject for the next turn can never record into this
 // turn's buffer.
-func (r *Runner) onTurnEnd() {
+func (r *Runner) onTurnEnd() { r.endTurn(nil) }
+
+// endTurn is onTurnEnd for the provider's turn-end event ev (nil when there
+// is none to show): the v2 turn_end goes out once the turn is over — busy
+// cleared, so a viewer that sends on it isn't refused — and before a queued
+// next turn's user_message.
+func (r *Runner) endTurn(ev *provider.Event) {
 	r.pushTurnEnded()
 	// Ahead of the lock, so this lands before the queued-injection drain
 	// below reports the NEXT turn working: appended the other way round, a
@@ -1093,6 +1128,11 @@ func (r *Runner) onTurnEnd() {
 
 	r.mu.Lock()
 	r.busy = false
+	r.turnStartedAt, r.interrupted = time.Time{}, false
+	if ev != nil {
+		turn := r.chat.turnEnd(*ev)
+		defer r.afterTurnEnd(turn) // outside r.mu: it reads the runner's state
+	}
 	if len(r.pending) > 0 && !r.landing {
 		r.deliverNextLocked()
 		return
@@ -1160,7 +1200,7 @@ func (r *Runner) deliverNextLocked() {
 	}
 
 	r.markAgentWorking(next.text)
-	if err := sess.Send(context.Background(), wire); err != nil {
+	if err := r.sendTurn(context.Background(), sess, wire, next.msgID, true); err != nil {
 		log.Printf("runner: deliver queued message: %v", err)
 		r.mu.Lock()
 		r.busy = false
@@ -1263,6 +1303,9 @@ func (r *Runner) Interrupt(ctx context.Context) error {
 		return ErrNotReady
 	}
 	sess := r.sess
+	if r.busy {
+		r.interrupted = true
+	}
 	r.mu.Unlock()
 	return sess.Interrupt(ctx)
 }
@@ -1781,6 +1824,14 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 	if sess != nil {
 		closeErr = sess.Close()
 	}
+	// A turn the child takes with it: its items will never be stored.
+	r.mu.Lock()
+	busy := r.busy
+	r.mu.Unlock()
+	if busy {
+		r.chatProcessExit()
+	}
+	r.stopSettling()
 	// A last look for shell calls still open, recorded before the recount
 	// below closes (bounded by ctx, like the Land wait).
 	if r.shell != nil {
@@ -1823,6 +1874,7 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 	r.agent.mu.Unlock()
 
 	r.hub.close()
+	r.chat.close()
 	return closeErr
 }
 
@@ -1836,6 +1888,16 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 func (r *Runner) pump(sess provider.Session) {
 	var join textJoiner
 	for ev := range sess.Events() {
+		if ev.Kind == provider.EventSettle {
+			// For the v2 tail alone: a contentless hint the legacy
+			// pipeline below never saw before the keyed contract, and
+			// still doesn't.
+			r.settleHint()
+			continue
+		}
+		// The v2 stream takes text as the adapter keyed it, before the
+		// join shim below.
+		rawText := ev.Text
 		// First, so every consumer below (conversation status, synth,
 		// digest, the live stream) sees text as it always read.
 		ev = join.apply(ev)
@@ -1849,7 +1911,7 @@ func (r *Runner) pump(sess provider.Session) {
 			// tools must not blur which turn deleted a touched file.
 			r.sweepDeletedFiles()
 			r.shadowStore.CommitTurnAsync()
-			r.onTurnEnd()
+			r.endTurn(&ev)
 			r.syncProviderRef(context.Background(), sess)
 			r.persistTurnEnd(context.Background(), ev.Usage)
 			r.refreshCountsAsync()
@@ -1870,7 +1932,12 @@ func (r *Runner) pump(sess provider.Session) {
 		if ev.Kind == provider.EventBackground {
 			r.setAgentBackground(mainAgentBackground(ev.Background))
 		}
-		r.hub.broadcast(ev)
+		v2 := ev
+		if v2.Kind == provider.EventText {
+			v2.Text = rawText
+		}
+		r.chat.event(v2)
+		r.hub.broadcastLegacy(ev)
 	}
 
 	// The stream closed. Normally the turn-end sweep already ran and this
@@ -1908,6 +1975,7 @@ func (r *Runner) pump(sess provider.Session) {
 	}
 
 	log.Printf("runner: provider session for %s ended unexpectedly mid-turn", r.sessionID)
+	r.chatProcessExit()
 	r.hub.broadcast(provider.Event{Kind: provider.EventError, Text: "provider process exited unexpectedly"})
 	r.died.Do(func() { close(r.Died) })
 }
@@ -1944,11 +2012,14 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 			defer wg.Done()
 			var join textJoiner
 			for ev := range events {
+				if ev.Kind == provider.EventSettle {
+					continue // v2-only, and terminal mode has no v2 chat frames
+				}
 				ev = join.apply(ev)
 				if ev.Kind == provider.EventTurnEnd {
 					r.sweepDeletedFiles()
 					r.shadowStore.CommitTurnAsync()
-					r.onTurnEnd()
+					r.endTurn(&ev)
 					r.syncProviderRef(context.Background(), sess)
 					r.persistTurnEnd(context.Background(), ev.Usage)
 					r.refreshCountsAsync()
@@ -1972,7 +2043,7 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 	for {
 		n, err := term.Read(buf)
 		if n > 0 {
-			r.hub.broadcast(provider.Event{Kind: provider.EventPTYOutput, Text: string(buf[:n])})
+			r.hub.broadcastLegacy(provider.Event{Kind: provider.EventPTYOutput, Text: string(buf[:n])})
 		}
 		if err != nil {
 			break

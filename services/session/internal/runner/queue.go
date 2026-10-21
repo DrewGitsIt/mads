@@ -55,7 +55,7 @@ func (r *Runner) SendOrQueue(ctx context.Context, text string) (*contracts.Queue
 // new queue. Called with r.mu held; it unlocks r.mu.
 func (r *Runner) queueUserLocked(text string) *contracts.QueuedMessage {
 	q := contracts.QueuedMessage{ID: newQueueID(), Text: text, QueuedAt: time.Now().UTC()}
-	r.pending = append(r.pending, pendingInjection{text: text, userID: q.ID, queuedAt: q.QueuedAt})
+	r.pending = append(r.pending, pendingInjection{text: text, userID: q.ID, queuedAt: q.QueuedAt, msgID: newMessageID()})
 	snapshot := r.queuedLocked()
 	r.mu.Unlock()
 	r.publishQueue(contracts.QueueChanged{Queued: snapshot})

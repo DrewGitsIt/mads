@@ -42,6 +42,30 @@ type itemEntry struct {
 // An interrupted turn's partial reply is in neither: codex stores an item
 // only once it completes (survey finding 6).
 func (p *Provider) Transcript(ctx context.Context, ref string) ([]provider.Message, error) {
+	entries, err := p.readItems(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeItems(entries, false), nil
+}
+
+// KeyedTranscript implements provider.KeyedTranscriptReader: Transcript's
+// rows plus a Role "thinking" row per reasoning item whose summary has
+// text, keyed by the item id and with the text the live EventThinking
+// carried (reasoningText of the same summary; survey run1: four of four
+// equal live and stored, one of them empty). An empty summary makes no
+// row, as it makes no live item.
+func (p *Provider) KeyedTranscript(ctx context.Context, ref string) ([]provider.Message, error) {
+	entries, err := p.readItems(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeItems(entries, true), nil
+}
+
+// readItems lists ref's items from the live session's app-server, else a
+// short-lived one.
+func (p *Provider) readItems(ctx context.Context, ref string) ([]itemEntry, error) {
 	if ref == "" {
 		return nil, errors.New("transcript: empty thread id")
 	}
@@ -64,7 +88,7 @@ func (p *Provider) Transcript(ctx context.Context, ref string) ([]provider.Messa
 	if err != nil {
 		return nil, fmt.Errorf("transcript %s: %w", ref, err)
 	}
-	return normalizeItems(entries), nil
+	return entries, nil
 }
 
 func listItems(ctx context.Context, c *conn, ref string) ([]itemEntry, error) {
@@ -95,11 +119,11 @@ func listItems(ctx context.Context, c *conn, ref string) ([]itemEntry, error) {
 // store order: a user message per userMessage, an agent message per
 // agentMessage (commentary and final answer alike — each is its own item),
 // a tool row per tool item followed by its result once the item finished,
-// a compact marker per contextCompaction. Reasoning summaries are left
-// out (Message has no thinking role); so are plan, review-mode and hook
-// items. A tool item still in progress — the turn was killed mid-command —
+// a compact marker per contextCompaction, and (thinking, the keyed form
+// only) a thinking row per reasoning item with summary text. Plan,
+// review-mode and hook items are left out. A tool item still in progress — the turn was killed mid-command —
 // keeps its tool row and gets no result.
-func normalizeItems(entries []itemEntry) []provider.Message {
+func normalizeItems(entries []itemEntry, thinking bool) []provider.Message {
 	var msgs []provider.Message
 	for _, e := range entries {
 		it := e.Item
@@ -111,6 +135,10 @@ func normalizeItems(entries []itemEntry) []provider.Message {
 		case it.Type == "agentMessage":
 			if it.Text != "" {
 				msgs = append(msgs, provider.Message{Role: "agent", Text: it.Text, Key: it.ID})
+			}
+		case it.Type == "reasoning":
+			if text := it.reasoningText(); thinking && text != "" {
+				msgs = append(msgs, provider.Message{Role: "thinking", Text: text, Key: it.ID})
 			}
 		case it.Type == "contextCompaction":
 			msgs = append(msgs, provider.Message{Role: "compact", Compact: &provider.CompactMarker{}, Key: it.ID})
@@ -170,7 +198,8 @@ type itemsCursor struct {
 // child's settle reads, cheap because the connection is already open. With
 // no live session for ref it returns provider.ErrUnsupported: spawning an
 // app-server per incremental read would cost more than the read saves, and
-// the caller reads Transcript instead.
+// the caller reads Transcript instead. Rows are the keyed form, thinking
+// included (KeyedTranscript).
 func (p *Provider) TranscriptSince(ctx context.Context, ref string, cursor provider.TranscriptCursor) ([]provider.Message, provider.TranscriptCursor, error) {
 	s := p.liveSession(ref)
 	if s == nil {
@@ -222,7 +251,7 @@ func (p *Provider) TranscriptSince(ctx context.Context, ref string, cursor provi
 	if err != nil {
 		return nil, cursor, fmt.Errorf("transcript since %s: %w", ref, err)
 	}
-	return normalizeItems(entries), &itemsCursor{ref: ref, last: last, anchor: anchor}, nil
+	return normalizeItems(entries, true), &itemsCursor{ref: ref, last: last, anchor: anchor}, nil
 }
 
 func indexOfItem(entries []itemEntry, id string) int {

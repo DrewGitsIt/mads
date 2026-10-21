@@ -215,6 +215,11 @@ func Check(ctx context.Context, p provider.Provider, s Script) []Result {
 	// got an EventSettle it never asked for.
 	keysNote, keysErr := c.stableKeys(structured)
 	c.add(provider.BehaviorStableKeys, keysErr, keysNote)
+	var thinkErr error
+	if _, has := c.p.(provider.KeyedTranscriptReader); m[provider.BehaviorStoredThinking].Works() && !has {
+		thinkErr = errors.New("declared working but the provider doesn't implement KeyedTranscriptReader")
+	}
+	c.add(provider.BehaviorStoredThinking, thinkErr, "the rows themselves are probed inside stable_keys")
 
 	switch {
 	case !structured:
@@ -299,6 +304,9 @@ type checker struct {
 	s       Script
 	ctx     context.Context
 	results []Result
+	// thinkingStored: the matrix declares stored_thinking working, so the
+	// stable_keys probe compares thinking items too.
+	thinkingStored bool
 	// unaskedSettle: collect saw an EventSettle on a session that never set
 	// StartOptions.Keyed (the stable_keys result reports it).
 	unaskedSettle bool

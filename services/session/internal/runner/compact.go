@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/providers/provider"
@@ -105,6 +106,7 @@ func (r *Runner) requestResumeCompact(ctx context.Context, compactor provider.Co
 // Compacting) after unlocking.
 func (r *Runner) beginCompactLocked() {
 	r.busy = true
+	r.turnStartedAt, r.interrupted = time.Now(), false
 	r.tally.setCompactTurn(true)
 }
 

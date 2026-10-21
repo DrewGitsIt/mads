@@ -27,6 +27,7 @@ func sampleToolMessages() []contracts.TranscriptMessage {
 				Locations: []contracts.ToolLocation{{Path: "/home/u/app/main.go", Line: 12}},
 			},
 			Timestamp: time.Date(2026, 9, 9, 18, 38, 15, 0, time.UTC),
+			Key:       "toolu_01edit",
 		},
 		{
 			Role: "tool",
@@ -40,6 +41,7 @@ func sampleToolMessages() []contracts.TranscriptMessage {
 				Server: "github",
 			},
 			Timestamp: time.Date(2026, 9, 9, 18, 38, 16, 0, time.UTC),
+			Key:       "toolu_02mcp",
 		},
 	}
 }
@@ -67,8 +69,8 @@ func TestTranscriptMessageConsumerParsesGolden(t *testing.T) {
 	}
 	for i, w := range want {
 		g := got[i]
-		if g.Role != w.Role || !g.Timestamp.Equal(w.Timestamp) {
-			t.Errorf("message %d: role/timestamp %q/%v, want %q/%v", i, g.Role, g.Timestamp, w.Role, w.Timestamp)
+		if g.Role != w.Role || !g.Timestamp.Equal(w.Timestamp) || g.Key != w.Key {
+			t.Errorf("message %d: role/timestamp/key %q/%v/%q, want %q/%v/%q", i, g.Role, g.Timestamp, g.Key, w.Role, w.Timestamp, w.Key)
 		}
 		gt, wt := g.Tool, w.Tool
 		if gt == nil {

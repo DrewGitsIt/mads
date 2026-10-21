@@ -118,7 +118,7 @@ func (s *server) buildExport(ctx context.Context, sess contracts.Session, now ti
 // (the unpaged read, not the browser's page param); otherwise, or if the child
 // doesn't answer, the durable read (preferLive).
 func (s *server) exportMessages(ctx context.Context, sess contracts.Session) []contracts.TranscriptMessage {
-	stored := func() []contracts.TranscriptMessage { return s.transcriptFor(ctx, sess) }
+	stored := func() []contracts.TranscriptMessage { return s.transcriptFor(ctx, sess, false) }
 	addr, ok := s.sup.SessionAddr(sess.ID)
 	if !ok {
 		return stored()

@@ -134,6 +134,34 @@ func TestExpand(t *testing.T) {
 	}
 }
 
+// A split user row gives each segment its own key, <key>#<i> in Parse
+// order (the notice included); a row Expand leaves whole keeps its key.
+func TestExpandSegmentKeys(t *testing.T) {
+	d := contracts.Attribution{SourceName: "W", Kind: KindDigest}
+	out := Expand([]contracts.TranscriptMessage{
+		{Role: "user", Text: "mine", Key: "user:m1"},
+		{Role: "user", Text: Wrap("a", d) + "\n\n" + Wrap("b", d), Key: "user:run"},
+		{Role: "user", Text: "[mads] note\n\n" + Wrap("c", d), Key: "user:reroot"},
+		{Role: "user", Text: Wrap("solo", d), Key: "user:solo"},
+		{Role: "user", Text: Wrap("x", d) + "\n\n" + Wrap("y", d)},
+	})
+	want := []struct{ key, text string }{
+		{"user:m1", "mine"},
+		{"user:run#0", "a"}, {"user:run#1", "b"}, // a coalesced run of two digests
+		{"user:reroot#0", "[mads] note"}, {"user:reroot#1", "c"}, // the re-root note ahead of its block
+		{"user:solo", "solo"}, // one segment: the key is unchanged
+		{"", "x"}, {"", "y"},  // no key to derive from
+	}
+	if len(out) != len(want) {
+		t.Fatalf("Expand = %d rows, want %d: %+v", len(out), len(want), out)
+	}
+	for i, w := range want {
+		if out[i].Key != w.key || out[i].Text != w.text {
+			t.Errorf("row %d = (%q, %q), want (%q, %q)", i, out[i].Key, out[i].Text, w.key, w.text)
+		}
+	}
+}
+
 // One send is one turn, however many blocks it splits into.
 func TestSplitTurnsCountsSendsNotBlocks(t *testing.T) {
 	d := contracts.Attribution{SourceName: "W", Kind: KindDigest}

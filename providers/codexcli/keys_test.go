@@ -74,19 +74,25 @@ func TestCaptureKeysMatchTheStore(t *testing.T) {
 	for _, tc := range []struct {
 		stream, items string
 		inflight      int // live text items at the end that were never stored
+		thinking      int // live thinking items (reasoning with summary text)
 	}{
-		{"run1-stdout.jsonl", "run1-items-list.json", 1},
-		{"toolturn-stdout.jsonl", "toolturn-items-list.json", 0},
+		{"run1-stdout.jsonl", "run1-items-list.json", 1, 3},
+		{"toolturn-stdout.jsonl", "toolturn-items-list.json", 0, 0},
 	} {
 		t.Run(tc.stream, func(t *testing.T) {
 			evs, _ := replay(t, tc.stream, provider.TrustFull, nil)
 			liveOrder, liveText := liveItems(t, evs)
-			storedOrder, storedText := storedItems(t, normalizeItems(loadItems(t, tc.items)))
-			var live []string
-			for _, id := range liveOrder {
-				if !strings.HasPrefix(id, "thinking:") { // thinking has no transcript row
-					live = append(live, id)
+			// The keyed form: thinking rows are compared like the rest.
+			storedOrder, storedText := storedItems(t, normalizeItems(loadItems(t, tc.items), true))
+			live := liveOrder
+			thinking := 0
+			for _, id := range live {
+				if strings.HasPrefix(id, "thinking:") {
+					thinking++
 				}
+			}
+			if thinking != tc.thinking {
+				t.Errorf("%d live thinking items, want %d", thinking, tc.thinking)
 			}
 			unsaved := live[len(live)-tc.inflight:]
 			live = live[:len(live)-tc.inflight]
@@ -110,7 +116,7 @@ func TestCaptureKeysMatchTheStore(t *testing.T) {
 	}
 	// The user rows are keyed by the ids the survey sent them with.
 	var users []string
-	for _, m := range normalizeItems(loadItems(t, "run1-items-list.json")) {
+	for _, m := range normalizeItems(loadItems(t, "run1-items-list.json"), false) {
 		if m.Role == "user" {
 			users = append(users, m.Key)
 		}
@@ -123,7 +129,7 @@ func TestCaptureKeysMatchTheStore(t *testing.T) {
 // A user message mads didn't send with an id keeps codex's own item id.
 func TestUserKeyWithoutClientID(t *testing.T) {
 	it := threadItem{Type: "userMessage", ID: "01a1-x", Content: []userInput{{Type: "text", Text: "hi"}}}
-	if got := normalizeItems([]itemEntry{{Item: it}}); len(got) != 1 || got[0].Key != "user:01a1-x" {
+	if got := normalizeItems([]itemEntry{{Item: it}}, false); len(got) != 1 || got[0].Key != "user:01a1-x" {
 		t.Fatalf("rows = %+v", got)
 	}
 }
@@ -178,7 +184,7 @@ func rowsString(msgs []provider.Message) string {
 	return b.String()
 }
 
-// Chained TranscriptSince reads add up to Transcript: a read before any
+// Chained TranscriptSince reads add up to KeyedTranscript: a read before any
 // turn, a read with nothing new, reads after plain, thinking and tool turns,
 // and one mid-turn.
 func TestTranscriptSinceChainsToTranscript(t *testing.T) {
@@ -216,12 +222,15 @@ func TestTranscriptSinceChainsToTranscript(t *testing.T) {
 	sendTurn(t, s, "tool-turn")
 	read()
 
-	full, err := p.Transcript(ctx, s.Ref())
+	full, err := p.KeyedTranscript(ctx, s.Ref())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got, want := rowsString(chained), rowsString(full); got != want {
-		t.Fatalf("chained\n%s\nTranscript\n%s", got, want)
+		t.Fatalf("chained\n%s\nKeyedTranscript\n%s", got, want)
+	}
+	if !strings.Contains(rowsString(full), "thinking|") {
+		t.Fatalf("no thinking rows in KeyedTranscript:\n%s", rowsString(full))
 	}
 	if len(full) < 10 {
 		t.Fatalf("transcript too short to prove anything: %d rows", len(full))
@@ -351,5 +360,37 @@ func TestSettleHintsOnlyWhenAsked(t *testing.T) {
 		if !found {
 			t.Errorf("item %s streamed but never settled", key)
 		}
+	}
+}
+
+// Plain Transcript never carries thinking; the keyed form carries one row
+// per reasoning item with summary text (run1: four reasoning items, one
+// with an empty summary) and is otherwise the same rows.
+func TestThinkingOnlyInTheKeyedForm(t *testing.T) {
+	entries := loadItems(t, "run1-items-list.json")
+	plain, keyed := normalizeItems(entries, false), normalizeItems(entries, true)
+	var rest []string
+	thinking := 0
+	for _, m := range plain {
+		if m.Role == "thinking" {
+			t.Errorf("plain Transcript carries thinking: %+v", m)
+		}
+	}
+	for _, m := range keyed {
+		if m.Role == "thinking" {
+			thinking++
+			continue
+		}
+		rest = append(rest, m.Role+":"+m.Key+":"+m.Text)
+	}
+	var want []string
+	for _, m := range plain {
+		want = append(want, m.Role+":"+m.Key+":"+m.Text)
+	}
+	if thinking != 3 {
+		t.Errorf("%d thinking rows, want 3 (the empty summary makes none)", thinking)
+	}
+	if strings.Join(rest, "\n") != strings.Join(want, "\n") {
+		t.Errorf("keyed form minus thinking != plain:\n%s\n--\n%s", strings.Join(rest, "\n"), strings.Join(want, "\n"))
 	}
 }
