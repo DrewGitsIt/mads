@@ -1018,13 +1018,15 @@ func TestRealClaudeSmoke(t *testing.T) {
 // TestRealClaudeStableKeysSmoke runs the stable_keys probe against the real
 // binary on haiku: a plain reply, text/Bash ls/text, and a count to 300
 // interrupted mid-text, each item's key and text compared live vs the
-// session's JSONL. Opt-in: it spends real tokens.
+// session's JSONL. Thinking summaries are on, so the thinking haiku streams
+// is compared too (stored_thinking: KeyedTranscript). Opt-in: it spends
+// real tokens.
 // MADS_CLAUDE_SMOKE=1 go test ./providers/claudecode -run StableKeysSmoke -v
 func TestRealClaudeStableKeysSmoke(t *testing.T) {
 	if os.Getenv("MADS_CLAUDE_SMOKE") != "1" {
 		t.Skip("set MADS_CLAUDE_SMOKE=1 (spends tokens) to run against the real claude binary")
 	}
-	p := New(Config{ExtraArgs: []string{"--model", "haiku"}})
+	p := New(Config{ExtraArgs: []string{"--model", "haiku", "--settings", `{"showThinkingSummaries":true}`}})
 	if fi, err := os.Stat(p.cfg.Bin); err != nil || fi.IsDir() {
 		t.Skipf("no claude binary (%s)", p.cfg.Bin)
 	}
@@ -1040,7 +1042,7 @@ func TestRealClaudeStableKeysSmoke(t *testing.T) {
 		Echo: func(marker string) string { return "Reply with exactly this and nothing else: " + marker },
 		Slow: func() string { return "Count from 1 to 300, one number per line, no other text. No tools." },
 		ToolTurn: func() string {
-			return "Say one short sentence, then run the Bash command `ls`, then say one short sentence about the result."
+			return "Think briefly about the request first. Then say one short sentence, then run the Bash command `ls`, then say one short sentence about the result."
 		},
 		StoreWait: 10 * time.Second,
 		Timeout:   90 * time.Second,
@@ -1048,6 +1050,58 @@ func TestRealClaudeStableKeysSmoke(t *testing.T) {
 	t.Logf("%s: declared %s; %s", res.Behavior, res.Declared, res.Note)
 	if res.Err != nil {
 		t.Fatal(res.Err)
+	}
+
+	// Does haiku think at all with summaries on? One turn, its thinking
+	// items against KeyedTranscript's rows, key and text.
+	ctx := context.Background()
+	sess, err := p.Start(ctx, provider.StartOptions{Mode: provider.ModeACP, Keyed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sess.Close() }()
+	if err := sess.Send(ctx, "What is 17*23? Think it through, then answer in one line."); err != nil {
+		t.Fatal(err)
+	}
+	live := map[string]string{}
+	deadline := time.After(90 * time.Second)
+	for done := false; !done; {
+		select {
+		case ev, ok := <-sess.Events():
+			if !ok {
+				t.Fatal("stream closed before turn end")
+			}
+			switch {
+			case ev.Kind == provider.EventThinking && ev.Text != "":
+				live[ev.Key] += ev.Text
+			case ev.Kind == provider.EventTurnEnd:
+				done = true
+			}
+		case <-deadline:
+			t.Fatal("no turn end")
+		}
+	}
+	var stored map[string]string
+	for wait := time.Now().Add(10 * time.Second); time.Now().Before(wait); time.Sleep(200 * time.Millisecond) {
+		rows, _ := p.KeyedTranscript(ctx, sess.Ref())
+		stored = map[string]string{}
+		for _, m := range rows {
+			if m.Role == "thinking" {
+				stored[m.Key] = m.Text
+			}
+		}
+		if len(stored) >= len(live) {
+			break
+		}
+	}
+	t.Logf("thinking: %d live items, %d stored rows", len(live), len(stored))
+	for k, text := range live {
+		if stored[k] != text {
+			t.Errorf("thinking %s: live %.80q, stored %.80q", k, text, stored[k])
+		}
+	}
+	if len(stored) != len(live) {
+		t.Errorf("stored %d thinking rows for %d live items", len(stored), len(live))
 	}
 }
 

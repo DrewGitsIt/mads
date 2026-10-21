@@ -242,8 +242,10 @@ func (f *Fake) Matrix() provider.Matrix {
 		provider.BehaviorDelegateStop:       provider.Unsupported,
 		// Every item is keyed live and in the in-memory store, and
 		// TranscriptSince reads the store by row index.
-		provider.BehaviorStableKeys:     provider.Native,
-		provider.BehaviorStoredThinking: provider.Unsupported,
+		provider.BehaviorStableKeys: provider.Native,
+		// A rule's Thinking streams keyed and is stored under the same key;
+		// KeyedTranscript returns it, plain Transcript never does.
+		provider.BehaviorStoredThinking: provider.Native,
 	}
 }
 
@@ -521,8 +523,27 @@ func (f *Fake) MCPServers(ref string) []provider.MCPServerRef {
 // Transcript prefers this process's own in-memory history (the common case:
 // same Fake that ran the turn). A ref this instance never saw falls back to
 // transcriptDir, when configured — the cross-process case WithTranscriptDir
-// exists for.
-func (f *Fake) Transcript(_ context.Context, ref string) ([]provider.Message, error) {
+// exists for. Stored thinking rows are left out (KeyedTranscript has them).
+func (f *Fake) Transcript(ctx context.Context, ref string) ([]provider.Message, error) {
+	all, err := f.KeyedTranscript(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	var out []provider.Message
+	for _, m := range all {
+		if m.Role != "thinking" {
+			out = append(out, m)
+		}
+	}
+	if out == nil && all != nil {
+		out = []provider.Message{}
+	}
+	return out, nil
+}
+
+// KeyedTranscript implements provider.KeyedTranscriptReader: the store as
+// written, thinking rows (Rule.Thinking) included.
+func (f *Fake) KeyedTranscript(_ context.Context, ref string) ([]provider.Message, error) {
 	f.mu.Lock()
 	msgs, known := f.histories[ref]
 	dir := f.transcriptDir
@@ -537,9 +558,9 @@ func (f *Fake) Transcript(_ context.Context, ref string) ([]provider.Message, er
 }
 
 // TranscriptSince implements provider.IncrementalTranscriptReader over the
-// in-memory store: the cursor is a row index.
+// in-memory store, in the keyed form: the cursor is a row index.
 func (f *Fake) TranscriptSince(ctx context.Context, ref string, cursor provider.TranscriptCursor) ([]provider.Message, provider.TranscriptCursor, error) {
-	all, err := f.Transcript(ctx, ref)
+	all, err := f.KeyedTranscript(ctx, ref)
 	if err != nil {
 		return nil, cursor, err
 	}
@@ -582,6 +603,8 @@ type turnPlan struct {
 	blocks  [][]string
 	userLag time.Duration
 	hold    bool
+	// thinking: the rule's Thinking.
+	thinking string
 }
 
 func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) turnPlan {
@@ -603,7 +626,7 @@ func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) tur
 		if len(p.chunks) == 0 && r.Reply != "" {
 			p.chunks = []string{r.Reply}
 		}
-		p.blocks, p.hold = r.Blocks, r.HoldUntilToolDone
+		p.blocks, p.hold, p.thinking = r.Blocks, r.HoldUntilToolDone, r.Thinking
 		p.userLag = time.Duration(r.UserLagMs) * time.Millisecond
 		return p
 	}
@@ -1005,6 +1028,13 @@ func (s *fakeSession) respond(prompt string, plan turnPlan, turn int, user provi
 		s.emit(provider.Event{Kind: provider.EventError, Text: rle.Error()})
 		s.emit(provider.Event{Kind: provider.EventTurnEnd})
 		return
+	}
+	if plan.thinking != "" {
+		key := s.itemKey(turn, "think")
+		if !s.emit(provider.Event{Kind: provider.EventThinking, Key: key, Text: plan.thinking}) {
+			return
+		}
+		s.store(provider.Message{Role: "thinking", Text: plan.thinking, Key: key, Timestamp: time.Now()})
 	}
 	if plan.blocks != nil {
 		s.respondBlocks(prompt, plan, turn)

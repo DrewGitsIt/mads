@@ -434,7 +434,13 @@ captures; `TestCapturedKeysLiveEqualStored`):
 | Interrupt marker, "No response requested.", API-error line, task notification | — | the line's own uuid, `Notice` set |
 | Peer message (`inbound`) | unkeyed | unkeyed: no capture shows the replayed line's uuid equal to the stored one |
 
-Thinking stays out of transcript rows; its live events are keyed. An
+**Stored thinking** (`stored_thinking: native`): with
+`--settings '{"showThinkingSummaries":true}'` claude streams thinking text
+and writes the same text to the JSONL (the 2.1.285 haiku `testdata/keys-think`
+capture: two of two blocks equal). `KeyedTranscript` and `TranscriptSince`
+return each as a Role `"thinking"` row under the block's key; plain
+`Transcript` never does, so its consumers are unchanged. By default the
+thinking is signature-only on both sides: no live item, no row. An
 interrupted message has no `message_stop`, and its partial text is
 stored as streamed, cut wherever the abort landed.
 
@@ -446,7 +452,7 @@ before each turn end.
 **`TranscriptSince`** keeps the file's identity, the byte offset past the
 last whole line, and the reader's state (seen uuids, per-message block
 counts, peer de-dupe) in its cursor, so chained reads key every row as a
-full `Transcript` does. A half-written last line waits for the next read;
+full `KeyedTranscript` does. A half-written last line waits for the next read;
 a compaction boundary waits for its summary line. A file that shrank or
 was replaced (different inode) is `ErrCursorStale`.
 

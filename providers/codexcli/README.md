@@ -146,6 +146,13 @@ items read, the same way live and stored. An interrupted partial message is
 live only (codex never stores it). Thinking arrives whole at the reasoning
 item's completion, so one item's chunks can't interleave with another's.
 
+**Stored thinking** (`stored_thinking: native`): thread/items/list keeps each
+reasoning item's summary under the same id, so `KeyedTranscript` and
+`TranscriptSince` return a Role `"thinking"` row per item whose summary has
+text, the same text the live event carried (survey run1: three of three, and
+the empty fourth is neither streamed nor a row). Plain `Transcript` never
+carries one.
+
 ## One-shot
 
 `OneShot` starts a thread at full trust, sends one turn, returns the

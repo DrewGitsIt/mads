@@ -193,12 +193,15 @@ func TestRealCodexSmoke(t *testing.T) {
 // against the real binary (docs/CHAT-STREAM-DESIGN.md §1): a plain reply, a
 // text → `ls` → text turn and an interrupted count, on one Keyed
 // session — same key and text live and stored, store order = stream order,
-// chained TranscriptSince = Transcript, user ids round-tripping through
+// chained TranscriptSince = KeyedTranscript (reasoning summaries as
+// thinking rows), user ids round-tripping through
 // clientUserMessageId. The probe starts its own session with no model or
 // cwd, so the model rides a -c override and the test runs from a scratch
 // repo; the trust is the probe's default (full), and `ls` is all it runs.
 //
 // MADS_CODEX_SMOKE=1 go test -run SmokeStableKeys ./providers/codexcli/ -v
+// (MADS_CODEX_SMOKE_EFFORT=medium for a run more likely to stream reasoning
+// summaries, which the probe then compares as thinking items).
 func TestRealCodexSmokeStableKeys(t *testing.T) {
 	skipUnlessRealCodexSmoke(t)
 	configPath := guardUserConfig(t)
@@ -209,8 +212,12 @@ func TestRealCodexSmokeStableKeys(t *testing.T) {
 		}
 	}
 	t.Chdir(dir)
+	effort := "low" // reasoning summaries are often empty at low
+	if e := os.Getenv("MADS_CODEX_SMOKE_EFFORT"); e != "" {
+		effort = e
+	}
 	p := New(Config{
-		Effort:    "low",
+		Effort:    effort,
 		ExtraArgs: []string{"-c", `model="` + smokeModel + `"`},
 		Env:       smokeCodexHome(t, filepath.Dir(configPath)),
 	})
@@ -235,7 +242,7 @@ func TestRealCodexSmokeStableKeys(t *testing.T) {
 		t.Error("the text-tool-text turn ran no tool, so the probe never saw a tool item")
 	}
 	if tee.ref != "" {
-		if msgs, err := p.Transcript(context.Background(), tee.ref); err == nil {
+		if msgs, err := p.KeyedTranscript(context.Background(), tee.ref); err == nil {
 			var rows []string
 			for _, m := range msgs {
 				rows = append(rows, fmt.Sprintf("%s:%.24s", m.Role, m.Key))

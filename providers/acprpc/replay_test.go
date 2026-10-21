@@ -36,6 +36,7 @@ type transcriptReplay struct {
 	toolUses            int
 	inTokens, outTokens int
 	contextTokens       int
+	thoughts            []string // turn 1's live thinking keys
 }
 
 // TestReplayGooseTranscriptCapture replays the current capture (goose
@@ -48,7 +49,8 @@ func TestReplayGooseTranscriptCapture(t *testing.T) {
 		{capture: "acp-transcript.jsonl", ref: "20261020_3", model: "qwen3.8-coder-nothink",
 			toolUses: 1, inTokens: 6430, outTokens: 11, contextTokens: 6441},
 		{capture: "acp-transcript-1.48.0.jsonl", ref: "20260829_19", model: "qwen3.8",
-			toolUses: 3, inTokens: 8415, outTokens: 21, contextTokens: 8436},
+			toolUses: 3, inTokens: 8415, outTokens: 21, contextTokens: 8436,
+			thoughts: []string{"chatcmpl-846@1788032672:0", "chatcmpl-194@1788032675:0", "chatcmpl-812@1788032677:0", "chatcmpl-773@1788032680:0"}},
 	} {
 		t.Run(tc.capture, func(t *testing.T) { replayTranscript(t, tc) })
 	}
@@ -96,6 +98,22 @@ func replayTranscript(t *testing.T, tc transcriptReplay) {
 	if toolUses != tc.toolUses {
 		t.Fatalf("tool uses = %d, want the capture's %d", toolUses, tc.toolUses)
 	}
+	// Live thought chunks are keyed runs of their message (the first
+	// chunk's created holds), one item per message; nothing empty is keyed.
+	var thoughts []string
+	for _, ev := range events {
+		if ev.Kind == provider.EventThinking {
+			if ev.Text == "" || ev.Key == "" {
+				t.Fatalf("thinking event without text or key: %+v", ev)
+			}
+			if n := len(thoughts); n == 0 || thoughts[n-1] != ev.Key {
+				thoughts = append(thoughts, ev.Key)
+			}
+		}
+	}
+	if got := strings.Join(thoughts, " "); got != strings.Join(tc.thoughts, " ") {
+		t.Fatalf("thinking items %q, want %q", got, tc.thoughts)
+	}
 	end := turnEnd(t, events)
 	if end.Usage == nil || end.Usage.InputTokens != tc.inTokens || end.Usage.OutputTokens != tc.outTokens {
 		t.Fatalf("usage = %+v, want the captured %d/%d", end.Usage, tc.inTokens, tc.outTokens)
@@ -115,6 +133,15 @@ func replayTranscript(t *testing.T, tc transcriptReplay) {
 	events = drainTurn(t, sess)
 	if !turnEnd(t, events).Interrupted {
 		t.Fatal("captured cancel turn not marked interrupted")
+	}
+
+	// The engine's own buffer (the plain transcript kiro and goose's live
+	// fallback serve) never carries thinking.
+	type transcripter interface{ Transcript() []provider.Message }
+	for _, m := range sess.(transcripter).Transcript() {
+		if m.Role == "thinking" {
+			t.Fatalf("session buffer carries thinking: %+v", m)
+		}
 	}
 
 	if err := sess.Close(); err != nil { // matches the captured session/close

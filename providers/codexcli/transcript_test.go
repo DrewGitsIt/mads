@@ -27,7 +27,7 @@ func loadItems(t *testing.T, name string) []itemEntry {
 // result, the web search, and nothing of the interrupted turn's partial
 // story — codex never stored it.
 func TestNormalizeRun1Items(t *testing.T) {
-	msgs := normalizeItems(loadItems(t, "run1-items-list.json"))
+	msgs := normalizeItems(loadItems(t, "run1-items-list.json"), false)
 	var roles []string
 	for _, m := range msgs {
 		roles = append(roles, m.Role)
@@ -67,7 +67,7 @@ func TestNormalizeRun1Items(t *testing.T) {
 // command item is gone from the store; the turn's user message and the
 // commentary before the command remain.
 func TestNormalizeKilledTurn(t *testing.T) {
-	msgs := normalizeItems(loadItems(t, "run3-resume-items-list.json"))
+	msgs := normalizeItems(loadItems(t, "run3-resume-items-list.json"), false)
 	var roles []string
 	for _, m := range msgs {
 		roles = append(roles, m.Role)
@@ -81,7 +81,7 @@ func TestNormalizeKilledTurn(t *testing.T) {
 }
 
 func TestNormalizeInProgressToolHasNoResult(t *testing.T) {
-	msgs := normalizeItems([]itemEntry{{Item: threadItem{Type: "commandExecution", ID: "exec-1", Status: "inProgress", Command: "sleep 9"}}})
+	msgs := normalizeItems([]itemEntry{{Item: threadItem{Type: "commandExecution", ID: "exec-1", Status: "inProgress", Command: "sleep 9"}}}, false)
 	if len(msgs) != 1 || msgs[0].Role != "tool" {
 		t.Fatalf("msgs = %+v", msgs)
 	}

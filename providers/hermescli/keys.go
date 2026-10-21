@@ -59,8 +59,11 @@ type liveTurn struct {
 	user  int    // the turn's user row, as an index among the stored user rows; -1 unknown
 	sent  string // the text mads sent
 	texts []string
-	tools []string
-	open  bool
+	// thoughts: the turn's live thinking items, in order (agent_thought_chunk
+	// runs, keyed like text: the model call's "<messageId>:<run>").
+	thoughts []string
+	tools    []string
+	open     bool
 }
 
 func (l *ledger) begin(user int, sent string) {
@@ -93,6 +96,14 @@ func (l *ledger) text(key string) {
 	}
 }
 
+func (l *ledger) thinking(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if t := l.current(); t != nil && key != "" && (len(t.thoughts) == 0 || t.thoughts[len(t.thoughts)-1] != key) {
+		t.thoughts = append(t.thoughts, key)
+	}
+}
+
 func (l *ledger) tool(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -117,6 +128,7 @@ func (l *ledger) snapshot() []liveTurn {
 	for i, t := range l.turns {
 		out[i] = *t
 		out[i].texts = append([]string(nil), t.texts...)
+		out[i].thoughts = append([]string(nil), t.thoughts...)
 		out[i].tools = append([]string(nil), t.tools...)
 	}
 	return out
@@ -156,12 +168,17 @@ func (ls *liveSessions) get(ref string) *ledger {
 }
 
 // aliases is the position match for one read: live keys by message_uid
-// (text rows) and by stored call id (tool calls and their results), and
-// hold, the index of the first row an incremental read must not serve yet.
+// (text rows, and thinking: the rows' reasoning) and by stored call id
+// (tool calls and their results), and hold, the index of the first row an
+// incremental read must not serve yet. thinking says the read is the keyed
+// form (KeyedTranscript, TranscriptSince): only then are reasoning columns
+// rows, matched and held like the rest; plain Transcript ignores them.
 type aliases struct {
-	text map[string]string
-	tool map[string]string
-	hold int
+	text     map[string]string
+	thought  map[string]string
+	tool     map[string]string
+	hold     int
+	thinking bool
 }
 
 // userRows are the indices of the display rows that are user messages —
@@ -177,9 +194,15 @@ func userRows(rows []storedRow) []int {
 	return idx
 }
 
-// match computes the aliases of rows against a ledger's turns (nil: none).
-func match(rows []storedRow, turns []liveTurn) aliases {
-	al := aliases{text: map[string]string{}, tool: map[string]string{}, hold: len(rows)}
+// match computes the aliases of rows against a ledger's turns (nil: none),
+// for plain Transcript.
+func match(rows []storedRow, turns []liveTurn) aliases { return matchWith(rows, turns, false) }
+
+// matchWith is match, matching each turn's stored reasoning to its live
+// thinking items too (the k-th assistant row with reasoning is the k-th
+// live thinking item) when thinking is set.
+func matchWith(rows []storedRow, turns []liveTurn, thinking bool) aliases {
+	al := aliases{text: map[string]string{}, thought: map[string]string{}, tool: map[string]string{}, hold: len(rows), thinking: thinking}
 	users := userRows(rows)
 	for _, t := range turns {
 		if t.user < 0 || t.user >= len(users) {
@@ -193,7 +216,7 @@ func match(rows []storedRow, turns []liveTurn) aliases {
 		if t.user+1 < len(users) {
 			end = users[t.user+1]
 		}
-		ti, tj := 0, 0
+		ti, tj, th := 0, 0, 0
 		for k := ui + 1; k < end; k++ {
 			r := rows[k]
 			text := decodeContent(r.content)
@@ -201,6 +224,14 @@ func match(rows []storedRow, turns []liveTurn) aliases {
 				continue
 			}
 			unmatched := false
+			if thinking && r.thinking() != "" {
+				if th < len(t.thoughts) {
+					al.thought[r.uid] = t.thoughts[th]
+					th++
+				} else {
+					unmatched = true
+				}
+			}
 			if text != "" {
 				if ti < len(t.texts) {
 					al.text[r.uid] = t.texts[ti]
@@ -225,13 +256,14 @@ func match(rows []storedRow, turns []liveTurn) aliases {
 	return al
 }
 
-// aliasesFor is the match against ref's live child, if it has one.
-func (p *Provider) aliasesFor(ref string, rows []storedRow) aliases {
+// aliasesFor is the match against ref's live child, if it has one;
+// thinking for the keyed form.
+func (p *Provider) aliasesFor(ref string, rows []storedRow, thinking bool) aliases {
 	var turns []liveTurn
 	if l := p.live.get(ref); l != nil {
 		turns = l.snapshot()
 	}
-	return match(rows, turns)
+	return matchWith(rows, turns, thinking)
 }
 
 // storedUserRows counts ref's stored user rows: the index the next prompt's
@@ -286,7 +318,7 @@ func (p *Provider) lookupToolResult(ctx context.Context, ref, liveKey string) (s
 	if err != nil {
 		return "", false
 	}
-	al := p.aliasesFor(ref, rows)
+	al := p.aliasesFor(ref, rows, false)
 	for _, r := range rows {
 		if r.role == "tool" && al.tool[r.toolCallID] == liveKey {
 			return decodeContent(r.content), true

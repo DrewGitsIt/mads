@@ -371,3 +371,60 @@ func TestFullTranscriptHoldsBackTheGap(t *testing.T) {
 		names[id] = m.Key
 	}
 }
+
+// Stored reasoning is a thinking row only in the keyed form: before its
+// row's text, aliased to the live thinking item by position like text (the
+// k-th row with reasoning is the k-th live thinking item), its own
+// "<uid>:thinking" with no live match, and never in plain Transcript, which
+// reads exactly as before. A blank reasoning_content (hermes's " " pad)
+// falls back to reasoning, and a row with neither makes no thinking row.
+func TestThinkingRowsOnlyInTheKeyedForm(t *testing.T) {
+	rows := positionRows()
+	rows[1].reasoningContent = "Plan the calls.\n" // a1: streamed, stored as is
+	rows[4].reasoningContent = " "                 // a2: the pad …
+	rows[4].reasoning = "Then the last one."       // … so reasoning
+	turn := liveTurn{user: 0, sent: "go", texts: []string{"m1:1", "m3:0"}, thoughts: []string{"m1:0", "m2:0"}, tools: []string{"tc-1", "tc-2", "tc-3"}}
+
+	plain := normalizeRows(rows, match(rows, []liveTurn{turn}))
+	for _, m := range plain {
+		if m.Role == "thinking" {
+			t.Fatalf("plain Transcript carries thinking: %+v", m)
+		}
+	}
+	keyed := normalizeRows(rows, matchWith(rows, []liveTurn{turn}, true))
+	var rest []provider.Message
+	var thoughts []string
+	for _, m := range keyed {
+		if m.Role == "thinking" {
+			thoughts = append(thoughts, m.Key+"="+m.Text)
+			continue
+		}
+		rest = append(rest, m)
+	}
+	if got := keysOf(rest); got != keysOf(plain) {
+		t.Errorf("keyed form minus thinking:\n%s\nwant plain:\n%s", got, keysOf(plain))
+	}
+	if got, want := strings.Join(thoughts, "|"), "m1:0=Plan the calls.\n|m2:0=Then the last one."; got != want {
+		t.Errorf("thinking rows %q, want %q", got, want)
+	}
+	if keyed[1].Role != "thinking" || keyed[2].Key != "m1:1" {
+		t.Errorf("thinking doesn't precede its row's text: %s", keysOf(keyed[:3]))
+	}
+
+	// No live child: native keys.
+	native := normalizeRows(rows, matchWith(rows, nil, true))
+	if native[1].Role != "thinking" || native[1].Key != "a1:thinking" {
+		t.Errorf("native thinking key: %+v", native[1])
+	}
+
+	// An open turn whose stored reasoning has no live thinking yet holds the
+	// row back — in the keyed form only; plain reads hold as before.
+	open := turn
+	open.open, open.thoughts = true, nil
+	if al := matchWith(rows, []liveTurn{open}, true); al.hold != 1 {
+		t.Errorf("keyed hold = %d, want 1", al.hold)
+	}
+	if al := match(rows, []liveTurn{open}); al.hold != len(rows) {
+		t.Errorf("plain hold = %d, want none", al.hold)
+	}
+}

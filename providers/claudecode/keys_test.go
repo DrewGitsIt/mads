@@ -21,6 +21,8 @@ import (
 //   - intr: an interrupt mid-text; an interrupt mid-tool; a mid-turn send
 //     ("Also say kiwi.", a queued_command); a recall. Every send carries a
 //     stdin uuid aaaaaaaa-0000-4000-8000-00000000000N.
+//   - think: two turns with showThinkingSummaries on, so each message
+//     opens with a thinking block with text (live and stored).
 //   - kill1 (JSONL only): a process killed mid-text and resumed, which
 //     writes the synthetic "No response requested.".
 
@@ -61,7 +63,7 @@ func storedRows(t *testing.T, run string) []provider.Message {
 		t.Fatal(err)
 	}
 	defer func() { _ = f.Close() }()
-	msgs, err := normalizeTranscript(f)
+	msgs, err := normalizeKeyed(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,14 +122,14 @@ func liveItems(t *testing.T, evs []provider.Event) []keyedItem {
 // streamed, and both list them in the same order. The interrupted text
 // (intr's first turn) may be cut at a different point on each side.
 func TestCapturedKeysLiveEqualStored(t *testing.T) {
-	for _, run := range []string{"main", "intr"} {
+	for _, run := range []string{"main", "intr", "think"} {
 		t.Run(run, func(t *testing.T) {
 			live := liveItems(t, replayKeyed(t, run, false))
 			stored := map[string]provider.Message{}
 			var storedOrder []string
 			for _, m := range storedRows(t, run) {
 				switch m.Role {
-				case "agent", "tool", "tool_result":
+				case "agent", "thinking", "tool", "tool_result":
 					if m.Key == "" {
 						t.Fatalf("stored %s row without a key: %+v", m.Role, m)
 					}
@@ -136,9 +138,10 @@ func TestCapturedKeysLiveEqualStored(t *testing.T) {
 				}
 			}
 			var liveOrder []string
+			thinking := 0
 			for _, it := range live {
 				if it.role == "thinking" {
-					continue
+					thinking++
 				}
 				id := it.role + "\x00" + it.key
 				liveOrder = append(liveOrder, id)
@@ -146,6 +149,9 @@ func TestCapturedKeysLiveEqualStored(t *testing.T) {
 				if !ok {
 					t.Errorf("streamed %s %q never stored", it.role, it.key)
 					continue
+				}
+				if it.role == "thinking" && m.Text != it.text {
+					t.Errorf("thinking %q: streamed %.80q, stored %.80q", it.key, it.text, m.Text)
 				}
 				if it.role != "tool" && m.Text != it.text && !strings.HasPrefix(m.Text, it.text) {
 					t.Errorf("%s %q: streamed %.80q, stored %.80q", it.role, it.key, it.text, m.Text)
@@ -156,6 +162,9 @@ func TestCapturedKeysLiveEqualStored(t *testing.T) {
 			}
 			if len(live) < 4 {
 				t.Fatalf("only %d live items: the fixture didn't replay", len(live))
+			}
+			if want := map[string]int{"think": 2}[run]; thinking != want {
+				t.Errorf("%d thinking items, want %d", thinking, want)
 			}
 		})
 	}
@@ -416,13 +425,13 @@ func TestTranscriptSinceChainsToTranscript(t *testing.T) {
 			t.Fatal(err)
 		}
 		read()
-		full, err := p.Transcript(ctx, "ref-1")
+		full, err := p.KeyedTranscript(ctx, "ref-1")
 		if err != nil {
 			t.Fatal(err)
 		}
 		heldBoundary := strings.Contains(ln, `"compact_boundary"`)
 		if got, want := rowIDs(chained), rowIDs(full); got != want && !heldBoundary {
-			t.Fatalf("after line %d chained != Transcript:\n got %s\nwant %s", i, got, want)
+			t.Fatalf("after line %d chained != KeyedTranscript:\n got %s\nwant %s", i, got, want)
 		}
 	}
 	if !strings.Contains(rowIDs(chained), "compact:cb-1:Summary of the story so far.") {
@@ -486,5 +495,58 @@ func TestTranscriptSinceCursorIsAValue(t *testing.T) {
 	}
 	if rowIDs(a) == "" || rowIDs(a) != rowIDs(b) {
 		t.Errorf("two reads from one cursor differ:\n%s\n---\n%s", rowIDs(a), rowIDs(b))
+	}
+}
+
+// Plain Transcript never carries thinking (its consumers are unchanged);
+// KeyedTranscript and TranscriptSince do, and chained reads add up to
+// KeyedTranscript.
+func TestThinkingOnlyOnTheKeyedReaders(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "proj", "ref-t.jsonl")
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	raw, err := os.ReadFile(filepath.Join("testdata", "keys-think.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := New(Config{TranscriptDir: dir, HistoryFile: filepath.Join(dir, "h.jsonl")})
+	ctx := context.Background()
+	plain, err := p.Transcript(ctx, "ref-t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range plain {
+		if m.Role == "thinking" {
+			t.Errorf("plain Transcript carries thinking: %+v", m)
+		}
+	}
+	keyed, err := p.KeyedTranscript(ctx, "ref-t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var withoutThinking []provider.Message
+	thinking := 0
+	for _, m := range keyed {
+		if m.Role == "thinking" {
+			thinking++
+			continue
+		}
+		withoutThinking = append(withoutThinking, m)
+	}
+	if thinking != 2 {
+		t.Errorf("KeyedTranscript: %d thinking rows, want 2", thinking)
+	}
+	if got, want := rowIDs(withoutThinking), rowIDs(plain); got != want {
+		t.Errorf("KeyedTranscript minus thinking != Transcript:\n got %s\nwant %s", got, want)
+	}
+	chained, _, err := p.TranscriptSince(ctx, "ref-t", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := rowIDs(chained), rowIDs(keyed); got != want {
+		t.Errorf("TranscriptSince != KeyedTranscript:\n got %s\nwant %s", got, want)
 	}
 }
