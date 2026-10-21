@@ -122,6 +122,17 @@ user edits mixed in unattributed.
     lines) sit to the right of the bars, not on a line below.
   - Stacked (list above the diff) was rejected: the Folder tree is
     unintelligible in a short, wide list.
+- **Subagent worktrees are left out** *(agreed 2026-10-21, stopgap)*. A
+  harness gives each subagent its own worktree inside the session folder
+  (Claude Code: `.claude/worktrees/<name>/`) and removes it when the
+  subagent finishes. Their edits reach the ledger as the session's own, so
+  live ones double-counted the work, and removed ones read as mass deletions:
+  the only "before" was a mid-session pre-image, because the worktree didn't
+  exist at session start. `pkg/changes/worktrees.go` drops any file under the
+  session folder that's in a known harness worktree location (matched by
+  path, so removed ones count) or a live linked worktree. Nested repos and
+  submodules aren't affected. A note gives the count. The work shows once it
+  lands in the folder. Delegates may later get their own changes view.
 - **Search** *(agreed)*: whole-token matches win (`.ts` matches `foo.ts`, not
   `foo.tsx`; a camelCase hump counts as a word edge). Any partial matches
   hidden that way are counted, with a "show N partial matches" link. When

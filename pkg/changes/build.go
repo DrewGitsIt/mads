@@ -159,6 +159,7 @@ type builder struct {
 	notes     []string
 	repoRoots map[string]bool // every repo root seen, for Git and commits
 	unknownN  int
+	nested    *nestedWorktrees // subagent worktrees under the folder, left out (worktrees.go)
 }
 
 // Build computes the session's ChangeSet against in.Baseline. Failures
@@ -179,6 +180,11 @@ func Build(ctx context.Context, in Inputs) (contracts.ChangeSet, error) {
 		captures:  map[string]shadow.Record{},
 		files:     map[string]*fileBuild{},
 		repoRoots: map[string]bool{},
+		nested:    newNestedWorktrees(folder),
+	}
+	if files, wts := dropNestedWorktrees(b.ledger, b.nested); files > 0 {
+		b.note("%d %s in %d subagent %s not listed; their work shows here once it lands",
+			files, plural(files, "file", "files"), wts, plural(wts, "worktree is", "worktrees are"))
 	}
 	if b.now.IsZero() {
 		b.now = time.Now().UTC()
@@ -250,7 +256,7 @@ func (b *builder) buildFromStart(ctx context.Context, folderRepo string) {
 	if sess.ShadowDir != "" {
 		if recs, err := shadow.ReadIndex(sess.ShadowDir); err == nil {
 			for _, rec := range recs {
-				if rec.Root != "" {
+				if rec.Root != "" && b.nested.rootOf(rec.Root) == "" {
 					candidates[rec.Root] = true
 				}
 			}
@@ -268,7 +274,7 @@ func (b *builder) buildFromStart(ctx context.Context, folderRepo string) {
 		if c.Repo == "" || !filepath.IsAbs(c.Repo) {
 			continue
 		}
-		if r := repoRootOf(shadow.RealPath(c.Repo), b.rootCache); r != "" {
+		if r := repoRootOf(shadow.RealPath(c.Repo), b.rootCache); r != "" && b.nested.rootOf(r) == "" {
 			candidates[r] = true
 		}
 	}
@@ -311,6 +317,9 @@ func (b *builder) buildFromStart(ctx context.Context, folderRepo string) {
 		diffed[root] = gitDir
 		for _, e := range entries {
 			p := filepath.Join(root, filepath.FromSlash(e.Rel))
+			if b.nested.rootOf(p) != "" {
+				continue // a subagent worktree the user's repo doesn't ignore
+			}
 			b.files[p] = &fileBuild{
 				path: p, root: root, change: e.Change,
 				added: e.Added, deleted: e.Deleted, binary: e.Binary,
@@ -496,6 +505,9 @@ func (b *builder) buildFromMergeBase(ctx context.Context, repo string, bl resolv
 	}
 	for _, e := range entries {
 		p := filepath.Join(repo, filepath.FromSlash(e.Rel))
+		if b.nested.rootOf(p) != "" {
+			continue // a subagent worktree the user's repo doesn't ignore
+		}
 		created := false
 		if atStart != nil {
 			created = !atStart[e.Rel]
