@@ -3,6 +3,22 @@ import { render, screen } from "@testing-library/react";
 import { ChatRenderer } from "../ChatRenderer/ChatRenderer";
 import type { TranscriptMessage } from "../../router/types";
 import type { FindRequest, FindStatus } from "./useFind";
+import type { KeyedRow } from "../keyed/conversation";
+
+/** Transcript messages as keyed rows: positional keys, and a tool_result
+ * folded onto its call's row (`tool.result`), as keyPage does. */
+function keyed(ms: TranscriptMessage[]): KeyedRow[] {
+  const out: KeyedRow[] = [];
+  ms.forEach((m, i) => {
+    if (m.role === "tool_result") {
+      const call = out.find((r) => r.role === "tool" && r.tool?.id === m.tool?.id);
+      if (call?.tool) call.tool = { ...call.tool, result: { text: m.text, is_error: m.is_error, timestamp: m.timestamp } };
+      return;
+    }
+    out.push({ ...m, key: m.key ?? `r${i}` });
+  });
+  return out;
+}
 
 const messages: TranscriptMessage[] = [
   { role: "user", text: "make a worktree for this", timestamp: "2026-10-12T10:00:00Z" },
@@ -18,16 +34,16 @@ const messages: TranscriptMessage[] = [
 function setup(msgs: TranscriptMessage[], find: Partial<FindRequest>) {
   const onStatus = vi.fn<(s: FindStatus) => void>();
   let req: FindRequest = { query: "", matchCase: false, skipTools: false, step: 0, dir: 1, ...find };
-  const view = render(<ChatRenderer messages={msgs} find={req} onFindStatus={onStatus} />);
+  const view = render(<ChatRenderer rows={keyed(msgs)} find={req} onFindStatus={onStatus} />);
   return {
     status: () => onStatus.mock.calls.at(-1)?.[0],
     step(dir: 1 | -1 = 1) {
       req = { ...req, step: req.step + 1, dir };
-      view.rerender(<ChatRenderer messages={msgs} find={req} onFindStatus={onStatus} />);
+      view.rerender(<ChatRenderer rows={keyed(msgs)} find={req} onFindStatus={onStatus} />);
     },
     set(next: Partial<FindRequest>) {
       req = { ...req, ...next };
-      view.rerender(<ChatRenderer messages={msgs} find={req} onFindStatus={onStatus} />);
+      view.rerender(<ChatRenderer rows={keyed(msgs)} find={req} onFindStatus={onStatus} />);
     },
   };
 }

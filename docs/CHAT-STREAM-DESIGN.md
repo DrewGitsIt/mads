@@ -82,10 +82,20 @@ below; the design must hold for all four columns.
 | User message id round-trips | yes (stdin `uuid`) | yes (`clientUserMessageId`) | no (text identical) | no (whitespace stripped; rewritten after a cancel) |
 | Mid-turn send | `queued_command` attachment, written at the next tool result | `turn/steer` | queued by mads | queued prompt, echoed when drained |
 | Live ≠ stored text | — | — | — | leading `"\n\n"` live after a tool |
+| Stored tool kind and title (`stored_tool_display`) | native | native | native: rebuilt from the stored name, args and extension by goose's own title rule | kind only (ported kind map); hermes stores no title |
+| Stored thinking (`stored_thinking`) | native: thinking blocks in the JSONL | native: reasoning summaries | unsupported: stored, but moved onto tool-call rows under other keys | native: reasoning columns |
 | Live-only / stored-only rows | interrupt markers; "No response requested." after a resume | interrupted partials (live only); injected context (rollout only) | hidden `<turn-context>` row (store only) | `failed_turn` "Your request was not processed." (store only) |
 
 Kiro (ACP) isn't installed; its column is unverified and stays so until a
-binary is available.
+binary is available (no stable keys, no stored thinking).
+
+**Thinking where `stored_thinking` is unsupported** (goose, kiro): the chat
+pane shows it only while it is in the unsettled tail, as `unsaved` items —
+through the turn and the next one for goose; for kiro (unkeyed) until its
+turn ends, when the stored page replaces the live items. mads keeps no copy
+of conversation content, so it is gone after that, as in the agent's own
+UI after a restart. The `session.thinking` events the runner still writes
+are not rendered in the chat (C4 decision, 2026-10-21).
 
 ## Design
 
@@ -237,10 +247,10 @@ thinking-token tick (`thinking` with `thinking_tokens` and no text) and any
 other kind the legacy stream carries, except `pty_output` and `settle`.
 
 **The keyed start option.** Sessions start with `StartOptions.Keyed` (settle
-hints) where the provider's `stable_keys` is `native` (claude, codex, goose,
-fake). Not hermes (`emulated`): under Keyed it swaps tool names and results
-for the stored ones, which the legacy stream would show; it settles at turn
-end and on `/transcript` serves instead, until C4 turns Keyed on for it.
+hints) where the provider's `stable_keys` works: claude, codex, goose and the
+fake (`native`), and hermes (`emulated`; since C4a). Under Keyed hermes
+streams tool names and results as it stores them, so the live and stored
+items are identical; the legacy stream shows that too.
 
 ### 3. The unsettled tail (session service, memory only)
 
@@ -275,10 +285,10 @@ the agent's store doesn't have yet**.
   own UI.
 - **Thinking** settles by key like any item, against the keyed store read
   (`provider.KeyedTranscriptReader`: Role `thinking` rows, where the
-  provider's `stored_thinking` is native). `session.thinking` events stay as
-  today, as the record only where `stored_thinking` is unsupported; nothing
-  settles against them, and they carry no keys — mads's event log is not a
-  second copy of the conversation.
+  provider's `stored_thinking` is native). `session.thinking` events are
+  still written, but nothing settles against them, they carry no keys and
+  the chat pane doesn't render them (C4): mads's event log is not a second
+  copy of the conversation.
 - **Tool-result bodies** are kept as a 2 KB preview in the tail; the live frame
   carries the full text as today, and the stored row has it once settled.
 - **ACP.** acprpc's in-memory buffer stops being the transcript; it supplies
@@ -293,6 +303,10 @@ the agent's store doesn't have yet**.
   it (claude JSONL with summaries on, codex reasoning summaries, goose,
   hermes) and is placed by key; `session.thinking` events stay only as the
   fallback for agents that don't store it.
+- A stored tool row carries the display `kind` and `title` its live call
+  did where the provider declares `stored_tool_display` (the stable_keys
+  probe holds it to that). Where a stored row lacks them, the chat keeps
+  what it showed live for rows it streamed, with a dev-console warning.
 - Stored-only rows (goose's hidden context row, codex's injected context) are
   filtered by the adapter; stored-only rows the agent shows its own user
   (hermes `failed_turn`) come through as `notice` rows.
@@ -393,8 +407,17 @@ Accepted as they stand (C2 review, 2026-10-21), for C4 to build around:
   `hello.queued` is only the snapshot at connect.
 - A send that failed (the HTTP caller got the error) is reported as
   `unsaved` for its `user_message` keys: drop the bubble.
-- hermes runs without `StartOptions.Keyed` until C4 (no settle hints; it
-  settles at turn end and on `/transcript` reads).
+- hermes ran without `StartOptions.Keyed` until C4a, which turned it on.
+
+Accepted in the C4 review (2026-10-21), follow-up:
+
+- hermes stored tool rows carry the kind but no title (`stored_tool_display`
+  unsupported): hermes builds titles in Python and stores none. A reloaded
+  hermes history shows the UI's own tool summary; rows the tab streamed keep
+  the live title (with a dev-console warning). Follow-up if reloaded titles
+  matter: ask hermes's own Python (`acp_adapter.tools.build_tool_title`) for
+  them from the reader — exact and version-matched, but it has to locate
+  hermes's installed runtime.
 
 Consequences:
 

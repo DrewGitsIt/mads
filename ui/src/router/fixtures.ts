@@ -67,6 +67,7 @@ import type {
   TemplateValidationResult,
   ToolDiff,
   TranscriptMessage,
+  TranscriptPage,
   UndoCommitResult,
   UpdateCheckResult,
   VersionInfo,
@@ -601,13 +602,23 @@ export class FakeSessionEventSource implements SessionEventSource {
     this.listeners.get(type)?.delete(listener);
   }
 
-  close(): void {}
+  close(): void {
+    this.closed = true;
+  }
 
   /** Test-only: simulate one normalized StreamEvent (providers/provider/event.go), SSE-encoded with event: <kind>. */
   emit(event: StreamEvent): void {
     const data = { data: JSON.stringify(event) } as MessageEvent<string>;
     this.listeners.get(event.kind)?.forEach((listener) => listener(data));
   }
+
+  /** Test-only: one `/output?v=2` frame (`event: <kind>`, `id:` when given). */
+  emitFrame(kind: string, data: Record<string, unknown> = {}, id?: string): void {
+    const ev = { data: JSON.stringify({ kind, ...data }), lastEventId: id ?? "" } as MessageEvent<string>;
+    this.listeners.get(kind)?.forEach((listener) => listener(ev));
+  }
+
+  closed = false;
 
   /** Test-only: simulate the browser's native EventSource reconnecting after
    * a mid-stream drop — a plain (non-StreamEvent) "open" DOM event, distinct
@@ -1012,7 +1023,7 @@ export class FakeRouterClient implements RouterClient {
 
   constructor(
     sessions: Record<string, Session> = fixtureSessions,
-    private readonly transcripts = fixtureTranscripts,
+    readonly transcripts = fixtureTranscripts,
     private readonly mentionables = fixtureMentionables,
     private readonly capabilities = fixtureCapabilities,
     tasks: Task[] = fixtureTasks,
@@ -1042,9 +1053,33 @@ export class FakeRouterClient implements RouterClient {
     return this.transcripts[sessionId] ?? [];
   }
 
+  /** Every getTranscriptPage call, in order. */
+  readonly transcriptPageCalls: { sessionId: string; before?: string; limit: number }[] = [];
+
+  async getTranscriptPage(sessionId: string, page: { before?: string; limit: number }): Promise<TranscriptPage> {
+    this.transcriptPageCalls.push({ sessionId, ...page });
+    const all = this.transcripts[sessionId] ?? [];
+    let end = all.length;
+    if (page.before !== undefined) {
+      end = all.findIndex((m) => m.key === page.before);
+      if (end < 0) throw new Error(`fixture transcript: unknown key ${page.before}`);
+    }
+    const start = Math.max(0, end - page.limit);
+    return { rows: all.slice(start, end), has_more: start > 0 };
+  }
+
   streamSession(): SessionEventSource {
     const source = new FakeSessionEventSource();
     this.sessionEventSources.push(source);
+    return source;
+  }
+
+  /** Every streamSessionV2 source, with the cursor it was opened with. */
+  readonly v2Sources: { source: FakeSessionEventSource; after?: string }[] = [];
+
+  streamSessionV2(_sessionId: string, after?: string): SessionEventSource {
+    const source = new FakeSessionEventSource();
+    this.v2Sources.push({ source, after });
     return source;
   }
 

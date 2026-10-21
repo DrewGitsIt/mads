@@ -177,6 +177,13 @@ export interface BootTopologyOptions {
    * get the fake's instant built-in reply.
    */
   pipelineScenario?: string;
+  /**
+   * Scenario YAML for the fake provider in every session child the Router
+   * spawns (services/session -fake-scenario). Rules key on prompts, so one
+   * suite-wide scenario scripts every spec's chat turns; unmatched prompts
+   * get the fake's built-in dialect (echo, slow, ...).
+   */
+  sessionScenario?: string;
 }
 
 /** Builds fresh mads/data/router/session binaries into a scratch dir and boots the full topology, mirroring scripts/e2esmoke/main_test.go. */
@@ -224,6 +231,14 @@ export async function bootTopology(opts: BootTopologyOptions): Promise<Topology>
     pipelineCmd += ` -fake-scenario ${scenarioPath}`;
   }
 
+  // Every session child's fake provider follows the suite's chat script.
+  let sessionScenarioArgs = "";
+  if (opts.sessionScenario) {
+    const scenarioPath = path.join(tmpDir, "session-scenario.yaml");
+    writeFileSync(scenarioPath, opts.sessionScenario);
+    sessionScenarioArgs = ` -fake-scenario ${scenarioPath}`;
+  }
+
   const data = await spawnListening("data", [dataBin, "-addr", "127.0.0.1:0", "-data-dir", dataDir], env);
   const dataURL = `http://${data.addr}`;
   await waitHealth(dataURL);
@@ -237,7 +252,7 @@ export async function bootTopology(opts: BootTopologyOptions): Promise<Topology>
       "-data-url",
       dataURL,
       "-session-cmd",
-      `${sessionBin} -data-url ${dataURL}`,
+      `${sessionBin} -data-url ${dataURL}${sessionScenarioArgs}`,
       "-pipeline-cmd",
       pipelineCmd,
       "-fastmodel-base-url",

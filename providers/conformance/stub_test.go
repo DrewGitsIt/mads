@@ -37,6 +37,9 @@ type lies struct {
 	settleUnasked   bool // emits EventSettle without StartOptions.Keyed
 	thinkingDropped bool // streams thinking it declares stored, but never stores it
 	thinkingInPlain bool // puts thinking rows in plain Transcript too
+	// toolDisplayDrift: the stored tool call lacks the kind and title it
+	// streamed with, while stored_tool_display is declared.
+	toolDisplayDrift bool
 }
 
 type stub struct {
@@ -377,7 +380,7 @@ func (ss *stubSession) send(_ context.Context, text, id string) error {
 				}
 			}
 			ss.emit(provider.Event{Kind: provider.EventText, Key: first, Text: "Looking. "})
-			ss.emit(provider.Event{Kind: provider.EventToolUse, Key: tool, Tool: &provider.ToolUse{Name: "ls"}})
+			ss.emit(provider.Event{Kind: provider.EventToolUse, Key: tool, Tool: &provider.ToolUse{Name: "ls", Kind: provider.ToolKindExecute, Title: "ls: list files"}})
 			ss.emit(provider.Event{Kind: provider.EventToolResult, Key: tool, Text: "a.txt"})
 			if l.keysInterleave {
 				ss.emit(provider.Event{Kind: provider.EventText, Key: first, Text: "late "})
@@ -388,7 +391,11 @@ func (ss *stubSession) send(_ context.Context, text, id string) error {
 				storedSecond += "-renamed"
 			}
 			store(provider.Message{Role: "agent", Key: first, Text: "Looking. "})
-			store(provider.Message{Role: "tool", Key: tool, Tool: &provider.ToolUse{Name: "ls"}})
+			stored := &provider.ToolUse{Name: "ls", Kind: provider.ToolKindExecute, Title: "ls: list files"}
+			if ss.p.lies.toolDisplayDrift {
+				stored = &provider.ToolUse{Name: "ls"}
+			}
+			store(provider.Message{Role: "tool", Key: tool, Tool: stored})
 			if !l.keysDropResult {
 				store(provider.Message{Role: "tool_result", Key: tool, Text: "a.txt"})
 			}

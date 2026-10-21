@@ -36,8 +36,9 @@ export interface EntryMatch {
   text: string;
 }
 
-/** Same keys as ActivityGroup's rows. */
+/** Same keys as ActivityGroup's rows: the row's own, in the main conversation. */
 export function entryKey(entry: ActivityEntry, i: number): string {
+  if (entry.key) return entry.key;
   return entry.type === "tool" ? (entry.tool.id ?? `t${i}`) : `th${i}`;
 }
 

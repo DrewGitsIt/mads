@@ -359,8 +359,21 @@ func fgServe() {
 	// (captures/keys run.wire.jsonl): every chunk carries the messageId
 	// and _meta.goose.created, later chunks a second later. It returns the
 	// row goose would store for it.
+	//
+	// MADS_FAKE_GOOSE_THINKING=1 plays a thinking model (the 1.48.0
+	// capture, acp-transcript-1.48.0.jsonl: chatcmpl-773 thinks, then
+	// answers under the same messageId): a thought chunk opens every
+	// message, and the stored row keeps it ahead of the text.
+	thinking := os.Getenv("MADS_FAKE_GOOSE_THINKING") == "1"
 	say := func(chunks ...string) fgRow {
 		msgID, created := nextMessage()
+		var content []map[string]any
+		if thinking {
+			notifyUpdate(map[string]any{"sessionUpdate": "agent_thought_chunk", "messageId": msgID,
+				"content": map[string]any{"type": "text", "text": "Thinking it over."},
+				"_meta":   map[string]any{"goose": map[string]any{"created": created, "messageId": msgID}}})
+			content = append(content, map[string]any{"type": "thinking", "thinking": "Thinking it over.", "signature": ""})
+		}
 		for i, c := range chunks {
 			stamp := created
 			if i > 0 {
@@ -370,7 +383,8 @@ func fgServe() {
 				"content": map[string]any{"type": "text", "text": c},
 				"_meta":   map[string]any{"goose": map[string]any{"created": stamp, "messageId": msgID}}})
 		}
-		return fgRow{id: msgID, role: "assistant", created: created, content: fgText(strings.Join(chunks, "")), meta: fgVisible}
+		content = append(content, fgText(strings.Join(chunks, ""))...)
+		return fgRow{id: msgID, role: "assistant", created: created, content: content, meta: fgVisible}
 	}
 	// lastMsg is the latest message's id and created, which goose puts on
 	// a tool call's _meta (the preceding text's).
@@ -378,11 +392,13 @@ func fgServe() {
 	// toolRows are the rows goose stores for a finished tool call: the
 	// request as an assistant row of its own and the response as a user
 	// row, both msg_<uuid>.
-	toolRows := func(callID, name string, input map[string]any, status, text string) []fgRow {
+	toolRows := func(callID, ext, name string, input map[string]any, status, text string) []fgRow {
 		return []fgRow{
 			{id: "msg_" + fgUUID(), role: "assistant", created: clock, meta: fgVisible, content: []map[string]any{{
 				"type": "toolRequest", "id": callID,
 				"toolCall": map[string]any{"status": "success", "value": map[string]any{"name": name, "arguments": input}},
+				// The extension rides tool_meta (captures/keys run.store.jsonl).
+				"_meta": map[string]any{"goose.toolCall.providerIndex": 0, "goose_extension": ext},
 			}}},
 			{id: "msg_" + fgUUID(), role: "user", created: clock, meta: fgVisible, content: []map[string]any{{
 				"type": "toolResponse", "id": callID,
@@ -480,11 +496,11 @@ func fgServe() {
 		}
 		if allowed {
 			toolDone(callID, "completed", "ran "+a.title)
-			insert(toolRows(callID, a.name, a.input, "completed", "ran "+a.title)...)
+			insert(toolRows(callID, a.ext, a.name, a.input, "completed", "ran "+a.title)...)
 			return "used " + a.title
 		}
 		toolDone(callID, "failed", "The user has declined to run this tool")
-		insert(toolRows(callID, a.name, a.input, "failed", "The user has declined to run this tool")...)
+		insert(toolRows(callID, a.ext, a.name, a.input, "failed", "The user has declined to run this tool")...)
 		return "denied via " + outcome
 	}
 
@@ -687,8 +703,19 @@ func fgServe() {
 						"sequence": 1, "chunks": []map[string]any{{"stream": "stdout", "output": "alpha.txt\n"}}}}}})
 				time.Sleep(50 * time.Millisecond)
 				toolDone(callID, "completed", "alpha.txt\nbeta.txt")
+				tools := toolRows(callID, a.ext, a.name, a.input, "completed", "alpha.txt\nbeta.txt")
+				if thinking {
+					// goose 1.48.0 agents/agent.rs ("Thinking/reasoning belongs
+					// on the tool-call messages"): the model call's thinking
+					// leaves its text row for the tool-call row, which takes the
+					// call's messageId and a later created.
+					tools[0].id = before.id
+					tools[0].created = before.created + 3
+					tools[0].content = append([]map[string]any{before.content[0]}, tools[0].content...)
+					before.content = before.content[1:]
+				}
 				insert(before)
-				insert(toolRows(callID, a.name, a.input, "completed", "alpha.txt\nbeta.txt")...)
+				insert(tools...)
 				insert(say("Two files: ", "alpha.txt and beta.txt."))
 				userHistory = append(userHistory, prompt)
 				endTurn()
@@ -758,7 +785,7 @@ func fgServe() {
 				a := fgAttempts["attempt-shell"]
 				toolCall(callID, a)
 				toolDone(callID, "failed", "boom: exit 1")
-				insert(toolRows(callID, a.name, a.input, "failed", "boom: exit 1")...)
+				insert(toolRows(callID, a.ext, a.name, a.input, "failed", "boom: exit 1")...)
 				reply = "the tool failed"
 			default:
 				if a, ok := fgAttempts[lastWord(prompt)]; ok {

@@ -178,6 +178,21 @@ func TestKeyDerivation(t *testing.T) {
 			want: []string{"thinking=m@100:0", "text=m@100:1", "text=m@100:1"},
 		},
 		{
+			name: "thinking apart: text runs count text only, thinking keyed on its own",
+			cfg:  Config{Keys: KeyStrategy{Mode: KeyModeMessageRun, CreatedNamespace: "goose", ThinkingApart: true}},
+			updates: []map[string]any{
+				chunkU("agent_thought_chunk", "m", 100, "hmm"),
+				chunkU("agent_message_chunk", "m", 101, "Hi"),
+				chunkU("agent_thought_chunk", "m", 102, "and"),
+				chunkU("agent_message_chunk", "m", 103, "more"),
+				tool,
+				chunkU("agent_thought_chunk", "n", 104, "so"),
+				chunkU("agent_message_chunk", "n", 105, "done"),
+			},
+			want: []string{"thinking=m@100:thinking:0", "text=m@100:0", "thinking=m@100:thinking:1", "text=m@100:1",
+				"tool_use=call_1", "thinking=n@104:thinking:0", "text=n@104:0"},
+		},
+		{
 			name: "a colliding id after a tool is a new message, told apart by created",
 			cfg:  goose,
 			updates: []map[string]any{

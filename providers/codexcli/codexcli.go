@@ -160,7 +160,8 @@ func (p *Provider) Matrix() provider.Matrix {
 		// item id, the text the live EventThinking carries at item
 		// completion; KeyedTranscript returns them. An empty summary is
 		// neither streamed nor a row.
-		provider.BehaviorStoredThinking: provider.Native,
+		provider.BehaviorStoredThinking:    provider.Native,
+		provider.BehaviorStoredToolDisplay: provider.Native,
 	}
 }
 

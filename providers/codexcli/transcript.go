@@ -273,6 +273,9 @@ type itemsPage struct {
 func listPage(ctx context.Context, c *conn, params map[string]any) (itemsPage, error) {
 	var res itemsPage
 	raw, err := c.request(ctx, "thread/items/list", params)
+	if notStoredYet(err) {
+		return res, nil
+	}
 	if err != nil {
 		return res, fmt.Errorf("thread/items/list: %w", err)
 	}
@@ -280,6 +283,16 @@ func listPage(ctx context.Context, c *conn, params map[string]any) (itemsPage, e
 		return res, fmt.Errorf("thread/items/list: %w", err)
 	}
 	return res, nil
+}
+
+// notStoredYet: codex 0.154 answers thread/items/list for a thread its
+// local thread store doesn't have — a new thread before its first turn is
+// written, as well as an unknown id — with -32601 and this exact message
+// (probed 2026-10-21 against a fresh thread/start). Nothing is stored yet:
+// an empty page, not an error.
+func notStoredYet(err error) bool {
+	var re *rpcError
+	return errors.As(err, &re) && re.Code == errMethodNotFound && re.Message == "thread/items/list is not supported yet"
 }
 
 // listItemsFrom lists ascending from cursor to the end of the thread.

@@ -646,7 +646,8 @@ export interface InboundSource {
 
 // mirrors providers/provider/event.go Message (TranscriptReader shape)
 export interface TranscriptMessage {
-  role: "user" | "agent" | "tool" | "tool_result" | "compact" | "notification" | "inbound";
+  // "thinking": stored thinking, from the keyed /transcript?v=2 only
+  role: "user" | "agent" | "tool" | "tool_result" | "compact" | "notification" | "inbound" | "thinking";
   // on role "compact", the summary the agent carried forward; on role
   // "notification" (a background task finished — the harness telling the
   // agent, not the human speaking), the harness's one-line summary
@@ -662,6 +663,13 @@ export interface TranscriptMessage {
   key?: string;
   /** A synthetic row the agent itself wrote (an interrupt marker, a failed turn); role is unchanged. */
   notice?: boolean;
+}
+
+// mirrors pkg/contracts/transcript.go TranscriptPage: one page of the keyed
+// transcript; rows[0].key is the next page's `before`.
+export interface TranscriptPage {
+  rows: TranscriptMessage[];
+  has_more: boolean;
 }
 
 // mirrors pkg/contracts/transcript.go CompactMarker. Zero/absent fields mean

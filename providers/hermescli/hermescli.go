@@ -264,7 +264,8 @@ func (p *Provider) Matrix() provider.Matrix {
 		// call's messageId; KeyedTranscript returns it, aliased to the live
 		// key by position like text (keys.go). No survey model emitted
 		// reasoning: proven on the stand-in, from hermes's source.
-		provider.BehaviorStoredThinking: provider.Native,
+		provider.BehaviorStoredThinking:    provider.Native,
+		provider.BehaviorStoredToolDisplay: provider.Unsupported,
 		// hermes has session/fork, but mads has no branching surface for
 		// ACP yet; no cwd reroot at all.
 		provider.BehaviorBranching: provider.Unsupported,

@@ -5,8 +5,9 @@ import { formatMessageTime, parseMessageTime } from "./messageTime";
 import styles from "./SendDelivery.module.css";
 
 /**
- * Under a user message the harness failed or that took more than one try
- * (see collapseFailedSends): "Not delivered" with the harness's reason and,
+ * Under a user message that failed (the harness answered with an error, or
+ * the send never reached the agent) or that took more than one try (see
+ * collapseFailedSends): "Not delivered" with the reason and,
  * on the latest message only, Retry; then a quiet count of earlier failed
  * attempts that opens to list each one's reason and time.
  */

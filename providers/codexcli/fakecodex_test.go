@@ -238,8 +238,14 @@ func (srv *fcServer) handle(line []byte) {
 		srv.threadOpen(m.ID, m.Method, p, str)
 	case "thread/items/list":
 		th := srv.load(str("threadId"))
-		if th == nil {
-			srv.fail(m.ID, -32600, "no rollout found for thread id "+str("threadId"))
+		srv.mu.Lock()
+		stored := th != nil && len(th.Items) > 0
+		srv.mu.Unlock()
+		if !stored {
+			// codex 0.154.0's answer for a thread its local store doesn't
+			// have — a new thread before its first turn, or an unknown id
+			// (probed 2026-10-21 against a real thread/start).
+			srv.fail(m.ID, -32601, "thread/items/list is not supported yet")
 			return
 		}
 		limit := 100

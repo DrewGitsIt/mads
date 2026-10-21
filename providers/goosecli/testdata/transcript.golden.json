@@ -12,7 +12,9 @@
       "name": "todo__todo_write",
       "input": {
         "content": "- [x] Create /tmp/mads-goose-capture-oneshot/x.txt containing \"hello\"\n- [ ] Confirm completion to user"
-      }
+      },
+      "kind": "think",
+      "title": "todo: todo write"
     },
     "timestamp": "2026-10-20T17:18:29Z",
     "key": "call_ocrbmvgk"
@@ -34,7 +36,9 @@
       "name": "shell",
       "input": {
         "command": "mkdir -p /tmp/mads-goose-capture-oneshot \u0026\u0026 echo -n hello \u003e /tmp/mads-goose-capture-oneshot/x.txt \u0026\u0026 cat /tmp/mads-goose-capture-oneshot/x.txt"
-      }
+      },
+      "kind": "execute",
+      "title": "shell · mkdir -p /tmp/mads-goose-capture-oneshot \u0026\u0026 echo -n he...…"
     },
     "timestamp": "2026-10-20T17:18:32Z",
     "key": "call_wo26aqor"
@@ -56,7 +60,9 @@
       "name": "todo__todo_write",
       "input": {
         "content": "- [x] Create /tmp/mads-goose-capture-oneshot/x.txt containing \"hello\"\n- [x] Confirm completion to user"
-      }
+      },
+      "kind": "think",
+      "title": "todo: todo write"
     },
     "timestamp": "2026-10-20T17:18:34Z",
     "key": "call_bi65iiph"

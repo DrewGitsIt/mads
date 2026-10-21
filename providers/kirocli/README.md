@@ -180,6 +180,12 @@ capture has something to confirm or refute
   position match.
 - **Settle hints**: none until the store's write timing is known.
 
+**Stored thinking: unsupported** (and unverified, like the rest). The chat
+pane shows kiro's live thinking only until its turn ends: an unkeyed
+session's live items are replaced by the stored page at every turn end,
+and the `session.thinking` events the runner writes aren't rendered in the
+chat (docs/CHAT-STREAM-DESIGN.md, "What the providers actually do").
+
 To flip the row: capture a live `kiro-cli acp` run (text, tool, text; an
 interrupt) together with whatever kiro persists for it, compare ids, then
 set `Keys`/`Settle` in `engineConfig` and declare Native or Emulated with

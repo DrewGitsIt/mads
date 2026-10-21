@@ -226,6 +226,12 @@ type KeyStrategy struct {
 	// real store, survey main-store-msgid-collisions.txt), so the id alone
 	// isn't unique. Empty: the messageId alone (hermes's are UUID4s).
 	CreatedNamespace string
+	// ThinkingApart, for KeyModeMessageRun, numbers a message's text runs
+	// and thinking runs separately: text "<id>:<n>" for its n-th text run,
+	// thinking "<id>:thinking:<n>". For an agent whose store can move
+	// thinking off the text's row (goose puts a model call's thinking on
+	// its tool-call messages), so text keys can't count thinking.
+	ThinkingApart bool
 }
 
 // SettlePoints are the wire events after which the engine emits

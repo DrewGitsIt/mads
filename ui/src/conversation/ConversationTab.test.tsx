@@ -8,6 +8,7 @@ import { resetProviderModelCache } from "../router/useProviderModels";
 import { resetProviderInfoCache } from "../router/useProviderInfos";
 import { FakeRouterClient, fixtureSessions } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
+import { frames, page } from "./keyed/testFrames";
 import { requestStreamReattach } from "./streamReattachSignal";
 import { TransportSwitchError, SessionWakeError } from "../router/client";
 import { FLAGS } from "../featureFlags";
@@ -624,7 +625,7 @@ describe("ConversationTab", () => {
       workspace: "mads",
       cwd: "/home/drew/repo/mads",
     });
-    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
+    vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
     const { host } = installShellHost();
     render(<ConversationTab sessionId="session-cwd" routerClient={client} />);
 
@@ -651,7 +652,7 @@ describe("ConversationTab", () => {
       name: "No workspace session",
       activity: "active",
     });
-    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
+    vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
     const { host } = installShellHost();
     render(<ConversationTab sessionId="session-no-workspace" routerClient={client} />);
 
@@ -675,9 +676,9 @@ describe("ConversationTab", () => {
     await waitForDock();
   });
 
-  it("shows an error card when getTranscript rejects", async () => {
+  it("shows an error card when the transcript page rejects", async () => {
     const client = new FakeRouterClient();
-    vi.spyOn(client, "getTranscript").mockRejectedValueOnce(new Error("boom"));
+    vi.spyOn(client, "getTranscriptPage").mockRejectedValueOnce(new Error("boom"));
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
     await waitFor(() => expect(screen.getByText(/couldn't load/i)).toBeTruthy());
@@ -694,7 +695,7 @@ describe("ConversationTab", () => {
 
   it("shows an empty-state note when the transcript is empty, with the composer still usable", async () => {
     const client = new FakeRouterClient();
-    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
+    vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
     await waitFor(() => expect(screen.getByText("No conversation yet")).toBeTruthy());
@@ -734,7 +735,7 @@ describe("ConversationTab", () => {
   it("auto-sends pendingFirstMessage through the composer and shows it as the first message", async () => {
     const client = new FakeRouterClient();
     const sendMessage = vi.spyOn(client, "sendMessage");
-    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
+    vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
     render(
       <ConversationTab
         sessionId="session-active"
@@ -750,13 +751,15 @@ describe("ConversationTab", () => {
         queue: true,
       }),
     );
+    // The bubble is the send's user_message frame.
+    act(() => void frames(client).user("fix the deploy script"));
     await waitFor(() => expect(screen.getByText("fix the deploy script")).toBeTruthy());
   });
 
   it("opens with the composer pre-filled and a toast when the auto-sent first message fails", async () => {
     const client = new FakeRouterClient();
     vi.spyOn(client, "sendMessage").mockRejectedValue(new Error("network down"));
-    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
+    vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
     render(
       <ConversationTab
         sessionId="session-active"
@@ -802,13 +805,16 @@ describe("ConversationTab", () => {
       vi.fn().mockResolvedValue(new Response(JSON.stringify([link]), { status: 200 })),
     );
     const client = new FakeRouterClient();
-    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([
-      {
-        role: "user",
-        text: "kick off the payments refactor",
-        attribution: { source_name: "Leader Session", kind: "message", relation: "your leader" },
-      },
-    ]);
+    vi.spyOn(client, "getTranscriptPage").mockResolvedValueOnce(
+      page([
+        {
+          role: "user",
+          key: "u1",
+          text: "kick off the payments refactor",
+          attribution: { source_name: "Leader Session", kind: "message", relation: "your leader" },
+        },
+      ]),
+    );
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
     await waitFor(() => expect(screen.getByText(/⇄ from your leader · Leader Session/)).toBeTruthy());
@@ -831,7 +837,7 @@ describe("ConversationTab", () => {
       vi.fn().mockResolvedValue(new Response(JSON.stringify([link]), { status: 200 })),
     );
     const client = new FakeRouterClient();
-    vi.spyOn(client, "getTranscript").mockResolvedValue([]);
+    vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
     const getSession = client.getSession.bind(client);
     vi.spyOn(client, "getSession").mockImplementation(async (id: string) =>
       id === "leader-session" ? { ...(await getSession("session-active")), id, name: "dns lead" } : getSession(id),
@@ -850,22 +856,19 @@ describe("ConversationTab", () => {
 
   it("renders a reply that arrives long after send, well past the old ~3s bounded-poll window", async () => {
     const client = new FakeRouterClient();
-    vi.spyOn(client, "getTranscript")
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        { role: "user", text: "hello" },
-        { role: "agent", text: "a reply after a long gap" },
-      ]);
+    vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
+    await waitFor(() => expect(client.v2Sources.length).toBeGreaterThan(0));
     await waitFor(() => expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy());
     const textarea = screen.getByPlaceholderText(/message the agent/i);
     fireEvent.change(textarea, { target: { value: "hello" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    const source = frames(client);
+    // The bubble is the send's own user_message frame, not a local copy.
+    act(() => void source.user("hello"));
     await waitFor(() => expect(screen.getByText("hello")).toBeTruthy());
 
-    const source = client.sessionEventSources.at(-1)!;
     // Real (short) delay standing in for "long after send" — the old
     // pollForReply gave up after ~3s (10 x 300ms) of real elapsed time, so a
     // stream chunk that only arrives after the event loop has turned over
@@ -879,14 +882,15 @@ describe("ConversationTab", () => {
     });
 
     expect(screen.getByText("a reply after a long gap")).toBeTruthy();
+    expect(screen.getAllByText("hello")).toHaveLength(1);
   });
 
   it("counts cached tokens in the context meter, not just the uncached delta — and excludes output_tokens", async () => {
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
-    const source = client.sessionEventSources.at(-1)!;
+    await waitFor(() => expect(client.v2Sources.length).toBeGreaterThan(0));
+    const source = frames(client);
 
     act(() => {
       source.emit({
@@ -921,8 +925,8 @@ describe("ConversationTab", () => {
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
-    const source = client.sessionEventSources.at(-1)!;
+    await waitFor(() => expect(client.v2Sources.length).toBeGreaterThan(0));
+    const source = frames(client);
 
     act(() => {
       source.emit({ kind: "turn_end", usage: { input_tokens: 10, output_tokens: 5, context_tokens: 100_000 } });
@@ -940,8 +944,8 @@ describe("ConversationTab", () => {
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
-    const source = client.sessionEventSources.at(-1)!;
+    await waitFor(() => expect(client.v2Sources.length).toBeGreaterThan(0));
+    const source = frames(client);
 
     act(() => {
       source.emit({ kind: "tool_use", tool: { name: "Read" } });
@@ -963,8 +967,8 @@ describe("ConversationTab", () => {
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
-    const source = client.sessionEventSources.at(-1)!;
+    await waitFor(() => expect(client.v2Sources.length).toBeGreaterThan(0));
+    const source = frames(client);
 
     act(() => {
       source.emit({ kind: "tool_use", tool: { id: "toolu_1", name: "Bash" } });
@@ -993,8 +997,8 @@ describe("ConversationTab", () => {
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
-    const source = client.sessionEventSources.at(-1)!;
+    await waitFor(() => expect(client.v2Sources.length).toBeGreaterThan(0));
+    const source = frames(client);
 
     act(() => {
       source.emit({ kind: "tool_use", tool: { id: "toolu_1", name: "Bash" } });
@@ -1024,26 +1028,31 @@ describe("ConversationTab", () => {
     expect(screen.queryByRole("button", { name: /Approval needed/ })).toBeNull();
   });
 
-  it("clears the streamed bubble and replaces it with the persisted transcript on turn_end", async () => {
+  it("hands the streamed reply to its stored row on turn_end, merged by key — no duplicate", async () => {
     const client = new FakeRouterClient();
-    vi.spyOn(client, "getTranscript")
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ role: "agent", text: "the persisted reply" }]);
+    const getPage = vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
-    const source = client.sessionEventSources.at(-1)!;
+    await waitFor(() => expect(client.v2Sources.length).toBeGreaterThan(0));
+    const source = frames(client);
 
+    let key = "";
     act(() => {
-      source.emit({ kind: "text", text: "streaming so far" });
+      key = source.text("the reply");
     });
-    expect(screen.getByText("streaming so far")).toBeTruthy();
+    expect(screen.getByText("the reply")).toBeTruthy();
+    const bubble = screen.getByText("the reply");
 
+    getPage.mockResolvedValue(page([{ role: "agent", key, text: "the reply", timestamp: "2026-10-21T10:00:00Z" }]));
     act(() => {
+      source.settled([key]);
       source.emit({ kind: "turn_end" });
     });
 
-    await waitFor(() => expect(screen.getByText("the persisted reply")).toBeTruthy());
+    await waitFor(() => expect(getPage).toHaveBeenCalledTimes(2));
+    expect(screen.getAllByText("the reply")).toHaveLength(1);
+    // The same element: the stored row took the live one's place, same React key.
+    expect(screen.getByText("the reply")).toBe(bubble);
     expect(screen.queryByRole("status")).toBeNull();
   });
 
@@ -1051,8 +1060,8 @@ describe("ConversationTab", () => {
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
-    const source = client.sessionEventSources.at(-1)!;
+    await waitFor(() => expect(client.v2Sources.length).toBeGreaterThan(0));
+    const source = frames(client);
 
     act(() => {
       source.emit({ kind: "tool_use", tool: { name: "Read" } });
@@ -1072,8 +1081,8 @@ describe("ConversationTab", () => {
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
-    const source = client.sessionEventSources.at(-1)!;
+    await waitFor(() => expect(client.v2Sources.length).toBeGreaterThan(0));
+    const source = frames(client);
 
     // No composer interaction anywhere in this test — the tool_use event is
     // the first thing that's happened to this turn, same as a linked-session
@@ -1085,32 +1094,28 @@ describe("ConversationTab", () => {
     expect(screen.getByRole("status", { name: "Using Grep…" })).toBeTruthy();
   });
 
-  it("calls getTranscript at most twice across a full send→turn_end cycle — no unbounded polling", async () => {
+  it("fetches the last page once at mount and once at turn end across a full send→turn_end cycle — no polling", async () => {
     const client = new FakeRouterClient();
-    const getTranscript = vi
-      .spyOn(client, "getTranscript")
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        { role: "user", text: "hello" },
-        { role: "agent", text: "reply" },
-      ]);
+    const getPage = vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
+    await waitFor(() => expect(client.v2Sources.length).toBeGreaterThan(0));
     await waitFor(() => expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy());
     const textarea = screen.getByPlaceholderText(/message the agent/i);
     fireEvent.change(textarea, { target: { value: "hello" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() => expect(screen.getByText("hello")).toBeTruthy());
 
-    const source = client.sessionEventSources.at(-1)!;
+    const source = frames(client);
     act(() => {
+      source.user("hello");
       source.emit({ kind: "text", text: "reply" });
-      source.emit({ kind: "turn_end" });
     });
-
     await waitFor(() => expect(screen.getByText("reply")).toBeTruthy());
-    expect(getTranscript.mock.calls.length).toBe(2);
+    expect(getPage).toHaveBeenCalledTimes(1);
+    act(() => source.emit({ kind: "turn_end" }));
+
+    await waitFor(() => expect(getPage).toHaveBeenCalledTimes(2));
+    expect(getPage.mock.calls[1]).toEqual(["session-active", { limit: 100 }]);
   });
 
   // Regression for the 89-GETs-in-17ms duplicate-request storm: a burst of
@@ -1181,8 +1186,8 @@ describe("ConversationTab", () => {
     const resolveSpy = vi.spyOn(client, "resolvePermissionRequest");
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
-    const source = client.sessionEventSources.at(-1)!;
+    await waitFor(() => expect(client.v2Sources.length).toBeGreaterThan(0));
+    const source = frames(client);
 
     act(() => {
       source.emit({
@@ -1206,8 +1211,8 @@ describe("ConversationTab", () => {
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
-    const source = client.sessionEventSources.at(-1)!;
+    await waitFor(() => expect(client.v2Sources.length).toBeGreaterThan(0));
+    const source = frames(client);
 
     act(() => {
       source.emit({ kind: "compact", compact: { phase: "start" } });
@@ -1246,7 +1251,7 @@ describe("ConversationTab", () => {
       model: "claude-sonnet-5",
       last_usage: { input_tokens: 100_000, output_tokens: 500 },
     });
-    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
+    vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
     await waitFor(() => expect(rimPct()).toBe("50"));
@@ -1272,7 +1277,7 @@ describe("ConversationTab", () => {
         cache_read_input_tokens: 243_484,
       },
     });
-    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
+    vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
     // The meter's intentional fallback rendering (267,212 aggregate against
@@ -1311,7 +1316,7 @@ describe("ConversationTab", () => {
       model: "claude-sonnet-5",
       last_usage: { input_tokens: 10, output_tokens: 5, context_tokens: 180_000, context_window: 200_000 },
     });
-    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
+    vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
     await waitFor(() => expect(rimPct()).toBe("90"));
@@ -1325,8 +1330,8 @@ describe("ConversationTab", () => {
   it("auto-dismisses a successful compaction banner after a few seconds", async () => {
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
-    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
-    const source = client.sessionEventSources.at(-1)!;
+    await waitFor(() => expect(client.v2Sources.length).toBeGreaterThan(0));
+    const source = frames(client);
 
     // Fake timers only from here — the mount above needs real ones for its
     // async fetches; the dismissal timer is what's under test.
@@ -1348,12 +1353,10 @@ describe("ConversationTab", () => {
 
   it("keeps the working indicator visible for the entire live turn, until turn_end", async () => {
     const client = new FakeRouterClient();
-    const getTranscript = vi
-      .spyOn(client, "getTranscript")
-      .mockResolvedValue([{ role: "user", text: "hi" }]);
+    vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([{ role: "user", key: "u0", text: "hi" }]));
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
     await waitFor(() => expect(screen.getByText("hi")).toBeTruthy());
-    const source = client.sessionEventSources.at(-1)!;
+    const source = frames(client);
 
     // Regression: `working` used to compute false whenever the tail was a
     // finished text run or a completed tool call, blinking the indicator
@@ -1366,17 +1369,11 @@ describe("ConversationTab", () => {
     expect(screen.getByLabelText("Using Read…")).toBeTruthy();
 
     act(() => source.emit({ kind: "tool_result", tool: { id: "wt1", name: "" }, text: "contents" }));
-    expect(screen.getByLabelText("Working…")).toBeTruthy();
+    expect(screen.getByLabelText(/Working…|Read/)).toBeTruthy();
+    expect(screen.getByRole("status")).toBeTruthy();
 
-    getTranscript.mockResolvedValue([
-      { role: "user", text: "hi" },
-      { role: "agent", text: "checking the logs" },
-    ]);
-    await act(async () => {
-      source.emit({ kind: "turn_end" });
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(screen.queryByLabelText("Working…")).toBeNull());
+    act(() => source.emit({ kind: "turn_end" }));
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
   });
 
   it("reconstructs a still-pending permission card from GET /permission-requests on mount, surviving a transcript refetch", async () => {
@@ -1400,16 +1397,16 @@ describe("ConversationTab", () => {
   // concatenated-blob bug: completed paragraphs/tool cards show up without
   // waiting for turn_end.
   describe("live-turn streaming", () => {
-    it("surfaces separate paragraphs and tool cards live before turn_end, with no mid-turn transcript poll", async () => {
+  it("surfaces separate paragraphs and tool cards live before turn_end, with no mid-turn transcript fetch", async () => {
       const client = new FakeRouterClient();
-      const getTranscript = vi
-        .spyOn(client, "getTranscript")
-        .mockResolvedValue([{ role: "user", text: "investigate the bug" }]);
+      const getPage = vi
+        .spyOn(client, "getTranscriptPage")
+        .mockResolvedValue(page([{ role: "user", key: "u0", text: "investigate the bug" }]));
       render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
       await waitFor(() => expect(screen.getByText("investigate the bug")).toBeTruthy());
-      const source = client.sessionEventSources.at(-1)!;
-      const callsAfterLoad = getTranscript.mock.calls.length;
+      const source = frames(client);
+      const callsAfterLoad = getPage.mock.calls.length;
 
       // Built entirely from the live stream: text, then a tool, then more text.
       act(() => {
@@ -1428,17 +1425,17 @@ describe("ConversationTab", () => {
       // ticker names the same current activity.
       expect(screen.getAllByText("a.go").length).toBeGreaterThanOrEqual(1);
       expect(document.querySelectorAll('[class*="prose"]').length).toBeGreaterThanOrEqual(3);
-      // The rubber-band source is gone: no transcript is polled mid-turn.
-      expect(getTranscript.mock.calls.length).toBe(callsAfterLoad);
+      // Nothing is fetched mid-turn: the rows are the stream's.
+      expect(getPage.mock.calls.length).toBe(callsAfterLoad);
     });
 
-    it("appends text tokens smoothly into one paragraph without resetting", async () => {
+  it("appends text tokens smoothly into one paragraph without resetting", async () => {
       const client = new FakeRouterClient();
-      vi.spyOn(client, "getTranscript").mockResolvedValue([{ role: "user", text: "hi" }]);
+      vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([{ role: "user", key: "u0", text: "hi" }]));
       render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
       await waitFor(() => expect(screen.getByText("hi")).toBeTruthy());
-      const source = client.sessionEventSources.at(-1)!;
+      const source = frames(client);
 
       // Token-by-token deltas accumulate into a single growing run — never
       // cleared between chunks.
@@ -1449,34 +1446,33 @@ describe("ConversationTab", () => {
       expect(screen.getByText("Hello, world")).toBeTruthy();
     });
 
-    it("recovers dropped frames by refetching the transcript on reconnect", async () => {
+  it("resumes from the last frame on a reattach, with no transcript refetch and no duplicate", async () => {
       const client = new FakeRouterClient();
-      const getTranscript = vi
-        .spyOn(client, "getTranscript")
-        .mockResolvedValueOnce([{ role: "user", text: "ping" }])
-        .mockResolvedValue([
-          { role: "user", text: "ping" },
-          { role: "agent", text: "done — here is the fix" },
-        ]);
+      const getPage = vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([{ role: "user", key: "u0", text: "ping" }]));
       render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
       await waitFor(() => expect(screen.getByText("ping")).toBeTruthy());
-      const source = client.sessionEventSources.at(-1)!;
-
-      // A turn is live (text streamed), then the stream drops — later frames
-      // are lost, standing in for a throttled/dropped EventSource.
-      act(() => source.emit({ kind: "text", text: "partial before the drop" }));
-      expect(screen.getByText("partial before the drop")).toBeTruthy();
-      const callsBefore = getTranscript.mock.calls.length;
-
-      // Reconnect: the browser's EventSource fires "open"; a live turn triggers
-      // an immediate transcript refetch to recover what the drop missed.
-      await act(async () => {
-        source.emitOpen();
-        await Promise.resolve();
+      const first = frames(client);
+      let key = "";
+      act(() => {
+        key = first.text("partial before the drop");
       });
-      expect(getTranscript.mock.calls.length).toBe(callsBefore + 1);
-      expect(screen.getByText("done — here is the fix")).toBeTruthy();
+      expect(screen.getByText("partial before the drop")).toBeTruthy();
+      const callsBefore = getPage.mock.calls.length;
+
+      // The stream is reopened from its cursor; the child resumes after it.
+      act(() => requestStreamReattach("session-active"));
+      await waitFor(() => expect(client.v2Sources.length).toBe(2));
+      expect(client.v2Sources[1].after).toBe(`e0:2`);
+      const second = frames(client);
+      act(() => {
+        second.hello({ resume: "resumed", turn: { active: true } });
+        second.frame("text_delta", { key, text: " and after it" });
+        second.replayEnd();
+      });
+
+      expect(screen.getByText("partial before the drop and after it")).toBeTruthy();
+      expect(getPage.mock.calls.length).toBe(callsBefore);
     });
 
     it("force-reattaches the stream on a mads:reattach-stream signal for this session, even while the cached record says inactive", async () => {
@@ -1486,72 +1482,56 @@ describe("ConversationTab", () => {
       });
       render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-      await waitFor(() => expect(client.sessionEventSources.length).toBe(1));
+      await waitFor(() => expect(client.v2Sources.length).toBe(1));
 
       // A signal for a different session must be ignored.
       act(() => requestStreamReattach("some-other-session"));
-      expect(client.sessionEventSources.length).toBe(1);
+      expect(client.v2Sources.length).toBe(1);
 
       act(() => requestStreamReattach("session-active"));
-      await waitFor(() => expect(client.sessionEventSources.length).toBe(2));
+      await waitFor(() => expect(client.v2Sources.length).toBe(2));
     });
 
-    it("never polls the transcript while idle", async () => {
+  it("never polls the transcript while idle", async () => {
       const client = new FakeRouterClient();
-      const getTranscript = vi.spyOn(client, "getTranscript");
+      const getPage = vi.spyOn(client, "getTranscriptPage");
       render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
       await waitForDock();
-      const callsAtIdle = getTranscript.mock.calls.length;
+      const callsAtIdle = getPage.mock.calls.length;
 
       vi.useFakeTimers();
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1500 * 4);
       });
-      expect(getTranscript.mock.calls.length).toBe(callsAtIdle);
+      expect(getPage.mock.calls.length).toBe(callsAtIdle);
     });
 
-    it("refetches transcript and session when the tab becomes visible again during a live turn", async () => {
+  it("refetches nothing when the tab becomes visible again during a live turn: the stream is still there", async () => {
       const client = new FakeRouterClient();
-      const getSession = vi.spyOn(client, "getSession");
-      const getTranscript = vi
-        .spyOn(client, "getTranscript")
-        .mockResolvedValueOnce([{ role: "user", text: "ping" }])
-        .mockResolvedValueOnce([
-          { role: "user", text: "ping" },
-          { role: "agent", text: "the reply that arrived while backgrounded" },
-        ]);
+      const getPage = vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([{ role: "user", key: "u0", text: "ping" }]));
       render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
       await waitFor(() => expect(screen.getByText("ping")).toBeTruthy());
-      const source = client.sessionEventSources.at(-1)!;
+      const source = frames(client);
       act(() => {
         source.emit({ kind: "tool_use", tool: { name: "Read" } });
       });
-      getSession.mockClear();
-      const callsBeforeVisible = getTranscript.mock.calls.length;
+      const callsBefore = getPage.mock.calls.length;
 
-      Object.defineProperty(document, "visibilityState", {
-        value: "hidden",
-        configurable: true,
-      });
-      act(() => {
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
-      // Hidden: no refetch fires.
-      expect(getTranscript.mock.calls.length).toBe(callsBeforeVisible);
+      for (const state of ["hidden", "visible"]) {
+        Object.defineProperty(document, "visibilityState", { value: state, configurable: true });
+        await act(async () => {
+          document.dispatchEvent(new Event("visibilitychange"));
+          await Promise.resolve();
+        });
+      }
 
-      Object.defineProperty(document, "visibilityState", {
-        value: "visible",
-        configurable: true,
-      });
-      await act(async () => {
-        document.dispatchEvent(new Event("visibilitychange"));
-        await Promise.resolve();
-      });
-
-      expect(getTranscript.mock.calls.length).toBeGreaterThan(callsBeforeVisible);
-      expect(getSession).toHaveBeenCalled();
+      // What arrived meanwhile comes on the same stream.
+      act(() => source.emit({ kind: "text", text: "the reply that arrived while backgrounded" }));
+      expect(getPage.mock.calls.length).toBe(callsBefore);
+      expect(client.v2Sources).toHaveLength(1);
+      expect(screen.getAllByText("ping")).toHaveLength(1);
       expect(screen.getByText("the reply that arrived while backgrounded")).toBeTruthy();
     });
   });

@@ -49,6 +49,17 @@ func TestConformanceAgainstScriptedBinary(t *testing.T) {
 	conformance.Run(t, conformanceProvider(t), script())
 }
 
+// The stable_keys probe against the stand-in playing a thinking model:
+// every message opens with thinking, and the store moves a tool-calling
+// message's thinking onto its tool-call row (goose 1.48.0), so text keys
+// hold only if neither side counts thinking runs.
+func TestStableKeysThinkingModel(t *testing.T) {
+	res := conformance.CheckStableKeys(context.Background(), testProvider(t, "MADS_FAKE_GOOSE_THINKING=1"), script())
+	if res.Err != nil {
+		t.Fatalf("stable_keys on a thinking model: %v", res.Err)
+	}
+}
+
 func startSession(t *testing.T, p *Provider, opts provider.StartOptions) provider.Session {
 	t.Helper()
 	if opts.Mode == "" {

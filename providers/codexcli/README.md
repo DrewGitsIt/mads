@@ -121,6 +121,12 @@ list has none of that and the same ids the live stream used. It has no
 timestamps, so `Message.Timestamp` stays zero. An interrupted turn's partial
 reply is in neither — codex stores an item only once it completes.
 
+Before a new thread's first turn is written, codex answers
+`thread/items/list` with `-32601 "thread/items/list is not supported yet"`
+— the same answer it gives an unknown thread id: the thread isn't in its
+local store (probed 2026-10-21). The reader takes exactly that answer as
+"nothing stored yet": an empty transcript, no error.
+
 `TranscriptSince` reads incrementally on the live session's app-server only
 (no live session: `ErrUnsupported`; use `Transcript`). Its cursor is the last
 item read plus a codex cursor anchored on it — the `backwardsCursor` of a

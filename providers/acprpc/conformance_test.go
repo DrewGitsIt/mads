@@ -42,6 +42,7 @@ func (p *keyedProvider) Matrix() provider.Matrix {
 		provider.BehaviorTranscript:         provider.Native,
 		provider.BehaviorStableKeys:         provider.Native,
 		provider.BehaviorStoredThinking:     provider.Unsupported,
+		provider.BehaviorStoredToolDisplay:  provider.Unsupported,
 		provider.BehaviorRefAnnounce:        provider.Native,
 		provider.BehaviorMCPServers:         provider.Native,
 		provider.BehaviorOneShot:            provider.Emulated,

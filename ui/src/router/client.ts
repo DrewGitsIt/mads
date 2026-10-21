@@ -66,6 +66,7 @@ import type {
   TemplateValidationResult,
   ToolDiff,
   TranscriptMessage,
+  TranscriptPage,
   UndoCommitResult,
   UpdateCheckResult,
   VersionInfo,
@@ -98,7 +99,20 @@ export interface SessionEventSource {
 export interface RouterClient {
   getSession(id: string): Promise<Session>;
   getTranscript(sessionId: string): Promise<TranscriptMessage[]>;
+  /**
+   * One page of the keyed transcript (`/transcript?v=2`, contracts
+   * TranscriptPage): the `limit` rows before `before` (default: the last
+   * ones). Every row carries `key`; stored thinking comes as role
+   * "thinking" rows. A call and its result are never split across pages.
+   */
+  getTranscriptPage(sessionId: string, page: { before?: string; limit: number }): Promise<TranscriptPage>;
   streamSession(sessionId: string): SessionEventSource;
+  /**
+   * The keyed chat stream (`/output?v=2`, docs/CHAT-STREAM-DESIGN.md §2):
+   * `after` (`<epoch>:<seq>`) resumes after that frame; the browser's own
+   * reconnect sends Last-Event-ID instead.
+   */
+  streamSessionV2(sessionId: string, after?: string): SessionEventSource;
   /**
    * `queue: true` asks the session to hold a message sent mid-turn and
    * deliver it when the turn ends (resolving `{status: "queued"}`) rather
@@ -579,11 +593,22 @@ export class FetchRouterClient implements RouterClient {
     return routerGet(this.baseUrl, `/sessions/${id}`);
   }
 
-  // The whole transcript, as a bare array. The server also pages by key
-  // (?before=&limit=, pkg/contracts TranscriptPage) for the keyed chat
-  // stream to adopt; nothing here asks for a page yet.
+  // The whole transcript, as a bare array (the unkeyed form).
   async getTranscript(sessionId: string): Promise<TranscriptMessage[]> {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/transcript`);
+  }
+
+  async getTranscriptPage(sessionId: string, page: { before?: string; limit: number }): Promise<TranscriptPage> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/transcript`, {
+      v: "2",
+      limit: String(page.limit),
+      before: page.before,
+    });
+  }
+
+  streamSessionV2(sessionId: string, after?: string): SessionEventSource {
+    const q = after ? `&after=${encodeURIComponent(after)}` : "";
+    return new EventSource(`${this.baseUrl}/sessions/${sessionId}/output?v=2${q}`);
   }
 
   // The child's live data-plane event feed (services/session's

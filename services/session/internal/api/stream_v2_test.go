@@ -724,6 +724,7 @@ func TestV2UnkeyedResyncsAtTurnEnd(t *testing.T) {
 		p.matrix[b] = s
 	}
 	p.matrix[provider.BehaviorStableKeys] = provider.Unsupported
+	p.matrix[provider.BehaviorStoredToolDisplay] = provider.Unsupported
 	p.matrix[provider.BehaviorStoredThinking] = provider.Unsupported
 	srv, _ := startRunner(t, p, fastSettle)
 	if p.startOptions().Keyed {
@@ -751,13 +752,13 @@ func TestV2UnkeyedResyncsAtTurnEnd(t *testing.T) {
 	}
 }
 
-// Sessions start Keyed only where the provider's keys are its own; an
-// emulated provider (hermes) stays as it was.
+// Sessions start Keyed wherever stable_keys works, native or emulated
+// (hermes); never where it doesn't (kiro).
 func TestV2KeyedStartOption(t *testing.T) {
 	for _, tc := range []struct {
 		support provider.Support
 		keyed   bool
-	}{{provider.Native, true}, {provider.Emulated, false}, {provider.Unsupported, false}} {
+	}{{provider.Native, true}, {provider.Emulated, true}, {provider.Unsupported, false}} {
 		p := newScriptProvider("scripted", nil)
 		p.matrix = provider.Matrix{}
 		for b, s := range fake.New().Matrix() {
@@ -765,6 +766,7 @@ func TestV2KeyedStartOption(t *testing.T) {
 		}
 		p.matrix[provider.BehaviorStableKeys] = tc.support
 		p.matrix[provider.BehaviorStoredThinking] = provider.Unsupported
+		p.matrix[provider.BehaviorStoredToolDisplay] = provider.Unsupported
 		startRunner(t, p, fastSettle)
 		if got := p.startOptions().Keyed; got != tc.keyed {
 			t.Errorf("stable_keys %s: Keyed = %v, want %v", tc.support, got, tc.keyed)

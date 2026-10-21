@@ -133,7 +133,7 @@ func TestStoreKeysMatchCapture(t *testing.T) {
 }
 
 // ollama's ids repeat within a session; the created stamp keeps the keys
-// apart. A thinking item before the text makes the text run 1, as live.
+// apart. Thinking isn't counted in the text's run, as live.
 func TestStoreKeysCollisionsAndRuns(t *testing.T) {
 	f := newStoreFixture(t, "20261021_1")
 	visible := json.RawMessage(`{"userVisible":true,"agentVisible":true}`)
@@ -147,7 +147,7 @@ func TestStoreKeysCollisionsAndRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "user user:msg_u1|agent chatcmpl-7@101:0|user user:msg_u2|agent chatcmpl-7@111:1"
+	want := "user user:msg_u1|agent chatcmpl-7@101:0|user user:msg_u2|agent chatcmpl-7@111:0"
 	if got := strings.Join(keyed(msgs), "|"); got != want {
 		t.Fatalf("keys %s, want %s", got, want)
 	}

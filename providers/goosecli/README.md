@@ -197,9 +197,18 @@ wire of five turns next to every row goose inserted into its store).
 
 | Item | Key | Why it holds |
 |---|---|---|
-| Assistant text | `<messageId>@<created>:<run>` | Every chunk carries the model call's `messageId` and `_meta.goose.created`; the stored row has the same `message_id` and, as `created_timestamp`, the **first** chunk's `created` (later chunks carry later seconds: `chatcmpl-17` spans 372–375, stored 372). ollama's ids are `chatcmpl-0..999` and repeat within a session (27 repeated pairs in a real store), so `created` is part of the key. `run` is the item's index among the message's text and thinking items (thinking isn't a transcript row, but counts). |
+| Assistant text | `<messageId>@<created>:<run>` | Every chunk carries the model call's `messageId` and `_meta.goose.created`; the stored row has the same `message_id` and, as `created_timestamp`, the **first** chunk's `created` (later chunks carry later seconds: `chatcmpl-17` spans 372–375, stored 372). ollama's ids are `chatcmpl-0..999` and repeat within a session (27 repeated pairs in a real store), so `created` is part of the key. `run` is the item's index among the message's text items; thinking runs are numbered apart (`<messageId>@<created>:thinking:<n>`, acprpc `ThinkingApart`), because the store can move a message's thinking off its text row (below). |
 | Tool call / result | `toolCallId` | Live, a tool call's `_meta` carries the *preceding text's* messageId; stored, the call is a row of its own (`msg_<uuid>`, sometimes a chatcmpl id), so only the call id is the same on both sides. |
 | User message | `user:<stored message id>` | goose doesn't echo the prompt and stores no caller id (no `KeyedSender`), but stores the text byte-identical; the session child matches mads's send to this row on settle. |
+
+**Stored tool display** (`stored_tool_display: native`): goose stores a
+call's name, arguments and extension (`_meta.goose_extension`), not the
+ACP title, so the reader rebuilds both the way the live side got them
+(`tooldisplay.go`): the kind by the engine's own ToolClassTable lookup, the
+title by goose's `default_tool_title`
+(`crates/goose/src/acp/server/tool_calls/conversion.rs`, v1.50.1:
+`shell · ls`, `todo: todo write`). goose only puts an LLM-generated title
+there for a client that asks for label enrichment, which mads doesn't.
 
 **Stored thinking: unsupported.** goose does store thinking (a
 `{"type":"thinking","thinking":…}` block; 1.48.0 replays it on load), but
@@ -214,11 +223,16 @@ new `Message::assistant()` with a later `created` — the 1.48.0 capture's
 the same thinking. So a thinking row would come back under a key nothing
 streamed (and twice for parallel calls); only a reply message's thinking
 (thinking then text, no tools) stays on its own row. The same move strips
-thinking from a text-then-tool message's text row, so with a thinking
-model that text's stored `run` is 0 where live said 1: a stable_keys gap
-for thinking models only (the probe's model, `qwen3.8-coder-nothink`,
-thinks never). Live thinking stays unsaved; `session.thinking` is its
-record.
+thinking from a text-then-tool message's text row, which is why text
+runs don't count thinking on either side: the stable_keys probe against
+the stand-in playing a thinking model (`MADS_FAKE_GOOSE_THINKING=1`,
+`TestStableKeysThinkingModel`) fails when they do. (qwen3.8 on ollama
+can't show it live: goose gets its reasoning inline as text, with a
+literal `</think>`, never as thought chunks.) Live thinking ends
+`unsaved`: the chat pane shows it only while it is in the session's
+unsettled tail (through the next turn), and not after; the
+`session.thinking` events the runner writes aren't rendered in the chat
+(docs/CHAT-STREAM-DESIGN.md, "What the providers actually do").
 
 Filtered: the hidden `<turn-context>` row goose writes after every prompt
 (`userVisible:false`) — as is anything goose marks `userVisible:false`,

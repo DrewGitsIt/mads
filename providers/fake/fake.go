@@ -245,7 +245,8 @@ func (f *Fake) Matrix() provider.Matrix {
 		provider.BehaviorStableKeys: provider.Native,
 		// A rule's Thinking streams keyed and is stored under the same key;
 		// KeyedTranscript returns it, plain Transcript never does.
-		provider.BehaviorStoredThinking: provider.Native,
+		provider.BehaviorStoredThinking:    provider.Native,
+		provider.BehaviorStoredToolDisplay: provider.Native,
 	}
 }
 

@@ -138,6 +138,11 @@ type exportBlock struct {
 			Arguments json.RawMessage `json:"arguments"`
 		} `json:"value"`
 	} `json:"toolCall"`
+	// Meta is a toolRequest's tool_meta: goose_extension names the
+	// extension a bare tool name belongs to.
+	Meta struct {
+		Extension string `json:"goose_extension"`
+	} `json:"_meta"`
 	// ToolResult is a toolResponse's payload: {status, value:{content[],
 	// structuredContent, isError}}.
 	ToolResult *struct {
@@ -160,8 +165,10 @@ type exportBlock struct {
 // Keys (docs/CHAT-STREAM-DESIGN.md §1), equal to the live ones acprpc
 // derives under goose's KeyModeMessageRun knob:
 //   - assistant text: "<message id>@<created>:<run>", run being the item's
-//     index among the message's text and thinking items. created tells
-//     apart ollama's chatcmpl-0..999 ids, which repeat within a session.
+//     index among the message's text items (thinking isn't counted: goose
+//     moves a tool-calling message's thinking onto its tool-call rows, so
+//     the stored text row may not have it). created tells apart ollama's
+//     chatcmpl-0..999 ids, which repeat within a session.
 //   - a tool call and its result: the call id (call_…). Live, a tool call
 //     carries the preceding text's messageId in _meta; stored, it is a row
 //     of its own (msg_<uuid>, sometimes a chatcmpl id), so only the call
@@ -220,15 +227,14 @@ func normalizeExport(conv []exportMessage) []provider.Message {
 						msgs = append(msgs, provider.Message{Role: "agent", Text: b.Text, Timestamp: ts, Key: fmt.Sprintf("%s@%d:%d", id, m.Created, run)})
 					}
 					run++
-				case "thinking":
-					run++ // not a transcript row, but a run of the message
 				case "toolRequest":
 					if b.ToolCall == nil {
 						continue
 					}
+					kind, title := storedToolDisplay(b.ToolCall.Value.Name, b.ToolCall.Value.Arguments, b.Meta.Extension)
 					msgs = append(msgs, provider.Message{
 						Role:      "tool",
-						Tool:      &provider.ToolUse{ID: b.ID, Name: b.ToolCall.Value.Name, Input: b.ToolCall.Value.Arguments},
+						Tool:      &provider.ToolUse{ID: b.ID, Name: b.ToolCall.Value.Name, Input: b.ToolCall.Value.Arguments, Kind: kind, Title: title},
 						Timestamp: ts,
 						Key:       b.ID,
 					})

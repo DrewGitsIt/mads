@@ -1,8 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { ChatRenderer } from "./ChatRenderer";
+import { UNDELIVERED } from "./failedSends";
 import { FLAGS } from "../../featureFlags";
 import type { Link, PermissionRequest, TranscriptMessage } from "../../router/types";
+import type { KeyedRow } from "../keyed/conversation";
+
+/** Transcript messages as keyed rows: positional keys, and a tool_result
+ * folded onto its call's row (`tool.result`), as keyPage does. */
+function keyed(ms: TranscriptMessage[]): KeyedRow[] {
+  const out: KeyedRow[] = [];
+  ms.forEach((m, i) => {
+    if (m.role === "tool_result") {
+      const call = out.find((r) => r.role === "tool" && r.tool?.id === m.tool?.id);
+      if (call?.tool) call.tool = { ...call.tool, result: { text: m.text, is_error: m.is_error, timestamp: m.timestamp } };
+      return;
+    }
+    out.push({ ...m, key: m.key ?? `r${i}` });
+  });
+  return out;
+}
 
 /** useLinkNames for makeLink's lnk_1: its subject is "payments refactor". */
 const paymentsName = (id: string) => (id === "lnk_1" ? "payments refactor" : undefined);
@@ -30,7 +47,7 @@ describe("ChatRenderer", () => {
       { role: "user", text: "hello **there**" },
       { role: "agent", text: "hi back" },
     ];
-    render(<ChatRenderer messages={messages} />);
+    render(<ChatRenderer rows={keyed(messages)} />);
     expect(screen.getByText("there").tagName).toBe("STRONG");
     expect(screen.getByText("hi back")).toBeTruthy();
   });
@@ -42,7 +59,7 @@ describe("ChatRenderer", () => {
       { role: "user", text: "first line\nsecond line" },
       { role: "agent", text: "wrapped\nprose" },
     ];
-    const { container } = render(<ChatRenderer messages={messages} />);
+    const { container } = render(<ChatRenderer rows={keyed(messages)} />);
     const user = container.querySelector("[data-user-msg]")!;
     expect(user.querySelectorAll("br")).toHaveLength(1);
     expect(screen.getByText(/wrapped/).querySelector("br")).toBeNull();
@@ -55,7 +72,7 @@ describe("ChatRenderer", () => {
       "- /Users/me/.mads/attachments/s1/b2/build.log";
     const url = (id: string, variant?: string) =>
       `http://router/sessions/s1/attachments/${id}${variant ? `/${variant}` : ""}`;
-    render(<ChatRenderer messages={[{ role: "user", text }]} attachmentUrl={url} />);
+    render(<ChatRenderer rows={keyed([{ role: "user", text }])} attachmentUrl={url} />);
     expect(screen.getByText("why is this red?")).toBeTruthy();
     expect(screen.queryByText(/Attached files/)).toBeNull();
     const thumb = screen.getByAltText("screenshot.png");
@@ -69,7 +86,7 @@ describe("ChatRenderer", () => {
       "Attached files (open each one with your file-reading tool):\n" +
       "- /h/.mads/attachments/s1/a1/huge.png";
     render(
-      <ChatRenderer messages={[{ role: "user", text }]} attachmentUrl={(id) => `http://r/${id}`} />,
+      <ChatRenderer rows={keyed([{ role: "user", text }])} attachmentUrl={(id) => `http://r/${id}`} />,
     );
     fireEvent.error(screen.getByAltText("huge.png"));
     expect(screen.getByText("huge.png")).toBeTruthy();
@@ -80,7 +97,7 @@ describe("ChatRenderer", () => {
     const messages: TranscriptMessage[] = [
       { role: "tool", tool: { name: "Read", path: "a.go" } },
     ];
-    render(<ChatRenderer messages={messages} />);
+    render(<ChatRenderer rows={keyed(messages)} />);
     const header = screen.getByRole("button", { name: /1 action · 1 read/ });
     expect(header.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByTestId("activity-row")).toBeNull();
@@ -120,7 +137,7 @@ describe("ChatRenderer", () => {
         timestamp: "2026-07-19T10:00:09Z",
       },
     ];
-    render(<ChatRenderer messages={messages} />);
+    render(<ChatRenderer rows={keyed(messages)} />);
 
     // Two activity groups (split by the agent's prose), each carrying its
     // one call's outcome — never a standalone result card.
@@ -145,12 +162,77 @@ describe("ChatRenderer", () => {
       },
     ];
     const { container } = render(
-      <ChatRenderer messages={messages} links={[makeLink({})]} viewedSessionId="subject-id" />,
+      <ChatRenderer rows={keyed(messages)} links={[makeLink({})]} viewedSessionId="subject-id" />,
     );
     expect(screen.queryByText(/Leader Session/)).toBeNull();
     const wrapper = container.querySelector('[class*="stream"]')?.firstElementChild;
     expect(wrapper?.className).toMatch(/_user_/);
     expect(wrapper?.className).not.toMatch(/injected/);
+  });
+
+  it("joins adjacent agent text into one bubble, ended by a tool call", () => {
+    const { container } = render(
+      <ChatRenderer
+        rows={keyed([
+          { role: "agent", text: "first part" },
+          { role: "thinking", text: "" },
+          { role: "agent", text: "second part" },
+          { role: "tool", tool: { id: "t1", name: "Read", path: "a.go" } },
+          { role: "agent", text: "after the call" },
+        ])}
+      />,
+    );
+    // Empty thinking is hidden and doesn't split the bubble.
+    const bubbles = container.querySelectorAll('[class*="_agent_"]');
+    expect(bubbles).toHaveLength(2);
+    expect(bubbles[0].textContent).toContain("first part");
+    expect(bubbles[0].textContent).toContain("second part");
+    expect(screen.getAllByTestId("activity-group")).toHaveLength(1);
+  });
+
+  it("renders stored thinking with text in place, as an activity row", () => {
+    render(
+      <ChatRenderer
+        rows={keyed([
+          { role: "user", text: "why?" },
+          { role: "thinking", text: "weighing the options" },
+          { role: "agent", text: "because" },
+        ])}
+      />,
+    );
+    const group = screen.getByTestId("activity-group");
+    fireEvent.click(within(group).getAllByRole("button")[0]);
+    expect(group.textContent).toContain("weighing the options");
+    expect(group.compareDocumentPosition(screen.getByText("because")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("holds the current turn's activity open while the turn is active, and folds it after", () => {
+    vi.useFakeTimers();
+    const current: KeyedRow[] = [
+      { key: "u1", role: "user", text: "go" },
+      { key: "k1", role: "tool", tool: { id: "t1", name: "Read", path: "a.go" }, current: true, live: true },
+      { key: "k2", role: "agent", text: "reading", current: true, live: true },
+    ];
+    const { rerender } = render(<ChatRenderer rows={current} turnActive />);
+    const header = () => within(screen.getByTestId("activity-group")).getAllByRole("button")[0];
+    expect(header().getAttribute("aria-expanded")).toBe("true");
+    // The stored copy replaces the live row under the same key: same group, now folding.
+    rerender(<ChatRenderer rows={current.map((r) => ({ ...r, live: false }))} />);
+    act(() => {
+      vi.runAllTimers();
+    });
+    expect(header().getAttribute("aria-expanded")).toBe("false");
+    vi.useRealTimers();
+  });
+
+  it("renders an agent-written notice as a quiet system line, not the agent's voice", () => {
+    const { container } = render(
+      <ChatRenderer rows={keyed([{ role: "agent", text: "Interrupted by the user", notice: true }])} />,
+    );
+    const line = screen.getByRole("note");
+    expect(line.textContent).toContain("Interrupted by the user");
+    expect(line.className).toMatch(/notification/);
+    expect(container.querySelector('[class*="_agent_"]')).toBeNull();
   });
 });
 
@@ -163,7 +245,7 @@ describe("ChatRenderer — a notice from mads itself", () => {
         attribution: { source_name: "your pipeline run", kind: "notice", relation: "your pipeline run" },
       },
     ];
-    const { container } = render(<ChatRenderer messages={messages} />);
+    const { container } = render(<ChatRenderer rows={keyed(messages)} />);
     expect(screen.getByText(/from your pipeline run/)).toBeTruthy();
     const wrapper = container.querySelector('[class*="stream"]')?.firstElementChild;
     expect(wrapper?.className).toMatch(/injected/);
@@ -186,7 +268,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
       },
     ];
     const { container } = render(
-      <ChatRenderer messages={messages} links={[makeLink({})]} viewedSessionId="subject-id" />,
+      <ChatRenderer rows={keyed(messages)} links={[makeLink({})]} viewedSessionId="subject-id" />,
     );
     expect(screen.getByText("⇄ from your leader · Leader Session")).toBeTruthy();
     const wrapper = container.querySelector('[class*="stream"]')?.firstElementChild;
@@ -205,7 +287,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     ];
     render(
       <ChatRenderer
-        messages={messages}
+        rows={keyed(messages)}
         links={[makeLink({ cadence: "per_turn" })]}
         viewedSessionId="leader-id"
         linkName={paymentsName}
@@ -227,7 +309,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     ];
     render(
       <ChatRenderer
-        messages={messages}
+        rows={keyed(messages)}
         links={[makeLink({ cadence: "manual_only" })]}
         viewedSessionId="leader-id"
         linkName={paymentsName}
@@ -246,7 +328,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
       },
     ];
     const { container } = render(
-      <ChatRenderer messages={messages} links={[]} viewedSessionId="leader-id" linkName={paymentsName} />,
+      <ChatRenderer rows={keyed(messages)} links={[]} viewedSessionId="leader-id" linkName={paymentsName} />,
     );
     expect(screen.getByText("summary from a session since unlinked")).toBeTruthy();
     expect(container.querySelector('[class*="digestCadence"]')).toBeNull();
@@ -265,7 +347,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     ];
     render(
       <ChatRenderer
-        messages={messages}
+        rows={keyed(messages)}
         links={[makeLink({ id: "lnk_self", granting_session_id: "leader-id", subject_session_id: "leader-id", implicit: true, cadence: "on_signal" })]}
         viewedSessionId="leader-id"
       />,
@@ -283,7 +365,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     });
     render(
       <ChatRenderer
-        messages={[digest("first of the run"), digest("second of the run"), { role: "agent", text: "NOOP" }]}
+        rows={keyed([digest("first of the run"), digest("second of the run"), { role: "agent", text: "NOOP" }])}
         links={[makeLink({})]}
         viewedSessionId="leader-id"
       />,
@@ -303,7 +385,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
       },
       { role: "agent", text: "NOOP" },
     ];
-    render(<ChatRenderer messages={messages} links={[makeLink({})]} viewedSessionId="leader-id" />);
+    render(<ChatRenderer rows={keyed(messages)} links={[makeLink({})]} viewedSessionId="leader-id" />);
     expect(screen.queryByText(/updates? from/)).toBeNull();
     // Collapsed by default, with a title that says what it is.
     expect(screen.queryByText("You can now direct payments refactor.")).toBeNull();
@@ -327,7 +409,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     ];
     render(
       <ChatRenderer
-        messages={messages}
+        rows={keyed(messages)}
         links={[makeLink({ cadence: "on_signal" })]}
         viewedSessionId="leader-id"
       />,
@@ -354,7 +436,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     ];
     render(
       <ChatRenderer
-        messages={messages}
+        rows={keyed(messages)}
         links={[makeLink({ cadence: "on_signal" })]}
         viewedSessionId="leader-id"
       />,
@@ -375,6 +457,8 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     });
     const messages: TranscriptMessage[] = [
       digest("thought then noop", "2026-10-15T10:00:00Z"),
+      // Stored thinking arrives in place, as its own row.
+      { role: "thinking", text: "nothing here needs me", timestamp: "2026-10-15T10:00:01Z" },
       { role: "agent", text: "NOOP", timestamp: "2026-10-15T10:00:02Z" },
       digest("worked then noop", "2026-10-15T10:01:00Z"),
       {
@@ -386,14 +470,15 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     ];
     render(
       <ChatRenderer
-        messages={messages}
+        rows={keyed(messages)}
         links={[makeLink({ cadence: "per_turn" })]}
         viewedSessionId="leader-id"
-        thinkingHistory={[{ text: "", timestamp: "2026-10-15T10:00:01Z" }]}
       />,
     );
     expect(screen.getByText(/1 update from payments refactor · no action needed/)).toBeTruthy();
     expect(screen.queryByText("thought then noop")).toBeNull();
+    // The thinking went into the chip with its NOOP: no group of its own.
+    expect(screen.getAllByTestId("activity-group")).toHaveLength(1);
     // A tool call means the monitor did real work: the pair stays visible.
     expect(screen.getByText("worked then noop")).toBeTruthy();
     expect(screen.getByText("NOOP")).toBeTruthy();
@@ -414,7 +499,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     ];
     render(
       <ChatRenderer
-        messages={messages}
+        rows={keyed(messages)}
         links={[makeLink({ cadence: "per_turn" })]}
         viewedSessionId="leader-id"
       />,
@@ -445,7 +530,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     // the reply stays visible.
     render(
       <ChatRenderer
-        messages={messages}
+        rows={keyed(messages)}
         links={[makeLink({})]}
         viewedSessionId="subject-id"
       />,
@@ -476,7 +561,7 @@ describe("ChatRenderer — permission card placement", () => {
   it("attaches a card with tool_use_id right under that call's row", () => {
     render(
       <ChatRenderer
-        messages={transcript}
+        rows={keyed(transcript)}
         permissionRequests={[req({ tool_use_id: "t2", reason: "Path is outside allowed working directories" })]}
       />,
     );
@@ -491,7 +576,7 @@ describe("ChatRenderer — permission card placement", () => {
   it("attaches a subagent call's card to its spawning task card", () => {
     render(
       <ChatRenderer
-        messages={transcript}
+        rows={keyed(transcript)}
         permissionRequests={[req({ tool: "Bash", tool_use_id: "sub1", parent_tool_use_id: "tu1" })]}
       />,
     );
@@ -502,7 +587,7 @@ describe("ChatRenderer — permission card placement", () => {
   it("falls back to the trailing list without a tool_use_id, or when the call isn't rendered yet", () => {
     const { container } = render(
       <ChatRenderer
-        messages={transcript}
+        rows={keyed(transcript)}
         permissionRequests={[
           req({ id: "perm-a" }),
           req({ id: "perm-b", tool_use_id: "not-yet" }),
@@ -526,7 +611,7 @@ describe("ChatRenderer — sends the harness failed", () => {
   ];
 
   it("shows the message as not delivered, with the reason in place of the error reply", () => {
-    render(<ChatRenderer messages={failed} />);
+    render(<ChatRenderer rows={keyed(failed)} />);
     const note = screen.getByRole("status");
     expect(note.textContent).toContain("Not delivered");
     expect(note.textContent).toContain("Login expired · Please run /login");
@@ -536,21 +621,21 @@ describe("ChatRenderer — sends the harness failed", () => {
 
   it("offers Retry on the latest message between turns, resending its text", () => {
     const onRetry = vi.fn();
-    const { rerender } = render(<ChatRenderer messages={failed} onRetry={onRetry} />);
+    const { rerender } = render(<ChatRenderer rows={keyed(failed)} onRetry={onRetry} />);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalledWith("deploy it");
 
-    rerender(<ChatRenderer messages={failed} onRetry={onRetry} turnActive />);
+    rerender(<ChatRenderer rows={keyed(failed)} onRetry={onRetry} turnActive />);
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 
-    rerender(<ChatRenderer messages={[...failed, { role: "user", text: "something else" }]} onRetry={onRetry} />);
+    rerender(<ChatRenderer rows={keyed([...failed, { role: "user", text: "something else" }])} onRetry={onRetry} />);
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("collapses a successful retry to one message with an expandable failed-attempt count", () => {
     render(
       <ChatRenderer
-        messages={[...failed, { role: "user", text: "deploy it" }, { role: "agent", text: "deployed" }]}
+        rows={keyed([...failed, { role: "user", text: "deploy it" }, { role: "agent", text: "deployed" }])}
       />,
     );
     expect(screen.getAllByText("deploy it")).toHaveLength(1);
@@ -559,6 +644,14 @@ describe("ChatRenderer — sends the harness failed", () => {
     expect(screen.queryByText("Login expired · Please run /login")).toBeNull();
     fireEvent.click(count);
     expect(screen.getByText("Login expired · Please run /login")).toBeTruthy();
+  });
+
+  it("shows a send the stream reported unsaved as not delivered, with the send's failure", () => {
+    const rows: KeyedRow[] = [{ key: "u1", role: "user", text: "ship it", failed: true }];
+    const { rerender } = render(<ChatRenderer rows={rows} sendFailure="HTTP 503: router unavailable" />);
+    expect(screen.getByRole("status").textContent).toContain("HTTP 503: router unavailable");
+    rerender(<ChatRenderer rows={rows} />);
+    expect(screen.getByRole("status").textContent).toContain(UNDELIVERED);
   });
 });
 
@@ -569,7 +662,7 @@ describe("ChatRenderer — quiet-update pills", () => {
   ];
   const renderPill = (messages: TranscriptMessage[]) => {
     FLAGS.linkedSessions = true;
-    return render(<ChatRenderer messages={messages} links={[]} viewedSessionId="leader-id" />);
+    return render(<ChatRenderer rows={keyed(messages)} links={[]} viewedSessionId="leader-id" />);
   };
 
   it("names one source, singular and plural", () => {
@@ -621,11 +714,11 @@ describe("ChatRenderer — quiet-update pills", () => {
     FLAGS.linkedSessions = true;
     render(
       <ChatRenderer
-        messages={[{
+        rows={keyed([{
           role: "user",
           text: 'The user has linked you to the session "Pipeline" (abc) as its leader, and suggests...',
           attribution: { source_name: "mads", kind: "notice" },
-        }]}
+        }])}
         links={[]}
         viewedSessionId="leader-id"
       />,
@@ -639,9 +732,9 @@ describe("ChatRenderer — quiet-update pills", () => {
     const spy = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(() => height);
     FLAGS.linkedSessions = true;
     const digest: TranscriptMessage = { role: "user", text: "d", attribution: { source_name: "S", kind: "digest" } };
-    const { container, rerender } = render(<ChatRenderer messages={[digest]} links={[]} viewedSessionId="v" />);
+    const { container, rerender } = render(<ChatRenderer rows={keyed([digest])} links={[]} viewedSessionId="v" />);
     height = 300;
-    rerender(<ChatRenderer messages={[digest, { role: "agent", text: "NOOP" }]} links={[]} viewedSessionId="v" />);
+    rerender(<ChatRenderer rows={keyed([digest, { role: "agent", text: "NOOP" }])} links={[]} viewedSessionId="v" />);
     const pill = container.querySelector("[data-ease]") as HTMLElement;
     expect(pill.style.getPropertyValue("--ease-from")).toBe("100px");
     act(() => {

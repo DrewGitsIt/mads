@@ -6,12 +6,12 @@ import type {
   PermissionRequest,
   SubagentEvent,
   SubagentTask,
-  ThinkingBlock,
   ToolStatus,
   ToolStatusChange,
   ToolUse,
   TranscriptMessage,
 } from "../../router/types";
+import type { KeyedRow } from "../keyed/conversation";
 import { kindOf } from "./toolDisplay";
 
 /**
@@ -28,6 +28,8 @@ export interface ToolEntry {
   tool: ToolUse;
   timestamp?: string;
   live?: boolean;
+  /** The row's key, in the main conversation (a subagent's stream has none). */
+  key?: string;
 }
 
 export interface ThinkingEntry {
@@ -35,6 +37,7 @@ export interface ThinkingEntry {
   text: string;
   timestamp?: string;
   live?: boolean;
+  key?: string;
 }
 
 export type ActivityEntry = ToolEntry | ThinkingEntry;
@@ -43,6 +46,8 @@ export interface MessageEntry {
   type: "message";
   message: TranscriptMessage;
   live?: boolean;
+  /** The row's key: the item's React key. */
+  key: string;
 }
 
 /**
@@ -105,9 +110,10 @@ function isPlan(tool: ToolUse): boolean {
  *   widget, every later call updates that same widget in place;
  * - an Agent-kind tool_use renders as a Task subagent card, not a row.
  *
- * Keys are stable across a live-turn's growth and the turn-end transcript
- * reconciliation (keyed by the first tool's id when it has one), so group
- * open/close state survives the refetch.
+ * Keys are the rows' keys (docs/CHAT-STREAM-DESIGN.md §6): a message's is
+ * its row's, a group's its first row's, the plan's and a task card's their
+ * call's. So nothing remounts when a row arrives, settles or is replaced by
+ * its stored copy, and a group's open/close state survives all three.
  */
 export function buildItems(entries: SourceEntry[]): ConversationItem[] {
   const items: ConversationItem[] = [];
@@ -118,21 +124,18 @@ export function buildItems(entries: SourceEntry[]): ConversationItem[] {
     currentGroup = undefined;
   };
 
-  // Cards don't count toward positional keys, so one arriving mid-history
-  // never re-keys (and remounts) everything after it.
-  let n = 0;
-  entries.forEach((entry) => {
+  entries.forEach((entry, i) => {
     if (entry.type === "card") {
       endGroup();
       items.push({ key: `c-${entry.id}`, type: "card", id: entry.id });
       return;
     }
-    const i = n++;
     if (entry.type === "message") {
       endGroup();
-      items.push({ key: `m-${i}`, type: "message", message: entry.message, live: entry.live });
+      items.push({ key: entry.key, type: "message", message: entry.message, live: entry.live });
       return;
     }
+    const key = entry.key ?? (entry.type === "tool" ? entry.tool.id : undefined) ?? `e-${i}`;
     if (entry.type === "tool") {
       const tool = entry.tool;
       if (isPlan(tool)) {
@@ -145,7 +148,7 @@ export function buildItems(entries: SourceEntry[]): ConversationItem[] {
             if (entry.live) planItem.live = entry.live;
           } else {
             endGroup();
-            planItem = { key: `plan-${tool.id ?? i}`, type: "plan", todos, live: entry.live };
+            planItem = { key, type: "plan", todos, live: entry.live };
             items.push(planItem);
           }
           return;
@@ -156,7 +159,7 @@ export function buildItems(entries: SourceEntry[]): ConversationItem[] {
       if (isTaskSpawn(tool)) {
         endGroup();
         items.push({
-          key: `task-${tool.id ?? i}`,
+          key,
           type: "task",
           tool,
           timestamp: entry.timestamp,
@@ -167,9 +170,8 @@ export function buildItems(entries: SourceEntry[]): ConversationItem[] {
     }
     // tool row or thinking row — join/open the current activity group
     if (!currentGroup) {
-      const firstId = entry.type === "tool" ? entry.tool.id : undefined;
       currentGroup = {
-        key: `g-${firstId ?? `i${i}`}`,
+        key,
         type: "activity",
         entries: [],
         live: entry.live,
@@ -214,35 +216,22 @@ export function anchorPermissions(
 }
 
 /**
- * Merges historical thinking blocks (session.thinking envelopes — the only
- * place claude-code's transcript-omitted thinking survives) into the folded
- * transcript by timestamp, producing the source sequence buildItems eats.
+ * The keyed rows (joined, failed sends folded) as the source sequence
+ * buildItems eats: a tool row (its result attached) and a thinking row are
+ * activity entries, everything else a message. Each carries its row's key,
+ * and `live` when the row is the current turn's own.
  */
-export function mergeTranscript(
-  foldedMessages: TranscriptMessage[],
-  thinking: { text: string; timestamp?: string }[] = [],
-): SourceEntry[] {
-  const entries: SourceEntry[] = [];
-  const pending = [...thinking];
-  const flushBefore = (iso: string) => {
-    while (pending.length > 0) {
-      const t = pending[0];
-      if (t.timestamp && Date.parse(t.timestamp) > Date.parse(iso)) break;
-      entries.push({ type: "thinking", text: t.text, timestamp: t.timestamp });
-      pending.shift();
+export function rowsToEntries(rows: KeyedRow[]): SourceEntry[] {
+  return rows.map((row): SourceEntry => {
+    const live = row.current || undefined;
+    if (row.role === "tool" && row.tool) {
+      return { type: "tool", tool: row.tool, timestamp: row.timestamp, live, key: row.key };
     }
-  };
-  for (const message of foldedMessages) {
-    if (message.timestamp) flushBefore(message.timestamp);
-    if (message.role === "tool" && message.tool) {
-      entries.push({ type: "tool", tool: message.tool, timestamp: message.timestamp });
-    } else {
-      entries.push({ type: "message", message });
+    if (row.role === "thinking") {
+      return { type: "thinking", text: row.text ?? "", timestamp: row.timestamp, live, key: row.key };
     }
-  }
-  // Whatever's left (later than every message, or timestamp-less) trails.
-  for (const t of pending) entries.push({ type: "thinking", text: t.text, timestamp: t.timestamp });
-  return entries;
+    return { type: "message", message: row, live, key: row.key };
+  });
 }
 
 /**
@@ -553,11 +542,12 @@ export function appendSubagentItem(
  * pages (getAllEvents). Not the subagents' own streams
  * (session.subagent_event): those are the bulk of a long session's log, and
  * a subagent's dock reads its own transcript file instead, falling back to
- * the log only when there's no file (SUBAGENT_STREAM_EVENT_TYPES).
+ * the log only when there's no file (SUBAGENT_STREAM_EVENT_TYPES). Nor
+ * main-agent thinking (session.thinking): the chat shows stored thinking as
+ * keyed /transcript rows, and live thinking while it's in the stream's tail.
  */
 export const CONVERSATION_EVENT_TYPES = [
   "session.subagent_task",
-  "session.thinking",
   "session.tool_status_changed",
   "session.compact",
 ];
@@ -569,7 +559,6 @@ export interface ConversationHistory {
   statuses: Map<string, ToolStatus>;
   tasks: Map<string, TaskModel>;
   subagentStreams: Map<string, SubStreamItem[]>;
-  thinking: { text: string; timestamp?: string }[];
   /** The latest compaction phase in the log, with when it was logged. */
   compact?: { status: CompactStatus; timestamp: string };
 }
@@ -579,7 +568,6 @@ export function foldHistoryEvents(envelopes: Envelope[]): ConversationHistory {
   let statuses = new Map<string, ToolStatus>();
   let tasks = new Map<string, TaskModel>();
   let subagentStreams = new Map<string, SubStreamItem[]>();
-  const thinking: { text: string; timestamp?: string }[] = [];
   let compact: ConversationHistory["compact"];
 
   for (const env of sorted) {
@@ -604,11 +592,6 @@ export function foldHistoryEvents(envelopes: Envelope[]): ConversationHistory {
         }
         break;
       }
-      case "session.thinking": {
-        const p = env.payload as ThinkingBlock | undefined;
-        if (p?.text) thinking.push({ text: p.text, timestamp: env.timestamp });
-        break;
-      }
       case "session.compact": {
         const p = env.payload as CompactStatus | undefined;
         if (p?.phase === "start" || p?.phase === "done") compact = { status: p, timestamp: env.timestamp };
@@ -616,7 +599,7 @@ export function foldHistoryEvents(envelopes: Envelope[]): ConversationHistory {
       }
     }
   }
-  return { statuses, tasks, subagentStreams, thinking, compact };
+  return { statuses, tasks, subagentStreams, compact };
 }
 
 /**
@@ -655,6 +638,21 @@ export function transcriptSubStream(messages: readonly TranscriptMessage[]): Sub
     }
   }
   return streams.get(KEY) ?? [];
+}
+
+/**
+ * A subagent's live rows (subagentRows: its items from the keyed stream, in
+ * arrival order) as the dock's stream. Its text items stay apart — each is
+ * one of the subagent's text runs.
+ */
+export function rowsSubStream(rows: readonly KeyedRow[]): SubStreamItem[] {
+  const out: SubStreamItem[] = [];
+  for (const r of rows) {
+    if (r.role === "tool" && r.tool) out.push({ type: "tool", tool: r.tool, timestamp: r.timestamp, key: r.key });
+    else if (r.role === "thinking" && r.text) out.push({ type: "thinking", text: r.text, timestamp: r.timestamp, key: r.key });
+    else if (r.role === "agent" && r.text) out.push({ type: "text", text: r.text, timestamp: r.timestamp });
+  }
+  return out;
 }
 
 /**

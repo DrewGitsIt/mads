@@ -2,12 +2,10 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import { Chip } from "../../components/Chip/Chip";
 import { FOLD_MS, Fold, useArrivals } from "../../components/Motion";
 import { FLAGS } from "../../featureFlags";
-import { foldToolResults } from "../../router/toolPairing";
 import type {
   Attribution,
   AttributionKind,
   BackgroundTask,
-  InboundSource,
   Link,
   PermissionRequest,
   ToolStatus,
@@ -21,10 +19,11 @@ import {
   anchorPermissions,
   buildItems,
   interleaveCards,
-  mergeTranscript,
-  type SourceEntry,
+  rowsToEntries,
   type TaskModel,
 } from "../activity/conversationItems";
+import type { KeyedRow } from "../keyed/conversation";
+import { joinRows } from "../keyed/joinRule";
 import { PlanWidget } from "../activity/PlanWidget";
 import { findAll, findPattern, searchEntries, type EntryMatch, type SearchCache } from "../Find/findText";
 import { useFind, type FindRequest, type FindStatus } from "../Find/useFind";
@@ -42,22 +41,13 @@ import { SendDelivery } from "./SendDelivery";
 import { splitAttachments } from "../attachmentRefs";
 import styles from "./ChatRenderer.module.css";
 
-/**
- * One item of an in-flight turn, built live from the stream: a run of streamed
- * text, a tool call (its result attached as tool_result frames arrive), or a
- * whole thinking block. Text tokens accumulate into the trailing text item so
- * prose streams smoothly, with no mid-turn transcript reconciliation to make
- * it rubber-band.
- */
-export type StreamItem =
-  | { kind: "text"; text: string }
-  | { kind: "tool"; tool: ToolUse; timestamp?: string }
-  | { kind: "thinking"; text: string }
-  // A message from outside MADS, live; transcript role "inbound" once persisted.
-  | { kind: "inbound"; text: string; inbound: InboundSource; timestamp?: string };
-
 export interface ChatRendererProps {
-  messages: TranscriptMessage[];
+  /**
+   * The keyed conversation's main list (useKeyedConversation), in order and
+   * as revealed (useReveal): stored and live rows alike, a tool's result on
+   * its call's row, subagent rows left out.
+   */
+  rows: KeyedRow[];
   /** Linked sessions (flag-gated): links touching the viewed session — only for a digest card's cadence line, matched by sender name (an attribution parsed from the message wrapper carries no link id). */
   links?: Link[];
   viewedSessionId?: string;
@@ -68,14 +58,14 @@ export interface ChatRendererProps {
    * message's attached files show as thumbnails. Absent → names only.
    */
   attachmentUrl?: (attachmentId: string, variant?: "thumbnail") => string;
-  /** The in-flight turn's ordered items (text runs + tool/thinking entries), rendered after `messages` and replaced by the persisted transcript on turn_end. */
-  liveItems?: StreamItem[];
-  /** A turn is in flight — the trailing live activity group renders open and grows in place, collapsing on turn end. */
+  /**
+   * A turn is in flight, or its reply is still revealing — the current
+   * turn's activity group renders open and grows in place, collapsing once
+   * this goes false.
+   */
   turnActive?: boolean;
   /** Live text is paced (lands a code block whole): a code block arriving in it folds in. */
   foldNewCode?: boolean;
-  /** Historical main-agent thinking blocks (session.thinking envelopes), merged into the stream by timestamp. */
-  thinkingHistory?: { text: string; timestamp?: string }[];
   /** Out-of-band status changes (session.tool_status_changed + replay), by tool_use id. */
   toolStatuses?: ReadonlyMap<string, ToolStatus>;
   /** Calls still running as background processes, by tool_use id (the live "background" frame). */
@@ -100,11 +90,13 @@ export interface ChatRendererProps {
   /** The approval jump's latest reveal — a collapsed group holding that card opens. */
   permissionReveal?: PermissionReveal | null;
   /**
-   * Resend a message the harness failed. Offered only on the latest user
-   * message, and only between turns; the resend collapses into it (see
+   * Resend a message that failed. Offered only on the latest user message,
+   * and only between turns; the resend collapses into it (see
    * collapseFailedSends).
    */
   onRetry?: (text: string) => void;
+  /** Why the latest send failed (its HTTP error, or the stream's error frame), for a send the stream reported unsaved. */
+  sendFailure?: string;
   /** Find in conversation (useFind): absent or an empty query is off. */
   find?: FindRequest;
   onFindStatus?: (status: FindStatus) => void;
@@ -311,20 +303,18 @@ function noopReplyAt(items: ReturnType<typeof buildItems>, from: number): number
  * Maps a transcript to prose + always-grouped activity (T12): consecutive
  * tool/thinking events render as one collapsible group of rows, TodoWrite
  * becomes the in-place-updating plan widget (T14), and Agent spawns become
- * Task subagent cards (T15). Live and historical rendering share the same
- * components — the only live-only difference is entrance motion and the
- * open-group treatment (`turnActive`).
+ * Task subagent cards (T15). Live and stored rows render through the same
+ * components, keyed by row key — the only live-only difference is entrance
+ * motion and the open-group treatment (`turnActive`).
  */
 export function ChatRenderer({
-  messages,
+  rows,
   links = [],
   viewedSessionId,
   linkName,
   attachmentUrl,
-  liveItems = [],
   turnActive = false,
   foldNewCode = false,
-  thinkingHistory = [],
   toolStatuses,
   background,
   tasks,
@@ -337,32 +327,17 @@ export function ChatRenderer({
   onResolvePermission = noResolve,
   permissionReveal,
   onRetry,
+  sendFailure,
   find,
   onFindStatus,
 }: ChatRendererProps) {
   const linksById = new Map(links.map((l) => [l.id, l]));
-  const { messages: shown, delivery } = collapseFailedSends(messages);
-  const folded = foldToolResults(shown);
+  // Adjacent text joins into one bubble (§6), then failed sends fold.
+  const { rows: shown, delivery } = collapseFailedSends(joinRows(rows), sendFailure);
   const latestSend = [...shown].reverse().find((m) => m.role === "user" && !m.attribution);
 
-  const entries: SourceEntry[] = mergeTranscript(folded, thinkingHistory);
-  for (const item of liveItems) {
-    if (item.kind === "text") {
-      entries.push({ type: "message", message: { role: "agent", text: item.text }, live: true });
-    } else if (item.kind === "inbound") {
-      entries.push({
-        type: "message",
-        message: { role: "inbound", text: item.text, inbound: item.inbound, timestamp: item.timestamp },
-        live: true,
-      });
-    } else if (item.kind === "tool") {
-      entries.push({ type: "tool", tool: item.tool, timestamp: item.timestamp, live: true });
-    } else {
-      entries.push({ type: "thinking", text: item.text, live: true });
-    }
-  }
   const cardsById = new Map(worktreeCards.map((c) => [c.id, c]));
-  const items = buildItems(interleaveCards(entries, worktreeCards));
+  const items = buildItems(interleaveCards(rowsToEntries(shown), worktreeCards));
   const permissions = anchorPermissions(items, permissionRequests);
   // A fallback (unanchored) approval that lands after mount folds in and rings once.
   const arrivedPermission = useArrivals(permissions.unanchored.map((r) => r.id));
@@ -474,7 +449,7 @@ export function ChatRenderer({
   const findTarget = useFind(rootRef, find, groupMatches, summaryMatches, onFindStatus);
 
   return (
-    <div className={styles.stream} ref={rootRef}>
+    <div className={styles.stream} ref={rootRef} data-chat-rows>
       {rendered.map((item) => {
         if (item.type === "quiet") {
           return <QuietChecks key={item.key} item={item} ease={easing?.key === item.key ? easing.px : undefined} />;
@@ -603,6 +578,18 @@ export function ChatRenderer({
             />
           );
         }
+        if (message.notice) {
+          // A row the agent wrote itself rather than said (an interrupt
+          // marker, a failed turn): a quiet system line, not its voice.
+          return (
+            <div key={item.key} className={styles.notification} role="note" data-find={item.key}>
+              <span aria-hidden="true">⏺</span>
+              <span className={styles.notificationText} title={message.text}>
+                {message.text}
+              </span>
+            </div>
+          );
+        }
         if (message.role === "notification") {
           // The harness telling the agent a background task finished, which
           // can start a turn nobody typed. Drawn as a quiet system line, not
@@ -647,9 +634,9 @@ export function ChatRenderer({
               foldNewCode={foldNewCode && Boolean(item.live)}
             />
           );
-        const sent = isUser ? delivery.get(message) : undefined;
+        const sent = isUser ? delivery.get(item.key) : undefined;
         const retry =
-          sent?.error && onRetry && !turnActive && message === latestSend
+          sent?.error && onRetry && !turnActive && item.key === latestSend?.key
             ? () => onRetry(message.text ?? "")
             : undefined;
         return (

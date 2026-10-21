@@ -533,11 +533,13 @@ func (r *Runner) Start(ctx context.Context) error {
 	// the harness ask at all; carried in baseOpts, a switch to the terminal
 	// transport simply leaves it unused there.
 	opts.Permissions = r.RequestPermission
-	// The keyed contract (settle hints) for a provider whose keys are the
-	// agent's own. Not for an emulated one (hermes): it would have to
-	// change live content to meet it, which a legacy consumer would see.
-	opts.Keyed = p.Matrix()[provider.BehaviorStableKeys] == provider.Native
-	r.chat.setKeyed(p.Matrix()[provider.BehaviorStableKeys].Works())
+	// The keyed contract (settle hints) wherever keys are stable, native or
+	// emulated. An emulated provider (hermes) may change live content to
+	// meet it (stored tool names and results); the legacy stream shows that
+	// too, which only matters until the UI reads the keyed one.
+	keyed := p.Matrix()[provider.BehaviorStableKeys].Works()
+	opts.Keyed = keyed
+	r.chat.setKeyed(keyed)
 	spawnedAt := time.Now()
 	provSess, err := p.Start(ctx, opts)
 	if err != nil {

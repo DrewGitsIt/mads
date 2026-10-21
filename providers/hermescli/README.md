@@ -173,6 +173,25 @@ A uid that's gone (compaction) is `ErrCursorStale`.
 cancel) rewrites the user's text, so the session child matches its sends
 to the user rows by position.
 
+**Stored tool display** (`stored_tool_display: unsupported`): a stored
+tool call carries the kind its tool_call streamed with — hermes's
+`TOOL_KIND_MAP` (`acp_adapter/tools.py` `get_tool_kind`), ported in
+`tooldisplay.go` — but no title: hermes builds it in Python
+(`build_tool_title` → `agent/display.py` `build_tool_preview`, per-tool
+previews and argument redaction) and stores none. The chat keeps the live
+title for rows it streamed, with a dev-console warning. A reloaded
+history shows the UI's own tool summary instead (accepted in the C4
+review, 2026-10-21). Follow-up, if reloaded titles matter: have the reader
+ask hermes's own Python for them (`acp_adapter.tools.build_tool_title`
+over the stored calls, batched and cached) — exact and version-matched, but
+it has to locate hermes's installed runtime. A Go port of
+`build_tool_preview` was rejected: it drifts with hermes and its argument
+redaction would have to be kept in step.
+
+A session hermes hasn't stored yet (no `state.db`, or no sessions row:
+hermes writes both with the first prompt) reads as an empty transcript,
+not an error.
+
 ## Transcript (state.db)
 
 Read-only (`mode=ro`, WAL-aware; hermes-acp may be writing). Rows are

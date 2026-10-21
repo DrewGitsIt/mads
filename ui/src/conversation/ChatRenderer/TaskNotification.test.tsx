@@ -3,6 +3,10 @@ import { render, screen } from "@testing-library/react";
 import { ChatRenderer } from "./ChatRenderer";
 import { buildFeedRows } from "../../pipeline/DrillIn/feedFormat";
 import type { TranscriptMessage } from "../../router/types";
+import type { KeyedRow } from "../keyed/conversation";
+
+/** Transcript messages as keyed rows, keyed by position. */
+const keyed = (ms: TranscriptMessage[]): KeyedRow[] => ms.map((m, i) => ({ ...m, key: m.key ?? `r${i}` }));
 
 const notice: TranscriptMessage = {
   role: "notification",
@@ -15,7 +19,7 @@ const notice: TranscriptMessage = {
 describe("task notification", () => {
   it("renders as a system line, not a user message", () => {
     const { container } = render(
-      <ChatRenderer messages={[{ role: "agent", text: "Running it in the background." }, notice]} />,
+      <ChatRenderer rows={keyed([{ role: "agent", text: "Running it in the background." }, notice])} />,
     );
     const line = screen.getByRole("note");
     expect(line.textContent).toContain('Background command "make check" completed (exit code 0)');
