@@ -68,3 +68,38 @@ func TestInjectionsReachTheProviderWrapped(t *testing.T) {
 		t.Errorf("user send = %q, want it unwrapped", got)
 	}
 }
+
+// A multi-part inject (a wake's flush of updates from several links) is one
+// turn whose parts are each wrapped with their own label, and it is never
+// merged into a neighbouring digest run when queued (2026-10-20).
+func TestInjectPartsWrapsEachPart(t *testing.T) {
+	ctx := context.Background()
+	rig := startPeer(t)
+	parts := []contracts.InjectPart{
+		{Text: "a1", Attribution: contracts.Attribution{LinkID: "lnk_a", SourceName: "Alpha", DigestAttributed: true, Kind: "digest"}},
+		{Text: "b1", Attribution: contracts.Attribution{LinkID: "lnk_b", SourceName: "Beta", DigestAttributed: true, Kind: "digest"}},
+	}
+	if err := rig.r.InjectParts(ctx, parts); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the flush", func() bool { return len(rig.sess.sentTexts()) == 1 })
+	segs, ok := linkwrap.Parse(rig.sess.sentTexts()[0])
+	if !ok || len(segs) != 2 || segs[0].Block.Attribution.SourceName != "Alpha" || segs[1].Block.Attribution.SourceName != "Beta" {
+		t.Fatalf("flush parses as %+v, want Alpha's then Beta's digest", segs)
+	}
+
+	// Queued behind a busy turn, next to a same-link digest: still its own turn.
+	if err := rig.r.Inject(ctx, "a2", parts[0].Attribution); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.r.InjectParts(ctx, parts); err != nil {
+		t.Fatal(err)
+	}
+	rig.sess.events <- provider.Event{Kind: provider.EventTurnEnd}
+	waitFor(t, "a2", func() bool { return len(rig.sess.sentTexts()) == 2 })
+	rig.sess.events <- provider.Event{Kind: provider.EventTurnEnd}
+	waitFor(t, "the queued flush", func() bool { return len(rig.sess.sentTexts()) == 3 })
+	if segs, _ := linkwrap.Parse(rig.sess.sentTexts()[1]); len(segs) != 1 || segs[0].Block.Body != "a2" {
+		t.Errorf("a2 turn = %+v, want a2 alone", segs)
+	}
+}

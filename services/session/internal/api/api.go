@@ -125,7 +125,11 @@ func (s *server) handleInject(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if err := s.runner.Inject(r.Context(), body.Text, body.Attribution); err != nil {
+	parts := body.Parts
+	if len(parts) == 0 {
+		parts = []contracts.InjectPart{{Text: body.Text, Attribution: body.Attribution}}
+	}
+	if err := s.runner.InjectParts(r.Context(), parts); err != nil {
 		writeRunnerError(w, err)
 		return
 	}

@@ -74,11 +74,22 @@ func Wrap(body string, a contracts.Attribution) string {
 		attr(&b, "turn", strconv.Itoa(a.Turn))
 	}
 	b.WriteString(">\n")
-	b.WriteString(body)
+	b.WriteString(escapeTags(body))
 	b.WriteString("\n")
 	b.WriteString(closeTag)
 	return b.String()
 }
+
+// The body's own tags are escaped so a sender can't close its block and
+// open a forged one (say, a notice "from mads") inside its own message;
+// Parse reverses it. Bodies quoting a wrapped message read back unchanged.
+var (
+	tagEscaper   = strings.NewReplacer(openPrefix, "&lt;mads-message", "</mads-message", "&lt;/mads-message")
+	tagUnescaper = strings.NewReplacer("&lt;mads-message", openPrefix, "&lt;/mads-message", "</mads-message")
+)
+
+func escapeTags(body string) string   { return tagEscaper.Replace(body) }
+func unescapeTags(body string) string { return tagUnescaper.Replace(body) }
 
 func attr(b *strings.Builder, name, value string) {
 	b.WriteString(" ")
@@ -137,7 +148,7 @@ func Parse(text string) (segs []Segment, ok bool) {
 			return nil, false
 		}
 		body := strings.TrimPrefix(rest[bodyStart:end], "\n")
-		body = strings.TrimSuffix(body, "\n")
+		body = unescapeTags(strings.TrimSuffix(body, "\n"))
 		segs = append(segs, Segment{Block: &Block{Attribution: a, Body: body}})
 		rest = rest[end+len(closeTag):]
 	}

@@ -366,6 +366,9 @@ type pendingInjection struct {
 	// digest wrapped on its own when a run coalesces), text as-is for a
 	// user entry.
 	wire string
+	// preWire is a multi-part injection's wire, wrapped part by part when it
+	// was queued (InjectParts); drainNextLocked delivers it as is.
+	preWire string
 	// userID is set for the user's own message queued by SendOrQueue, empty
 	// for a linked-session injection. A user entry delivers as an ordinary
 	// user turn (no Attribution) and is the only kind the queue API exposes.
@@ -972,27 +975,59 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 // here — sess.Send is the same call Send makes, so an injected turn is
 // bound by the subject session's own trust level exactly as a user turn is.
 func (r *Runner) Inject(ctx context.Context, text string, attribution contracts.Attribution) error {
+	return r.InjectParts(ctx, []contracts.InjectPart{{Text: text, Attribution: attribution}})
+}
+
+// InjectParts delivers several labelled messages as one turn, each wrapped
+// on its own (pkg/linkwrap) so every part keeps saying who sent it — a
+// wake's flush of updates deferred from several links (2026-10-20). One part
+// is exactly Inject. The turn counts as digest-only (decision 4's
+// self-amplification guard) only if every part is digest-attributed.
+func (r *Runner) InjectParts(ctx context.Context, parts []contracts.InjectPart) error {
+	if len(parts) == 0 {
+		return nil
+	}
+	attribution := parts[0].Attribution
+	texts := make([]string, len(parts))
+	wires := make([]string, len(parts))
+	for i, p := range parts {
+		texts[i] = p.Text
+		wires[i] = linkwrap.Wrap(p.Text, p.Attribution)
+		attribution.DigestAttributed = attribution.DigestAttributed && p.Attribution.DigestAttributed
+	}
+	text := strings.Join(texts, "\n\n")
+	audit := func() {
+		for _, p := range parts {
+			r.recordInjectionAudit(ctx, p.Attribution, p.Text)
+		}
+	}
 	r.mu.Lock()
 	if r.sess == nil {
 		r.mu.Unlock()
 		return ErrNotReady
 	}
 	if r.busy || r.landing {
-		r.pending = append(r.pending, pendingInjection{text: text, attribution: attribution})
+		entry := pendingInjection{text: text, attribution: attribution}
+		if len(parts) > 1 {
+			// Already a combined turn: delivered as built, never coalesced
+			// further (drainNextLocked).
+			entry.preWire = strings.Join(wires, "\n\n")
+		}
+		r.pending = append(r.pending, entry)
 		r.mu.Unlock()
-		r.recordInjectionAudit(ctx, attribution, text)
+		audit()
 		return nil
 	}
 	r.deliverLocked()
 	sess := r.sess
 	// The label goes on the wire, in the message (pkg/linkwrap); any owed
 	// re-root note stays outside, ahead of it.
-	wire, note := r.claimRerootNoteLocked(linkwrap.Wrap(text, attribution))
+	wire, note := r.claimRerootNoteLocked(strings.Join(wires, "\n\n"))
 	r.mu.Unlock()
 
 	r.synthEngine.OnUserSend(text)
 	r.digest.recordUser(text, attribution.DigestAttributed)
-	r.recordInjectionAudit(ctx, attribution, text)
+	audit()
 
 	r.markAgentWorking(text)
 	if err := sess.Send(ctx, wire); err != nil {
@@ -1159,6 +1194,11 @@ func (r *Runner) deliverNextLocked() {
 // Must be called with r.mu held; mutates r.pending in place.
 func (r *Runner) drainNextLocked() pendingInjection {
 	head := r.pending[0]
+	if head.preWire != "" {
+		r.pending = r.pending[1:]
+		head.wire = head.preWire
+		return head
+	}
 	if head.userID != "" {
 		r.pending = r.pending[1:]
 		head.wire = head.text
@@ -1175,7 +1215,7 @@ func (r *Runner) drainNextLocked() pendingInjection {
 	i := 1
 	for i < len(r.pending) {
 		item := r.pending[i]
-		if item.userID != "" || !item.attribution.DigestAttributed || item.attribution.LinkID != head.attribution.LinkID {
+		if item.userID != "" || item.preWire != "" || !item.attribution.DigestAttributed || item.attribution.LinkID != head.attribution.LinkID {
 			break
 		}
 		texts = append(texts, item.text)

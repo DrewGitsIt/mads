@@ -188,4 +188,15 @@ type Attribution struct {
 type InjectRequest struct {
 	Text        string      `json:"text"`
 	Attribution Attribution `json:"attribution"`
+	// Parts, when set, replaces Text/Attribution: several messages delivered
+	// as ONE turn, each keeping its own label (the receiving runner wraps
+	// each part on its own). A wake's flush of deferred pushes from several
+	// links uses it so every update still says who it came from (2026-10-20).
+	Parts []InjectPart `json:"parts,omitempty"`
+}
+
+// InjectPart is one labelled message within a multi-part InjectRequest.
+type InjectPart struct {
+	Text        string      `json:"text"`
+	Attribution Attribution `json:"attribution"`
 }

@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -136,44 +135,33 @@ func FlushDeferred(ctx context.Context, deps Deps, sessionID string) error {
 		return nil
 	}
 
-	// Attribution: the oldest entry's, whole, so a single-entry flush is the
-	// original push unchanged. DigestAttributed holds only if every entry's
-	// does, so a mixed batch can't hide a real message from digestwatch.
-	first := entries[0]
-	attribution := contracts.Attribution{LinkID: first.link.ID}
-	if first.Attribution != nil {
-		attribution = *first.Attribution
-	}
+	// One turn, one part per entry, each with its own stored Attribution:
+	// the receiving runner wraps every part on its own, so each update still
+	// says who sent it (pkg/linkwrap). A single entry is the original push
+	// unchanged. The NOOP offer closes the last part, and only if every
+	// entry was NOOP-able.
+	parts := make([]contracts.InjectPart, len(entries))
 	allNoop := true
-	multiSource := false
-	for _, e := range entries {
+	for i, e := range entries {
+		attribution := contracts.Attribution{LinkID: e.link.ID}
+		if e.Attribution != nil {
+			attribution = *e.Attribution
+		}
+		text := e.Text
+		if len(entries) > 1 {
+			text = anchorPrefix(e.LinkDigest) + text
+		}
+		parts[i] = contracts.InjectPart{Text: text, Attribution: attribution}
 		allNoop = allNoop && e.Noop
-		if e.Attribution == nil || !e.Attribution.DigestAttributed {
-			attribution.DigestAttributed = false
-		}
-		if e.link.ID != first.link.ID {
-			multiSource = true
-		}
-	}
-
-	body := first.Text
-	if len(entries) > 1 {
-		var b strings.Builder
-		b.WriteString("Updates that arrived while you were asleep, oldest first:")
-		for _, e := range entries {
-			b.WriteString("\n\n")
-			if multiSource && e.Attribution != nil && e.Attribution.SourceName != "" {
-				fmt.Fprintf(&b, "[from %s] ", e.Attribution.SourceName)
-			}
-			b.WriteString(anchorPrefix(e.LinkDigest))
-			b.WriteString(e.Text)
-		}
-		body = b.String()
 	}
 	if allNoop {
-		body += noopInstruction
+		parts[len(parts)-1].Text += noopInstruction
 	}
-	status, _, err := PostInject(ctx, addr, contracts.InjectRequest{Text: body, Attribution: attribution})
+	req := contracts.InjectRequest{Parts: parts}
+	if len(parts) == 1 {
+		req = contracts.InjectRequest{Text: parts[0].Text, Attribution: parts[0].Attribution}
+	}
+	status, _, err := PostInject(ctx, addr, req)
 	if err == nil && status != http.StatusAccepted {
 		err = fmt.Errorf("status %d", status)
 	}

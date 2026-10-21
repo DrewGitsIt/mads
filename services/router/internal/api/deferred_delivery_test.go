@@ -9,6 +9,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/linkwrap"
 	"github.com/drewkidwell/mads/services/data/datatest"
 	"github.com/drewkidwell/mads/services/router/internal/api"
 	"github.com/drewkidwell/mads/services/router/internal/job"
@@ -60,7 +61,7 @@ func TestGrantNoticeToSleepingLeaderDefersAndFlushesOnStart(t *testing.T) {
 	if createResp.StatusCode != http.StatusCreated {
 		t.Fatalf("create: status %d", createResp.StatusCode)
 	}
-	link := decodeJSON[contracts.Link](t, createResp)
+	_ = decodeJSON[contracts.Link](t, createResp)
 
 	deadline := time.Now().Add(5 * time.Second)
 	for waitingUpdates(t, srv.URL, leaderID) != 1 && time.Now().Before(deadline) {
@@ -86,8 +87,10 @@ func TestGrantNoticeToSleepingLeaderDefersAndFlushesOnStart(t *testing.T) {
 	if len(notices) != 1 {
 		t.Fatalf("grant notices after the leader started = %d, want 1", len(notices))
 	}
-	if a := notices[0].Attribution; a.LinkID != link.ID || !a.DigestAttributed {
-		t.Errorf("attribution = %+v, want link %s, digest-attributed", a, link.ID)
+	// The label comes back from the message's own wrapper (pkg/linkwrap),
+	// which carries no IDs: a notice from mads, digest-attributed.
+	if a := notices[0].Attribution; a.Kind != linkwrap.KindNotice || a.SourceName != linkwrap.NoticeSource || !a.DigestAttributed {
+		t.Errorf("attribution = %+v, want a digest-attributed notice from mads", a)
 	}
 	if n := waitingUpdates(t, srv.URL, leaderID); n != 0 {
 		t.Errorf("waiting_updates after flush = %d, want 0", n)

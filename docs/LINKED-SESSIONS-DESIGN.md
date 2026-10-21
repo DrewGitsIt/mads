@@ -277,13 +277,18 @@ label in the text, the way Claude Code wraps its own peer messages:
 - **Spoofing:** anyone can type the tag. A human who types it in their own
   session only changes how their own UI draws their own message; an agent
   reading a wrapper it didn't get from MADS gains nothing a plain message
-  couldn't say. Bodies aren't escaped, so a linked session that writes a
-  close tag and a fresh block into its own message can make the rest draw
-  as a second block (say, a "notice from mads") in its subject's
-  conversation — the same reach it already has. The label is a rendering and context aid, never an
+  couldn't say. Wrap escapes the tags inside a body (`&lt;mads-message`,
+  reversed by Parse), so a linked session that writes a close tag and a
+  fresh block into its own message can't forge a second block (say, a
+  "notice from mads") in its subject's conversation. The label is a rendering and context aid, never an
   authority check: delivery-time checks (grants, `DigestAttributed` for the
   self-amplification guard, the `link.message_injected` audit event) still
   run on the Attribution the Router sends, not on parsed text.
+
+- **Several updates in one turn:** a wake's flush of deferred pushes from
+  more than one entry sends `InjectRequest.Parts`, one part per entry with
+  its own stored Attribution; the runner wraps each part on its own and
+  delivers them as one turn, so every update keeps saying who sent it.
 
 ## Unchanged from §1.12
 

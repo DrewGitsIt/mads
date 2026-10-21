@@ -211,15 +211,19 @@ func TestFlushDeliversInOrderOnceWithAttribution(t *testing.T) {
 	if len(reqs) != 1 {
 		t.Fatalf("%d flush deliveries under concurrent wakes, want exactly 1", len(reqs))
 	}
-	text := reqs[0].Text
-	if i, j := strings.Index(text, "first"), strings.Index(text, "second"); i < 0 || j < i {
-		t.Errorf("text %q: want first before second", text)
+	// Two entries: one turn of two parts, oldest first, each keeping its own
+	// Attribution so the receiving runner labels each on its own.
+	parts := reqs[0].Parts
+	if len(parts) != 2 || !strings.HasSuffix(parts[0].Text, "first") || !strings.Contains(parts[1].Text, "second") {
+		t.Fatalf("parts = %+v, want first then second", parts)
 	}
-	if !strings.HasSuffix(text, job.NoopInstruction) {
-		t.Errorf("text %q: every entry is NOOP-able, want the NOOP line", text)
+	if !strings.HasSuffix(parts[1].Text, job.NoopInstruction) || strings.Contains(parts[0].Text, "NOOP") {
+		t.Errorf("parts = %+v: every entry is NOOP-able, want the NOOP line closing the last part only", parts)
 	}
-	if reqs[0].Attribution.LinkID != f.link.ID || reqs[0].Attribution.SourceName != "watched session" || !reqs[0].Attribution.DigestAttributed {
-		t.Errorf("attribution = %+v", reqs[0].Attribution)
+	for _, p := range parts {
+		if p.Attribution.LinkID != f.link.ID || p.Attribution.SourceName != "watched session" || !p.Attribution.DigestAttributed {
+			t.Errorf("part attribution = %+v", p.Attribution)
+		}
 	}
 	if c, _ := f.data.DeferredLinkCounts(ctx); c[f.monitor.ID] != 0 {
 		t.Errorf("waiting count after flush = %d, want 0", c[f.monitor.ID])
