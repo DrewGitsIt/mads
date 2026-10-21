@@ -155,8 +155,12 @@ func (p *Provider) Matrix() provider.Matrix {
 		// notifications and in thread/items/list; a user message's is the
 		// clientUserMessageId mads sent it with (SendKeyed). Live text is
 		// per item, exactly the stored text.
-		provider.BehaviorStableKeys:     provider.Native,
-		provider.BehaviorStoredThinking: provider.Unsupported, // C2: flipped with each reader's thinking rows
+		provider.BehaviorStableKeys: provider.Native,
+		// Reasoning summaries are stored in thread/items/list under the
+		// item id, the text the live EventThinking carries at item
+		// completion; KeyedTranscript returns them. An empty summary is
+		// neither streamed nor a row.
+		provider.BehaviorStoredThinking: provider.Native,
 	}
 }
 
