@@ -119,6 +119,11 @@ type Rule struct {
 	// call itself, only once the tool's result is in — goose writes a
 	// message only after its tools have run.
 	HoldUntilToolDone bool `yaml:"hold_until_tool_done,omitempty"`
+	// Thinking streams as one keyed EventThinking before the reply (and
+	// before any tools) and is stored as a keyed Role "thinking" row under
+	// the same key — the stored thinking KeyedTranscript returns (plain
+	// Transcript never does). Session turns only; one-shots ignore it.
+	Thinking string `yaml:"thinking,omitempty"`
 }
 
 // UsageOverride pins one or more of a scripted one-shot's usage fields; unset
