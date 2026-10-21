@@ -83,6 +83,82 @@ func TestSessionOutputForwarding(t *testing.T) {
 	}
 }
 
+// The keyed v2 stream through the Router: ?v= and the cursor (the
+// Last-Event-ID header, or ?after=) reach the child, and every frame is
+// flushed as the child writes it — the child here never ends the response,
+// so a buffering proxy would deliver nothing. A reconnect resumes from the
+// last id the client saw.
+func TestSessionOutputV2ResumesThroughProxy(t *testing.T) {
+	srv, _ := newTestServerWithData(t)
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "v2 output", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}](t, resp)
+	url := srv.URL + "/sessions/" + created.Session.ID + "/output?v=2"
+
+	type frame struct{ id, event, data string }
+	// read opens the stream and returns its first n frames, leaving the
+	// connection open until they arrive.
+	read := func(url, lastID string, n int) []frame {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if lastID != "" {
+			req.Header.Set("Last-Event-ID", lastID)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var out []frame
+		var f frame
+		sc := bufio.NewScanner(resp.Body)
+		for len(out) < n && sc.Scan() {
+			line := sc.Text()
+			switch {
+			case line == "":
+				out = append(out, f)
+				f = frame{}
+			case strings.HasPrefix(line, "id: "):
+				f.id = strings.TrimPrefix(line, "id: ")
+			case strings.HasPrefix(line, "event: "):
+				f.event = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data: "):
+				f.data = strings.TrimPrefix(line, "data: ")
+			}
+		}
+		if len(out) < n {
+			t.Fatalf("got %d frames %v, want %d (err %v)", len(out), out, n, sc.Err())
+		}
+		return out
+	}
+
+	first := read(url, "", 3)
+	if first[0].event != "hello" || first[0].id != "" || !strings.Contains(first[0].data, `"resume":"fresh"`) ||
+		first[1].id != "e1:1" || first[2].id != "e1:2" {
+		t.Fatalf("fresh connection: %+v", first)
+	}
+
+	resumed := read(url, first[2].id, 3)
+	if !strings.Contains(resumed[0].data, `"cursor":"e1:2"`) || resumed[1].id != "e1:3" || resumed[2].id != "e1:4" {
+		t.Fatalf("resume with Last-Event-ID %s: %+v", first[2].id, resumed)
+	}
+	after := read(url+"&after=e1:1", "", 2)
+	if !strings.Contains(after[0].data, `"cursor":"e1:1"`) || after[1].id != "e1:2" {
+		t.Fatalf("resume with ?after=e1:1: %+v", after)
+	}
+}
+
 func TestSessionOutputNotRunning(t *testing.T) {
 	srv, _ := newTestServerWithData(t)
 	resp, err := http.Get(srv.URL + "/sessions/does-not-exist/output")

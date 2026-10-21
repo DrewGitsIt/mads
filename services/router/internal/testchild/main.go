@@ -14,6 +14,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,6 +61,10 @@ func main() {
 		flusher := w.(http.Flusher)
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
+		if r.URL.Query().Get("v") == "2" {
+			serveV2(w, flusher, r)
+			return
+		}
 		for _, tok := range []string{"token-1", "token-2", "token-3"} {
 			select {
 			case <-r.Context().Done():
@@ -250,4 +256,38 @@ func main() {
 		_, _ = fmt.Fprintf(w, `{"present":%t}`, present)
 	})
 	log.Fatal(http.Serve(ln, mux))
+}
+
+// serveV2 mimics the session service's keyed stream closely enough for the
+// Router's proxy tests: an id-less hello echoing the cursor it was given
+// (Last-Event-ID, else ?after=), then three numbered frames after it, each
+// flushed on its own — and the connection held open, so a proxy that
+// buffered would deliver nothing.
+func serveV2(w http.ResponseWriter, flusher http.Flusher, r *http.Request) {
+	last := r.Header.Get("Last-Event-ID")
+	if last == "" {
+		last = r.URL.Query().Get("after")
+	}
+	from := 0
+	if _, n, ok := strings.Cut(last, ":"); ok {
+		from, _ = strconv.Atoi(n)
+	}
+	resume := "fresh"
+	if last != "" {
+		resume = "resumed"
+	}
+	_, _ = fmt.Fprintf(w, "event: hello\ndata: {\"kind\":\"hello\",\"epoch\":\"e1\",\"resume\":%q,\"cursor\":%q}\n\n", resume, last)
+	flusher.Flush()
+	for seq := from + 1; seq <= from+3; seq++ {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(10 * time.Millisecond):
+		}
+		if _, err := fmt.Fprintf(w, "id: e1:%d\nevent: text_delta\ndata: {\"kind\":\"text_delta\",\"key\":\"k\",\"text\":\"t%d\"}\n\n", seq, seq); err != nil {
+			return
+		}
+		flusher.Flush()
+	}
+	<-r.Context().Done()
 }

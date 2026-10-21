@@ -16,6 +16,11 @@ import (
 // This traffic is never persisted: it is byte-transparent reverse-proxied
 // straight from the child's /output to the UI connection and never touches
 // s.data (the Data Service is not on this path at all).
+//
+// The keyed v2 stream (?v=2, docs/CHAT-STREAM-DESIGN.md §2) needs nothing
+// more: the query (?v=, ?after=) and the Last-Event-ID header pass through,
+// and httputil.ReverseProxy flushes a text/event-stream response frame by
+// frame (TestSessionOutputV2ResumesThroughProxy holds it to that).
 func (s *server) handleSessionOutput(w http.ResponseWriter, r *http.Request) {
 	addr, ok := s.sup.SessionAddr(r.PathValue("id"))
 	if !ok {
