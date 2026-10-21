@@ -11,6 +11,7 @@ claim in this package. Model gpt-5.6-luna at low reasoning effort.
 | `limited-decline.jsonl` | Limited trust (`workspace-write` + `untrusted`): `touch a.txt` asks (`item/started` commandExecution, then `item/commandExecution/requestApproval` with that item id); the client declines; the item completes `declined`; the model retries once, declined again. | Probe 2026-10-20 (P2d), ephemeral thread, client answered `{"decision":"decline"}`. |
 | `limited-filechange.jsonl` | Limited trust: an apply_patch add asks (`item/fileChange/requestApproval`); accepted; the item completes `completed`. | Probe 2026-10-20 (P2d), client answered `{"decision":"accept"}`. |
 | `readonly-untrusted.jsonl` | read_only trust (`read-only` sandbox + `untrusted` approvals): even `ls` asks; the client declines; the item completes `declined`. Why read_only uses `untrusted`, not `never` (which would run reads without asking). | Probe 2026-10-20 (P2d review), scratch `CODEX_HOME` with the login symlinked, ephemeral thread. |
+| `toolturn-stdout.jsonl`, `toolturn-items-list.json` | The stable_keys probe's text, tool, text turn: "Say one short sentence, then run the shell command `ls`, then say one short sentence about the result." — reasoning, a commentary agentMessage, an `ls` commandExecution (`aggregatedOutput` on completion, no `outputDelta`), the final answer; then `thread/items/list` with the same ids and texts, the user item's `clientId` echoed. | Probe 2026-10-21 (C1), scratch `CODEX_HOME` with the login symlinked, `read-only` sandbox + `never`, a workspace holding `a.txt` and `b.txt`. |
 | `steer-compact.jsonl` | `turn/steer` mid-turn (one more userMessage item, same turn id, one `turn/completed`), then `thread/compact/start` (its own turn: a `contextCompaction` item, `tokenUsage.last.totalTokens` 4900). | Probe 2026-10-20 (P2d), read-only sandbox, ephemeral thread. |
 
 ## Trimming and scrubbing
@@ -29,6 +30,17 @@ claim in this package. Model gpt-5.6-luna at low reasoning effort.
   completed items carry the text).
 
 ## Probes behind the adapter's other decisions (no file kept)
+
+- **Items-list cursors** (2026-10-21, scratch home, whole turns appended
+  between reads): `nextCursor` is null on any page that reaches the end of
+  the thread, even a full one (`limit` 2 over exactly 2 items); a
+  `nextCursor` from a non-final page continued correctly after more items
+  were appended; `backwardsCursor` is `{rolloutOrdinal: <page's first
+  item>, includeAnchor: true}`, and from a one-item descending page it read
+  ascending from the then-newest item, itself included, after a whole turn
+  had been appended (`[anchor, user 2, agent 2]`). The `turnId` filter
+  returns one turn's items. `TranscriptSince` is built on the
+  `backwardsCursor` result.
 
 - **Trust persistence**: `thread/start` with `sandbox` `workspace-write` or
   `danger-full-access` appends `[projects."<realpath or git root>"]
