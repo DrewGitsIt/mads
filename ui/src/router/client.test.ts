@@ -39,13 +39,11 @@ describe("FetchRouterClient", () => {
     expect(report.billing.mode).toBe("unknown");
   });
 
-  it("getTranscript includes the page query param when given", async () => {
+  it("getTranscript asks for the whole transcript, with no query", async () => {
     const fetchMock = mockFetchOnce([]);
     const client = new FetchRouterClient("http://router.local");
-    await client.getTranscript("s1", "2");
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://router.local/sessions/s1/transcript?page=2",
-    );
+    await client.getTranscript("s1");
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/transcript");
   });
 
   it("compactSession sends instructions only when there are some", async () => {

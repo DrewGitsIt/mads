@@ -14,6 +14,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
+	"github.com/drewkidwell/mads/pkg/transcriptpage"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/session/internal/runner"
 )
@@ -446,8 +447,13 @@ func (s *server) handleCommits(w http.ResponseWriter, r *http.Request) {
 // its bound provider instance (runner.Transcript) — the Router proxies here
 // for any session with a running child, since the Router's own
 // provider.Registry has no visibility into this process's provider session.
+//
+// ?before=<key>&limit=<n> pages it (contracts.TranscriptPage); with neither,
+// the answer is the whole transcript as a bare array, as it always was. The
+// Router's stored-ref fallback pages through the same transcriptpage.Respond.
 func (s *server) handleTranscript(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.runner.Transcript(r.Context()))
+	status, body := transcriptpage.Respond(r.URL.Query(), s.runner.Transcript(r.Context()))
+	writeJSON(w, status, body)
 }
 
 // handleInjectSkill sends a declared skill's content into the session as a

@@ -658,6 +658,10 @@ export interface TranscriptMessage {
   is_error?: boolean;
   compact?: CompactMarker; // set on role "compact": one compaction pass, where it happened
   inbound?: InboundSource; // set on role "inbound" (text is the message body; not a user turn) — mirrors pkg/contracts/transcript.go TranscriptMessage.Inbound
+  /** The row's conversation identity (opaque; compare for equality only). A tool call and its result share one. Absent from an adapter without stable keys. */
+  key?: string;
+  /** A synthetic row the agent itself wrote (an interrupt marker, a failed turn); role is unchanged. */
+  notice?: boolean;
 }
 
 // mirrors pkg/contracts/transcript.go CompactMarker. Zero/absent fields mean

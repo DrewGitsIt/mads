@@ -97,7 +97,7 @@ export interface SessionEventSource {
  */
 export interface RouterClient {
   getSession(id: string): Promise<Session>;
-  getTranscript(sessionId: string, page?: string): Promise<TranscriptMessage[]>;
+  getTranscript(sessionId: string): Promise<TranscriptMessage[]>;
   streamSession(sessionId: string): SessionEventSource;
   /**
    * `queue: true` asks the session to hold a message sent mid-turn and
@@ -579,8 +579,11 @@ export class FetchRouterClient implements RouterClient {
     return routerGet(this.baseUrl, `/sessions/${id}`);
   }
 
-  async getTranscript(sessionId: string, page?: string): Promise<TranscriptMessage[]> {
-    return routerGet(this.baseUrl, `/sessions/${sessionId}/transcript`, { page });
+  // The whole transcript, as a bare array. The server also pages by key
+  // (?before=&limit=, pkg/contracts TranscriptPage) for the keyed chat
+  // stream to adopt; nothing here asks for a page yet.
+  async getTranscript(sessionId: string): Promise<TranscriptMessage[]> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/transcript`);
   }
 
   // The child's live data-plane event feed (services/session's
