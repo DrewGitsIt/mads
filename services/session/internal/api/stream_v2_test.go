@@ -724,6 +724,7 @@ func TestV2UnkeyedResyncsAtTurnEnd(t *testing.T) {
 		p.matrix[b] = s
 	}
 	p.matrix[provider.BehaviorStableKeys] = provider.Unsupported
+	p.matrix[provider.BehaviorStoredThinking] = provider.Unsupported
 	srv, _ := startRunner(t, p, fastSettle)
 	if p.startOptions().Keyed {
 		t.Fatal("an unkeyed provider was started Keyed")
@@ -763,6 +764,7 @@ func TestV2KeyedStartOption(t *testing.T) {
 			p.matrix[b] = s
 		}
 		p.matrix[provider.BehaviorStableKeys] = tc.support
+		p.matrix[provider.BehaviorStoredThinking] = provider.Unsupported
 		startRunner(t, p, fastSettle)
 		if got := p.startOptions().Keyed; got != tc.keyed {
 			t.Errorf("stable_keys %s: Keyed = %v, want %v", tc.support, got, tc.keyed)
@@ -1029,4 +1031,44 @@ func TestV2ThinkingSettlesAgainstKeyedStore(t *testing.T) {
 	live.wait(t, "th2 unsaved", func(fs []v2Frame) bool {
 		return slices.ContainsFunc(ofKind(fs, "unsaved"), func(f v2Frame) bool { return slices.Equal(f.keys(), []string{"th2"}) })
 	})
+}
+
+// The fake stores its thinking (stored_thinking native): a viewer that
+// connects mid-turn, before the store is read, gets the thinking item once
+// from the tail; it then settles, and /transcript?v=2 serves it as a
+// thinking row under the same key. Plain /transcript has no thinking row.
+func TestV2FakeThinkingSettles(t *testing.T) {
+	f := newFake(t, fake.Rule{Match: "ponder", Thinking: "weighing it", Chunks: []string{"de", "ci", "ded"}, DelayMs: 200})
+	limits := fastSettle
+	limits.SettleDelay = 300 * time.Millisecond // a window before the first settle read
+	srv, _ := startRunner(t, f, limits)
+	live := openV2(t, srv.URL, "", "")
+	postMessage(t, srv, "ponder")
+	fs := live.waitKind(t, "thinking_delta", 1)
+	key := keyOf(ofKind(fs, "thinking_delta")[0])
+
+	c := openV2(t, srv.URL, "", "")
+	rp := c.replay(t)
+	c.close()
+	starts := slices.DeleteFunc(ofKind(rp, "item_start"), func(f v2Frame) bool { return keyOf(f) != key })
+	deltas := slices.DeleteFunc(ofKind(rp, "thinking_delta"), func(f v2Frame) bool { return keyOf(f) != key })
+	if len(starts) != 1 || starts[0].str("item") != "thinking" || len(deltas) != 1 || deltas[0].str("text") != "weighing it" {
+		t.Fatalf("mid-turn replay:\n%s", dump(rp))
+	}
+
+	all := live.wait(t, "the thinking to settle", func(fs []v2Frame) bool {
+		return count(fs, "turn_end") == 1 && slices.ContainsFunc(ofKind(fs, "settled"), func(f v2Frame) bool { return slices.Contains(f.keys(), key) })
+	})
+	if slices.ContainsFunc(ofKind(all, "unsaved"), func(f v2Frame) bool { return slices.Contains(f.keys(), key) }) {
+		t.Fatalf("stored thinking declared unsaved:\n%s", dump(all))
+	}
+	if !slices.ContainsFunc(transcriptRows(t, srv), func(m contracts.TranscriptMessage) bool {
+		return m.Role == "thinking" && m.Key == key && m.Text == "weighing it"
+	}) {
+		t.Fatalf("no thinking row %s in /transcript?v=2", key)
+	}
+	if _, legacy := getBody(t, srv.URL+"/transcript"); bytes.Contains(legacy, []byte(`"thinking"`)) {
+		t.Fatalf("plain /transcript carries thinking: %s", legacy)
+	}
+	assertNoDuplicates(t, srv, live, all)
 }
