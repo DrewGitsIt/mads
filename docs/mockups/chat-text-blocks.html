@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>mads · one answer, several text blocks: (a) vs (b)</title>
+<style>
+  :root {
+    --bg: #15120d; --bg1: #1d1913; --line: #3a3328; --text: #ece6da; --text2: #b9b0a0;
+    --text3: #857c6c; --accent: #d9a273; --warn: #e0a95a; --bad: #e07a5f;
+    --user: #3a2f24;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { padding: 20px 28px 8px; }
+  h1 { font-size: 18px; margin: 0 0 6px; }
+  header p { margin: 0; color: var(--text2); max-width: 980px; }
+  .case { padding: 18px 28px 26px; border-top: 1px solid var(--line); }
+  .case h2 { font-size: 14px; margin: 0 0 4px; color: var(--accent); font-weight: 600; }
+  .blocks { font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--text3); margin: 0 0 14px; }
+  .blocks b { color: var(--text2); font-weight: 500; }
+  .cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .col { background: var(--bg1); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px 16px; }
+  .col h3 { margin: 0 0 2px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--text2); }
+  .col .why { margin: 0 0 12px; font-size: 12px; color: var(--text3); }
+  .col.today h3 { color: var(--bad); }
+  .col.pick { border-color: var(--accent); }
+  .col.pick h3 { color: var(--accent); }
+  .userbubble { margin-left: auto; width: max-content; background: var(--user); border-radius: 10px;
+                padding: 8px 14px; margin-bottom: 18px; }
+  /* one agent message bubble, as ChatRenderer draws them: prose, a gap between bubbles */
+  .agent { position: relative; }
+  .agent + .agent { margin-top: 22px; }               /* gap between bubbles */
+  .agent.outlined { outline: 1px dashed #5a4f3f; outline-offset: 4px; border-radius: 3px; }
+  .agent p, .agent ul, .agent h2 { margin: 0; }
+  .agent > * + *, .agent > p + *, .agent > ul + * { margin-top: 10px; }   /* gap between paragraphs inside a bubble */
+  .agent h2 { font-size: 17px; }
+  .agent ul { padding-left: 22px; }
+  .agent ul.loose li + li { margin-top: 6px; }
+  .flag { color: var(--bad); background: rgba(224,122,95,.12); border-radius: 3px; padding: 0 2px; }
+  .legend { font-size: 12px; color: var(--text3); margin-top: 10px; }
+  .legend span { outline: 1px dashed #5a4f3f; padding: 0 4px; border-radius: 3px; }
+  footer { padding: 16px 28px 30px; color: var(--text2); border-top: 1px solid var(--line); max-width: 1100px; }
+  footer code { color: var(--text); }
+</style>
+</head>
+<body>
+<header>
+  <h1>One answer, several text blocks</h1>
+  <p>Claude sometimes writes one answer as several text blocks. These are the four cases from the repro.
+     <b>Live today</b> is what streams now (blocks glued together); the other two are the candidate rules,
+     which live <i>and</i> stored would both follow, so nothing jumps at turn end.
+     Dashed outlines mark bubble boundaries (only to make them visible here).</p>
+</header>
+
+<!-- R4B -->
+<section class="case">
+  <h2>R4B · a list split across blocks</h2>
+  <div class="blocks">block 1: <b>"Steps:\n\n- first\n- second\n"</b> &nbsp; block 2: <b>"- third\n- fourth\n\nDone."</b></div>
+  <div class="cols">
+    <div class="col today">
+      <h3>Live today</h3><p class="why">Joined with nothing; happens to look right, then jumps to (a) at turn end.</p>
+      <div class="userbubble">R4B go</div>
+      <div class="agent outlined">
+        <p>Steps:</p>
+        <ul><li>first</li><li>second</li><li>third</li><li>fourth</li></ul>
+        <p>Done.</p>
+      </div>
+    </div>
+    <div class="col">
+      <h3>(a) one bubble per block</h3><p class="why">Faithful to claude's blocks; the list breaks in two.</p>
+      <div class="userbubble">R4B go</div>
+      <div class="agent outlined">
+        <p>Steps:</p>
+        <ul><li>first</li><li>second</li></ul>
+      </div>
+      <div class="agent outlined">
+        <ul><li>third</li><li>fourth</li></ul>
+        <p>Done.</p>
+      </div>
+    </div>
+    <div class="col pick">
+      <h3>(b) one bubble per answer</h3><p class="why">Blocks joined at the boundary; one list.</p>
+      <div class="userbubble">R4B go</div>
+      <div class="agent outlined">
+        <p>Steps:</p>
+        <ul><li>first</li><li>second</li><li>third</li><li>fourth</li></ul>
+        <p>Done.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- R4A -->
+<section class="case">
+  <h2>R4A · a sentence, then a heading</h2>
+  <div class="blocks">block 1: <b>"I'll check the config files first."</b> &nbsp; block 2: <b>"## Findings\n\n- one\n- two\n"</b></div>
+  <div class="cols">
+    <div class="col today">
+      <h3>Live today</h3><p class="why">The heading marker lands mid-paragraph.</p>
+      <div class="agent outlined">
+        <p>I'll check the config files first.<span class="flag">## Findings</span></p>
+        <ul><li>one</li><li>two</li></ul>
+      </div>
+    </div>
+    <div class="col">
+      <h3>(a) one bubble per block</h3><p class="why">Correct, with a bubble gap before the heading.</p>
+      <div class="agent outlined"><p>I'll check the config files first.</p></div>
+      <div class="agent outlined">
+        <h2>Findings</h2>
+        <ul><li>one</li><li>two</li></ul>
+      </div>
+    </div>
+    <div class="col pick">
+      <h3>(b) one bubble per answer</h3><p class="why">Correct, with paragraph spacing.</p>
+      <div class="agent outlined">
+        <p>I'll check the config files first.</p>
+        <h2>Findings</h2>
+        <ul><li>one</li><li>two</li></ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- R4C -->
+<section class="case">
+  <h2>R4C · two sentences</h2>
+  <div class="blocks">block 1: <b>"Sentence one."</b> &nbsp; block 2: <b>"Sentence two."</b></div>
+  <div class="cols">
+    <div class="col today">
+      <h3>Live today</h3><p class="why">Run together.</p>
+      <div class="agent outlined"><p>Sentence one.<span class="flag">S</span>entence two.</p></div>
+    </div>
+    <div class="col">
+      <h3>(a) one bubble per block</h3><p class="why">Two bubbles.</p>
+      <div class="agent outlined"><p>Sentence one.</p></div>
+      <div class="agent outlined"><p>Sentence two.</p></div>
+    </div>
+    <div class="col pick">
+      <h3>(b) one bubble per answer</h3><p class="why">Two paragraphs.</p>
+      <div class="agent outlined"><p>Sentence one.</p><p>Sentence two.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- R4D -->
+<section class="case">
+  <h2>R4D · a sentence, then a list</h2>
+  <div class="blocks">block 1: <b>"Here is what I found:"</b> &nbsp; block 2: <b>"- alpha\n- beta\n"</b></div>
+  <div class="cols">
+    <div class="col today">
+      <h3>Live today</h3><p class="why">The first item is swallowed into the sentence.</p>
+      <div class="agent outlined">
+        <p>Here is what I found:<span class="flag">- alpha</span></p>
+        <ul><li>beta</li></ul>
+      </div>
+    </div>
+    <div class="col">
+      <h3>(a) one bubble per block</h3><p class="why">The list floats a bubble away from its lead-in.</p>
+      <div class="agent outlined"><p>Here is what I found:</p></div>
+      <div class="agent outlined"><ul><li>alpha</li><li>beta</li></ul></div>
+    </div>
+    <div class="col pick">
+      <h3>(b) one bubble per answer</h3><p class="why">Lead-in and list together.</p>
+      <div class="agent outlined">
+        <p>Here is what I found:</p>
+        <ul><li>alpha</li><li>beta</li></ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <p><b>(b)'s join rule</b> (revised 2026-10-20 after the provider survey): adjacent visible text items are joined before markdown parsing,
+  whether they share a message id (claude blocks) or not (codex items, goose/hermes model calls).
+  If block 1 already ends with a newline, they're joined as is (R4B stays one tight list); otherwise a blank line goes
+  between them (R4A, R4C, R4D become separate paragraphs). A tool call, or a thinking block with text, still ends the bubble,
+  exactly as today. The same rule runs on the live frames and on the stored rows, so turn end changes nothing.</p>
+</footer>
+</body>
+</html>
