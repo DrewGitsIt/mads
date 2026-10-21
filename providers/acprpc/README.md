@@ -101,7 +101,7 @@ capture citations are to committed files.
 | `PermissionAsksEveryCall` | goose's `approve` mode asks before EVERY tool call, reads included (`goose_mode.rs`: "Ask before every tool call"; `permission_inspector.rs` sends every call without a user grant to RequireApproval; `acp-transcript.jsonl` line 34 asks for `todo__todo_write`). Set, the engine answers read/search/think/fetch itself at limited trust instead of making each a card. Unset (kiro-cli, whose own policy trusts reads), every ask is forwarded. Never applied at auto_review, whose reviewer mode has already filtered. |
 | `OwnProcessTree` | hermes's helpers outlive hermes-acp: its dependency bootstrap's PM worker runs in hermes-acp's own process group (`pm/client.py:77`) and survived as ppid-1 `uv sync` orphans when only hermes-acp was killed (integration run, 2026-10-20), and its tools detach into sessions of their own (`tools/process_registry.py:1246`, `tools/mcp_tool.py:594`, `tools/code_kernel.py:642`). Set, the agent starts with `Setpgid`, and Close (the funnel for Start failures, one-shot returns and cancels, discovery) kills the group while the agent is still unreaped, then reaps remembered descendants by pid + start time (`pkg/procreap`, codexcli's reaper). Off for goose and kiro-cli. |
 | `Keys` | ACP names no item identity, so `Event.Key` (docs/CHAT-STREAM-DESIGN.md §1) comes from whatever ids an agent puts on the wire, and they differ: goose stamps every chunk with the model call's `messageId` and `_meta.goose.created`, both of which its store keeps, and its ollama ids repeat (`chatcmpl-0..999`; `goosecli/testdata/captures/keys/`); hermes stamps a UUID4 `messageId` per model call that it never stores (`hermescli/testdata/captures/runc1.*`); kiro-cli is uncaptured. `KeyModeMessageRun` keys text and thinking `<messageId>[@<created>]:<run>` and tools by `toolCallId`; the zero value emits no keys. |
-| `Settle` | Where an agent's store catches up is per agent (`EventSettle`, only with `StartOptions.SettleHints`): goose writes a tool call and the text before it only when the tool finishes (survey `lag.txt`: 6025 ms for `sleep 6`), so tool completion + prompt response; hermes writes the assistant row with its tool calls 3–15 ms after the `tool_call` frame, so the frame + prompt response. |
+| `Settle` | Where an agent's store catches up is per agent (`EventSettle`, only with `StartOptions.Keyed`): goose writes a tool call and the text before it only when the tool finishes (survey `lag.txt`: 6025 ms for `sleep 6`), so tool completion + prompt response; hermes writes the assistant row with its tool calls 3–15 ms after the `tool_call` frame, so the frame + prompt response. |
 | `ToolClassTable` | goose's `tool_call` updates carry only the `_meta` name and no `kind` (`goosecli/testdata/captures/acp-transcript.jsonl` line 33), so classification must be supplied, not read off the wire. Unknown identities deny below full trust. |
 
 ## Keys, settle hints and the in-memory buffer
@@ -118,7 +118,7 @@ matches live items to stored rows itself — an agent that stores different
 ids (hermes) is the binding's to alias.
 
 `Config.Settle` picks the points; `EventSettle` goes out only on a session
-started with `SettleHints`, so nothing changes for a consumer that didn't
+started with `Keyed`, so nothing changes for a consumer that didn't
 ask.
 
 The in-memory buffer (`Transcript()` / `ReplayMessages()`) is unchanged and

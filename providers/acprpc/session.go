@@ -77,7 +77,7 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 		toolCalls: make(map[string]toolCallInfo),
 		asker:     opts.Permissions,
 		asks:      make(map[string]*permAsk),
-		settle:    opts.SettleHints,
+		settle:    opts.Keyed,
 	}
 	if e.cfg.OwnProcessTree {
 		s.reaper = procreap.New(cmd.Process.Pid)
@@ -429,7 +429,7 @@ type streamSession struct {
 	// value); last-write-wins is exactly right for "occupancy now".
 	ctxUsed int
 	ctxSize int
-	// settle — the session asked for EventSettle (StartOptions.SettleHints);
+	// settle — the session asked for EventSettle (StartOptions.Keyed);
 	// cfg.Settle says where. item is the message the latest text or
 	// thinking chunk belonged to (Config.Keys); anonSeq numbers the
 	// messages of chunks that carried no messageId. Both are read-loop

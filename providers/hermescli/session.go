@@ -49,7 +49,7 @@ type session struct {
 	p      *Provider
 	ref    string
 	led    *ledger
-	// keyed: the session was started with StartOptions.SettleHints, the
+	// keyed: the session was started with StartOptions.Keyed, the
 	// keyed consumer's opt-in. Only then are a tool's name and result
 	// swapped for what hermes stores (corrections 3 and the result swap);
 	// a consumer that didn't opt in sees the stream exactly as before.

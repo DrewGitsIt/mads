@@ -310,7 +310,7 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 	}
 	s := &fakeSession{
 		f: f, ref: ref, mode: opts.Mode, cwd: opts.Cwd, trust: trust,
-		announced: announced, refAnnounce: timing, refCh: refCh, settle: opts.SettleHints,
+		announced: announced, refAnnounce: timing, refCh: refCh, settle: opts.Keyed,
 		events:    make(chan provider.Event, 256),
 		interrupt: make(chan struct{}, 1),
 	}
@@ -801,7 +801,7 @@ type fakeSession struct {
 	// refAnnounce is RefAnnounceNever — see RefAnnounced.
 	refCh chan string
 
-	// settle: the session asked for EventSettle (StartOptions.SettleHints).
+	// settle: the session asked for EventSettle (StartOptions.Keyed).
 	settle bool
 
 	mu        sync.Mutex

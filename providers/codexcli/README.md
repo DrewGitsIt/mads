@@ -30,7 +30,7 @@ survey's captures and this increment's probes, trimmed and scrubbed under
 | `thread/tokenUsage/updated` | `Usage` on the turn end: the turn's own tokens (codex's per-process totals differenced), cache reads split out, `ContextTokens` = the last call's `totalTokens`, `ContextWindow` = `modelContextWindow` |
 | `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `item/permissions/requestApproval` | decided by trust (below); forwarded asks become `PermissionAsk{ToolUseID: itemId, Tool: "shell"/"apply_patch", Input, Reason}` |
 | other server requests | answered at once (elicitation declined, user input empty, unknown methods `-32601`) — nothing is left waiting |
-| `item/completed` (any), `turn/completed` | with `StartOptions.SettleHints` only: `EventSettle` keyed to the item, and an unkeyed one before `EventTurnEnd` |
+| `item/completed` (any), `turn/completed` | with `StartOptions.Keyed` only: `EventSettle` keyed to the item, and an unkeyed one before `EventTurnEnd` |
 | other threads' notifications | ignored: a multi-agent run streams sub-agent threads on the same connection |
 
 ## Matrix, row by row

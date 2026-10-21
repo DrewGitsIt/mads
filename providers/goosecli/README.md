@@ -228,7 +228,7 @@ session only by deleting rows (`replace_conversation` for compaction,
 truncation for edits); either changes that count, and the read answers
 `ErrCursorStale`.
 
-**Settle hints** (`EventSettle`, only with `StartOptions.SettleHints`):
+**Settle hints** (`EventSettle`, only with `StartOptions.Keyed`):
 after each tool completion — goose writes the tool call, its result and
 the text before them only once the tool is done (6 s after the call for
 `sleep 6`) — and at the prompt response. A long tool keeps that text

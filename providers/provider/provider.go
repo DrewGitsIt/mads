@@ -147,14 +147,17 @@ type StartOptions struct {
 	// Nil means nobody answers: an adapter must then let the harness refuse
 	// whatever would have asked, never stall on it. See PermissionAsker.
 	Permissions PermissionAsker
-	// SettleHints opts the session into EventSettle (see that kind): the
-	// adapter marks where its agent's store has likely caught up with the
-	// stream. Off by default, so no consumer that didn't ask sees the kind.
-	// It is the keyed consumer's opt-in more broadly: an adapter that must
-	// change live content to equal its store (hermes's tool names and
-	// results) does so only under it, so a consumer that didn't opt in sees
-	// exactly the stream it always has.
-	SettleHints bool
+	// Keyed asks for the keyed conversation contract
+	// (docs/CHAT-STREAM-DESIGN.md §1, §3): every live item's text, tool name
+	// and tool result exactly as the agent's store will hold them, so the
+	// live item and the stored row are interchangeable under one Key, plus
+	// EventSettle marks where the store has likely caught up. An adapter that
+	// must change live content to get there (hermes swaps a tool's title for
+	// its stored name and its rendered result for the stored output) does so
+	// only under Keyed. Off by default: a consumer that doesn't ask sees
+	// exactly the stream it always has. Keys themselves (Event.Key) are
+	// carried either way.
+	Keyed bool
 	// ToolIntents is the persona-level allow/deny policy expressed as a
 	// closed-set intent vocabulary (agent-concept redesign §2). Allowed
 	// is the persona's Allowlist (empty == allow-all, the harness's

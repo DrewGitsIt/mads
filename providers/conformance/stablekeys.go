@@ -12,7 +12,7 @@ import (
 )
 
 // The stable_keys probe (docs/CHAT-STREAM-DESIGN.md §1). Three scripted turns
-// on one session started with SettleHints: a plain reply (Script.Echo), a
+// on one session started with Keyed: a plain reply (Script.Echo), a
 // reply with a tool call between two text parts (Script.ToolTurn), and a
 // turn interrupted while text streams (Script.Slow). For every item both
 // streamed and stored, the key and the text must agree; the store must list
@@ -74,7 +74,7 @@ func CheckStableKeys(ctx context.Context, p provider.Provider, s Script) Result 
 func (c *checker) stableKeys(structured bool) (string, error) {
 	var errs []string
 	if c.unaskedSettle {
-		errs = append(errs, "an EventSettle reached a session started without StartOptions.SettleHints")
+		errs = append(errs, "an EventSettle reached a session started without StartOptions.Keyed")
 	}
 	fail := func(note string) (string, error) {
 		if len(errs) == 0 {
@@ -101,9 +101,9 @@ func (c *checker) stableKeys(structured bool) (string, error) {
 		return fail("")
 	}
 
-	sess, err := c.p.Start(c.ctx, provider.StartOptions{Mode: provider.ModeACP, SettleHints: true})
+	sess, err := c.p.Start(c.ctx, provider.StartOptions{Mode: provider.ModeACP, Keyed: true})
 	if err != nil {
-		errs = append(errs, fmt.Sprintf("Start(acp, SettleHints): %v", err))
+		errs = append(errs, fmt.Sprintf("Start(acp, Keyed): %v", err))
 		return fail("")
 	}
 	defer func() { _ = sess.Close() }()
@@ -129,7 +129,7 @@ func (c *checker) stableKeys(structured bool) (string, error) {
 			return fail("")
 		}
 		if t.settles == 0 {
-			errs = append(errs, fmt.Sprintf("turn %q: no EventSettle with SettleHints on", t.name))
+			errs = append(errs, fmt.Sprintf("turn %q: no EventSettle with Keyed on", t.name))
 		}
 		stored = c.awaitStored(reader, sess.Ref(), turns[:i+1])
 		if incremental {

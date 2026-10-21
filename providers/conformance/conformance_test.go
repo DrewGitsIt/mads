@@ -190,7 +190,7 @@ func TestMismatchesAreCaught(t *testing.T) {
 		{
 			"a settle hint nobody asked for",
 			newStub(nil, lies{settleUnasked: true}),
-			provider.BehaviorStableKeys, "without StartOptions.SettleHints",
+			provider.BehaviorStableKeys, "without StartOptions.Keyed",
 		},
 	}
 	for _, c := range cases {

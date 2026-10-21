@@ -301,7 +301,7 @@ func TestAnchorAtWalksBack(t *testing.T) {
 	}
 }
 
-// Settle hints are opt-in: none without StartOptions.SettleHints; with it,
+// Settle hints are opt-in: none without StartOptions.Keyed; with it,
 // one after each item/completed, keyed to that item and after its last
 // live event, and one unkeyed before the turn end.
 func TestSettleHintsOnlyWhenAsked(t *testing.T) {
@@ -309,11 +309,11 @@ func TestSettleHintsOnlyWhenAsked(t *testing.T) {
 	plain := startSession(t, p, provider.StartOptions{})
 	for _, ev := range sendTurn(t, plain, "tool-turn") {
 		if ev.Kind == provider.EventSettle {
-			t.Fatalf("EventSettle without SettleHints: %+v", ev)
+			t.Fatalf("EventSettle without Keyed: %+v", ev)
 		}
 	}
 
-	s := startSession(t, p, provider.StartOptions{SettleHints: true})
+	s := startSession(t, p, provider.StartOptions{Keyed: true})
 	if err := s.SendKeyed(context.Background(), "tool-turn", "id-tt"); err != nil {
 		t.Fatal(err)
 	}

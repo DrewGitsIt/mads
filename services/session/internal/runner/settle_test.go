@@ -8,7 +8,7 @@ import (
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
-// EventSettle is opt-in (StartOptions.SettleHints, which the runner doesn't
+// EventSettle is opt-in (StartOptions.Keyed, which the runner doesn't
 // set yet), but a consumer that does see one must be unmoved by it: it
 // neither ends nor opens a turn, and the turn still ends on its own
 // EventTurnEnd. The kind carries no content, so nothing records it either.

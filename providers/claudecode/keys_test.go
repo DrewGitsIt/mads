@@ -24,7 +24,7 @@ import (
 //   - kill1 (JSONL only): a process killed mid-text and resumed, which
 //     writes the synthetic "No response requested.".
 
-// replayKeyed runs a captured stdout through a SettleHints streamSession,
+// replayKeyed runs a captured stdout through a Keyed streamSession,
 // with mads's sends and interrupts where the capture had them.
 func replayKeyed(t *testing.T, run string, settle bool) []provider.Event {
 	t.Helper()

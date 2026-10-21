@@ -438,7 +438,7 @@ Thinking stays out of transcript rows; its live events are keyed. An
 interrupted message has no `message_stop`, and its partial text is
 stored as streamed, cut wherever the abort landed.
 
-**Settle hints** (`StartOptions.SettleHints` only): an `EventSettle` after
+**Settle hints** (`StartOptions.Keyed` only): an `EventSettle` after
 each main-agent `message_stop` (a message's JSONL lines are written
 together ~30 ms after it), after each tool result (~100 ms), and just
 before each turn end.

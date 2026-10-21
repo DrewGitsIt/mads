@@ -140,7 +140,7 @@ type session struct {
 	trust  provider.Trust
 	asker  provider.PermissionAsker
 	effort string
-	// settle: the session asked for EventSettle (StartOptions.SettleHints).
+	// settle: the session asked for EventSettle (StartOptions.Keyed).
 	settle bool
 
 	// sendMu serializes the turn-shaping calls (Send, Compact) so a second
@@ -204,7 +204,7 @@ func newSession(p *Provider, c *conn, opts provider.StartOptions) *session {
 		trust:   effectiveTrust(opts.Trust),
 		asker:   opts.Permissions,
 		effort:  p.cfg.Effort,
-		settle:  opts.SettleHints,
+		settle:  opts.Keyed,
 		asks:    map[string]*pendingAsk{},
 	}
 }

@@ -125,7 +125,7 @@ const (
 	// up through the events before it, so a reader of the store (provider.
 	// IncrementalTranscriptReader) will find what was streamed so far. Key,
 	// when set, names the item it settles. Opt-in: an adapter emits it only
-	// for a session started with StartOptions.SettleHints, so consumers that
+	// for a session started with StartOptions.Keyed, so consumers that
 	// never asked never see one. Carries no conversation content; a
 	// consumer that doesn't know the kind can ignore it.
 	EventSettle EventKind = "settle"

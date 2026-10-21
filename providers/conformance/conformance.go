@@ -300,7 +300,7 @@ type checker struct {
 	ctx     context.Context
 	results []Result
 	// unaskedSettle: collect saw an EventSettle on a session that never set
-	// StartOptions.SettleHints (the stable_keys result reports it).
+	// StartOptions.Keyed (the stable_keys result reports it).
 	unaskedSettle bool
 }
 

@@ -121,7 +121,7 @@ for other threads — a multi-agent run's sub-agents — are ignored.
 - webSearch: one `EventToolUse` + result at completion (its started item
   has an empty query).
 - contextCompaction: `EventCompact` start/done, auto or manual.
-- With `StartOptions.SettleHints`: `EventSettle` (Key = the item's key)
+- With `StartOptions.Keyed`: `EventSettle` (Key = the item's key)
   after every `item/completed` of the thread — codex stores an item as it
   completes it, 0–27 ms behind — and an unkeyed one before each
   `EventTurnEnd`. Never without the option.

@@ -102,7 +102,7 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 		asker:            opts.Permissions,
 		asks:             map[string]context.CancelFunc{},
 		hasAgentFile:     p.hasDelegateFile,
-		settle:           opts.SettleHints,
+		settle:           opts.Keyed,
 	}
 	s.askCtx, s.askStop = context.WithCancel(context.Background())
 	for _, srv := range opts.MCPServers {
@@ -235,7 +235,7 @@ type streamSession struct {
 
 	// keys follows the stream to key its items (keys.go).
 	keys liveKeys
-	// settle: the session asked for EventSettle (StartOptions.SettleHints;
+	// settle: the session asked for EventSettle (StartOptions.Keyed;
 	// settleAfter).
 	settle bool
 }

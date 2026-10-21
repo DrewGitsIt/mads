@@ -67,7 +67,7 @@ func settles(events []provider.Event) []string {
 // span four seconds (…372 to …375), and the store keeps …372.
 func TestReplayGooseCaptureKeys(t *testing.T) {
 	e := replayEngine(t, "keys/run.wire.jsonl", gooseConfig())
-	sess, err := e.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Trust: provider.TrustFull, SettleHints: true})
+	sess, err := e.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Trust: provider.TrustFull, Keyed: true})
 	if err != nil {
 		t.Fatalf("Start against the capture: %v", err)
 	}

@@ -102,7 +102,7 @@ func TestHoldUntilToolDone(t *testing.T) {
 		Tools:             []fake.ToolStep{{Name: "sleep", Result: "ok", DurationMs: 400}},
 		HoldUntilToolDone: true,
 	})
-	sess, _ := f.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, SettleHints: true})
+	sess, _ := f.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Keyed: true})
 	defer func() { _ = sess.Close() }()
 	_ = sess.Send(context.Background(), "go")
 	for ev := range sess.Events() {
@@ -144,7 +144,7 @@ func TestSettleHintsAreOptIn(t *testing.T) {
 	_ = sess.Send(context.Background(), "tool-text")
 	for _, ev := range drain(t, sess) {
 		if ev.Kind == provider.EventSettle {
-			t.Fatal("EventSettle without StartOptions.SettleHints")
+			t.Fatal("EventSettle without StartOptions.Keyed")
 		}
 	}
 }

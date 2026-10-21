@@ -34,7 +34,7 @@ type lies struct {
 	keysTextDiffers bool // the store's plain reply text differs from the stream
 	keysInterleave  bool // the first text part's key comes back after the tool
 	keysUnsupported bool // emits keys while declaring stable_keys unsupported
-	settleUnasked   bool // emits EventSettle without StartOptions.SettleHints
+	settleUnasked   bool // emits EventSettle without StartOptions.Keyed
 }
 
 type stub struct {
@@ -112,7 +112,7 @@ func (s *stub) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 	s.mu.Unlock()
 
 	sess := &stubSession{
-		p: s, ref: ref, mode: opts.Mode, settle: opts.SettleHints || s.lies.settleUnasked,
+		p: s, ref: ref, mode: opts.Mode, settle: opts.Keyed || s.lies.settleUnasked,
 		events:    make(chan provider.Event, 256),
 		interrupt: make(chan struct{}, 1),
 	}

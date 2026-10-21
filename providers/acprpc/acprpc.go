@@ -187,7 +187,7 @@ type Config struct {
 	Keys KeyStrategy
 	// Settle names where the agent's own store has likely caught up, for
 	// EventSettle (emitted only for a session started with
-	// StartOptions.SettleHints). Store timing is per agent: goose writes a
+	// StartOptions.Keyed). Store timing is per agent: goose writes a
 	// tool call and the text before it only once the tool finishes
 	// (survey lag.txt: 6025 ms for `sleep 6`), so its points are the tool's
 	// completion and the prompt response; hermes writes the assistant row

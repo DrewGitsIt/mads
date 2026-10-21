@@ -188,7 +188,7 @@ func streamEventType(raw json.RawMessage) string {
 }
 
 // settleAfter adds the settle hints (provider.EventSettle) a line earns to
-// its events, for a session started with StartOptions.SettleHints. Points
+// its events, for a session started with StartOptions.Keyed. Points
 // where claude's JSONL has caught up (2.1.285 survey timings):
 //
 //   - the main agent's message_stop: a message's lines are written

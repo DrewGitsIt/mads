@@ -191,7 +191,7 @@ func TestRealCodexSmoke(t *testing.T) {
 
 // TestRealCodexSmokeStableKeys runs the stable_keys conformance probe
 // against the real binary (docs/CHAT-STREAM-DESIGN.md §1): a plain reply, a
-// text → `ls` → text turn and an interrupted count, on one SettleHints
+// text → `ls` → text turn and an interrupted count, on one Keyed
 // session — same key and text live and stored, store order = stream order,
 // chained TranscriptSince = Transcript, user ids round-tripping through
 // clientUserMessageId. The probe starts its own session with no model or
@@ -265,7 +265,7 @@ func (s *teeSession) Events() <-chan provider.Event { return s.events }
 
 func (p *teeProvider) Start(ctx context.Context, opts provider.StartOptions) (provider.Session, error) {
 	sess, err := p.Provider.Start(ctx, opts)
-	if err != nil || !opts.SettleHints {
+	if err != nil || !opts.Keyed {
 		return sess, err
 	}
 	p.mu.Lock()
