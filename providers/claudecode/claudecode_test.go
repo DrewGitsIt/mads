@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -29,6 +30,8 @@ func script() conformance.Script {
 		AttemptWrite:   func() string { return "attempt-write" },
 		AttemptCommand: func() string { return "attempt-command" },
 		Unprompted:     func() string { return "unprompted" },
+		ToolTurn:       func() string { return "tool-text" },
+		StoreWait:      2 * time.Second,  // the stand-in writes its JSONL before the next line
 		Timeout:        10 * time.Second, // each probe spawns a real subprocess
 	}
 }
@@ -1009,6 +1012,42 @@ func TestRealClaudeSmoke(t *testing.T) {
 	}
 	if !strings.Contains(res.Text, "mk-smoke") || res.Usage.OutputTokens == 0 {
 		t.Fatalf("smoke result: %+v", res)
+	}
+}
+
+// TestRealClaudeStableKeysSmoke runs the stable_keys probe against the real
+// binary on haiku: a plain reply, text/Bash ls/text, and a count to 300
+// interrupted mid-text, each item's key and text compared live vs the
+// session's JSONL. Opt-in: it spends real tokens.
+// MADS_CLAUDE_SMOKE=1 go test ./providers/claudecode -run StableKeysSmoke -v
+func TestRealClaudeStableKeysSmoke(t *testing.T) {
+	if os.Getenv("MADS_CLAUDE_SMOKE") != "1" {
+		t.Skip("set MADS_CLAUDE_SMOKE=1 (spends tokens) to run against the real claude binary")
+	}
+	p := New(Config{ExtraArgs: []string{"--model", "haiku"}})
+	if fi, err := os.Stat(p.cfg.Bin); err != nil || fi.IsDir() {
+		t.Skipf("no claude binary (%s)", p.cfg.Bin)
+	}
+	// The probe starts sessions without a cwd: run them in a scratch dir,
+	// and take claude's project dir for it away afterwards.
+	work := t.TempDir()
+	t.Chdir(work)
+	if real, err := filepath.EvalSymlinks(work); err == nil {
+		project := filepath.Join(p.cfg.TranscriptDir, regexp.MustCompile(`[^A-Za-z0-9]`).ReplaceAllString(real, "-"))
+		t.Cleanup(func() { _ = os.RemoveAll(project) })
+	}
+	res := conformance.CheckStableKeys(context.Background(), p, conformance.Script{
+		Echo: func(marker string) string { return "Reply with exactly this and nothing else: " + marker },
+		Slow: func() string { return "Count from 1 to 300, one number per line, no other text. No tools." },
+		ToolTurn: func() string {
+			return "Say one short sentence, then run the Bash command `ls`, then say one short sentence about the result."
+		},
+		StoreWait: 10 * time.Second,
+		Timeout:   90 * time.Second,
+	})
+	t.Logf("%s: declared %s; %s", res.Behavior, res.Declared, res.Note)
+	if res.Err != nil {
+		t.Fatal(res.Err)
 	}
 }
 
