@@ -303,7 +303,7 @@ func SplitTurns(msgs []contracts.TranscriptMessage) [][]contracts.TranscriptMess
 	sawUser := false
 	for i, m := range msgs {
 		if m.Role == "user" {
-			if len(turns) == 0 || sawUser && !(i > 0 && SameSend(msgs[i-1], m)) {
+			if len(turns) == 0 || sawUser && (i == 0 || !SameSend(msgs[i-1], m)) {
 				turns = append(turns, nil)
 			}
 			sawUser = true
