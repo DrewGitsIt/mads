@@ -173,6 +173,72 @@ type Config struct {
 	// tools/mcp_tool.py:594, tools/code_kernel.py:642). Off by default:
 	// goose and kiro-cli keep the plain stdin-EOF-then-kill shutdown.
 	OwnProcessTree bool
+	// Keys is the strategy for Event.Key on EventText, EventThinking,
+	// EventToolUse and EventToolResult (docs/CHAT-STREAM-DESIGN.md §1). ACP
+	// names no item identity: agents put their own on the wire, or none.
+	// goose stamps every chunk with the model call's messageId plus
+	// _meta.goose.created, and the store keeps both (survey 2026-10-20,
+	// goosecli testdata/captures/keys/run.wire.jsonl lines 15-16 and
+	// run.store.jsonl rows 3, 6); hermes stamps a UUID4 messageId per
+	// model call that it never stores (hermescli testdata/captures/
+	// runc1.wire.jsonl vs runc1.db.jsonl); kiro-cli is uncaptured. The
+	// zero value emits no keys — the honest reading where the wire's ids
+	// are unverified.
+	Keys KeyStrategy
+	// Settle names where the agent's own store has likely caught up, for
+	// EventSettle (emitted only for a session started with
+	// StartOptions.SettleHints). Store timing is per agent: goose writes a
+	// tool call and the text before it only once the tool finishes
+	// (survey lag.txt: 6025 ms for `sleep 6`), so its points are the tool's
+	// completion and the prompt response; hermes writes the assistant row
+	// with its tool calls before the tool runs (3–15 ms after the tool_call
+	// frame) and its last row before the prompt response. Zero: none.
+	Settle SettlePoints
+}
+
+// KeyMode selects a KeyStrategy variant.
+type KeyMode string
+
+const (
+	// KeyModeNone emits no keys. The zero value: an agent whose ids aren't
+	// verified live-vs-stored must not claim stable keys.
+	KeyModeNone KeyMode = ""
+	// KeyModeMessageRun keys text and thinking as
+	// "<messageId>[@<created>]:<run>" and tool calls by toolCallId. A message
+	// is the chunks sharing one messageId with no tool call, tool result or
+	// turn boundary between them; run counts the switches between text and
+	// thinking within it, so a thinking block and the text after it are two
+	// items (0 and 1), as an agent storing one content item per run lists
+	// them. created is the first chunk's _meta.<CreatedNamespace>.created:
+	// later chunks of one message carry later seconds (survey: chatcmpl-17
+	// spans 4), and the stored message keeps the first. A chunk with no
+	// messageId opens an anonymous message keyed by a per-session counter —
+	// the engine invents an id only where the agent gives none.
+	KeyModeMessageRun KeyMode = "message_run"
+)
+
+// KeyStrategy configures Event.Key derivation; see the modes.
+type KeyStrategy struct {
+	Mode KeyMode
+	// CreatedNamespace, for KeyModeMessageRun, names the _meta key whose
+	// "created" stamp joins the messageId: goose's ollama ids are
+	// chatcmpl-0..999 and repeat within a session (27 repeated pairs in a
+	// real store, survey main-store-msgid-collisions.txt), so the id alone
+	// isn't unique. Empty: the messageId alone (hermes's are UUID4s).
+	CreatedNamespace string
+}
+
+// SettlePoints are the wire events after which the engine emits
+// EventSettle; see Config.Settle.
+type SettlePoints struct {
+	// ToolCall: after each tool_call announcement (Key = the tool's).
+	ToolCall bool
+	// ToolDone: after each terminal tool_call_update, completed or failed
+	// (Key = the tool's).
+	ToolDone bool
+	// PromptResponse: when the session/prompt response arrives, just
+	// before the turn end.
+	PromptResponse bool
 }
 
 // ConfigOptionValue is one PreseedConfigOptions entry.

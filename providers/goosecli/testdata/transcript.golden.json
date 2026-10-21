@@ -2,7 +2,8 @@
   {
     "role": "user",
     "text": "Use the shell tool to create a file /tmp/mads-goose-capture-oneshot/x.txt containing the word hello, then tell me you did.",
-    "timestamp": "2026-10-20T17:18:25Z"
+    "timestamp": "2026-10-20T17:18:25Z",
+    "key": "user:msg_da631356-5703-430b-9f24-215fb5f5371b"
   },
   {
     "role": "tool",
@@ -13,7 +14,8 @@
         "content": "- [x] Create /tmp/mads-goose-capture-oneshot/x.txt containing \"hello\"\n- [ ] Confirm completion to user"
       }
     },
-    "timestamp": "2026-10-20T17:18:29Z"
+    "timestamp": "2026-10-20T17:18:29Z",
+    "key": "call_ocrbmvgk"
   },
   {
     "role": "tool_result",
@@ -22,7 +24,8 @@
       "id": "call_ocrbmvgk",
       "name": ""
     },
-    "timestamp": "2026-10-20T17:18:29Z"
+    "timestamp": "2026-10-20T17:18:29Z",
+    "key": "call_ocrbmvgk"
   },
   {
     "role": "tool",
@@ -33,7 +36,8 @@
         "command": "mkdir -p /tmp/mads-goose-capture-oneshot \u0026\u0026 echo -n hello \u003e /tmp/mads-goose-capture-oneshot/x.txt \u0026\u0026 cat /tmp/mads-goose-capture-oneshot/x.txt"
       }
     },
-    "timestamp": "2026-10-20T17:18:32Z"
+    "timestamp": "2026-10-20T17:18:32Z",
+    "key": "call_wo26aqor"
   },
   {
     "role": "tool_result",
@@ -42,7 +46,8 @@
       "id": "call_wo26aqor",
       "name": ""
     },
-    "timestamp": "2026-10-20T17:18:32Z"
+    "timestamp": "2026-10-20T17:18:32Z",
+    "key": "call_wo26aqor"
   },
   {
     "role": "tool",
@@ -53,7 +58,8 @@
         "content": "- [x] Create /tmp/mads-goose-capture-oneshot/x.txt containing \"hello\"\n- [x] Confirm completion to user"
       }
     },
-    "timestamp": "2026-10-20T17:18:34Z"
+    "timestamp": "2026-10-20T17:18:34Z",
+    "key": "call_bi65iiph"
   },
   {
     "role": "tool_result",
@@ -62,11 +68,13 @@
       "id": "call_bi65iiph",
       "name": ""
     },
-    "timestamp": "2026-10-20T17:18:34Z"
+    "timestamp": "2026-10-20T17:18:34Z",
+    "key": "call_bi65iiph"
   },
   {
     "role": "agent",
     "text": "Done.",
-    "timestamp": "2026-10-20T17:18:34Z"
+    "timestamp": "2026-10-20T17:18:34Z",
+    "key": "chatcmpl-612@1792516714:0"
   }
 ]

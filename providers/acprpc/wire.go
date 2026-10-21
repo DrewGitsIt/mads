@@ -305,8 +305,9 @@ type sessionUpdateParams struct {
 // on tool_call_update. Kind is the spec tool-kind taxonomy field on
 // tool_call variants — set by claude/codex/hermes, never by goose
 // (testdata/captures/README.md "Tool identity varies"). Meta stays raw:
-// the only extension read is decodeNSToolCallMeta, behind the
-// ToolIdentityMetaNamespace knob.
+// the only extension reads are decodeNSToolCallMeta, behind the
+// ToolIdentityMetaNamespace knob, and decodeNSCreated, behind
+// KeyStrategy.CreatedNamespace.
 type sessionUpdate struct {
 	SessionUpdate string          `json:"sessionUpdate"`
 	Content       json.RawMessage `json:"content,omitempty"`
@@ -332,8 +333,8 @@ type sessionUpdate struct {
 	Size int `json:"size,omitempty"`
 }
 
-// nsToolCallMeta quarantines the engine's ONLY _meta read, in one
-// greppable type: the tool_call variant's _meta.<ns>.toolCall{toolName,
+// nsToolCallMeta quarantines the engine's tool-identity _meta read (the
+// other is decodeNSCreated, for keys), in one greppable type: the tool_call variant's _meta.<ns>.toolCall{toolName,
 // extensionName} pair — the sole stable tool identity goose provides
 // (titles are humanized display strings, and goose never sets the ACP
 // kind field on model tool calls; claude puts a comparable name under
@@ -350,6 +351,21 @@ func decodeNSToolCallMeta(raw json.RawMessage, ns string) nsToolCallMeta {
 	}
 	_ = json.Unmarshal(raw, &outer)
 	return outer[ns].ToolCall
+}
+
+// decodeNSCreated reads _meta.<ns>.created, the creation stamp an agent
+// puts on each chunk (goose: unix seconds, the stored message's created on
+// the first chunk — survey run.wire.jsonl vs run.store.jsonl). Kept as the
+// wire's own digits, so the key carries exactly what the store holds; ""
+// when absent or not a number.
+func decodeNSCreated(raw json.RawMessage, ns string) string {
+	var outer map[string]struct {
+		Created json.Number `json:"created"`
+	}
+	if json.Unmarshal(raw, &outer) != nil {
+		return ""
+	}
+	return outer[ns].Created.String()
 }
 
 // chunkText decodes the *_chunk variants' single content block.

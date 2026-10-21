@@ -32,6 +32,7 @@ func script() conformance.Script {
 		Recall:         func() string { return "recall" },
 		AttemptWrite:   func() string { return "attempt-write" },
 		AttemptCommand: func() string { return "attempt-shell" },
+		ToolTurn:       func() string { return "tool-text" },
 		Timeout:        10 * time.Second, // each probe spawns a real subprocess
 	}
 }

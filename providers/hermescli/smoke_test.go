@@ -28,36 +28,8 @@ func TestRealHermesSmoke(t *testing.T) {
 	if _, err := binlocate.Find("hermes-acp"); err != nil {
 		t.Fatalf("hermes-acp not found: %v", err)
 	}
-	home := t.TempDir()
-	// A scratch HERMES_HOME has no hermes dependency install of its own,
-	// and mads refuses to start hermes-acp there (pkg/hermesinstall: hermes
-	// would sync ~600 MB into it). The smoke borrows the install of a hermes
-	// home prepared beforehand, by hermes, outside mads —
-	// MADS_HERMES_SMOKE_HOME — through a symlinked installs/ (hermes keys
-	// dependency state by <root>/installs/<key>). Never ~/.hermes: a
-	// borrowing launch rebuilds the owner's pm-runtime generation in place,
-	// which must not happen under the user's running Hermes.
-	donor := os.Getenv("MADS_HERMES_SMOKE_HOME")
-	if donor == "" {
-		t.Fatal("set MADS_HERMES_SMOKE_HOME to a hermes home with its own dependency install (not ~/.hermes); " +
-			"make one once with hermes itself, e.g. HERMES_HOME=/tmp/hermes-smoke hermes-acp </dev/null")
-	}
-	if realHome, err := os.UserHomeDir(); err == nil {
-		if a, b := resolvedPath(donor), resolvedPath(filepath.Join(realHome, ".hermes")); a == b {
-			t.Fatal("MADS_HERMES_SMOKE_HOME is ~/.hermes: the smoke must not touch the user's own install")
-		}
-	}
-	installs := filepath.Join(donor, "installs")
-	if _, err := os.Stat(installs); err != nil {
-		t.Fatalf("no hermes install to borrow at %s: %v", installs, err)
-	}
-	if err := os.Symlink(installs, filepath.Join(home, "installs")); err != nil {
-		t.Fatal(err)
-	}
+	home := smokeHome(t)
 	cfgPath := filepath.Join(home, "config.yaml")
-	if err := os.WriteFile(cfgPath, []byte("model:\n  default: gpt-4.1\n  provider: copilot\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	cfgBefore := fileSum(t, cfgPath)
 	cwd := t.TempDir()
 	if err := os.WriteFile(filepath.Join(cwd, "alpha.txt"), []byte("a\n"), 0o644); err != nil {
@@ -202,6 +174,43 @@ func TestRealHermesSmoke(t *testing.T) {
 	if got := turnText(drainTurnWithin(t, withMCP, turnTimeout)); !strings.Contains(got, "marker-QX7731") {
 		t.Errorf("MCP turn text = %q, want the tool's marker", got)
 	}
+}
+
+// smokeHome is a scratch HERMES_HOME for a real-binary smoke: copilot
+// gpt-4.1 in its config.yaml, and the dependency install of
+// MADS_HERMES_SMOKE_HOME borrowed through a symlinked installs/.
+func smokeHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	// A scratch HERMES_HOME has no hermes dependency install of its own,
+	// and mads refuses to start hermes-acp there (pkg/hermesinstall: hermes
+	// would sync ~600 MB into it). The smoke borrows the install of a hermes
+	// home prepared beforehand, by hermes, outside mads —
+	// MADS_HERMES_SMOKE_HOME — through a symlinked installs/ (hermes keys
+	// dependency state by <root>/installs/<key>). Never ~/.hermes: a
+	// borrowing launch rebuilds the owner's pm-runtime generation in place,
+	// which must not happen under the user's running Hermes.
+	donor := os.Getenv("MADS_HERMES_SMOKE_HOME")
+	if donor == "" {
+		t.Fatal("set MADS_HERMES_SMOKE_HOME to a hermes home with its own dependency install (not ~/.hermes); " +
+			"make one once with hermes itself, e.g. HERMES_HOME=/tmp/hermes-smoke hermes-acp </dev/null")
+	}
+	if realHome, err := os.UserHomeDir(); err == nil {
+		if a, b := resolvedPath(donor), resolvedPath(filepath.Join(realHome, ".hermes")); a == b {
+			t.Fatal("MADS_HERMES_SMOKE_HOME is ~/.hermes: the smoke must not touch the user's own install")
+		}
+	}
+	installs := filepath.Join(donor, "installs")
+	if _, err := os.Stat(installs); err != nil {
+		t.Fatalf("no hermes install to borrow at %s: %v", installs, err)
+	}
+	if err := os.Symlink(installs, filepath.Join(home, "installs")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte("model:\n  default: gpt-4.1\n  provider: copilot\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return home
 }
 
 // mcpProbeServer is a minimal stdio MCP server with one tool,
