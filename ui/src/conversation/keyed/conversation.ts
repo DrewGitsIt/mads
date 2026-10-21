@@ -31,6 +31,8 @@ export interface KeyedRow extends TranscriptMessage {
    * ends, then folds.
    */
   current?: boolean;
+  /** Built from stream frames in this tab (kept after it settles): its arrival times are the measured ones. */
+  streamed?: boolean;
   /**
    * A live row from before a replay of the whole tail (hello `fresh` or
    * `resync`): the replay resends its content, which replaces rather than
@@ -200,6 +202,13 @@ function mergePage(s: ConvState, page: KeyedRow[], hasMore: boolean): ConvState 
     if (prev?.current) merged.current = true;
     // The same send, stored: its failure (if any) stays shown.
     if (prev?.failed) merged.failed = true;
+    if (prev?.streamed) merged.streamed = true;
+    if (prev?.tool && merged.tool) {
+      merged.tool = withLiveDisplay(merged.tool, prev.tool, !!prev.streamed);
+      // A call watched live keeps its measured duration: stores stamp
+      // coarser (goose: whole seconds) than the arrival times.
+      if (prev.streamed && prev.timestamp) merged.timestamp = prev.timestamp;
+    }
     rows[r.key] = merged;
   }
   const next: ConvState = {
@@ -213,6 +222,26 @@ function mergePage(s: ConvState, page: KeyedRow[], hasMore: boolean): ConvState 
     next.hasMore = hasMore;
   }
   return next;
+}
+
+/**
+ * A stored tool call keeps what the live one showed where the store has
+ * nothing: an ACP agent's store (goose, hermes) keeps the call's name and
+ * input but not the display kind and title the wire carried, and the
+ * stored row replacing the live one mustn't change the row at turn end
+ * (nor its duration, for a call this tab watched live).
+ */
+function withLiveDisplay(stored: ToolUse, live: ToolUse, watched: boolean): ToolUse {
+  const result = stored.result && watched && live.result?.timestamp ? { ...stored.result, timestamp: live.result.timestamp } : stored.result;
+  return {
+    ...stored,
+    kind: stored.kind ?? live.kind,
+    title: stored.title ?? live.title,
+    locations: stored.locations ?? live.locations,
+    server: stored.server ?? live.server,
+    path: stored.path ?? live.path,
+    result: result ?? live.result,
+  };
 }
 
 function prependPage(s: ConvState, page: KeyedRow[], hasMore: boolean): ConvState {
@@ -268,7 +297,7 @@ function implicitStart(s: ConvState, key: string, parent: unknown): ConvState {
 /** Add or patch a live row, appending a new key to the tail. */
 function upsertLive(s: ConvState, key: string, patch: (prev: KeyedRow | undefined) => KeyedRow): ConvState {
   const prev = s.rows[key];
-  const row = patch(prev);
+  const row = prev ? patch(prev) : { ...patch(prev), streamed: true };
   const rows = { ...s.rows, [key]: row };
   return { ...s, rows, tail: prev ? s.tail : [...s.tail, key] };
 }

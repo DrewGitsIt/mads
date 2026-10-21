@@ -232,4 +232,41 @@ describe("conversationReducer", () => {
     t = run(t, f("unsaved", { keys: ["user:1"] }));
     expect(t.turn.active).toBe(true);
   });
+
+  it("a stored tool row keeps the live display kind and title the store doesn't have", () => {
+    let s = run(emptyConversation(), hello(), f("replay_end"));
+    s = run(
+      s,
+      f("item_start", { key: "call_1", item: "tool_use" }),
+      f("tool_use", { key: "call_1", tool: { id: "call_1", name: "shell", kind: "execute", title: "shell · ls" } }),
+      f("tool_result", { key: "call_1", text: "a.txt", is_error: false }),
+    );
+    s = run(
+      s,
+      page([
+        { role: "tool", key: "call_1", tool: { id: "call_1", name: "shell", status: "completed" } },
+        { role: "tool_result", key: "call_1", text: "a.txt", tool: { id: "call_1", name: "shell" } },
+      ]),
+    );
+    expect(s.rows.call_1.tool).toMatchObject({ name: "shell", kind: "execute", title: "shell · ls", status: "completed" });
+    expect(s.rows.call_1.tool?.result?.text).toBe("a.txt");
+    expect(s.rows.call_1.live).toBeFalsy();
+  });
+
+  it("a tool call watched live keeps its measured duration through the stored merge", () => {
+    let s = run(emptyConversation(), hello(), f("replay_end"));
+    s = run(s, f("item_start", { key: "c", item: "tool_use" }), f("tool_use", { key: "c", tool: { id: "c", name: "shell" } }), f("tool_result", { key: "c", text: "x" }));
+    s = run(s, f("settled", { keys: ["c"] })); // settled before the turn-end page lands
+    const started = s.rows.c.timestamp;
+    const ended = s.rows.c.tool?.result?.timestamp;
+    s = run(
+      s,
+      page([
+        { role: "tool", key: "c", tool: { id: "c", name: "shell" }, timestamp: "2026-10-21T00:00:00Z" },
+        { role: "tool_result", key: "c", text: "x", timestamp: "2026-10-21T00:00:00Z" },
+      ]),
+    );
+    expect(s.rows.c.timestamp).toBe(started);
+    expect(s.rows.c.tool?.result?.timestamp).toBe(ended);
+  });
 });
