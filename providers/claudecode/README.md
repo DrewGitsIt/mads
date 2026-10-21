@@ -451,9 +451,10 @@ a compaction boundary waits for its summary line. A file that shrank or
 was replaced (different inode) is `ErrCursorStale`.
 
 **Interrupts**: claude closes an interrupted turn with an `is_error`
-`error_during_execution` result that has no text. That turn end is
-`Interrupted` with no `EventError` beside it; an empty error used to
-follow every interrupt.
+`error_during_execution` result that has no text. The adapter still emits
+the empty `EventError` it always has before the `Interrupted` turn end, so
+consumers are unchanged; the stable_keys probe tolerates an error after the
+interrupt it asked for.
 
 ## Testing without claude installed
 

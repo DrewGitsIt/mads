@@ -345,25 +345,23 @@ func TestSettleHints(t *testing.T) {
 }
 
 // An interrupt's result line (is_error, error_during_execution, no text)
-// closes the turn as interrupted with no error beside it; the same line
-// with no interrupt asked for is still an error.
-func TestInterruptResultIsNotAnError(t *testing.T) {
+// still surfaces as the empty EventError it always has, before the
+// interrupted turn end: existing consumers see exactly what they did (C1
+// changes no live behaviour; the stable_keys probe tolerates an error after
+// the interrupt it asked for).
+func TestInterruptResultStillSurfacesAsBefore(t *testing.T) {
 	evs := replayKeyed(t, "intr", false)
-	if errs := ofKind(evs, provider.EventError); len(errs) != 0 {
-		t.Errorf("interrupted turns surfaced errors: %+v", errs)
-	}
 	var interrupted int
-	for _, ev := range ofKind(evs, provider.EventTurnEnd) {
-		if ev.Interrupted {
+	for i, ev := range evs {
+		if ev.Kind == provider.EventTurnEnd && ev.Interrupted {
 			interrupted++
+			if i == 0 || evs[i-1].Kind != provider.EventError {
+				t.Errorf("interrupted turn end %d not preceded by its EventError", interrupted)
+			}
 		}
 	}
 	if interrupted != 2 {
 		t.Errorf("%d interrupted turn ends, want 2", interrupted)
-	}
-	l := parseWireLine(t, `{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s"}`)
-	if got := ofKind(l.events(false, true), provider.EventError); len(got) != 1 {
-		t.Errorf("unasked error_during_execution: %d errors, want 1", len(got))
 	}
 }
 

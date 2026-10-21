@@ -558,7 +558,7 @@ func (l *wireLine) keyedEvents(interrupted bool, partial bool, k *lineKeys) []pr
 			return nil
 		}
 		ev := l.turnEnd(interrupted)
-		if l.IsError && !l.isInterruptEnd(interrupted) {
+		if l.IsError {
 			return []provider.Event{
 				{Kind: provider.EventError, Text: l.Result},
 				ev,
@@ -603,16 +603,6 @@ func (l *wireLine) keyedEvents(interrupted bool, partial bool, k *lineKeys) []pr
 		// control_response, ...: bookkeeping, not conversation.
 		return nil
 	}
-}
-
-// isInterruptEnd reports whether a result line is just how claude closes a
-// turn mads interrupted: is_error, subtype "error_during_execution", no
-// result text, terminal_reason "aborted_streaming" (2.1.285, testdata/
-// keys-intr.stdout.jsonl). That is the interrupt working, not an error, so it
-// closes the turn as interrupted with no EventError beside it; an empty
-// error used to reach the conversation after every interrupt.
-func (l *wireLine) isInterruptEnd(interrupted bool) bool {
-	return interrupted && l.Subtype == "error_during_execution" && strings.TrimSpace(l.Result) == ""
 }
 
 // tagged stamps the line's subagent-sidechain identity onto every event it
