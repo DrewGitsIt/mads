@@ -1,0 +1,21 @@
+{
+ "data": [
+  {
+   "turnId": "01a16526-a956-7e52-b663-369717930a94",
+   "item": {
+    "type": "userMessage",
+    "id": "01a16526-aa25-7230-8d5c-2294d210a77e",
+    "clientId": null,
+    "content": [
+     {
+      "type": "text",
+      "text": "say hi",
+      "text_elements": []
+     }
+    ]
+   }
+  }
+ ],
+ "nextCursor": null,
+ "backwardsCursor": "{\"requestedThreadId\":\"01a16526-a92d-7202-aab7-b42eb3283e88\",\"rolloutOrdinal\":9,\"includeAnchor\":true,\"scope\":{\"kind\":\"itemsByCreatedAtOrdinal\"}}"
+}

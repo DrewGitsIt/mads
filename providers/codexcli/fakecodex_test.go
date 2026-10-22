@@ -60,9 +60,18 @@ type fcThread struct {
 	Sandbox  string      `json:"sandbox"`
 	Approval string      `json:"approval"`
 	Items    []itemEntry `json:"items"`
+	Turns    []fcStored  `json:"turns"`
 
 	turn   *fcTurn
 	totals tokenBreakdown
+}
+
+// fcStored is one ended turn as thread/turns/list reports it (items not
+// loaded).
+type fcStored struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Error  any    `json:"error"`
 }
 
 type fcTurn struct {
@@ -268,6 +277,26 @@ func (srv *fcServer) handle(line []byte) {
 			return
 		}
 		srv.result(m.ID, page)
+	case "thread/turns/list":
+		th := srv.load(str("threadId"))
+		srv.mu.Lock()
+		var turns []fcStored
+		stored := th != nil && len(th.Items) > 0
+		if stored {
+			turns = append(turns, th.Turns...)
+		}
+		srv.mu.Unlock()
+		if !stored {
+			// codex 0.154.0, probed 2026-10-22 against a fresh thread/start.
+			srv.fail(m.ID, -32600, "thread "+str("threadId")+" is not materialized yet; thread/turns/list is unavailable before first user message")
+			return
+		}
+		data := []map[string]any{}
+		for i := len(turns) - 1; i >= 0; i-- { // newest first, codex's default
+			t := turns[i]
+			data = append(data, map[string]any{"id": t.ID, "items": []any{}, "itemsView": "notLoaded", "status": t.Status, "error": t.Error})
+		}
+		srv.result(m.ID, map[string]any{"data": data, "nextCursor": nil, "backwardsCursor": nil})
 	case "turn/start":
 		th := srv.load(str("threadId"))
 		if th == nil {
@@ -436,7 +465,9 @@ func (srv *fcServer) usage(th *fcThread, turn *fcTurn, last tokenBreakdown) {
 func (srv *fcServer) endTurn(th *fcThread, turn *fcTurn, status string, terr any) {
 	srv.mu.Lock()
 	th.turn = nil
+	th.Turns = append(th.Turns, fcStored{ID: turn.id, Status: status, Error: terr})
 	srv.mu.Unlock()
+	srv.save(th)
 	srv.notify("thread/status/changed", map[string]any{"threadId": th.ID, "status": map[string]any{"type": "idle"}})
 	srv.notify("turn/completed", map[string]any{"threadId": th.ID,
 		"turn": map[string]any{"id": turn.id, "items": []any{}, "status": status, "error": terr}})
@@ -517,6 +548,22 @@ func (srv *fcServer) runTurn(th *fcThread, turn *fcTurn, text, clientID string) 
 	case "fail-limit":
 		status = "failed"
 		terr = map[string]any{"message": "You've hit your usage limit.", "codexErrorInfo": "usageLimitExceeded"}
+	case "fail-expired":
+		// An expired login, as captured (testdata/captures/auth-expired.jsonl).
+		status = "failed"
+		terr = map[string]any{"message": "Your access token could not be refreshed. Please log out and sign in again.", "codexErrorInfo": "unauthorized"}
+		srv.notify("error", map[string]any{"error": terr, "willRetry": false, "threadId": th.ID, "turnId": turn.id})
+	case "fail-signed-out":
+		// No login at all, as captured (auth-signed-out.jsonl): retries
+		// carrying the 401, then a failure codex calls "other".
+		retry := map[string]any{"message": "Reconnecting... 1/5", "codexErrorInfo": map[string]any{"responseStreamDisconnected": map[string]any{"httpStatusCode": 401}}}
+		srv.notify("error", map[string]any{"error": retry, "willRetry": true, "threadId": th.ID, "turnId": turn.id})
+		status = "failed"
+		terr = map[string]any{"message": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses", "codexErrorInfo": "other"}
+		srv.notify("error", map[string]any{"error": terr, "willRetry": false, "threadId": th.ID, "turnId": turn.id})
+	case "fail-forbidden":
+		status = "failed"
+		terr = map[string]any{"message": "unexpected status 403 Forbidden", "codexErrorInfo": map[string]any{"httpConnectionFailed": map[string]any{"httpStatusCode": 403}}}
 	default:
 		srv.reply(th, turn, "final_answer", "ok")
 	}

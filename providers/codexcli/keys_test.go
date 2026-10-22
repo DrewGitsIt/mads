@@ -83,7 +83,7 @@ func TestCaptureKeysMatchTheStore(t *testing.T) {
 			evs, _ := replay(t, tc.stream, provider.TrustFull, nil)
 			liveOrder, liveText := liveItems(t, evs)
 			// The keyed form: thinking rows are compared like the rest.
-			storedOrder, storedText := storedItems(t, normalizeItems(loadItems(t, tc.items), true))
+			storedOrder, storedText := storedItems(t, normalizeItems(loadItems(t, tc.items), nil, true))
 			live := liveOrder
 			thinking := 0
 			for _, id := range live {
@@ -116,7 +116,7 @@ func TestCaptureKeysMatchTheStore(t *testing.T) {
 	}
 	// The user rows are keyed by the ids the survey sent them with.
 	var users []string
-	for _, m := range normalizeItems(loadItems(t, "run1-items-list.json"), false) {
+	for _, m := range normalizeItems(loadItems(t, "run1-items-list.json"), nil, false) {
 		if m.Role == "user" {
 			users = append(users, m.Key)
 		}
@@ -129,7 +129,7 @@ func TestCaptureKeysMatchTheStore(t *testing.T) {
 // A user message mads didn't send with an id keeps codex's own item id.
 func TestUserKeyWithoutClientID(t *testing.T) {
 	it := threadItem{Type: "userMessage", ID: "01a1-x", Content: []userInput{{Type: "text", Text: "hi"}}}
-	if got := normalizeItems([]itemEntry{{Item: it}}, false); len(got) != 1 || got[0].Key != "user:01a1-x" {
+	if got := normalizeItems([]itemEntry{{Item: it}}, nil, false); len(got) != 1 || got[0].Key != "user:01a1-x" {
 		t.Fatalf("rows = %+v", got)
 	}
 }
@@ -368,7 +368,7 @@ func TestSettleHintsOnlyWhenAsked(t *testing.T) {
 // with an empty summary) and is otherwise the same rows.
 func TestThinkingOnlyInTheKeyedForm(t *testing.T) {
 	entries := loadItems(t, "run1-items-list.json")
-	plain, keyed := normalizeItems(entries, false), normalizeItems(entries, true)
+	plain, keyed := normalizeItems(entries, nil, false), normalizeItems(entries, nil, true)
 	var rest []string
 	thinking := 0
 	for _, m := range plain {

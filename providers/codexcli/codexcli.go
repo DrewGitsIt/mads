@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -182,11 +183,13 @@ func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provi
 		return nil, fmt.Errorf("mode %q: %w", opts.Mode, provider.ErrUnsupported)
 	}
 	cwd := absCwd(opts.Cwd)
-	c, err := spawn(p.bin(), p.spawnArgs(), cwd, p.env(opts.Env))
+	env := p.env(opts.Env)
+	c, err := spawn(p.bin(), p.spawnArgs(), cwd, env)
 	if err != nil {
 		return nil, err
 	}
 	s := newSession(p, c, opts)
+	s.account = accountKey(env)
 	c.onNotify, c.onRequest, c.onExit = s.handleNotification, s.handleRequest, s.onExit
 	c.start()
 	fail := func(step string, err error) (provider.Session, error) {
@@ -412,4 +415,69 @@ func (p *Provider) Models(ctx context.Context) ([]provider.Model, error) {
 		return nil, fmt.Errorf("codex app-server: %w", err)
 	}
 	return models, nil
+}
+
+// DefaultAccount implements provider.AccountKeyer: the login a session
+// started with no extra environment runs on.
+func (p *Provider) DefaultAccount() string { return accountKey(p.env(nil)) }
+
+// LoginCommand is `codex login` for the login account names
+// (provider.Authenticator): codex opens the browser itself and writes the
+// login under $CODEX_HOME. The account's home goes in as CODEX_HOME only
+// when it isn't the default ~/.codex. argv[0] is the binary sessions spawn:
+// Config.Bin, else binlocate.Find (which honours $MADS_AGENT_BIN_DIR) — not
+// Resolve, whose fallback names a path that may not exist. No absolute,
+// existing binary, no command.
+func (p *Provider) LoginCommand(account string) (provider.LoginCommand, bool) {
+	dir, ok := strings.CutPrefix(account, accountPrefix)
+	bin := p.cfg.Bin
+	if bin == "" {
+		bin, _ = binlocate.Find("codex")
+	}
+	if !ok || dir == "" || !filepath.IsAbs(bin) {
+		return provider.LoginCommand{}, false
+	}
+	cmd := provider.LoginCommand{Argv: []string{bin, "login"}, Env: []string{}}
+	if accountKey(withoutCodexHome(p.env(nil))) != account {
+		cmd.Env = append(cmd.Env, "CODEX_HOME="+dir)
+	}
+	return cmd, true
+}
+
+// withoutCodexHome is env with any CODEX_HOME dropped: the environment of a
+// codex on its default login.
+func withoutCodexHome(env []string) []string {
+	return slices.DeleteFunc(slices.Clone(env), func(kv string) bool {
+		return strings.HasPrefix(kv, "CODEX_HOME=")
+	})
+}
+
+// accountPrefix starts every codex account key (accountKey).
+const accountPrefix = "codex:"
+
+// accountKey names the login a codex process with environment env runs on:
+// the provider plus its home — $CODEX_HOME, else ~/.codex, where codex
+// keeps auth.json. Two sessions with the same key share one login. "" when
+// neither CODEX_HOME nor a home directory is known.
+func accountKey(env []string) string {
+	var dir, home string
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		switch k {
+		case "CODEX_HOME":
+			dir = v
+		case "HOME":
+			home = v
+		}
+	}
+	if dir == "" {
+		if home == "" {
+			home, _ = os.UserHomeDir()
+		}
+		if home == "" {
+			return ""
+		}
+		dir = filepath.Join(home, ".codex")
+	}
+	return accountPrefix + filepath.Clean(dir)
 }

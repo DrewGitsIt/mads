@@ -1,6 +1,6 @@
 # Signing back in when an agent's login expires
 
-**Status:** In progress on `auth-signin` (2026-10-22). Order: claude-code, then codex, then hermes.
+**Status:** In progress on `auth-signin` (2026-10-22). claude-code and codex done; hermes next.
 **Driver:** Drew's claude login expired mid-session. Getting back in meant opening the
 shell dock, starting `claude`, typing `/login`, finishing in the browser, then resending.
 It worked, but nothing in mads helped.
@@ -65,6 +65,19 @@ transcript, `is_api_error_message`/`isApiErrorMessage` true) is an auth failure.
 `terminal_reason: api_error`. Expired login reads "Failed to authenticate: OAuth session
 expired and could not be refreshed" or "Login expired · Please run /login". Login command:
 `claude auth login`.
+
+**codex:** a failed turn (`turn/completed` status `failed`) whose `codexErrorInfo` is
+`"unauthorized"`, or a variant carrying `httpStatusCode` 401, or `"other"` with codex's own
+"unexpected status 401 …" message, is an auth failure. 403 is not: it can be policy.
+Captured 2026-10-22 with a scratch `CODEX_HOME`: an expired login fails with
+`unauthorized` ("Your access token could not be refreshed. Please log out and sign in
+again."); no login at all retries on `responseStreamDisconnected {httpStatusCode: 401}`,
+then fails with `other` and "unexpected status 401 Unauthorized: …". Both get as far as the
+turn: initialize and `thread/start` succeed signed out. Stored, a failed turn has no item;
+its error lives on the turn (`thread/turns/list`), so the transcript adds an `IsError` agent
+row after the turn's items, classified the same way. The account is
+`codex:<$CODEX_HOME, else ~/.codex>`. Login command: `codex login`, with `CODEX_HOME` only
+for a non-default home.
 
 ### Session runner
 

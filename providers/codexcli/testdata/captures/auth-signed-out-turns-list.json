@@ -1,0 +1,34 @@
+{
+ "data": [
+  {
+   "id": "01a16526-a956-7e52-b663-369717930a94",
+   "items": [
+    {
+     "type": "userMessage",
+     "id": "01a16526-aa25-7230-8d5c-2294d210a77e",
+     "clientId": null,
+     "content": [
+      {
+       "type": "text",
+       "text": "say hi",
+       "text_elements": []
+      }
+     ]
+    }
+   ],
+   "itemsView": "summary",
+   "status": "failed",
+   "error": {
+    "message": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: a4eb02a4ba071325-EWR, request id: req_79b95a322b3d4e54a8f3789610a5ca72",
+    "codexErrorInfo": "other",
+    "additionalDetails": null,
+    "misalignment": null
+   },
+   "startedAt": 1792698394,
+   "completedAt": 1792698409,
+   "durationMs": 14831
+  }
+ ],
+ "nextCursor": null,
+ "backwardsCursor": "{\"requestedThreadId\":\"01a16526-a92d-7202-aab7-b42eb3283e88\",\"rolloutOrdinal\":1,\"includeAnchor\":true,\"scope\":{\"kind\":\"turns\"}}"
+}

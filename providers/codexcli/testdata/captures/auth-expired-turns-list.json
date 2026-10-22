@@ -1,0 +1,34 @@
+{
+ "data": [
+  {
+   "id": "01a16527-4db7-71a1-8b1a-04ff5760439d",
+   "items": [
+    {
+     "type": "userMessage",
+     "id": "01a16527-53f4-7583-a25a-a5a355f9fc0c",
+     "clientId": null,
+     "content": [
+      {
+       "type": "text",
+       "text": "say hi",
+       "text_elements": []
+      }
+     ]
+    }
+   ],
+   "itemsView": "summary",
+   "status": "failed",
+   "error": {
+    "message": "Your access token could not be refreshed. Please log out and sign in again.",
+    "codexErrorInfo": "unauthorized",
+    "additionalDetails": null,
+    "misalignment": null
+   },
+   "startedAt": 1792698437,
+   "completedAt": 1792698439,
+   "durationMs": 2306
+  }
+ ],
+ "nextCursor": null,
+ "backwardsCursor": "{\"requestedThreadId\":\"01a16527-4da3-7de0-aebc-c32582258940\",\"rolloutOrdinal\":1,\"includeAnchor\":true,\"scope\":{\"kind\":\"turns\"}}"
+}

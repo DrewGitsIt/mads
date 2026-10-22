@@ -65,6 +65,63 @@ func (e *turnError) rateLimited() bool {
 	return false
 }
 
+// errorKind classifies the failure for provider.Event.ErrorKind and
+// Message.ErrorKind: ErrorKindAuth when codex refused the turn for its
+// login (authFailed), else unclassified.
+func (e *turnError) errorKind() string {
+	if e.authFailed() {
+		return provider.ErrorKindAuth
+	}
+	return ""
+}
+
+// authFailed reports whether the turn failed because the login was refused.
+// Captured 2026-10-22 against codex 0.154.0 with a scratch CODEX_HOME
+// (testdata/captures/auth-*.jsonl):
+//
+//   - an expired login (a ChatGPT token that would not refresh) fails the
+//     turn with CodexErrorInfo "unauthorized": "Your access token could not
+//     be refreshed. Please log out and sign in again."
+//   - no login at all retries on responseStreamDisconnected {httpStatusCode:
+//     401}, then fails the turn with "other" and the bare HTTP status as its
+//     message: "unexpected status 401 Unauthorized: Missing bearer …".
+//
+// So: "unauthorized"; any variant carrying httpStatusCode 401; or an
+// unclassified failure whose message is codex's own rendering of a 401. A
+// 403 is never auth — it can be policy (a workspace that disallows codex,
+// a region block), which signing in again would not fix.
+func (e *turnError) authFailed() bool {
+	if e == nil {
+		return false
+	}
+	raw := e.CodexErrorInfo
+	if len(raw) == 0 {
+		raw = json.RawMessage("null")
+	}
+	var info string
+	if json.Unmarshal(raw, &info) == nil {
+		switch info {
+		case "unauthorized":
+			return true
+		case "", "other":
+			return strings.HasPrefix(e.Message, "unexpected status 401 ")
+		}
+		return false
+	}
+	var variant map[string]struct {
+		HTTPStatusCode *int `json:"httpStatusCode"`
+	}
+	if json.Unmarshal(raw, &variant) != nil {
+		return false
+	}
+	for _, v := range variant {
+		if v.HTTPStatusCode != nil && *v.HTTPStatusCode == 401 {
+			return true
+		}
+	}
+	return false
+}
+
 // pendingAsk is one approval request forwarded to the PermissionAsker and
 // not yet answered. Whoever deletes it from session.asks under s.mu — the
 // asker's goroutine with a decision, or a withdrawal (serverRequest/resolved,
@@ -142,6 +199,9 @@ type session struct {
 	effort string
 	// settle: the session asked for EventSettle (StartOptions.Keyed).
 	settle bool
+	// account is the login this app-server runs on (accountKey of its
+	// environment), carried by an auth failure's EventError.
+	account string
 
 	// sendMu serializes the turn-shaping calls (Send, Compact) so a second
 	// Send sees the first one's turn as open, and lets Interrupt wait out a
@@ -663,9 +723,19 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 		open := s.turnOpen
 		s.mu.Unlock()
 		if !open && p.Error.Message != "" {
-			s.emit(provider.Event{Kind: provider.EventError, Text: p.Error.Message})
+			s.emit(s.errorEvent(p.Error.Message, &p.Error))
 		}
 	}
+}
+
+// errorEvent is the EventError for a failure codex reported as terr: an
+// auth failure is tagged ErrorKindAuth and names the session's login.
+func (s *session) errorEvent(text string, terr *turnError) provider.Event {
+	ev := provider.Event{Kind: provider.EventError, Text: text, ErrorKind: terr.errorKind()}
+	if ev.ErrorKind == provider.ErrorKindAuth && s.account != "" {
+		ev.Account = &provider.AccountStatus{Account: s.account}
+	}
+	return ev
 }
 
 // text emits one agentMessage delta, keyed by the item. Each agentMessage
@@ -865,7 +935,7 @@ func (s *session) finishTurn(status string, terr *turnError) {
 		if terr != nil && terr.Message != "" {
 			msg = terr.Message
 		}
-		s.emit(provider.Event{Kind: provider.EventError, Text: msg})
+		s.emit(s.errorEvent(msg, terr))
 	}
 	if settle {
 		// Every item the turn completed is stored by now.

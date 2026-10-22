@@ -41,12 +41,16 @@ type itemEntry struct {
 //
 // An interrupted turn's partial reply is in neither: codex stores an item
 // only once it completes (survey finding 6).
+//
+// A failed turn has no item saying so: its failure is on the turn
+// (thread/turns/list status "failed", error), read alongside and placed
+// after the turn's items as an IsError agent row (turnFailures).
 func (p *Provider) Transcript(ctx context.Context, ref string) ([]provider.Message, error) {
-	entries, err := p.readItems(ctx, ref)
+	entries, failed, err := p.readItems(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
-	return normalizeItems(entries, false), nil
+	return normalizeItems(entries, failed, false), nil
 }
 
 // KeyedTranscript implements provider.KeyedTranscriptReader: Transcript's
@@ -56,24 +60,31 @@ func (p *Provider) Transcript(ctx context.Context, ref string) ([]provider.Messa
 // equal live and stored, one of them empty). An empty summary makes no
 // row, as it makes no live item.
 func (p *Provider) KeyedTranscript(ctx context.Context, ref string) ([]provider.Message, error) {
-	entries, err := p.readItems(ctx, ref)
+	entries, failed, err := p.readItems(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
-	return normalizeItems(entries, true), nil
+	return normalizeItems(entries, failed, true), nil
 }
 
-// readItems lists ref's items from the live session's app-server, else a
-// short-lived one.
-func (p *Provider) readItems(ctx context.Context, ref string) ([]itemEntry, error) {
+// readItems lists ref's items, and the failures of its failed turns, from
+// the live session's app-server, else a short-lived one.
+func (p *Provider) readItems(ctx context.Context, ref string) ([]itemEntry, map[string]*turnError, error) {
 	if ref == "" {
-		return nil, errors.New("transcript: empty thread id")
+		return nil, nil, errors.New("transcript: empty thread id")
 	}
 	var entries []itemEntry
+	var failed map[string]*turnError
 	list := func(c *conn) error {
-		entries = entries[:0]
 		var err error
 		entries, err = listItems(ctx, c, ref)
+		if err != nil || len(entries) == 0 {
+			// Nothing stored, so no turn to have failed: codex refuses
+			// thread/turns/list before a thread's first user message.
+			failed = nil
+			return err
+		}
+		failed, err = turnFailures(ctx, c, ref)
 		return err
 	}
 	var err error
@@ -86,9 +97,9 @@ func (p *Provider) readItems(ctx context.Context, ref string) ([]itemEntry, erro
 		err = p.withServer(ctx, list)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("transcript %s: %w", ref, err)
+		return nil, nil, fmt.Errorf("transcript %s: %w", ref, err)
 	}
-	return entries, nil
+	return entries, failed, nil
 }
 
 func listItems(ctx context.Context, c *conn, ref string) ([]itemEntry, error) {
@@ -112,6 +123,64 @@ func listItems(ctx context.Context, c *conn, ref string) ([]itemEntry, error) {
 	return all, nil
 }
 
+// turnPageSize is thread/turns/list's page size: turns, not items, so a
+// long session still takes few pages.
+const turnPageSize = 200
+
+// turnFailures maps each failed turn of ref to its error, from
+// thread/turns/list (items not loaded: only status and error are read).
+// Captured 2026-10-22 (testdata/captures/auth-*-turns-list.json): a failed
+// turn keeps its status and its TurnError, codexErrorInfo included, in the
+// rollout, so a fresh app-server reads it back. A codex without
+// thread/turns/list yields none: the rows then just lack the failures.
+func turnFailures(ctx context.Context, c *conn, ref string) (map[string]*turnError, error) {
+	failed := map[string]*turnError{}
+	cursor := ""
+	for range 10000 {
+		params := map[string]any{"threadId": ref, "limit": turnPageSize, "itemsView": "notLoaded"}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		raw, err := c.request(ctx, "thread/turns/list", params)
+		var re *rpcError
+		if errors.As(err, &re) && re.Code == errMethodNotFound {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("thread/turns/list: %w", err)
+		}
+		var res struct {
+			Data []struct {
+				ID     string     `json:"id"`
+				Status string     `json:"status"`
+				Error  *turnError `json:"error"`
+			} `json:"data"`
+			NextCursor *string `json:"nextCursor"`
+		}
+		if err := json.Unmarshal(raw, &res); err != nil {
+			return nil, fmt.Errorf("thread/turns/list: %w", err)
+		}
+		for _, t := range res.Data {
+			if t.Status == "failed" {
+				terr := t.Error
+				if terr == nil || terr.Message == "" {
+					terr = &turnError{Message: "turn failed"}
+				}
+				failed[t.ID] = terr
+			}
+		}
+		if res.NextCursor == nil || *res.NextCursor == "" || len(res.Data) == 0 {
+			break
+		}
+		cursor = *res.NextCursor
+	}
+	return failed, nil
+}
+
+// turnErrorKey keys the row standing for a failed turn's error: the turn
+// has no item of its own to key it by.
+func turnErrorKey(turnID string) string { return "turn-error:" + turnID }
+
 // Every row carries its item's key (itemKey): the same key the live events
 // for the item carried. A tool row and its result row share it.
 //
@@ -123,43 +192,59 @@ func listItems(ctx context.Context, c *conn, ref string) ([]itemEntry, error) {
 // only) a thinking row per reasoning item with summary text. Plan,
 // review-mode and hook items are left out. A tool item still in progress — the turn was killed mid-command —
 // keeps its tool row and gets no result.
-func normalizeItems(entries []itemEntry, thinking bool) []provider.Message {
+//
+// failed (turnFailures) adds, after the last item of each failed turn, an
+// agent row marked IsError with the turn's error — the harness speaking in
+// the agent's place, as claude-code's API-error lines do — classified
+// (ErrorKind) the way the live EventError is. A failed turn with no stored
+// item makes no row.
+func normalizeItems(entries []itemEntry, failed map[string]*turnError, thinking bool) []provider.Message {
 	var msgs []provider.Message
-	for _, e := range entries {
-		it := e.Item
-		switch {
-		case it.Type == "userMessage":
-			if text := it.userText(); text != "" {
-				msgs = append(msgs, provider.Message{Role: "user", Text: text, Key: itemKey(&it)})
-			}
-		case it.Type == "agentMessage":
-			if it.Text != "" {
-				msgs = append(msgs, provider.Message{Role: "agent", Text: it.Text, Key: it.ID})
-			}
-		case it.Type == "reasoning":
-			if text := it.reasoningText(); thinking && text != "" {
-				msgs = append(msgs, provider.Message{Role: "thinking", Text: text, Key: it.ID})
-			}
-		case it.Type == "contextCompaction":
-			msgs = append(msgs, provider.Message{Role: "compact", Compact: &provider.CompactMarker{}, Key: it.ID})
-		case it.isTool():
-			tool := it.toolUse()
-			text, isError, status := it.toolResult("")
-			if it.Status != "inProgress" {
-				tool.Status = status
-			}
-			msgs = append(msgs, provider.Message{Role: "tool", Tool: tool, Key: it.ID})
-			if it.Status == "inProgress" {
-				continue
-			}
+	for i, e := range entries {
+		msgs = appendItem(msgs, e.Item, thinking)
+		if terr := failed[e.TurnID]; terr != nil && (i+1 == len(entries) || entries[i+1].TurnID != e.TurnID) {
 			msgs = append(msgs, provider.Message{
-				Role:    "tool_result",
-				Tool:    &provider.ToolUse{ID: it.ID, Name: tool.Name, Kind: tool.Kind, Status: status},
-				Text:    text,
-				IsError: isError,
-				Key:     it.ID,
+				Role: "agent", Text: terr.Message, IsError: true, ErrorKind: terr.errorKind(), Key: turnErrorKey(e.TurnID),
 			})
 		}
+	}
+	return msgs
+}
+
+// appendItem appends one item's rows (normalizeItems).
+func appendItem(msgs []provider.Message, it threadItem, thinking bool) []provider.Message {
+	switch {
+	case it.Type == "userMessage":
+		if text := it.userText(); text != "" {
+			msgs = append(msgs, provider.Message{Role: "user", Text: text, Key: itemKey(&it)})
+		}
+	case it.Type == "agentMessage":
+		if it.Text != "" {
+			msgs = append(msgs, provider.Message{Role: "agent", Text: it.Text, Key: it.ID})
+		}
+	case it.Type == "reasoning":
+		if text := it.reasoningText(); thinking && text != "" {
+			msgs = append(msgs, provider.Message{Role: "thinking", Text: text, Key: it.ID})
+		}
+	case it.Type == "contextCompaction":
+		msgs = append(msgs, provider.Message{Role: "compact", Compact: &provider.CompactMarker{}, Key: it.ID})
+	case it.isTool():
+		tool := it.toolUse()
+		text, isError, status := it.toolResult("")
+		if it.Status != "inProgress" {
+			tool.Status = status
+		}
+		msgs = append(msgs, provider.Message{Role: "tool", Tool: tool, Key: it.ID})
+		if it.Status == "inProgress" {
+			return msgs
+		}
+		msgs = append(msgs, provider.Message{
+			Role:    "tool_result",
+			Tool:    &provider.ToolUse{ID: it.ID, Name: tool.Name, Kind: tool.Kind, Status: status},
+			Text:    text,
+			IsError: isError,
+			Key:     it.ID,
+		})
 	}
 	return msgs
 }
@@ -251,7 +336,10 @@ func (p *Provider) TranscriptSince(ctx context.Context, ref string, cursor provi
 	if err != nil {
 		return nil, cursor, fmt.Errorf("transcript since %s: %w", ref, err)
 	}
-	return normalizeItems(entries, true), &itemsCursor{ref: ref, last: last, anchor: anchor}, nil
+	// No failed-turn rows (turnFailures): these reads settle the live tail,
+	// and a turn's failure was never a live row to settle. Whole reads
+	// (Transcript, KeyedTranscript) carry them.
+	return normalizeItems(entries, nil, true), &itemsCursor{ref: ref, last: last, anchor: anchor}, nil
 }
 
 func indexOfItem(entries []itemEntry, id string) int {
