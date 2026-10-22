@@ -55,7 +55,6 @@ import type {
   Session,
   SessionReport,
   SessionDefaults,
-  QueuedMessage,
   SendResult,
   SessionTrust,
   SetSessionModelResponse,
@@ -65,7 +64,6 @@ import type {
   Template,
   TemplateValidationResult,
   ToolDiff,
-  TranscriptMessage,
   TranscriptPage,
   UndoCommitResult,
   UpdateCheckResult,
@@ -98,7 +96,6 @@ export interface SessionEventSource {
  */
 export interface RouterClient {
   getSession(id: string): Promise<Session>;
-  getTranscript(sessionId: string): Promise<TranscriptMessage[]>;
   /**
    * One page of the keyed transcript (`/transcript?v=2`, contracts
    * TranscriptPage): the `limit` rows before `before` (default: the last
@@ -139,8 +136,6 @@ export interface RouterClient {
    * anchor to this URL saves a file.
    */
   exportSessionUrl(sessionId: string, format: "md" | "json"): string;
-  /** The session's queued messages, in delivery order. */
-  listQueuedMessages(sessionId: string): Promise<QueuedMessage[]>;
   /** Drop one queued message before it's delivered. */
   cancelQueuedMessage(sessionId: string, queuedId: string): Promise<void>;
   interrupt(sessionId: string): Promise<void>;
@@ -593,11 +588,6 @@ export class FetchRouterClient implements RouterClient {
     return routerGet(this.baseUrl, `/sessions/${id}`);
   }
 
-  // The whole transcript, as a bare array (the unkeyed form).
-  async getTranscript(sessionId: string): Promise<TranscriptMessage[]> {
-    return routerGet(this.baseUrl, `/sessions/${sessionId}/transcript`);
-  }
-
   async getTranscriptPage(sessionId: string, page: { before?: string; limit: number }): Promise<TranscriptPage> {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/transcript`, {
       v: "2",
@@ -695,14 +685,6 @@ export class FetchRouterClient implements RouterClient {
 
   exportSessionUrl(sessionId: string, format: "md" | "json"): string {
     return `${this.baseUrl}/sessions/${encodeURIComponent(sessionId)}/export?format=${format}`;
-  }
-
-  async listQueuedMessages(sessionId: string): Promise<QueuedMessage[]> {
-    const res = await routerGet<{ queued?: QueuedMessage[] }>(
-      this.baseUrl,
-      `/sessions/${sessionId}/queue`,
-    );
-    return res.queued ?? [];
   }
 
   async cancelQueuedMessage(sessionId: string, queuedId: string): Promise<void> {

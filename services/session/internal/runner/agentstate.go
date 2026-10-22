@@ -193,8 +193,7 @@ func (r *Runner) observeAgentState(ev provider.Event) {
 	case ev.Kind == provider.EventThinking:
 		// Deliberately not the ticker's "Thinking · N tokens": a token
 		// count would make every tick its own transition, and the count is
-		// live-only indicator fuel that this log never persists anyway
-		// (see contracts.SessionThinking).
+		// live-only indicator fuel that this log never persists anyway.
 		r.setAgentState(contracts.AgentWorking, agentLabelThinking, false)
 	}
 }

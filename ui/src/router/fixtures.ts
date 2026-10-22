@@ -7,7 +7,6 @@ import type {
   DelegateTranscript,
   DelegateState,
   AttachmentOwner,
-  QueuedMessage,
   SendResult,
   Agent,
   CapabilitySuggestion,
@@ -1049,10 +1048,6 @@ export class FakeRouterClient implements RouterClient {
     return session;
   }
 
-  async getTranscript(sessionId: string): Promise<TranscriptMessage[]> {
-    return this.transcripts[sessionId] ?? [];
-  }
-
   /** Every getTranscriptPage call, in order. */
   readonly transcriptPageCalls: { sessionId: string; before?: string; limit: number }[] = [];
 
@@ -1119,21 +1114,7 @@ export class FakeRouterClient implements RouterClient {
     return `fixture://${who}/attachments/${attachmentId}${variant ? `/${variant}` : ""}`;
   }
 
-  /** Per-session queued messages; tests seed via seedQueuedMessages. */
-  private readonly queuedMessages = new Map<string, QueuedMessage[]>();
-
-  seedQueuedMessages(sessionId: string, queued: QueuedMessage[]): void {
-    this.queuedMessages.set(sessionId, queued);
-  }
-
-  async listQueuedMessages(sessionId: string): Promise<QueuedMessage[]> {
-    return this.queuedMessages.get(sessionId) ?? [];
-  }
-
-  async cancelQueuedMessage(sessionId: string, queuedId: string): Promise<void> {
-    const list = this.queuedMessages.get(sessionId);
-    if (list) this.queuedMessages.set(sessionId, list.filter((q) => q.id !== queuedId));
-  }
+  async cancelQueuedMessage(): Promise<void> {}
 
   async interrupt(): Promise<void> {}
 

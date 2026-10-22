@@ -13,6 +13,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/drewkidwell/mads/pkg/procreap"
 )
 
 // rpcMessage is one JSON-RPC line in either direction. `codex app-server`
@@ -57,7 +59,7 @@ var errConnClosed = errors.New("codex app-server exited")
 // group reaches everything that stayed in it. codex itself moves every tool
 // command and MCP server it spawns into a group of its own (captured
 // 2026-10-20: `sleep 37` ran with pgid == its own pid, not app-server's),
-// so the group alone is not enough — reap.go tracks the descendants.
+// so the group alone is not enough — pkg/procreap tracks the descendants.
 type conn struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
@@ -85,7 +87,7 @@ type conn struct {
 	waited   chan struct{}
 	waitOnce sync.Once
 
-	reaper *reaper
+	reaper *procreap.Reaper
 	// stderr keeps the tail of what app-server wrote to stderr — codex logs
 	// its failures there (auth, config, panics) — for the error a crash or a
 	// failed start reports.
@@ -164,7 +166,7 @@ func spawn(bin string, args []string, dir string, env []string) (*conn, error) {
 		pending:    map[int64]chan rpcMessage{},
 		done:       make(chan struct{}),
 		waited:     make(chan struct{}),
-		reaper:     newReaper(cmd.Process.Pid),
+		reaper:     procreap.New(cmd.Process.Pid),
 		stderr:     newRing(stderrTail),
 		stderrDone: make(chan struct{}),
 	}
@@ -211,7 +213,7 @@ func (c *conn) read(stdout io.Reader) {
 	// now orphaned (reparented to init) and only the reaper's snapshot
 	// still knows it — kill -9 of app-server left `sleep 20` running in
 	// the survey (run2-kill).
-	c.reaper.reap()
+	c.reaper.Reap()
 	if c.onExit != nil {
 		c.onExit()
 	}
@@ -329,7 +331,7 @@ func (c *conn) initialize(ctx context.Context) error {
 func (c *conn) wait() {
 	c.waitOnce.Do(func() {
 		// From here the pid may be reused: the reaper must never walk it again.
-		c.reaper.markExited()
+		c.reaper.MarkExited()
 		_ = c.cmd.Wait()
 		close(c.waited)
 	})
@@ -344,7 +346,7 @@ func (c *conn) shutdown(grace time.Duration) {
 	// Snapshot first: once app-server is gone its children reparent to
 	// init and the tree that ties them to this session is lost. (A no-op
 	// once app-server has been waited — its pid may be reused.)
-	c.reaper.snapshot()
+	c.reaper.Snapshot()
 	_ = c.stdin.Close()
 	select {
 	case <-c.done:
@@ -352,9 +354,9 @@ func (c *conn) shutdown(grace time.Duration) {
 		select {
 		case <-c.waited: // already reaped: its pid (and group id) may be anyone's now
 		default:
-			_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
+			procreap.KillGroup(c.cmd.Process.Pid)
 		}
 		<-c.done
 	}
-	c.reaper.reap()
+	c.reaper.Reap()
 }

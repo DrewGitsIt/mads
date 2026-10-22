@@ -94,7 +94,7 @@ it does not exit on stdin EOF. That alone is not enough: codex moves every
 tool command (and MCP server) it spawns into a group of **its own** —
 captured, `sleep 37` had pgid == its own pid — so a group kill misses
 exactly the processes that outlive app-server, and the survey saw a
-`sleep 20` survive `kill -9` of app-server. `reap.go` keeps a snapshot of
+`sleep 20` survive `kill -9` of app-server. `pkg/procreap` keeps a snapshot of
 app-server's descendants (taken 300 ms after each command item starts, and
 again at Close) and, once app-server is gone however it went, kills each
 one that is still the same process (same pid and pgid), group-wide when it

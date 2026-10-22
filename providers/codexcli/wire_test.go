@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/procreap"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -61,7 +62,7 @@ func replayWith(t *testing.T, capture string, opts provider.StartOptions) ([]pro
 		t.Fatal(err)
 	}
 	w := &bufWC{}
-	c := &conn{stdin: w, pending: map[int64]chan rpcMessage{}, done: make(chan struct{}), waited: make(chan struct{}), reaper: newReaper(0)}
+	c := &conn{stdin: w, pending: map[int64]chan rpcMessage{}, done: make(chan struct{}), waited: make(chan struct{}), reaper: procreap.New(0)}
 	s := newSession(New(Config{}), c, opts)
 	c.onNotify, c.onRequest = s.handleNotification, s.handleRequest
 	s.ref = captureThread(t, raw)
@@ -310,7 +311,7 @@ func TestReplaySteerAndCompact(t *testing.T) {
 
 func TestUnknownServerRequestsAreAnswered(t *testing.T) {
 	w := &bufWC{}
-	c := &conn{stdin: w, pending: map[int64]chan rpcMessage{}, reaper: newReaper(0)}
+	c := &conn{stdin: w, pending: map[int64]chan rpcMessage{}, reaper: procreap.New(0)}
 	s := newSession(New(Config{}), c, provider.StartOptions{Trust: provider.TrustLimited})
 	for i, method := range []string{"item/tool/call", "account/chatgptAuthTokens/refresh", "mcpServer/elicitation/request", "item/tool/requestUserInput", "something/new"} {
 		s.handleRequest(json.RawMessage(strings.Repeat("9", i+1)), method, json.RawMessage(`{}`))
@@ -338,7 +339,7 @@ func TestInterruptAbortsEachAskKind(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.method, func(t *testing.T) {
 			w := &bufWC{}
-			c := &conn{stdin: w, pending: map[int64]chan rpcMessage{}, reaper: newReaper(0)}
+			c := &conn{stdin: w, pending: map[int64]chan rpcMessage{}, reaper: procreap.New(0)}
 			cancelled := make(chan struct{})
 			asker := func(ctx context.Context, _ provider.PermissionAsk) provider.PermissionDecision {
 				<-ctx.Done()
@@ -373,7 +374,7 @@ func TestInterruptAbortsEachAskKind(t *testing.T) {
 // turn interrupted: that turn (or the next) would end mislabelled.
 func TestInterruptWithoutATurnIDMarksNothing(t *testing.T) {
 	w := &bufWC{}
-	c := &conn{stdin: w, pending: map[int64]chan rpcMessage{}, reaper: newReaper(0)}
+	c := &conn{stdin: w, pending: map[int64]chan rpcMessage{}, reaper: procreap.New(0)}
 	s := newSession(New(Config{}), c, provider.StartOptions{})
 	s.ref, s.turnOpen = "th", true // turn/start answered, turn/started not yet read
 	if err := s.Interrupt(context.Background()); err == nil {

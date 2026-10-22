@@ -88,11 +88,10 @@ type SubagentTask struct {
 	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
 }
 
-// ThinkingBlock is the payload of SessionThinking: one whole
-// extended-thinking block from the main agent. Token-count progress ticks
-// are never persisted (see SessionThinking); ThinkingTokens exists for
-// completeness of the wire shape and is zero on every persisted record
-// today.
+// ThinkingBlock is the payload of SessionThinking (no longer written; old
+// rows still decode): one whole extended-thinking block from the main
+// agent. ThinkingTokens existed for completeness of the wire shape and is
+// zero on every stored row.
 type ThinkingBlock struct {
 	Text           string `json:"text"`
 	ThinkingTokens int    `json:"thinking_tokens,omitempty"`
