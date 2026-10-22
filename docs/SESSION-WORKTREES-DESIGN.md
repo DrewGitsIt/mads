@@ -238,6 +238,7 @@ while any of these is true:
   just session files: untracked files would ride along otherwise.
 
 While Land runs, user messages queue behind it, using the runner's existing queue.
+In terminal mode the queue is typed into the TUI, all of it, once Land ends.
 
 **Steps,** all under `mads-land.lock`:
 

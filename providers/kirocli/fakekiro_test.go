@@ -30,6 +30,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/drewkidwell/mads/providers/provider/ptytest"
 )
 
 func TestMain(m *testing.M) {
@@ -153,17 +155,19 @@ func fkModels() {
 }
 
 // fkTerminal mimics the interactive `kiro-cli chat` REPL for PTY probes:
-// prompt, echo, prompt.
+// prompt, echo, prompt, its input line read as ptytest.Prompt.
 func fkTerminal() {
+	if err := ptytest.RawMode(0); err != nil {
+		fmt.Fprintln(os.Stderr, "fakekiro:", err)
+	}
 	fmt.Print("> ")
-	sc := bufio.NewScanner(os.Stdin)
-	for sc.Scan() {
-		reply, crash := fkReply(strings.TrimSpace(sc.Text()), nil)
+	_ = ptytest.Prompt{Submit: func(text string) {
+		reply, crash := fkReply(strings.TrimSpace(text), nil)
 		if crash {
 			os.Exit(1)
 		}
 		fmt.Printf("%s\r\n> ", reply)
-	}
+	}}.Read(os.Stdin)
 }
 
 // fkTranscriptEntry is one persisted turn — the cross-process memory a

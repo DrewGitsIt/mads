@@ -228,10 +228,14 @@ type Runner struct {
 	// read/write at a time.
 	opMu sync.Mutex
 
+	// typeMu keeps two messages typed into a terminal session at once
+	// (typeInto) from interleaving their bytes.
+	typeMu sync.Mutex
+
 	mu           sync.Mutex
 	sess         provider.Session
 	providerName string // sess's provider name, set alongside sess so Transcript can look the provider back up
-	busy         bool   // a turn is in flight (Send called, or an inbound message woke the agent; no EventTurnEnd yet)
+	busy         bool   // a turn is in flight (Send called, or an inbound message woke the agent; no EventTurnEnd yet); never set in terminal mode
 	// turnStartedAt is when the in-flight turn began, and interrupted
 	// whether Interrupt was asked of it since (the v2 hello's turn).
 	turnStartedAt time.Time
@@ -933,8 +937,37 @@ func (r *Runner) deliverLocked() {
 	r.interrupted = false
 }
 
+// terminalLocked reports whether the current transport is a terminal (PTY)
+// session. Must be called with r.mu held.
+func (r *Runner) terminalLocked() bool {
+	return r.sess != nil && r.sess.Mode() == provider.ModePTY
+}
+
+// typeInto delivers a message to a terminal session: the TUI gets it typed
+// into its prompt (the session's Send, provider.TypedMessage) and decides
+// for itself when to act on it — submitting it now, or holding it until
+// the agent's current reply ends. The runner marks no turn in flight: a
+// real terminal session has no event stream (Events() is nil), so nothing
+// would ever clear busy, and every later message would queue behind it for
+// good while SwitchTransport and SetModel refused. note is the re-root note
+// claimed into wire, owed again if the typing fails.
+func (r *Runner) typeInto(ctx context.Context, sess provider.Session, wire, note string) error {
+	r.typeMu.Lock()
+	err := sess.Send(ctx, wire)
+	r.typeMu.Unlock()
+	if err != nil {
+		r.restoreRerootNote(note)
+		return err
+	}
+	if note != "" {
+		r.noteDelivered(ctx)
+	}
+	return nil
+}
+
 // Send relays one user turn. Returns ErrTurnInFlight (surfaced as HTTP 409)
-// if a turn is already in flight.
+// if a turn is already in flight. In terminal mode it types the message
+// instead (typeInto) and starts no turn the runner tracks.
 func (r *Runner) Send(ctx context.Context, text string) error {
 	r.mu.Lock()
 	if r.sess == nil {
@@ -961,7 +994,12 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 		cwd = r.providerCwd
 		spawnedAt = r.spawnedAt
 	}
-	r.deliverLocked()
+	terminal := r.terminalLocked()
+	if terminal {
+		r.sentAny = true
+	} else {
+		r.deliverLocked()
+	}
 	sess := r.sess
 	// The user's own words go to the synthesis engine and digest; the
 	// provider (and the locator, which matches the transcript's first
@@ -976,6 +1014,9 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 	r.synthEngine.OnUserSend(text)
 	r.digest.recordUser(text, false)
 
+	if terminal {
+		return r.typeInto(ctx, sess, wire, note)
+	}
 	r.markAgentWorking(text)
 	if err := r.sendTurn(ctx, sess, wire, newMessageID(), false); err != nil {
 		r.mu.Lock()
@@ -1000,7 +1041,9 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 // conversation (docs/LINKED-SESSIONS-DESIGN.md decisions 1-2). It never
 // interrupts an in-flight turn: if the runner is busy, the message queues
 // and onTurnEnd delivers it once the current turn ends, FIFO with any other
-// queued injections. The provider gets text inside the attribution's
+// queued injections. Terminal mode is the exception: there the runner sees
+// no turns, so the message is typed into the TUI at once (typeInto), which
+// keeps its own queue if the agent is mid-reply. The provider gets text inside the attribution's
 // wrapper (pkg/linkwrap) — who sent it, in the conversation itself, where
 // both the agent and every transcript reader see it. Trust capping (decision 3) needs no extra plumbing
 // here — sess.Send is the same call Send makes, so an injected turn is
@@ -1049,7 +1092,12 @@ func (r *Runner) InjectParts(ctx context.Context, parts []contracts.InjectPart) 
 		audit()
 		return nil
 	}
-	r.deliverLocked()
+	terminal := r.terminalLocked()
+	if terminal {
+		r.sentAny = true
+	} else {
+		r.deliverLocked()
+	}
 	sess := r.sess
 	// The label goes on the wire, in the message (pkg/linkwrap); any owed
 	// re-root note stays outside, ahead of it.
@@ -1060,6 +1108,9 @@ func (r *Runner) InjectParts(ctx context.Context, parts []contracts.InjectPart) 
 	r.digest.recordUser(text, attribution.DigestAttributed)
 	audit()
 
+	if terminal {
+		return r.typeInto(ctx, sess, wire, note)
+	}
 	r.markAgentWorking(text)
 	if err := r.sendTurn(ctx, sess, wire, newMessageID(), false); err != nil {
 		r.mu.Lock()
@@ -1182,7 +1233,12 @@ func (r *Runner) deliverNextLocked() {
 	next := r.drainNextLocked()
 	var delivered *contracts.QueuedMessage
 	var remaining []contracts.QueuedMessage
-	r.deliverLocked()
+	terminal := r.terminalLocked()
+	if terminal {
+		r.sentAny = true
+	} else {
+		r.deliverLocked()
+	}
 	if next.userID != "" {
 		delivered = &contracts.QueuedMessage{ID: next.userID, Text: next.text, QueuedAt: next.queuedAt}
 		remaining = r.queuedLocked()
@@ -1201,6 +1257,23 @@ func (r *Runner) deliverNextLocked() {
 		r.publishQueue(contracts.QueueChanged{Queued: remaining, Delivered: delivered})
 	}
 
+	if terminal {
+		// What queued during a Land: type it all, since no turn end will
+		// come to deliver the rest.
+		if err := r.typeInto(context.Background(), sess, wire, note); err != nil {
+			log.Printf("runner: type queued message: %v", err)
+			if delivered != nil {
+				r.publishQueue(contracts.QueueChanged{Queued: r.QueuedMessages(), Failed: delivered, Error: err.Error()})
+			}
+		}
+		r.mu.Lock()
+		if !r.landing && !r.closing && len(r.pending) > 0 && r.terminalLocked() {
+			r.deliverNextLocked()
+			return
+		}
+		r.mu.Unlock()
+		return
+	}
 	r.markAgentWorking(next.text)
 	if err := r.sendTurn(context.Background(), sess, wire, next.msgID, true); err != nil {
 		log.Printf("runner: deliver queued message: %v", err)
@@ -1989,18 +2062,20 @@ func (r *Runner) pump(sess provider.Session) {
 // listen for EventText, and is what the hub buffers for terminal replay on
 // reattach (see hub.writePTY).
 //
-// Interactive terminal input goes through TerminalWrite, never Send, so PTY
-// mode's own traffic never sets busy. But Send is still a valid call in PTY
-// mode per the Session interface (and providers/fake's tests exercise it,
-// as the only way to get a fake turn recorded into shared transcript
-// history while "in terminal mode") — so if Events() is non-nil, drain it
-// purely for busy-clearing/tool-tracking/synth bookkeeping, without
+// Nothing in terminal mode sets busy: interactive input goes through
+// TerminalWrite, and Send, Inject and SendOrQueue type their message into
+// the TUI (typeInto) rather than start a turn — a real PTY session has no
+// turn end to clear one. providers/fake still answers a Send in terminal
+// mode with events (its tests use that as the only way to get a fake turn
+// recorded into shared transcript history while "in terminal mode") — so
+// if Events() is non-nil, drain it purely for tool-tracking/synth
+// bookkeeping, without
 // rebroadcasting: providers/fake mirrors every chunk onto both Events and
 // Terminal, and rebroadcasting here would double the text a subscriber
 // sees. A real PTY provider's Events() is nil (per the interface's own
 // doc), so this loop simply never runs there.
 //
-// The crash check can't use busy (PTY mode's own traffic never sets it);
+// The crash check can't use busy (never set in PTY mode);
 // it compares sess against the runner's current session by identity
 // instead. SwitchTransport nils r.sess before intentionally closing the
 // old session (and Shutdown never clears r.sess at all, so closing already

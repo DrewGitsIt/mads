@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/providers/provider"
+	"github.com/drewkidwell/mads/providers/provider/ptytest"
 )
 
 // bannerPath returns the committed goose 1.50.1 banner capture as an
@@ -251,6 +252,38 @@ func TestPTYSendAndInterruptReachChild(t *testing.T) {
 		t.Fatalf("Interrupt: %v", err)
 	}
 	log.waitContains(t, "INTERRUPT-MARK")
+}
+
+// TestPTYSendMultiLineIsOneMessage: a multi-line Send reaches the fake
+// REPL (ptytest.Prompt, as goose reads its input line) as one message,
+// where the same text typed bare submits at each newline.
+func TestPTYSendMultiLineIsOneMessage(t *testing.T) {
+	text := "one\ntwo\nthree"
+	for _, tc := range []struct {
+		name string
+		send func(provider.PTYSession) error
+		want string
+	}{
+		{"Send", func(s provider.PTYSession) error { return s.Send(context.Background(), text) },
+			"pong:one\ntwo\nthree\n"},
+		{"typed bare", func(s provider.PTYSession) error { _, err := s.Terminal().Write([]byte(text + "\r")); return err },
+			"pong:one\npong:two\npong:three\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := startPTYSession(t, testProvider(t), provider.StartOptions{})
+			screen := ptytest.Watch(sess.Terminal())
+			if !screen.WaitFor("FAKE-REPL-READY", 15*time.Second) {
+				t.Fatal("fake REPL never ready")
+			}
+			if err := tc.send(sess); err != nil {
+				t.Fatalf("send: %v", err)
+			}
+			want := "FAKE-REPL-READY\n" + tc.want
+			if !screen.WaitFor(want, 15*time.Second) {
+				t.Fatalf("screen %q, want %q", screen.Text(), want)
+			}
+		})
+	}
 }
 
 // TestPTYResume: the resume triple reaches the child (the fake's argv

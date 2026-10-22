@@ -100,8 +100,9 @@ func TestQueuedPromptSkips(t *testing.T) {
 // so claude records an ordinary user line, attributed by its turn ordinal as
 // before. PTY mode: the runner has no turn signal and types the inject
 // straight into the terminal, so mid-turn claude records a queued_command —
-// string prompt, origin "human", the leader's raw text (mads adds no wrapper;
-// attribution travels beside the text). It now renders as the user row it
+// string prompt, origin "human", the leader's raw text (captured before mads
+// wrapped injects in pkg/linkwrap; TestPastedPTYTranscripts has the wrapped,
+// pasted form). It now renders as the user row it
 // is, like the same inject typed while idle, instead of vanishing.
 func TestInjectTranscripts(t *testing.T) {
 	type row struct{ role, text string }

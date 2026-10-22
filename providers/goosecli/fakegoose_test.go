@@ -34,7 +34,7 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/sys/unix"
+	"github.com/drewkidwell/mads/providers/provider/ptytest"
 )
 
 //go:embed testdata/sessions-schema.sql
@@ -70,9 +70,10 @@ func fgMain() {
 // tests point it at the committed goose 1.50.1 capture, spinner redraws,
 // OSC title and all — and MADS_FAKE_PTY_EXIT=1 prints one plain no-banner
 // line and exits immediately (the stream-ends-without-a-banner path). Then
-// a tiny REPL on raw stdin bytes (the tty is put in raw mode so Interrupt's
-// 0x03 arrives as a byte instead of a line-discipline SIGINT): a line
-// ending \r → `pong:<line>`, byte 0x03 → `INTERRUPT-MARK`, EOF → exit 0.
+// a tiny REPL on raw stdin bytes (ptytest.Prompt; the tty is put in raw
+// mode so Interrupt's 0x03 arrives as a byte instead of a line-discipline
+// SIGINT): a submitted message → `pong:<text>`, byte 0x03 →
+// `INTERRUPT-MARK`, EOF → exit 0.
 func fgSessionMain(args []string) {
 	if len(args) > 0 && (args[0] == "list" || args[0] == "export") {
 		fgSessionQuery(args)
@@ -95,35 +96,16 @@ func fgSessionMain(args []string) {
 		fmt.Println("no banner here")
 		return
 	}
-	if tio, err := unix.IoctlGetTermios(0, ioctlGetTermios); err == nil {
-		tio.Lflag &^= unix.ICANON | unix.ECHO | unix.ISIG
-		tio.Iflag &^= unix.ICRNL
-		_ = unix.IoctlSetTermios(0, ioctlSetTermios, tio)
-	} else {
-		fmt.Fprintln(os.Stderr, "fakegoose: raw mode:", err)
+	if err := ptytest.RawMode(0); err != nil {
+		fmt.Fprintln(os.Stderr, "fakegoose:", err)
 	}
 	// Bytes written before the ioctl above land translated (ICRNL) and
 	// echoed — tests wait for this marker before sending anything.
 	fmt.Print("FAKE-REPL-READY\n")
-	var line []byte
-	buf := make([]byte, 256)
-	for {
-		n, err := os.Stdin.Read(buf)
-		for _, b := range buf[:n] {
-			switch b {
-			case 0x03:
-				fmt.Print("INTERRUPT-MARK\n")
-			case '\r', '\n':
-				fmt.Printf("pong:%s\n", line)
-				line = nil
-			default:
-				line = append(line, b)
-			}
-		}
-		if err != nil {
-			return
-		}
-	}
+	_ = ptytest.Prompt{
+		Submit: func(text string) { fmt.Printf("pong:%s\n", text) },
+		CtrlC:  func() { fmt.Print("INTERRUPT-MARK\n") },
+	}.Read(os.Stdin)
 }
 
 // fgSessionQuery serves the CLI query subcommands the TranscriptReader and

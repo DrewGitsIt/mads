@@ -59,7 +59,10 @@ Links are directed edges; nothing is 1:1 by design:
    asynchronous. An injected/orchestrated message queues behind the subject's
    in-flight turn — it never interrupts. The sender's tool returns "delivered"
    immediately; replies arrive as events (optional bounded wait for
-   quick-question ergonomics).
+   quick-question ergonomics). Exception: a subject in terminal (PTY) mode,
+   where the runner sees no turns. The message is typed into the TUI at once
+   as one bracketed paste, and the TUI holds it if the agent is mid-reply
+   (claude, goose and kiro alike; 2026-10-22).
 2. **Attribution is explicit.** Injected messages render in the subject's stream
    with source attribution ("⇄ from your leader · <session name>") — never
    impersonating the subject's own user. Since 2026-10-20 the attribution is

@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/drewkidwell/mads/providers/provider/ptytest"
 )
 
 func TestMain(m *testing.M) {
@@ -935,8 +937,13 @@ func (f *fcConv) store(line map[string]any) {
 	_ = json.NewEncoder(fh).Encode(stored)
 }
 
-// fcTerminal mimics the interactive UI for PTY probes: prompt, echo, prompt.
+// fcTerminal mimics the interactive UI for PTY probes: prompt, echo, prompt,
+// reading its input line as claude-code does (ptytest.Prompt), so a
+// multi-line message counts as one only if it arrives as one.
 func fcTerminal(a fcArgs) {
+	if err := ptytest.RawMode(0); err != nil {
+		fmt.Fprintln(os.Stderr, "fakeclaude:", err)
+	}
 	fmt.Print("> ")
 	// Mirrors real claude-code PTY behavior: the transcript file appears
 	// only once the first prompt is submitted, never at process spawn — a
@@ -947,22 +954,20 @@ func fcTerminal(a fcArgs) {
 	if dir != "" {
 		transcript = filepath.Join(dir, "proj", id+".jsonl")
 	}
-	sc := bufio.NewScanner(os.Stdin)
-	for sc.Scan() {
-		text := strings.TrimSpace(sc.Text())
-		if text == "fork-echo" {
+	_ = ptytest.Prompt{Submit: func(text string) {
+		text = strings.TrimSpace(text)
+		switch text {
+		case "fork-echo":
 			fcForkSeed(dir, a)
 			fcAppendTranscript(transcript, "user", text, "")
 			fmt.Printf("%s\r\n> ", fcForkEcho(a))
-			continue
-		}
-		if text == "mcp-echo" {
+			return
+		case "mcp-echo":
 			fmt.Printf("%s\r\n> ", fcMCPEcho(a))
-			continue
-		}
-		if text == "permission-echo" {
+			return
+		case "permission-echo":
 			fmt.Printf("%s\r\n> ", fcPermissionEcho(a))
-			continue
+			return
 		}
 		reply, crash := fcReply(text, nil)
 		fcAppendTranscript(transcript, "user", text, "")
@@ -971,7 +976,7 @@ func fcTerminal(a fcArgs) {
 		}
 		fcAppendTranscript(transcript, "assistant", reply, "")
 		fmt.Printf("%s\r\n> ", reply)
-	}
+	}}.Read(os.Stdin)
 }
 
 // fcSessionID is the id the stand-in session runs under: the pinned

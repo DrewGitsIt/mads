@@ -578,7 +578,7 @@ func (st *transcriptState) add(line []byte, msgs []provider.Message) []provider.
 			if !st.peers.repeat(in, body, id) {
 				msgs = append(msgs, provider.Message{Role: "inbound", Inbound: in, Text: body, Timestamp: ts})
 			}
-		} else if text := queuedPrompt(l.Attachment); text != "" {
+		} else if text := unpaste(queuedPrompt(l.Attachment)); text != "" {
 			// A mid-turn send: keyed by the stdin uuid it was sent with.
 			id := l.Attachment.SourceUUID
 			if id == "" {
@@ -646,7 +646,7 @@ func (st *transcriptState) add(line []byte, msgs []provider.Message) []provider.
 			}
 		}
 		if len(texts) > 0 {
-			text := strings.Join(texts, "\n")
+			text := unpaste(strings.Join(texts, "\n"))
 			m := provider.Message{Role: "user", Text: text, Timestamp: ts, Key: userKey(l.UUID)}
 			if isInterruptMarker(text) {
 				// claude's own marker, not the human's words.
@@ -748,7 +748,7 @@ func firstUserText(path string) (string, bool) {
 			}
 		}
 		if len(texts) > 0 {
-			return strings.Join(texts, "\n"), true
+			return unpaste(strings.Join(texts, "\n")), true
 		}
 	}
 	return "", false

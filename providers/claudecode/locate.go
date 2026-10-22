@@ -14,14 +14,16 @@ import (
 // ~/.claude/history.jsonl: every prompt submitted across every session, in
 // submission order, independent of the per-session transcript files.
 // Display is the literal submitted text, except that pasted or image
-// content is replaced with an inline bracket placeholder — locateFromHistory
-// accounts for that with a prefix match. Project is the un-slugged cwd the
+// content is replaced with an inline bracket placeholder — a pasted text's
+// own words are kept in PastedContents (expandDisplay puts them back), and
+// locateFromHistory tolerates any other placeholder with a prefix match. Project is the un-slugged cwd the
 // session was started in. Timestamp is milliseconds since epoch.
 type historyEntry struct {
-	Display   string `json:"display"`
-	Project   string `json:"project"`
-	SessionID string `json:"sessionId"`
-	Timestamp int64  `json:"timestamp"`
+	Display        string                  `json:"display"`
+	PastedContents map[string]historyPaste `json:"pastedContents"`
+	Project        string                  `json:"project"`
+	SessionID      string                  `json:"sessionId"`
+	Timestamp      int64                   `json:"timestamp"`
 }
 
 // locateInterval is how often LocateSession retries both rungs while its
@@ -104,7 +106,7 @@ func locateFromHistory(historyFile, cwd string, spawnedAfter time.Time, firstMes
 		if time.UnixMilli(e.Timestamp).Before(margin) {
 			continue
 		}
-		if !historyDisplayMatches(e.Display, firstMessage) {
+		if !historyDisplayMatches(expandDisplay(e.Display, e.PastedContents), firstMessage) {
 			continue
 		}
 		seen[e.SessionID] = true
