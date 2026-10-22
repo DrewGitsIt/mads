@@ -43,7 +43,9 @@ type EventType string
 // surfaces; it grows as services land. Every emitted event must use a type
 // registered here so subscribers and the UI share one vocabulary.
 const (
-	SessionCreated         EventType = "session.created"
+	SessionCreated EventType = "session.created"
+	// SessionProvisioning fires as each Start step finishes. Payload:
+	// contracts.SessionProvisioningPayload.
 	SessionProvisioning    EventType = "session.provisioning"
 	SessionRenamed         EventType = "session.renamed"
 	SessionActivityChanged EventType = "session.activity_changed"

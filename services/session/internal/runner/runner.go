@@ -447,15 +447,19 @@ func (r *Runner) Start(ctx context.Context) error {
 	if startDir != "" {
 		r.Cwd = startDir
 	}
-	cwd, err := r.isolate(ctx, &sess)
+	cwd, inPlace, err := r.isolate(ctx, &sess)
 	if err != nil {
 		return err
 	}
-	r.appendProvisioning(ctx, "worktree", nil)
+	mode := contracts.ProvisioningWorktree
+	if inPlace {
+		mode = contracts.ProvisioningInPlace
+	}
+	r.appendProvisioning(ctx, contracts.SessionProvisioningPayload{Step: "worktree", Mode: mode})
 	// Stamps this session into the worktree's own config for the hook — or,
 	// working in place, into the user's checkout.
-	r.installHook(ctx, cwd)
-	r.appendProvisioning(ctx, "hook", nil)
+	installed := r.installHook(ctx, cwd)
+	r.appendProvisioning(ctx, contracts.SessionProvisioningPayload{Step: "hook", Skipped: !installed})
 
 	// Shadow store provisioning (docs/SHADOW-GIT-DIFFS-ADR.md): record the
 	// store's base path on the session record now (persisted with the
@@ -470,7 +474,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	agent, agentOK := r.loadAgent(ctx, sess)
 	capEnv := r.setupCapabilities(ctx, cwd, agent, agentOK)
 	orchestrateMCP, orchestrateErr := r.setupOrchestrate(ctx, sess)
-	r.appendProvisioning(ctx, "mcp_up", nil)
+	r.appendProvisioning(ctx, contracts.SessionProvisioningPayload{Step: "mcp_up"})
 
 	opts := provider.StartOptions{
 		Mode:         provider.ModeACP,
@@ -545,7 +549,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("runner: start provider session: %w", err)
 	}
-	r.appendProvisioning(ctx, "agent_starting", nil)
+	r.appendProvisioning(ctx, contracts.SessionProvisioningPayload{Step: "agent_starting"})
 
 	// Persist the resume handle before returning success, so a crash right
 	// after this point still leaves a resumable ref recorded.
@@ -591,7 +595,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		r.markOrchestrateLinks(ctx, status, "")
 	}
 
-	r.appendProvisioning(ctx, "provider_ready", map[string]string{"provider": sess.Provider})
+	r.appendProvisioning(ctx, contracts.SessionProvisioningPayload{Step: "provider_ready", Provider: sess.Provider})
 	if err := r.data.Append(ctx, &contracts.Envelope{
 		Type:      contracts.SessionActivityChanged,
 		SessionID: r.sessionID,
@@ -688,13 +692,14 @@ func recordedCwd(cwd string) string {
 // "." for un-isolated sessions with no explicit -cwd, and installing
 // against "." would mutate whatever repo this process happens to have been
 // started from, so this only acts on an explicit directory that is itself a
-// git repo.
-func (r *Runner) installHook(ctx context.Context, dir string) {
+// git repo. Reports whether the hook was installed, for the "hook"
+// provisioning step; a hook in place whose config write failed still counts.
+func (r *Runner) installHook(ctx context.Context, dir string) bool {
 	if dir == "" || dir == "." {
-		return
+		return false
 	}
 	if err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--git-dir").Run(); err != nil {
-		return
+		return false
 	}
 	// A session linked at start can join another session's folder
 	// (Router's validateStagedLinks). That folder's config names its owner,
@@ -702,11 +707,11 @@ func (r *Runner) installHook(ctx context.Context, dir string) {
 	// session; the owner installed the hook there already.
 	if branch, err := sessionwt.CurrentBranch(ctx, dir); err == nil &&
 		strings.HasPrefix(branch, sessionwt.BranchPrefix) && branch != sessionwt.Branch(r.sessionID) {
-		return
+		return false
 	}
 	if err := githook.EnsureInstalled(ctx, dir); err != nil {
 		log.Printf("runner: install commit hook: %v", err)
-		return
+		return false
 	}
 	if err := githook.SetWorktreeConfig(ctx, dir, githook.Config{
 		SessionID: r.sessionID,
@@ -714,6 +719,7 @@ func (r *Runner) installHook(ctx context.Context, dir string) {
 	}); err != nil {
 		log.Printf("runner: configure commit hook: %v", err)
 	}
+	return true
 }
 
 // worktreeState is where the header counts are taken (D4): the session's
@@ -734,7 +740,8 @@ func implicitDir(dir string) bool {
 }
 
 // isolate decides where the agent runs (docs/SESSION-WORKTREES-DESIGN.md
-// D1) and returns that directory. A session is isolated when it didn't ask
+// D1) and returns that directory, and whether it is the session's own
+// folder in place rather than a worktree. A session is isolated when it didn't ask
 // for the current directory, its folder is a git repo, and either it already
 // has a worktree (resume) or it has never started (no ProviderRef). A
 // session that has run in place before stays in place: claude-code finds a
@@ -748,14 +755,14 @@ func implicitDir(dir string) bool {
 // persisted here, before the provider starts, so a provider
 // that fails to start leaves a record the next start reuses instead of
 // tripping over its own branch.
-func (r *Runner) isolate(ctx context.Context, sess *contracts.Session) (string, error) {
-	inPlace := func() (string, error) {
+func (r *Runner) isolate(ctx context.Context, sess *contracts.Session) (string, bool, error) {
+	inPlace := func() (string, bool, error) {
 		if !implicitDir(r.Cwd) && sessionwt.IsGitRepo(ctx, r.Cwd) {
 			r.mu.Lock()
 			r.wt = worktreeState{dir: r.Cwd}
 			r.mu.Unlock()
 		}
-		return r.Cwd, nil
+		return r.Cwd, true, nil
 	}
 	if r.WorktreeRoot == "" || sess.Isolation == contracts.IsolationCurrentDir || implicitDir(r.Cwd) {
 		return inPlace()
@@ -776,13 +783,13 @@ func (r *Runner) isolate(ctx context.Context, sess *contracts.Session) (string, 
 			return inPlace()
 		}
 		if err != nil {
-			return "", fmt.Errorf("runner: read primary branch: %w", err)
+			return "", false, fmt.Errorf("runner: read primary branch: %w", err)
 		}
 		spec.Base = base
 	}
 	res, err := sessionwt.EnsureWithLock(ctx, spec)
 	if err != nil {
-		return "", fmt.Errorf("runner: ensure worktree: %w", err)
+		return "", false, fmt.Errorf("runner: ensure worktree: %w", err)
 	}
 	if sess.WorktreeDir != res.Dir || sess.WorktreeBranch != res.Branch || sess.WorktreeBase != spec.Base {
 		r.recordMu.Lock()
@@ -791,7 +798,7 @@ func (r *Runner) isolate(ctx context.Context, sess *contracts.Session) (string, 
 		})
 		r.recordMu.Unlock()
 		if err != nil {
-			return "", fmt.Errorf("runner: persist worktree: %w", err)
+			return "", false, fmt.Errorf("runner: persist worktree: %w", err)
 		}
 		sess.WorktreeDir, sess.WorktreeBranch, sess.WorktreeBase = res.Dir, res.Branch, spec.Base
 	}
@@ -810,20 +817,17 @@ func (r *Runner) isolate(ctx context.Context, sess *contracts.Session) (string, 
 			cwd = filepath.Join(res.Dir, prefix)
 		}
 	}
-	return cwd, nil
+	return cwd, false, nil
 }
 
 // appendProvisioning records that one Start step finished, for the
 // Launchpad's provisioning strip (ui/src/conversation/provisioningSteps.ts).
 // Steps arrive in Start's order — worktree, hook, mcp_up, agent_starting,
 // provider_ready — and a step that had nothing to do (working in place, no
-// capabilities) is still reported, so the strip never stalls on it. Best
+// capabilities) is still reported, so the strip never stalls on it — with
+// what it did: the worktree step's Mode, the hook step's Skipped. Best
 // effort, like every other Start event.
-func (r *Runner) appendProvisioning(ctx context.Context, step string, extra map[string]string) {
-	payload := map[string]string{"step": step}
-	for k, v := range extra {
-		payload[k] = v
-	}
+func (r *Runner) appendProvisioning(ctx context.Context, payload contracts.SessionProvisioningPayload) {
 	if err := r.data.Append(ctx, &contracts.Envelope{
 		Type: contracts.SessionProvisioning, SessionID: r.sessionID, Payload: mustJSON(payload),
 	}); err != nil {
