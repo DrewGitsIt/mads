@@ -68,8 +68,13 @@ func TestNestedWorktreesRootOf(t *testing.T) {
 	if got, want := n.rootOf(filepath.Join(folder, ".claude/worktrees/agent-9/pkg/x.go")), filepath.Join(folder, ".claude/worktrees/agent-9"); got != want {
 		t.Errorf("claude worktree root = %q, want %q", got, want)
 	}
-	// .claude/worktrees itself, and files directly in .claude, aren't in a worktree.
-	for _, p := range []string{".claude/worktrees", ".claude/settings.json", "src/.claude/x"} {
+	// Hermes (delegation.worktree_isolation): .worktrees/subagent-<id>, prefix required.
+	if got, want := n.rootOf(filepath.Join(folder, ".worktrees/subagent-3/pkg/x.go")), filepath.Join(folder, ".worktrees/subagent-3"); got != want {
+		t.Errorf("hermes worktree root = %q, want %q", got, want)
+	}
+	// .claude/worktrees itself, files directly in .claude, and a user's own
+	// worktree folder under .worktrees (not live here) aren't in a subagent worktree.
+	for _, p := range []string{".claude/worktrees", ".claude/settings.json", "src/.claude/x", ".worktrees/feature-x/a.go", ".worktrees/a.go"} {
 		if got := n.rootOf(filepath.Join(folder, p)); got != "" {
 			t.Errorf("rootOf(%s) = %q, want \"\"", p, got)
 		}

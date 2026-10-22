@@ -7,18 +7,33 @@ import (
 )
 
 // Agent harnesses give subagents their own worktree inside the session's
-// folder (Claude Code: .claude/worktrees/<name>/) and remove it when the
-// subagent finishes. The subagent's edits reach the ledger as the session's
-// own, but they're scratch copies: what counts is whatever lands in the
-// session's folder. Listing them double-counts the work while the worktree
+// folder (Claude Code: .claude/worktrees/<name>/; Hermes, with
+// delegation.worktree_isolation: .worktrees/subagent-<id>/) and remove it
+// when the subagent is done. The subagent's edits reach the ledger as the
+// session's own, but they're scratch copies: what counts is whatever lands
+// in the session's folder. Listing them double-counts the work while the worktree
 // exists, and once it's removed every file it touched reads as deleted —
 // its only "before" is the pre-image captured mid-session, since the
 // worktree didn't exist at session start. So they're left out, with a note.
 // A stopgap until delegates have their own changes view.
 
-// worktreeDirs is where harnesses put subagent worktrees, as path segments
-// under the session folder; the next segment names the worktree.
-var worktreeDirs = [][]string{{".claude", "worktrees"}}
+// worktreeDir is where a harness puts subagent worktrees: path segments
+// under the session folder, then a segment naming the worktree, which must
+// start with prefix when one is set.
+type worktreeDir struct {
+	dirs   []string
+	prefix string
+}
+
+// worktreeDirs are the known harness locations. Codex and goose subagents
+// share the parent's folder, so their edits are real and stay listed.
+var worktreeDirs = []worktreeDir{
+	{dirs: []string{".claude", "worktrees"}},
+	// Prefixed: people keep their own worktrees in .worktrees/ too, and a
+	// user's worktree isn't a harness's scratch copy (unless it's live, which
+	// the linked-worktree check covers either way).
+	{dirs: []string{".worktrees"}, prefix: "subagent-"},
+}
 
 // nestedWorktrees finds the subagent worktrees under a session folder.
 type nestedWorktrees struct {
@@ -47,9 +62,10 @@ func (n *nestedWorktrees) rootOf(p string) string {
 	}
 	parts := strings.Split(rel, "/")
 	for i := range parts {
-		for _, pat := range worktreeDirs {
-			if i+len(pat) < len(parts) && segmentsEqual(parts[i:i+len(pat)], pat) {
-				return filepath.Join(n.folder, filepath.Join(parts[:i+len(pat)+1]...))
+		for _, wd := range worktreeDirs {
+			k := len(wd.dirs)
+			if i+k < len(parts) && segmentsEqual(parts[i:i+k], wd.dirs) && strings.HasPrefix(parts[i+k], wd.prefix) {
+				return filepath.Join(n.folder, filepath.Join(parts[:i+k+1]...))
 			}
 		}
 		d := filepath.Join(n.folder, filepath.Join(parts[:i+1]...))
