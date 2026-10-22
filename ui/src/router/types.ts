@@ -1154,6 +1154,16 @@ export interface FileChange {
   timestamp: string;
 }
 
+// mirrors pkg/contracts/session.go SessionProvisioningPayload — one Start
+// step that finished. Rows written before mode/skipped existed carry step
+// alone (provider too on provider_ready).
+export interface SessionProvisioningPayload {
+  step: string;
+  mode?: "in_place" | "worktree"; // "worktree" step only
+  skipped?: boolean; // "hook" step only: no commit hook was installed
+  provider?: string; // "provider_ready" step only
+}
+
 // mirrors pkg/contracts/session.go Commit
 export type LinkedVia = "trailer" | "session_context" | "heuristic";
 
