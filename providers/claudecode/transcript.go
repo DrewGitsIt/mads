@@ -229,8 +229,9 @@ type transcriptLine struct {
 	Message *wireMessage `json:"message"`
 	// Attachment is an "attachment" line's payload. Only the queued_command
 	// kind is read: a peer message that arrived mid-turn is recorded as one
-	// (peerAttachment), and so is the human's own mid-turn send
-	// (queuedPrompt).
+	// (peerAttachment), and so are the human's own mid-turn send
+	// (queuedPrompt) and a background task's mid-turn notification
+	// (taskNotice).
 	Attachment *transcriptAttachment `json:"attachment"`
 	// Cwd is the session's working directory, stamped on every line —
 	// candidateTranscripts's filter, not read by normalizeTranscript.
@@ -283,14 +284,8 @@ func (p *promptText) UnmarshalJSON(raw []byte) error {
 // in "prompt" mode that isn't a peer message (peerAttachment reads those).
 // claude records it only as this attachment, never as a user line, so
 // skipping it lost the message from the conversation. Empty for any other
-// attachment.
-//
-// TODO(task-notification dedupe): mid-turn task notifications
-// (commandMode "task-notification", 199 of the 222 queued_command lines in
-// the local corpus on 2026-10-20) are still skipped here. 14 of their 112
-// task ids were also delivered as a user line, which already renders as a
-// "notification" entry, so showing the attachment form needs a dedupe by
-// task id first.
+// attachment. Mid-turn task notifications (commandMode
+// "task-notification") are taskNotice's.
 func queuedPrompt(a *transcriptAttachment) string {
 	if a == nil || a.Type != "queued_command" || a.CommandMode != "prompt" {
 		return ""
@@ -381,21 +376,64 @@ func isCommandMarkup(text string) bool {
 }
 
 var (
-	notificationSummary = regexp.MustCompile(`(?s)<summary>(.*?)</summary>`)
-	notificationStatus  = regexp.MustCompile(`<status>(.*?)</status>`)
+	notificationSummary   = regexp.MustCompile(`(?s)<summary>(.*?)</summary>`)
+	notificationStatus    = regexp.MustCompile(`<status>(.*?)</status>`)
+	notificationToolUseID = regexp.MustCompile(`<tool-use-id>(.*?)</tool-use-id>`)
 )
 
-// taskNotificationText is the one line worth showing from a
-// <task-notification> block: its <summary> (the CLI's own sentence, e.g.
-// `Background command "make check" completed (exit code 0)`), unescaped, or
-// failing that the bare status.
-func taskNotificationText(m *wireMessage) string {
+// taskNotice is the <task-notification> block a queued_command attachment
+// carries: claude's record of a background task's notice that arrived
+// while a turn ran (idle, the same block is a user line with origin
+// "task-notification"). Empty for any other attachment.
+func taskNotice(a *transcriptAttachment) string {
+	if a == nil || a.Type != "queued_command" || a.CommandMode != "task-notification" {
+		return ""
+	}
+	return string(a.Prompt)
+}
+
+// messageText is a user line's text blocks, concatenated.
+func messageText(m *wireMessage) string {
 	var raw string
 	for _, b := range m.blocks() {
 		if b.Type == "text" {
 			raw += b.Text
 		}
 	}
+	return raw
+}
+
+// noticeIdentity says which <task-notification> blocks are one notice, so
+// a notice written in both forms (attachment and user line) renders once.
+// The task id alone is not one: a subagent that is messaged again, or
+// that stops with work of its own still running, notifies again under the
+// same task id (one local transcript holds 42 notices for one task: 9
+// tool-use ids, and many notices with none). With a <tool-use-id> the
+// pair (task id, tool-use id) is the identity. Without one (a subagent's
+// interim re-notification, a Monitor event, an artifact-watch notice with
+// no task id at all) the block's whole text is: those notices differ in
+// their <result> or <event>, so only a byte-identical block is taken for
+// the same notice.
+// (The local corpus on 2026-10-22: 615 user-line and 196 attachment
+// notices, 207 of them without a tool-use id; 14 task ids notified in both
+// forms, but no pair and no whole text repeats, so on real lines this
+// dedupe drops nothing yet.)
+func noticeIdentity(raw string) string {
+	if tu := notificationToolUseID.FindStringSubmatch(raw); tu != nil {
+		var task string
+		if t := notificationTaskID.FindStringSubmatch(raw); t != nil {
+			task = t[1]
+		}
+		return task + "\x00" + tu[1]
+	}
+	return "\x00\x00" + strings.TrimSpace(raw)
+}
+
+// taskNotificationText is the one line worth showing from a
+// <task-notification> block: its <summary> (the CLI's own sentence, e.g.
+// `Background command "make check" completed (exit code 0)`), unescaped, or
+// failing that the bare status.
+func taskNotificationText(raw string) string {
 	if sm := notificationSummary.FindStringSubmatch(raw); sm != nil {
 		if t := strings.TrimSpace(html.UnescapeString(sm[1])); t != "" {
 			return t
@@ -504,9 +542,9 @@ func (st *transcriptState) readAll(r io.Reader) ([]provider.Message, error) {
 
 // transcriptState is what reading a transcript carries from one line to
 // the next: the uuids already read (the CLI can append verbatim copies of
-// earlier entries, same uuid), the peer messages already rendered, and
-// each assistant message's blocks counted so far (its keys' indices,
-// keys.go). TranscriptSince keeps one in its cursor, so an incremental
+// earlier entries, same uuid), the peer messages and task notices already
+// rendered, and each assistant message's blocks counted so far (its keys'
+// indices, keys.go). TranscriptSince keeps one in its cursor, so an incremental
 // read keys and filters exactly as a full one.
 type transcriptState struct {
 	sidechain bool
@@ -515,20 +553,34 @@ type transcriptState struct {
 	thinking bool
 	seen     map[string]struct{}
 	peers    peerSeen
-	blocks   map[string]int
+	// notices: the noticeIdentity of every task notice rendered.
+	notices map[string]bool
+	blocks  map[string]int
 }
 
 func newTranscriptState(sidechain bool) *transcriptState {
-	return &transcriptState{sidechain: sidechain, seen: map[string]struct{}{}, blocks: map[string]int{}}
+	return &transcriptState{sidechain: sidechain, seen: map[string]struct{}{}, notices: map[string]bool{}, blocks: map[string]int{}}
 }
 
 // clone is a deep copy, so a cursor stays valid after a read from it.
 func (st *transcriptState) clone() *transcriptState {
-	c := &transcriptState{sidechain: st.sidechain, thinking: st.thinking, seen: maps.Clone(st.seen), blocks: maps.Clone(st.blocks)}
+	c := &transcriptState{sidechain: st.sidechain, thinking: st.thinking, seen: maps.Clone(st.seen), notices: maps.Clone(st.notices), blocks: maps.Clone(st.blocks)}
 	if st.peers.ids != nil {
 		c.peers = peerSeen{ids: maps.Clone(st.peers.ids), bodies: maps.Clone(st.peers.bodies)}
 	}
 	return c
+}
+
+// notice appends a task notice's "notification" row, keyed by its line's
+// uuid, unless the same notice (noticeIdentity) was already rendered in
+// either form.
+func (st *transcriptState) notice(raw, uuid string, ts time.Time, msgs []provider.Message) []provider.Message {
+	id := noticeIdentity(raw)
+	if st.notices[id] {
+		return msgs
+	}
+	st.notices[id] = true
+	return append(msgs, provider.Message{Role: "notification", Text: taskNotificationText(raw), Timestamp: ts, Key: uuid, Notice: true})
 }
 
 // add normalizes one JSONL line onto msgs.
@@ -574,6 +626,11 @@ func (st *transcriptState) add(line []byte, msgs []provider.Message) []provider.
 	// replayed line's uuid, which no capture has shown to equal the
 	// stored line's (or the attachment's source_uuid).
 	if l.Type == "attachment" {
+		if raw := taskNotice(l.Attachment); raw != "" {
+			// A task notice that arrived mid-turn: the same row as the
+			// idle user-line form below.
+			return st.notice(raw, l.UUID, ts, msgs)
+		}
 		if in, body, id := peerAttachment(l.Attachment); in != nil {
 			if !st.peers.repeat(in, body, id) {
 				msgs = append(msgs, provider.Message{Role: "inbound", Inbound: in, Text: body, Timestamp: ts})
@@ -617,8 +674,10 @@ func (st *transcriptState) add(line []byte, msgs []provider.Message) []provider.
 	// raw <task-notification> XML in the human's voice (2026-09-30), and
 	// it can open a whole unprompted turn with no explanation. It becomes
 	// a "notification" entry the conversation draws as a system line.
+	// Mid-turn the CLI records the same block as a queued_command
+	// attachment instead (above); a notice is rendered once either way.
 	if l.Type == "user" && (l.Origin != nil && l.Origin.Kind == "task-notification") {
-		return append(msgs, provider.Message{Role: "notification", Text: taskNotificationText(l.Message), Timestamp: ts, Key: l.UUID, Notice: true})
+		return st.notice(messageText(l.Message), l.UUID, ts, msgs)
 	}
 	switch l.Type {
 	case "user":

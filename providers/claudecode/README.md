@@ -431,7 +431,7 @@ captures; `TestCapturedKeysLiveEqualStored`):
 | Assistant text / thinking | `message_start.message.id` + the block's `content_block_start` index | the line's `message.id` + its block's position among that id's lines, counted after the uuid de-dupe and over every block type (signature-only thinking included; claude writes one block per line) |
 | Tool call / result | `tool_use` id | `tool_use` id (on both rows) |
 | User message | — (the runner owns it) | `user:` + the line uuid: mads's id when sent with `SendKeyed` (stdin `"uuid"`); a mid-turn send is a `queued_command` attachment, keyed by its `source_uuid` |
-| Interrupt marker, "No response requested.", API-error line, task notification | — | the line's own uuid, `Notice` set |
+| Interrupt marker, "No response requested.", API-error line, task notification | — | the line's own uuid, `Notice` set (a task notification's line is a user line when idle, a `task-notification` `queued_command` attachment mid-turn; one notice written both ways renders once) |
 | Peer message (`inbound`) | unkeyed | unkeyed: no capture shows the replayed line's uuid equal to the stored one |
 
 **Stored thinking** (`stored_thinking: native`): with
