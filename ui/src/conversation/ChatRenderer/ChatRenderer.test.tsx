@@ -52,17 +52,40 @@ describe("ChatRenderer", () => {
     expect(screen.getByText("hi back")).toBeTruthy();
   });
 
-  // A Shift+Enter in the composer is a new line in the history too; an
-  // agent's single newline stays markdown's soft wrap.
-  it("breaks a user message's lines where they were typed, but not an agent's", () => {
+  // A Shift+Enter in the composer is a new line in the history too, and an
+  // agent's single newline reads the same way: one rule for all chat prose.
+  it("breaks user and agent prose where the newlines are", () => {
     const messages: TranscriptMessage[] = [
       { role: "user", text: "first line\nsecond line" },
-      { role: "agent", text: "wrapped\nprose" },
+      { role: "agent", text: "1\n2\n3" },
     ];
     const { container } = render(<ChatRenderer rows={keyed(messages)} />);
     const user = container.querySelector("[data-user-msg]")!;
     expect(user.querySelectorAll("br")).toHaveLength(1);
-    expect(screen.getByText(/wrapped/).querySelector("br")).toBeNull();
+    const agent = container.querySelector('[data-find="r1"]')!;
+    expect(agent.querySelectorAll("br")).toHaveLength(2);
+  });
+
+  it("keeps lists and code blocks whole in an agent bubble that breaks lines", () => {
+    const text = "Plan:\n\n- one\n- two\n\n```\na\nb\n```";
+    const { container } = render(<ChatRenderer rows={keyed([{ role: "agent", text }])} />);
+    expect(container.querySelectorAll("li")).toHaveLength(2);
+    // (markdown.test.tsx covers blocks in full, under jsdom.)
+    expect(container.querySelector("code")?.textContent).toBe("a\nb\n");
+    expect(container.querySelector("code br")).toBeNull();
+  });
+
+  it("breaks the lines of an expanded notice from mads", () => {
+    const messages: TranscriptMessage[] = [
+      {
+        role: "user",
+        text: "first line\nsecond line",
+        attribution: { source_name: "mads", kind: "notice" },
+      },
+    ];
+    const { container } = render(<ChatRenderer rows={keyed(messages)} />);
+    fireEvent.click(screen.getByText(/expand to show message/));
+    expect(container.querySelector('[data-find="r0"]')!.querySelectorAll("br")).toHaveLength(1);
   });
 
   it("shows a user message's attached files as thumbnails and tiles, not the path list", () => {
@@ -296,6 +319,28 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     expect(screen.getByText(/payments refactor/)).toBeTruthy();
     expect(screen.getByText("compressed summary of the turn")).toBeTruthy();
     expect(screen.getByText("cadence: digest after each burst of activity")).toBeTruthy();
+  });
+
+  it("breaks the lines of injected messages and digest cards", () => {
+    FLAGS.linkedSessions = true;
+    const messages: TranscriptMessage[] = [
+      {
+        role: "user",
+        text: "inject one\ninject two",
+        attribution: { source_name: "Leader Session", kind: "message", relation: "your leader" },
+      },
+      { role: "agent", text: "ok" },
+      {
+        role: "user",
+        text: "digest one\ndigest two",
+        attribution: { source_name: "payments refactor", kind: "digest", relation: "a session you lead" },
+      },
+    ];
+    const { container } = render(
+      <ChatRenderer rows={keyed(messages)} links={[makeLink({})]} viewedSessionId="subject-id" />,
+    );
+    expect(container.querySelector('[data-find="r0"]')!.querySelectorAll("br")).toHaveLength(1);
+    expect(container.querySelector('[data-find="r2"]')!.querySelectorAll("br")).toHaveLength(1);
   });
 
   it("renders honest manual-only cadence copy — no automatic digests promised", () => {

@@ -21,12 +21,45 @@ describe("Markdown", () => {
     expect(container.querySelector("code")?.textContent).toBe("code");
   });
 
+  // Chat prose passes breaks; documents outside the chat (task
+  // descriptions) keep markdown's soft wrap, the default.
   it("keeps a lone newline a soft wrap by default, and a line break with breaks", () => {
     const { container, rerender } = render(<Markdown text={"line one\nline two"} />);
     expect(container.querySelector("br")).toBeNull();
     rerender(<Markdown text={"line one\nline two"} breaks />);
     expect(container.querySelectorAll("br")).toHaveLength(1);
     expect(container.querySelectorAll("p")).toHaveLength(1);
+  });
+
+  it("leaves code blocks, lists and tables whole with breaks", () => {
+    const text = [
+      "Intro line\nsecond line",
+      "",
+      "- one\n- two\n  continued",
+      "",
+      "1. first\n2. second",
+      "",
+      "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |",
+      "",
+      "```go\nfunc a() {\n\treturn\n}\n```",
+      "",
+      "    indented\n    code",
+    ].join("\n");
+    const { container } = render(<Markdown text={text} breaks />);
+    // Code keeps its newlines as text, never as <br>.
+    const codes = [...container.querySelectorAll("pre code")].map((c) => c.textContent);
+    expect(codes).toEqual(["func a() {\n\treturn\n}\n", "indented\ncode\n"]);
+    expect(container.querySelector("pre br")).toBeNull();
+    // Lists keep their items; a continuation line breaks inside its item.
+    expect(container.querySelectorAll("ul > li")).toHaveLength(2);
+    expect(container.querySelectorAll("ol > li")).toHaveLength(2);
+    expect(container.querySelectorAll("ul > li")[1].querySelectorAll("br")).toHaveLength(1);
+    // Tables keep their rows and cells, with no breaks in them.
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(2);
+    expect(container.querySelectorAll("td")).toHaveLength(4);
+    expect(container.querySelector("table br")).toBeNull();
+    // The intro paragraph breaks once, and only there.
+    expect(container.querySelector("p")?.querySelectorAll("br")).toHaveLength(1);
   });
 
   it("strips script tags and event-handler attributes", () => {

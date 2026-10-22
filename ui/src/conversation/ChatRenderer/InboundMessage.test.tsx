@@ -28,6 +28,11 @@ const message = (inbound: Partial<InboundSource> = {}, text = "please rebase ont
 const keyed = (ms: TranscriptMessage[]): KeyedRow[] => ms.map((m, i) => ({ ...m, key: m.key ?? `r${i}` }));
 
 describe("inbound message row", () => {
+  it("breaks the body's lines where the newlines are, like every other chat row", () => {
+    render(<ChatRenderer rows={keyed([message({}, "line one\nline two")])} />);
+    expect(screen.getByRole("note").querySelectorAll("br")).toHaveLength(1);
+  });
+
   it("names the resolved session, the harness mark and the harness, and reads as a note, not a user turn", () => {
     const { container } = render(<ChatRenderer rows={keyed([message()])} />);
     const row = screen.getByRole("note");

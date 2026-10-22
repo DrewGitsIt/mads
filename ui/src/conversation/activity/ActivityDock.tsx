@@ -401,7 +401,7 @@ export function SubagentStream({
           </div>
         ) : b.type === "text" ? (
           <div key={i} className={styles.subText}>
-            <Markdown className={styles.subProse} text={b.text} />
+            <Markdown className={styles.subProse} text={b.text} breaks />
             <SubStamp timestamp={b.timestamp} />
           </div>
         ) : (
@@ -421,7 +421,7 @@ export function SubagentStream({
       )}
       {summary && (
         <div className={styles.subText}>
-          <Markdown className={styles.subProse} text={summary} />
+          <Markdown className={styles.subProse} text={summary} breaks />
         </div>
       )}
     </>

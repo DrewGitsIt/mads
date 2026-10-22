@@ -194,6 +194,17 @@ describe("SubagentStream — the subagent's words", () => {
     const stamps = [...container.querySelectorAll("time")].map((t) => t.getAttribute("datetime"));
     expect(stamps).toEqual(["2026-10-09T10:00:00.000Z", "2026-10-09T10:00:03.000Z"]);
   });
+
+  it("breaks its text and summary where the newlines are, like the chat", () => {
+    const { container } = render(
+      <SubagentStream
+        items={[{ type: "text", text: "one\ntwo", timestamp: "2026-10-09T10:00:03Z" }]}
+        summary={"done\nreally"}
+        running={false}
+      />,
+    );
+    expect(container.querySelectorAll("br")).toHaveLength(2);
+  });
 });
 
 describe("ActivityDock — subagent stream (T15)", () => {

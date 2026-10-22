@@ -151,7 +151,7 @@ function DigestCard({ findKey, source, kind = "digest", time, text, cadence }: {
         ⌗ {kind} · <b>{source}</b>
         {time && ` · ${formatMessageTime(time)}`}
       </div>
-      <Markdown className={styles.prose} text={text} />
+      <Markdown className={styles.prose} text={text} breaks />
       {cadence && <div className={styles.digestCadence}>{CADENCE_LABEL[cadence]}</div>}
     </div>
   );
@@ -241,7 +241,7 @@ function NoticeRow({ findKey, attribution, text, acknowledged }: {
         )}
       </span>
       <Fold open={open}>
-        <Markdown className={styles.prose} text={text} />
+        <Markdown className={styles.prose} text={text} breaks />
       </Fold>
     </div>
   );
@@ -541,7 +541,7 @@ export function ChatRenderer({
               <Chip tone="info">
                 ⇄ from {message.attribution.relation ?? "a linked session"} · {message.attribution.source_name}
               </Chip>
-              <Markdown className={styles.prose} text={message.text ?? ""} />
+              <Markdown className={styles.prose} text={message.text ?? ""} breaks />
             </div>
           );
         }
@@ -630,7 +630,7 @@ export function ChatRenderer({
             <Markdown
               className={styles.prose}
               text={body}
-              breaks={isUser}
+              breaks
               foldNewCode={foldNewCode && Boolean(item.live)}
             />
           );

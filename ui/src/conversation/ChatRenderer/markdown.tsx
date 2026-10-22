@@ -62,10 +62,12 @@ export function Markdown({
   text: string;
   className?: string;
   /**
-   * Every newline is a line break, not standard markdown's soft wrap. For
-   * the user's own messages: a Shift+Enter in the composer should read as a
-   * new line in the history too. Agent prose keeps the standard rule — a
-   * model may wrap lines inside a paragraph.
+   * Every newline is a line break, not standard markdown's soft wrap. On for
+   * all chat prose (user and agent bubbles, digests, notices, injected and
+   * inbound messages, compaction summaries, subagent text): a Shift+Enter in
+   * the composer reads as a new line in the history, and so does a newline
+   * an agent wrote, so one rule holds for everything in the conversation.
+   * Off for documents rendered elsewhere (task descriptions).
    */
   breaks?: boolean;
   /**
