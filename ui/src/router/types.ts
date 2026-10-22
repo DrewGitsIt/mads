@@ -1001,8 +1001,8 @@ export interface SubagentEvent {
 }
 
 // mirrors pkg/contracts/conversation.go ThinkingBlock — the payload of a
-// persisted "session.thinking" Envelope: one whole main-agent thinking
-// block (token ticks are never persisted).
+// "session.thinking" Envelope: one whole main-agent thinking block. No
+// longer written; rows from before still decode.
 export interface ThinkingBlock {
   text: string;
   thinking_tokens?: number;

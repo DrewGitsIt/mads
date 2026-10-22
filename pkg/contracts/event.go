@@ -80,13 +80,12 @@ const (
 	// "task." — the task.* domain is the mads work-item schema
 	// (pkg/contracts/task.go), an unrelated thing.
 	SessionSubagentTask EventType = "session.subagent_task"
-	// SessionThinking fires for each whole extended-thinking block the
-	// session's main agent emits (providers/provider/event.go
-	// EventThinking with text). Payload: contracts.ThinkingBlock. Live
-	// estimated-token progress ticks (EventThinking with only a count) are
-	// NOT persisted — they are indicator fuel, high-frequency and worthless
-	// after the fact; a subagent's thinking blocks arrive parent-tagged and
-	// persist as SessionSubagentEvent instead.
+	// SessionThinking is no longer written: main-agent thinking lives only
+	// in the provider's own store (docs/CHAT-STREAM-DESIGN.md). It stays
+	// registered so rows from before (one per whole main-agent thinking
+	// block; payload contracts.ThinkingBlock) remain valid and decode.
+	// Nothing reads them. A subagent's thinking blocks arrive parent-tagged
+	// and persist as SessionSubagentEvent.
 	SessionThinking EventType = "session.thinking"
 	// SessionToolStatusChanged fires when the runner's defensive status
 	// synthesis (pkg/toolstatus) changes a tool call's lifecycle state

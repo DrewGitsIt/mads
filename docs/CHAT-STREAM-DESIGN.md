@@ -94,8 +94,9 @@ pane shows it only while it is in the unsettled tail, as `unsaved` items —
 through the turn and the next one for goose; for kiro (unkeyed) until its
 turn ends, when the stored page replaces the live items. mads keeps no copy
 of conversation content, so it is gone after that, as in the agent's own
-UI after a restart. The `session.thinking` events the runner still writes
-are not rendered in the chat (C4 decision, 2026-10-21).
+UI after a restart. The runner no longer writes `session.thinking` events
+(2026-10-22); old rows stay valid and are not rendered (C4 decision,
+2026-10-21).
 
 ## Design
 
@@ -285,10 +286,9 @@ the agent's store doesn't have yet**.
   own UI.
 - **Thinking** settles by key like any item, against the keyed store read
   (`provider.KeyedTranscriptReader`: Role `thinking` rows, where the
-  provider's `stored_thinking` is native). `session.thinking` events are
-  still written, but nothing settles against them, they carry no keys and
-  the chat pane doesn't render them (C4): mads's event log is not a second
-  copy of the conversation.
+  provider's `stored_thinking` is native). The runner no longer writes
+  `session.thinking` events (old rows stay valid, unrendered): mads's
+  event log is not a second copy of the conversation.
 - **Tool-result bodies** are kept as a 2 KB preview in the tail; the live frame
   carries the full text as today, and the stored row has it once settled.
 - **ACP.** acprpc's in-memory buffer stops being the transcript; it supplies
@@ -301,8 +301,10 @@ the agent's store doesn't have yet**.
 
 - Every row carries `key`. Thinking comes from the store where the agent keeps
   it (claude JSONL with summaries on, codex reasoning summaries, goose,
-  hermes) and is placed by key; `session.thinking` events stay only as the
-  fallback for agents that don't store it.
+  hermes) and is placed by key. Thinking lives only in the provider's own
+  store: for agents that don't store it (goose, kiro) it shows only while in
+  the live tail, and mads keeps no copy (`session.thinking` is no longer
+  written).
 - A stored tool row carries the display `kind` and `title` its live call
   did where the provider declares `stored_tool_display` (the stable_keys
   probe holds it to that). Where a stored row lacks them, the chat keeps

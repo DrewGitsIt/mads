@@ -104,9 +104,13 @@ func (r *Runner) flushInterruptedTools() {
 // never give back — claude-code's on-disk transcript omits subagent
 // sidechains entirely, so this event log is the ONLY historical source for
 // them (T6). Main-agent text/tool events are NOT persisted here: the
-// transcript refetch already replays those. Thinking token-count ticks are
-// live-only indicator fuel and skipped. Best-effort throughout, like every
-// other pump-side append: a failed write logs and never perturbs the turn.
+// transcript refetch already replays those. Nor is main-agent thinking: it
+// lives only in the provider's own store (stored_thinking), and where the
+// agent keeps none (goose, kiro) it shows only while in the live tail —
+// mads keeps no second copy of the conversation (old session.thinking rows
+// stay valid; nothing writes them now). Thinking token-count ticks are
+// live-only indicator fuel. Best-effort throughout, like every other
+// pump-side append: a failed write logs and never perturbs the turn.
 func (r *Runner) persistConversation(ev provider.Event) {
 	switch {
 	case ev.Kind == provider.EventTask && ev.Task != nil:
@@ -141,8 +145,6 @@ func (r *Runner) persistConversation(ev provider.Event) {
 			Tool:            contractsToolUse(ev.Tool),
 			IsError:         ev.IsError,
 		})
-	case ev.Kind == provider.EventThinking && ev.Text != "":
-		r.appendConversation(contracts.SessionThinking, contracts.ThinkingBlock{Text: ev.Text})
 	case ev.Kind == provider.EventCompact && ev.Compact != nil:
 		r.appendConversation(contracts.SessionCompact, contracts.CompactStatus{
 			Phase:   ev.Compact.Phase,

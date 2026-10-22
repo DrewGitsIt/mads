@@ -32,10 +32,11 @@ func eventsOfType[T any](t *testing.T, data *dataclient.Client, sessionID string
 	return out
 }
 
-// TestConversationPersistence: subagent sidechain events, task lifecycle
-// updates, and thinking blocks land in the event log — tagged, enriched, and
-// status-stamped — while main-agent text and thinking token ticks do not
-// (the transcript refetch replays the former; the latter are live-only).
+// TestConversationPersistence: subagent sidechain events (thinking
+// included) and task lifecycle updates land in the event log — tagged,
+// enriched, and status-stamped — while main-agent text, main-agent thinking
+// and thinking token ticks do not (the provider's store keeps the first
+// two; ticks are live-only).
 func TestConversationPersistence(t *testing.T) {
 	base := datatest.Start(t)
 	sess := newSession(t, base)
@@ -43,9 +44,9 @@ func TestConversationPersistence(t *testing.T) {
 	r := New(sess.ID, data, nil)
 
 	events := []provider.Event{
-		{Kind: provider.EventText, Text: "main agent text"}, // not persisted
-		{Kind: provider.EventThinking, ThinkingTokens: 512}, // token tick: not persisted
-		{Kind: provider.EventThinking, Text: "planning the audit"},
+		{Kind: provider.EventText, Text: "main agent text"},        // not persisted
+		{Kind: provider.EventThinking, ThinkingTokens: 512},        // token tick: not persisted
+		{Kind: provider.EventThinking, Text: "planning the audit"}, // main-agent thinking: not persisted
 		{Kind: provider.EventTask, Task: &provider.TaskStatus{
 			Phase: "started", TaskID: "task-1", ToolUseID: "toolu_agent",
 			Description: "Audit errors", SubagentType: "general-purpose",
@@ -120,9 +121,30 @@ func TestConversationPersistence(t *testing.T) {
 		t.Errorf("notification task payload: %+v", tasks[1])
 	}
 
-	thinking := eventsOfType[contracts.ThinkingBlock](t, data, sess.ID, contracts.SessionThinking)
-	if len(thinking) != 1 || thinking[0].Text != "planning the audit" {
-		t.Fatalf("persisted thinking = %+v, want exactly the main-agent block (no token ticks, no sidechain)", thinking)
+	if thinking := eventsOfType[contracts.ThinkingBlock](t, data, sess.ID, contracts.SessionThinking); len(thinking) != 0 {
+		t.Fatalf("wrote %d session.thinking events, want none: %+v", len(thinking), thinking)
+	}
+}
+
+// TestOldThinkingRowStillDecodes: a session.thinking row written before the
+// runner stopped writing them is still accepted by the event log, reads
+// back, and decodes; the runner ignores it.
+func TestOldThinkingRowStillDecodes(t *testing.T) {
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+	if err := data.Append(context.Background(), &contracts.Envelope{
+		Type:      contracts.SessionThinking,
+		SessionID: sess.ID,
+		Payload:   json.RawMessage(`{"text":"an old block"}`),
+	}); err != nil {
+		t.Fatalf("event log refused an old session.thinking row: %v", err)
+	}
+	r := New(sess.ID, data, nil)
+	r.observeConversation(provider.Event{Kind: provider.EventThinking, Text: "a new block"})
+	got := eventsOfType[contracts.ThinkingBlock](t, data, sess.ID, contracts.SessionThinking)
+	if len(got) != 1 || got[0].Text != "an old block" {
+		t.Fatalf("session.thinking rows = %+v, want only the old one, decoded", got)
 	}
 }
 

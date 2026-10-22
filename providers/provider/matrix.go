@@ -148,8 +148,9 @@ const (
 	// KeyedTranscriptReader, the same key and text as the live
 	// EventThinking. Native or unsupported (never emulated: a copy mads kept
 	// would be a second conversation log). Unsupported: live thinking is
-	// unsaved, and session.thinking events stay the record. Needs
-	// stable_keys. Internal plumbing, like stable_keys.
+	// unsaved — the chat shows it only while it is in the live tail, and
+	// nothing keeps it after (mads no longer writes session.thinking).
+	// Needs stable_keys. Internal plumbing, like stable_keys.
 	BehaviorStoredThinking Behavior = "stored_thinking"
 	// BehaviorStoredToolDisplay — a stored tool call carries the display
 	// Kind and Title its live EventToolUse did (same key), so reloaded

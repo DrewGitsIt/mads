@@ -230,8 +230,8 @@ the stand-in playing a thinking model (`MADS_FAKE_GOOSE_THINKING=1`,
 can't show it live: goose gets its reasoning inline as text, with a
 literal `</think>`, never as thought chunks.) Live thinking ends
 `unsaved`: the chat pane shows it only while it is in the session's
-unsettled tail (through the next turn), and not after; the
-`session.thinking` events the runner writes aren't rendered in the chat
+unsettled tail (through the next turn), and not after; mads keeps no
+copy (the runner no longer writes `session.thinking` events)
 (docs/CHAT-STREAM-DESIGN.md, "What the providers actually do").
 
 Filtered: the hidden `<turn-context>` row goose writes after every prompt
