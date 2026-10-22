@@ -20,6 +20,36 @@ const (
 	IsolationCurrentDir = "current_dir"
 )
 
+// Where a session ended up running, as its "worktree" provisioning step
+// reports it (SessionProvisioningPayload.Mode). In place covers asking for
+// the current directory and every fallback that lands there: isolation
+// switched off, an implicit folder, a folder that isn't a git repo, a
+// detached HEAD, and a session that ran in place before isolation existed.
+const (
+	ProvisioningInPlace  = "in_place"
+	ProvisioningWorktree = "worktree"
+)
+
+// SessionProvisioningPayload is the payload of SessionProvisioning: one
+// Start step that finished. Only Step is always set. Rows written before
+// Mode and Skipped existed carry Step alone (and Provider on
+// provider_ready), and read as a worktree step and an installed hook did
+// before: the zero values claim nothing.
+type SessionProvisioningPayload struct {
+	// Step is "worktree", "hook", "mcp_up", "agent_starting", or
+	// "provider_ready", in that order.
+	Step string `json:"step"`
+	// Mode is set on the "worktree" step: ProvisioningInPlace or
+	// ProvisioningWorktree.
+	Mode string `json:"mode,omitempty"`
+	// Skipped is set on the "hook" step when no commit hook was installed
+	// (no folder chosen, not a git repo, another session's worktree, or
+	// the install failed).
+	Skipped bool `json:"skipped,omitempty"`
+	// Provider is set on the "provider_ready" step.
+	Provider string `json:"provider,omitempty"`
+}
+
 // SessionTrust is the session's trust level (MADS-UX §3.2 Trust pill): a flat
 // per-session field with no workspace-level default propagation yet.
 type SessionTrust string

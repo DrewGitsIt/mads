@@ -230,6 +230,9 @@ func TestLegacyInPlaceSessionStaysInPlace(t *testing.T) {
 	if b := sessionBranches(t, repo); b != "" {
 		t.Errorf("legacy session got a branch: %q", b)
 	}
+	if got := h.provisioned("worktree").Mode; got != contracts.ProvisioningInPlace {
+		t.Errorf("worktree mode = %q, want %q", got, contracts.ProvisioningInPlace)
+	}
 }
 
 // The folder was deleted by hand between runs: resume recreates it at the
@@ -388,11 +391,104 @@ func (h *wtHarness) provisioningSteps() string {
 	}
 	steps := make([]string, len(evs))
 	for i, ev := range evs {
-		var p map[string]string
+		var p contracts.SessionProvisioningPayload
 		if err := json.Unmarshal(ev.Payload, &p); err != nil {
 			h.t.Fatal(err)
 		}
-		steps[i] = p["step"]
+		steps[i] = p.Step
 	}
 	return strings.Join(steps, " ")
+}
+
+// provisioned returns the last session.provisioning payload for step.
+func (h *wtHarness) provisioned(step string) contracts.SessionProvisioningPayload {
+	h.t.Helper()
+	evs, err := h.data.Events(context.Background(), 0, h.id, []string{string(contracts.SessionProvisioning)})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		var p contracts.SessionProvisioningPayload
+		if err := json.Unmarshal(evs[i].Payload, &p); err != nil {
+			h.t.Fatal(err)
+		}
+		if p.Step == step {
+			return p
+		}
+	}
+	h.t.Fatalf("no %q provisioning step", step)
+	return contracts.SessionProvisioningPayload{}
+}
+
+// The worktree step says where the session ended up and the hook step
+// whether a hook went in: an isolated session gets a worktree and a hook;
+// every way of running in place reports in_place, and a folder the hook
+// can't or mustn't go into reports the hook skipped.
+func TestProvisioningReportsModeAndHook(t *testing.T) {
+	cases := []struct {
+		name string
+		// setup returns the session's folder ("" for none), its Isolation,
+		// and whether isolation is switched on (a WorktreeRoot).
+		setup       func(t *testing.T) (dir string, isolation string, root bool)
+		wantMode    string
+		wantSkipped bool
+	}{
+		{"isolated", func(t *testing.T) (string, string, bool) {
+			repo := t.TempDir()
+			initRepo(t, repo)
+			return repo, contracts.IsolationWorktree, true
+		}, contracts.ProvisioningWorktree, false},
+		{"current dir", func(t *testing.T) (string, string, bool) {
+			repo := t.TempDir()
+			initRepo(t, repo)
+			return repo, contracts.IsolationCurrentDir, true
+		}, contracts.ProvisioningInPlace, false},
+		{"isolation off", func(t *testing.T) (string, string, bool) {
+			repo := t.TempDir()
+			initRepo(t, repo)
+			return repo, contracts.IsolationWorktree, false
+		}, contracts.ProvisioningInPlace, false},
+		{"not a git repo", func(t *testing.T) (string, string, bool) {
+			return t.TempDir(), contracts.IsolationWorktree, true
+		}, contracts.ProvisioningInPlace, true},
+		{"detached head", func(t *testing.T) (string, string, bool) {
+			repo := t.TempDir()
+			initRepo(t, repo)
+			gitRun(t, repo, "checkout", "-q", "--detach")
+			return repo, contracts.IsolationWorktree, true
+		}, contracts.ProvisioningInPlace, false},
+		{"implicit dir", func(t *testing.T) (string, string, bool) {
+			return "", contracts.IsolationWorktree, true
+		}, contracts.ProvisioningInPlace, true},
+		{"foreign hook", func(t *testing.T) (string, string, bool) {
+			repo := t.TempDir()
+			initRepo(t, repo)
+			hooks := filepath.Join(repo, ".git", "hooks")
+			if err := os.MkdirAll(hooks, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(hooks, "post-commit"), []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // a hook is executable
+				t.Fatal(err)
+			}
+			return repo, contracts.IsolationCurrentDir, true
+		}, contracts.ProvisioningInPlace, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, isolation, root := tc.setup(t)
+			h := newWTHarness(t, contracts.Session{Dir: dir, Isolation: isolation}, fake.Scenario{})
+			if !root {
+				h.root = ""
+			}
+			if err := h.boot(); err != nil {
+				t.Fatal(err)
+			}
+			if got := h.provisioned("worktree").Mode; got != tc.wantMode {
+				t.Errorf("worktree mode = %q, want %q", got, tc.wantMode)
+			}
+			if got := h.provisioned("hook").Skipped; got != tc.wantSkipped {
+				t.Errorf("hook skipped = %v, want %v", got, tc.wantSkipped)
+			}
+		})
+	}
 }
