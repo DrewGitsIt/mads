@@ -50,7 +50,7 @@ claim in this package. Model gpt-5.6-luna at low reasoning effort.
   (config backed up and restored around each probe).
 - **Process groups**: a `sleep 37` run by a turn had pgid == its own pid,
   app-server another; `killpg` on app-server's group left it running,
-  reparented to launchd (reap.go).
+  reparented to launchd (pkg/procreap).
 - **MCP servers**: `config.mcp_servers.<name> = {command, args, env}` on
   `thread/start` starts that server (`mcpServer/startupStatus/updated`
   names it); nothing written to the user's config.

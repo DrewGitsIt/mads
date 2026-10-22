@@ -464,7 +464,7 @@ func (s *session) Compact(ctx context.Context, instructions string) error {
 
 // Close ends the session: open asks are withdrawn, stdin EOF asks
 // app-server to exit, a laggard is killed with its group, and every tool
-// process codex spawned in a group of its own is reaped (reap.go). Ref
+// process codex spawned in a group of its own is reaped (pkg/procreap). Ref
 // stays valid for a later resume — the rollout is codex's, on disk.
 func (s *session) Close() error {
 	s.mu.Lock()
@@ -700,7 +700,7 @@ func (s *session) itemStarted(it *threadItem) {
 			// The command's process exists a moment after codex announces
 			// it; look then, so a crash of app-server mid-command still
 			// leaves the reaper knowing what to kill.
-			s.c.reaper.snapshotSoon(300 * time.Millisecond)
+			s.c.reaper.SnapshotSoon(300 * time.Millisecond)
 		}
 		s.emitToolUse(it)
 	}

@@ -1,8 +1,7 @@
 // Package procreap kills what an agent process left behind: its process
-// group, and the descendants that left that group. It is the codexcli
-// reaper (providers/codexcli/reap.go on the codex branch) lifted into a
-// package any adapter can use without importing another adapter; codexcli
-// can switch to it unchanged.
+// group, and the descendants that left that group. It began as the
+// codexcli reaper, lifted into a package any adapter can use without
+// importing another adapter; codexcli and acprpc both use it.
 //
 // Why a group is not enough: harnesses put the commands, MCP servers and
 // kernels they spawn into sessions of their own (codex for every tool;
@@ -190,6 +189,14 @@ func (r *Reaper) Seen() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.seen)
+}
+
+// Remembers reports whether the reaper currently remembers pid.
+func (r *Reaper) Remembers(pid int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.seen[pid]
+	return ok
 }
 
 // Reap kills every remembered descendant that is still the process it was

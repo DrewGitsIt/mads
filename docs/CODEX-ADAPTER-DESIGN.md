@@ -44,12 +44,13 @@ docs/CHAT-STREAM-DESIGN.md §1 (C1). Every event and transcript row carries
 ## Shape of the work
 
 `providers/codexcli` (registry `codex`): `rpc.go` (process + JSON-RPC),
-`reap.go` (tool-process reaper), `session.go` (turns, events, approvals),
-`items.go` (ThreadItem → ToolUse/result), `codexcli.go` (Provider, Matrix,
-Start, trust, thread config, Models), `transcript.go`, `oneshot.go`;
+`session.go` (turns, events, approvals), `items.go` (ThreadItem →
+ToolUse/result), `codexcli.go` (Provider, Matrix, Start, trust, thread
+config, Models), `transcript.go`, `oneshot.go`;
 tests: `fakecodex_test.go` (scripted stand-in), `codexcli_test.go`
 (conformance + behavior), `wire_test.go` (capture replay),
-`transcript_test.go`, `reap_test.go`, `smoke_test.go`.
+`transcript_test.go`, `smoke_test.go`. The tool-process reaper is
+`pkg/procreap` (shared with acprpc).
 
 ## Verified binary surface
 
@@ -196,7 +197,7 @@ Captured: codex puts every tool command, MCP server and helper it spawns
 in a process group of its own (`sleep 37`: pgid == its pid; app-server's
 group different). So `killpg(app-server)` misses them, and after
 app-server dies they reparent to init — the survey's `sleep 20` outlived
-`kill -9`. `reap.go` snapshots app-server's descendants (`ps -A -o
+`kill -9`. `pkg/procreap` snapshots app-server's descendants (`ps -A -o
 pid,ppid,pgid`, walked from app-server's pid) 300 ms after each command
 item starts and again at Close, and when app-server is gone — clean exit,
 SIGKILL after the 3 s grace, or a crash noticed by the read loop — kills
