@@ -1,10 +1,14 @@
 package claudecode
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/drewkidwell/mads/providers/provider"
 )
 
 // The human's mid-turn send, as claude-code 2.1.285 records it
@@ -153,5 +157,101 @@ func TestInjectTranscripts(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A background task's notice is written as a user line when it arrives
+// idle and as a "task-notification" queued_command attachment when it
+// arrives mid-turn; both render as the same "notification" row, keyed by
+// the line's uuid. testdata/transcript_task_notices.jsonl is real lines,
+// trimmed: one subagent (a0b39524a6827d682) that notified again and again
+// under one task id, in both forms, some notices with a tool-use id and
+// some without, then two Monitor events from another session (no tool-use
+// id either). Three lines are constructed, with zero uuids: a real
+// notice's block repeated in the other form (twice) and a tool-use-less
+// block repeated verbatim. Each distinct notice shows once, in order;
+// the repeats don't, and a chained read keys and dedupes like a full one.
+func TestTaskNoticeTranscript(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "transcript_task_notices.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const agent = `Agent "Build synthesis eval harness" finished`
+	const monitor = `Monitor event: "watching /tmp/bgmon/watched.txt for first line"`
+	want := []struct{ key, text string }{
+		{"afae394a-5829-49fb-a6be-c3eeb8f6114e", agent}, // user line, toolu_01KRhF…
+		{"fff4f878-117e-412d-b05a-c6b9e2988fe1", agent}, // attachment, no tool-use id
+		{"a4cab899-9fe3-4338-bb48-4599ccb36c8b", agent}, // user line, toolu_01ACrS…
+		{"5111c4b9-7f1e-43b1-8ca7-cb2273c906ae", agent}, // attachment, toolu_0147UG…
+		{"e23deb57-729d-4f39-8317-b1c00ea32110", agent}, // attachment, toolu_01BwBh…
+		{"451690fc-c99b-492a-add6-488783eac9ff", agent}, // user line, no tool-use id
+		{"a4d6abc4-eb87-4d9a-a3a5-3b4834c9d008", monitor},
+		{"2fa8dbc8-64eb-4270-9cb1-3a879bd6fa8e", monitor},
+	}
+	check := func(name string, msgs []provider.Message) {
+		t.Helper()
+		if len(msgs) != len(want) {
+			for _, m := range msgs {
+				t.Logf("%s %s %q", m.Role, m.Key, m.Text)
+			}
+			t.Fatalf("%s: %d rows, want %d", name, len(msgs), len(want))
+		}
+		for i, w := range want {
+			m := msgs[i]
+			if m.Role != "notification" || !m.Notice || m.Key != w.key || m.Text != w.text || m.Timestamp.IsZero() {
+				t.Errorf("%s row %d = {%s notice=%v key=%s %q ts=%v}, want notification %s %q", name, i, m.Role, m.Notice, m.Key, m.Text, m.Timestamp, w.key, w.text)
+			}
+		}
+	}
+
+	full, err := normalizeTranscript(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("Transcript", full)
+	keyed, err := normalizeKeyed(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("KeyedTranscript", keyed)
+
+	// Split anywhere, the second half read from a clone of the first's
+	// state (TranscriptSince's cursor): the same rows, the same keys.
+	lines := bytes.SplitAfter(raw, []byte("\n"))
+	for k := range lines {
+		st := newTranscriptState(false)
+		var msgs []provider.Message
+		for _, l := range lines[:k] {
+			msgs = st.add(l, msgs)
+		}
+		next := st.clone()
+		for _, l := range lines[k:] {
+			msgs = next.add(l, msgs)
+		}
+		check(fmt.Sprintf("split at line %d", k), msgs)
+	}
+}
+
+// The dedupe identity: task id plus tool-use id when the block has one,
+// otherwise the whole block, so a re-notified task's distinct notices all
+// show.
+func TestNoticeIdentity(t *testing.T) {
+	block := func(inner string) string { return "<task-notification>\n" + inner + "\n</task-notification>" }
+	a1 := block("<task-id>a1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<result>first</result>")
+	a1again := block("<task-id>a1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<result>said differently</result>")
+	a1other := block("<task-id>a1</task-id>\n<tool-use-id>toolu_2</tool-use-id>\n<result>first</result>")
+	b1 := block("<task-id>b1</task-id>\n<tool-use-id>toolu_1</tool-use-id>")
+	m1 := block("<task-id>m1</task-id>\n<event>changed</event>")
+	m2 := block("<task-id>m1</task-id>\n<event>expired</event>")
+	if noticeIdentity(a1) != noticeIdentity(a1again) {
+		t.Error("same (task id, tool-use id) read as two notices")
+	}
+	for _, pair := range [][2]string{{a1, a1other}, {a1, b1}, {m1, m2}} {
+		if noticeIdentity(pair[0]) == noticeIdentity(pair[1]) {
+			t.Errorf("distinct notices share an identity:\n%s\n%s", pair[0], pair[1])
+		}
+	}
+	if noticeIdentity(m1) != noticeIdentity("  "+m1+"\n") {
+		t.Error("a tool-use-less block's identity depends on surrounding whitespace")
 	}
 }
