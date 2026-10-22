@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -315,12 +316,33 @@ type Session interface {
 }
 
 // PTYSession is the terminal transport: the same Session contract with the
-// byte stream exposed. Send still injects user messages programmatically;
-// Terminal carries everything the harness renders.
+// byte stream exposed. Send still injects user messages programmatically —
+// typed into the TUI's prompt as TypedMessage — and Terminal carries
+// everything the harness renders.
 type PTYSession interface {
 	Session
 	Terminal() io.ReadWriter
 	Resize(cols, rows int) error
+}
+
+const (
+	pasteStart = "\x1b[200~"
+	pasteEnd   = "\x1b[201~"
+)
+
+// TypedMessage is what a PTYSession's Send writes to the terminal: the text
+// as one bracketed paste, then a carriage return to submit it. Typed bare,
+// a TUI takes each newline in the text as a key — claude-code 2.1 leaves a
+// multi-line write unsubmitted in its input box, and a line-at-a-time
+// prompt would submit at the first newline — while a paste arrives as one
+// message (claude-code 2.1.285 and goose 1.50.1 both enable bracketed
+// paste and store a pasted "a\nb" then \r as one user message; kiro-cli
+// is not installed to check). The UI's terminal compose sheet pastes the
+// same way (formatBracketedPaste). ESC bytes in the text are dropped: an
+// end marker there would end the paste early and type the rest as keys, and
+// a chat message has no other use for them.
+func TypedMessage(text string) []byte {
+	return []byte(pasteStart + strings.ReplaceAll(text, "\x1b", "") + pasteEnd + "\r")
 }
 
 // ModelDiscoverer is the optional strategy for BehaviorModelDiscovery.

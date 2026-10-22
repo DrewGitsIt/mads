@@ -70,9 +70,10 @@ func (s *ptySession) Resize(cols, rows int) error {
 	return pty.Setsize(s.master, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}) //nolint:gosec // terminal dimensions
 }
 
-// Send types a message into the terminal (carriage return submits).
+// Send types a message into the terminal: one bracketed paste, then the
+// carriage return that submits it (provider.TypedMessage).
 func (s *ptySession) Send(_ context.Context, text string) error {
-	_, err := s.master.Write([]byte(text + "\r"))
+	_, err := s.master.Write(provider.TypedMessage(text))
 	return err
 }
 
