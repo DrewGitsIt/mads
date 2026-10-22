@@ -18,6 +18,12 @@ const compaction: TranscriptMessage = {
 };
 
 describe("compaction marker", () => {
+  it("breaks the summary's lines where the newlines are", () => {
+    const { container } = render(<ChatRenderer rows={keyed([{ ...compaction, text: "line one\nline two" }])} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show summary" }));
+    expect(container.querySelector("[data-find-summary-body]")!.querySelectorAll("br")).toHaveLength(1);
+  });
+
   // The screenshot bug: the carried-forward summary rendered as one giant
   // user bubble. It's a system row now, the summary behind a disclosure.
   it("renders a compaction as a system row, not a user bubble", () => {

@@ -69,7 +69,7 @@ export function InboundMessage({
       {body && (
         <>
           <div className={folded ? styles.folded : undefined}>
-            <Markdown className={styles.prose} text={body} />
+            <Markdown className={styles.prose} text={body} breaks />
           </div>
           {long && (
             <button type="button" className={styles.disclose} aria-expanded={open} onClick={() => setOpen(!open)}>

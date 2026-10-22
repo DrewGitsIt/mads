@@ -74,7 +74,7 @@ export function CompactionMarker({
       </div>
       {summary && shown && (
         <div className={styles.summaryBody} data-find-summary-body>
-          <Markdown className={styles.summary} text={summary} />
+          <Markdown className={styles.summary} text={summary} breaks />
         </div>
       )}
     </div>
