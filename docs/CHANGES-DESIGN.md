@@ -124,8 +124,10 @@ user edits mixed in unattributed.
     unintelligible in a short, wide list.
 - **Subagent worktrees are left out** *(agreed 2026-10-21, stopgap)*. A
   harness gives each subagent its own worktree inside the session folder
-  (Claude Code: `.claude/worktrees/<name>/`) and removes it when the
-  subagent finishes. Their edits reach the ledger as the session's own, so
+  (Claude Code: `.claude/worktrees/<name>/`; Hermes with
+  `delegation.worktree_isolation`: `.worktrees/subagent-<id>/`) and removes
+  it when the subagent is done. Codex and goose subagents share the
+  parent's folder, so their edits are real and stay listed. Their edits reach the ledger as the session's own, so
   live ones double-counted the work, and removed ones read as mass deletions:
   the only "before" was a mid-session pre-image, because the worktree didn't
   exist at session start. `pkg/changes/worktrees.go` drops any file under the
