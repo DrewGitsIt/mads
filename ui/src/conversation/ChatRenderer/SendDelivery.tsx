@@ -10,26 +10,48 @@ import styles from "./SendDelivery.module.css";
  * collapseFailedSends): "Not delivered" with the reason and,
  * on the latest message only, Retry; then a quiet count of earlier failed
  * attempts that opens to list each one's reason and time.
+ *
+ * A send the harness refused for auth, while the session's login is still
+ * signed out, reads "Signed out of {provider}" instead (the reason moves to
+ * the tooltip) and offers Sign in beside Retry. Once the login is signed in
+ * again it reads "Not delivered" like any other failure.
  */
 export function SendDelivery({
   delivery,
   onRetry,
+  signIn,
 }: {
   delivery: Delivery;
   /** Present only when this message can be resent now. */
   onRetry?: () => void;
+  /** Present only while the session's login is signed out: its provider's display name and the way back in. */
+  signIn?: { provider: string; onSignIn: () => void };
 }) {
   const [open, setOpen] = useState(false);
   const { error, attempts } = delivery;
   const n = attempts.length;
+  const signedOut = signIn && delivery.errorKind === "auth" ? signIn : undefined;
   return (
     <div className={styles.delivery} data-find-skip>
       {error && (
         <div className={styles.failed} role="status">
-          <span className={styles.failedLabel}>Not delivered</span>
-          <span className={styles.reason} title={error}>
-            {error}
-          </span>
+          {signedOut ? (
+            <>
+              <span className={styles.failedLabel} title={error}>
+                Signed out of {signedOut.provider}
+              </span>
+              <Button variant="secondary" size="sm" className={styles.retry} onClick={signedOut.onSignIn}>
+                Sign in
+              </Button>
+            </>
+          ) : (
+            <>
+              <span className={styles.failedLabel}>Not delivered</span>
+              <span className={styles.reason} title={error}>
+                {error}
+              </span>
+            </>
+          )}
           {onRetry && (
             <Button variant="ghost" size="sm" className={styles.retry} onClick={onRetry}>
               Retry
@@ -53,9 +75,10 @@ export function SendDelivery({
                 const at = parseMessageTime(a.timestamp);
                 return (
                   <li key={i}>
+                    {/* "failed at": the message's own hover stamp sits on this row too. */}
                     {at && (
                       <time dateTime={at.toISOString()} title={at.toLocaleString()}>
-                        {formatMessageTime(at)}
+                        failed at {formatMessageTime(at)}
                       </time>
                     )}
                     <span className={styles.reason} title={a.error}>

@@ -22,6 +22,8 @@ var routeManifest = []struct {
 	{"GET", "/sessions/abc", "GET /sessions/{id}"},
 	{"GET", "/sessions/abc/transcript", "GET /sessions/{id}/transcript"},
 	{"GET", "/sessions/abc/report", "GET /sessions/{id}/report"},
+	{"GET", "/sessions/abc/auth", "GET /sessions/{id}/auth"},
+	{"POST", "/accounts/signed-in", "POST /accounts/signed-in"},
 	{"POST", "/sessions/abc/bounce", "POST /sessions/{id}/bounce"},
 	{"POST", "/sessions/abc/trust", "POST /sessions/{id}/trust"},
 	{"POST", "/sessions/abc/model", "POST /sessions/{id}/model"},

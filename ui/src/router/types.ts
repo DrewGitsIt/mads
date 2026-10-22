@@ -578,6 +578,29 @@ export interface RateLimit {
   scope: string;
 }
 
+// GET /sessions/{id}/auth: the login a session runs on, and whether it is
+// signed out (docs/AUTH-SIGNIN-DESIGN.md). Login state belongs to the
+// account, so every session on one login reads the same.
+export interface SessionAuth {
+  /** Provider name ("claude-code"). */
+  provider: string;
+  /** The login's key (provider.AccountStatus.Account): "claude-code:<config dir>". */
+  account: string;
+  signed_out: boolean;
+  failed_at?: string; // RFC3339
+  signed_in_at?: string; // RFC3339
+  /** How to sign back in, when the provider knows: argv[0] is an absolute path; env holds "K=V" overrides. */
+  login?: { argv: string[]; env: string[] };
+}
+
+// payload of the global "account.auth_changed" Envelope: a login's
+// signed-out state flipped.
+export interface AccountAuthChanged {
+  account: string;
+  provider: string;
+  signed_out: boolean;
+}
+
 export interface SessionReport {
   session_id: string;
   health: {
@@ -659,6 +682,8 @@ export interface TranscriptMessage {
   timestamp?: string; // RFC3339, when the provider recorded this entry
   /** On "tool_result": the call failed. On "agent": the harness reporting a failed turn in the agent's place (auth rejected, API unreachable, out of credits), not a reply. */
   is_error?: boolean;
+  /** On an `is_error` "agent" row: "auth" when the harness refused the turn because its login is signed out. Absent: unclassified. */
+  error_kind?: "auth";
   compact?: CompactMarker; // set on role "compact": one compaction pass, where it happened
   inbound?: InboundSource; // set on role "inbound" (text is the message body; not a user turn) — mirrors pkg/contracts/transcript.go TranscriptMessage.Inbound
   /** The row's conversation identity (opaque; compare for equality only). A tool call and its result share one. Absent from an adapter without stable keys. */

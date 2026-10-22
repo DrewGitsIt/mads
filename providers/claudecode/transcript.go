@@ -219,6 +219,8 @@ type transcriptLine struct {
 	// "<synthetic>": "Login expired · Please run /login", "API Error:
 	// Connection refused…") — a failed delivery, not the agent's reply.
 	IsAPIErrorMessage bool `json:"isApiErrorMessage"`
+	// APIError is such a line's reason; apiErrorAuth marks a refused login.
+	APIError string `json:"error"`
 	// Origin marks a user-role line the CLI wrote itself: kind
 	// "task-notification" is the <task-notification> block it feeds the
 	// model when a background task finishes.
@@ -249,6 +251,15 @@ type transcriptLine struct {
 	// Timestamp is claude-code's own RFC3339 stamp on every conversation
 	// line. Unparseable or absent leaves the zero time.Time.
 	Timestamp string `json:"timestamp"`
+}
+
+// errorKind classifies an API-failure line (IsAPIErrorMessage) the way the
+// live stream's turn error is (streamSession.authFailed).
+func (l *transcriptLine) errorKind() string {
+	if l.IsAPIErrorMessage && l.APIError == apiErrorAuth {
+		return provider.ErrorKindAuth
+	}
+	return ""
 }
 
 // transcriptAttachment is an "attachment" line's payload. A queued_command's
@@ -732,7 +743,7 @@ func (st *transcriptState) add(line []byte, msgs []provider.Message) []provider.
 			switch b.Type {
 			case "text":
 				if b.Text != "" {
-					msgs = append(msgs, provider.Message{Role: "agent", Text: b.Text, Timestamp: ts, IsError: l.IsAPIErrorMessage, Key: key(i), Notice: synthetic})
+					msgs = append(msgs, provider.Message{Role: "agent", Text: b.Text, Timestamp: ts, IsError: l.IsAPIErrorMessage, ErrorKind: l.errorKind(), Key: key(i), Notice: synthetic})
 				}
 			case "thinking":
 				if st.thinking && b.Thinking != "" {

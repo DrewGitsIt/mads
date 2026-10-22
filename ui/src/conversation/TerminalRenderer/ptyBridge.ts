@@ -99,6 +99,14 @@ export interface ShellHostBridge {
      */
     snapshot?: string;
   }>;
+  /**
+   * Runs one command in a pty (argv[0] with argv[1..], in HOME, with the
+   * docked shell's environment plus `env`'s "K=V" overrides) and returns its
+   * id. Its output and exit come through onData/onExit like a shell's, but it
+   * is never in list() or onShellsChanged, it is gone once it exits, and
+   * end() kills it. A sign-in's login command (docs/AUTH-SIGNIN-DESIGN.md).
+   */
+  run(argv: string[], options?: { env?: string[]; cols?: number; rows?: number }): Promise<{ shellId: string }>;
   /** The view went away; the shell keeps running. */
   detach(shellId: string): Promise<void>;
   /** Kills the shell and forgets it. */

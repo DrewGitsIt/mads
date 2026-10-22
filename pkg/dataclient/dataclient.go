@@ -467,6 +467,26 @@ func (c *Client) SetSessionBilling(ctx context.Context, id string, patch contrac
 	return c.do(ctx, http.MethodPut, "/sessions/"+url.PathEscape(id)+"/billing", patch, nil)
 }
 
+// AccountAuthFailed reports a send refused for auth on f.Account
+// (docs/AUTH-SIGNIN-DESIGN.md); the Data Service announces
+// account.auth_changed if that signs the login out.
+func (c *Client) AccountAuthFailed(ctx context.Context, f contracts.AccountAuthFailed) error {
+	return c.do(ctx, http.MethodPut, "/accounts/auth/failed", f, nil)
+}
+
+// AccountAuthOK reports ok.Account working: a sign-in finished or a turn got
+// a real answer. A no-op unless the login is signed out.
+func (c *Client) AccountAuthOK(ctx context.Context, ok contracts.AccountAuthOK) error {
+	return c.do(ctx, http.MethodPut, "/accounts/auth/ok", ok, nil)
+}
+
+// AccountAuths lists every login that has failed auth, signed out or not.
+func (c *Client) AccountAuths(ctx context.Context) ([]contracts.AccountAuth, error) {
+	var out []contracts.AccountAuth
+	err := c.do(ctx, http.MethodGet, "/accounts/auth", nil, &out)
+	return out, err
+}
+
 // SetSessionWorktree applies a scoped write of the session's isolation
 // state (worktree folder/branch/base, D4 counts) in one atomic round trip;
 // nil fields are left alone. Like RecordSessionTurnEnd, it can't drop a field

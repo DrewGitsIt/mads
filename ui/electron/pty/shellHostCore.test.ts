@@ -31,6 +31,7 @@ class FakePty implements PtyProcess {
     readonly pid: number,
     readonly file: string,
     readonly options: { cwd?: string; cols?: number; rows?: number; env?: Record<string, string | undefined> },
+    readonly args: string[] = [],
   ) {}
   write(data: string) {
     this.written.push(data);
@@ -138,8 +139,8 @@ beforeEach(() => {
   signals = [];
   signalErrors = new Map();
   const pty: NodePtyModule = {
-    spawn: (file, _args, options) => {
-      const proc = new FakePty(1000 + spawned.length, file, options);
+    spawn: (file, args, options) => {
+      const proc = new FakePty(1000 + spawned.length, file, options, typeof args === "string" ? [args] : args);
       spawned.push(proc);
       return proc;
     },
@@ -629,6 +630,97 @@ describe("ShellHostCore", () => {
       tick();
       expect(events).toEqual([]);
     });
+  });
+});
+
+describe("ShellHostCore run", () => {
+  const run = (windowId: number, argv: string[], env?: string[]) =>
+    core.handle(windowId, { type: "run", argv, env }) as Promise<{ shellId: string }>;
+
+  it("spawns argv in HOME with the shell's env plus the overrides", async () => {
+    connectWindow(1);
+    const { shellId } = await run(1, ["/usr/local/bin/claude", "auth", "login"], ["CLAUDE_CONFIG_DIR=/cfg/a=b"]);
+    expect(shellId).toBe("shell-1");
+    expect(spawned[0].file).toBe("/usr/local/bin/claude");
+    expect(spawned[0].args).toEqual(["auth", "login"]);
+    expect(spawned[0].options.cwd).toBe(process.env.HOME);
+    expect(spawned[0].options.env).toEqual({ PATH: "/bin", TERM_PROGRAM: "mads", CLAUDE_CONFIG_DIR: "/cfg/a=b" });
+  });
+
+  it("is never listed or reported to main", async () => {
+    connectWindow(1);
+    await open(1, "ses_a");
+    await run(1, ["/bin/login-cmd"]);
+    expect(core.list().map((s) => s.sessionId)).toEqual(["ses_a"]);
+    expect(reported).toEqual([["ses_a"]]);
+    spawned[1].emitExit(0);
+    expect(reported).toEqual([["ses_a"]]);
+  });
+
+  it("sends output and exit to its window, then forgets the command", async () => {
+    const events = connectWindow(1);
+    const { shellId } = await run(1, ["/bin/login-cmd"]);
+    spawned[0].emitData("Opening browser…");
+    tick();
+    spawned[0].emitExit(3);
+    expect(events).toEqual([
+      { event: "data", shellId, data: "Opening browser…" },
+      { event: "exit", shellId, exitCode: 3 },
+    ]);
+    // Gone: input and an end reach nothing.
+    await core.handle(1, { type: "write", shellId, data: "x" });
+    await core.handle(1, { type: "end", shellId });
+    expect(spawned[0].written).toEqual([]);
+    expect(spawned[0].killed).toBe(false);
+  });
+
+  it("holds output and an exit that come before the reply is posted", async () => {
+    const events = connectWindow(1);
+    let seenAtReply = -1;
+    // A command that fails at once: its output and exit still follow the reply.
+    await core.handleAndReply(1, { type: "run", argv: ["/bin/nope"] }, () => {
+      spawned[0].emitData("no such account\r\n");
+      spawned[0].emitExit(1);
+      seenAtReply = events.length;
+    });
+    expect(seenAtReply).toBe(0);
+    expect(events).toEqual([
+      { event: "data", shellId: "shell-1", data: "no such account\r\n" },
+      { event: "exit", shellId: "shell-1", exitCode: 1 },
+    ]);
+  });
+
+  it("takes input and resizes only from its own window", async () => {
+    connectWindow(1);
+    connectWindow(2);
+    const { shellId } = await run(1, ["/bin/login-cmd"]);
+    await core.handle(2, { type: "write", shellId, data: "nope" });
+    await core.handle(1, { type: "write", shellId, data: "code\r" });
+    await core.handle(1, { type: "resize", shellId, cols: 90, rows: 20 });
+    expect(spawned[0].written).toEqual(["code\r"]);
+    expect(spawned[0].sizes).toEqual([[90, 20]]);
+  });
+
+  it("end kills it", async () => {
+    const events = connectWindow(1);
+    const { shellId } = await run(1, ["/bin/login-cmd"]);
+    await core.handle(1, { type: "end", shellId });
+    expect(spawned[0].killed).toBe(true);
+    // The kill's own exit owes the window nothing.
+    expect(events).toEqual([]);
+  });
+
+  it("ends with its window", async () => {
+    connectWindow(1);
+    await run(1, ["/bin/login-cmd"]);
+    core.disconnect(1);
+    expect(spawned[0].killed).toBe(true);
+  });
+
+  it("rejects an empty argv", async () => {
+    connectWindow(1);
+    await expect(run(1, [])).rejects.toThrow("run needs a command");
+    expect(spawned).toHaveLength(0);
   });
 });
 

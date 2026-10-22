@@ -287,6 +287,23 @@ type AccountKeyer interface {
 	DefaultAccount() string
 }
 
+// Authenticator is implemented by a provider whose login can be renewed by
+// a command the user runs in a terminal (claude-code: `claude auth login`).
+// LoginCommand returns that command for one login (AccountStatus.Account),
+// and false for a key it doesn't recognize or a binary it can't find.
+type Authenticator interface {
+	LoginCommand(account string) (LoginCommand, bool)
+}
+
+// LoginCommand is a login command to run in a pty. Argv[0] is an absolute
+// path, so the runner needn't search PATH. Env holds only the overrides
+// that pick the login (claude-code: CLAUDE_CONFIG_DIR), as KEY=VALUE, on
+// top of the runner's own environment; empty for the default login.
+type LoginCommand struct {
+	Argv []string `json:"argv"`
+	Env  []string `json:"env"`
+}
+
 type Provider interface {
 	// Name is the registry key ("claude-code", "fake", ...).
 	Name() string

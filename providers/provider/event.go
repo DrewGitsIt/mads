@@ -184,6 +184,10 @@ type Event struct {
 	// IsError marks EventToolResult as the tool call having failed
 	// (including a permission denial) — mirrors Message.IsError below.
 	IsError bool `json:"is_error,omitempty"`
+	// ErrorKind classifies an EventError when the adapter knows for certain
+	// what went wrong (ErrorKindAuth). Empty means unclassified, which is
+	// every error an adapter can't pin down.
+	ErrorKind string `json:"error_kind,omitempty"`
 	// Permission for EventPermissionRequest.
 	Permission *PermissionRequest `json:"permission,omitempty"`
 	// Compact for EventCompact.
@@ -223,6 +227,12 @@ type Event struct {
 	// provider can know. Adapters never set it.
 	Wire json.RawMessage `json:"-"`
 }
+
+// ErrorKindAuth is Event.ErrorKind / Message.ErrorKind for a turn the
+// harness refused because its login is signed out or expired. Only a
+// definite auth failure is tagged: the session runner marks the login
+// signed out on it, and the UI offers to sign in.
+const ErrorKindAuth = "auth"
 
 // Billing modes for AccountStatus.BillingMode — contracts.BillingPlan and
 // contracts.BillingUsage, mirrored so providers needn't import contracts.
@@ -496,6 +506,9 @@ type Message struct {
 	// turn in the agent's place (auth rejected, API unreachable, out of
 	// credits) rather than a reply. Meaningless on other roles.
 	IsError bool `json:"is_error,omitempty"`
+	// ErrorKind classifies a Role "agent" IsError entry the way Event.
+	// ErrorKind does the live failure. Empty means unclassified.
+	ErrorKind string `json:"error_kind,omitempty"`
 	// Compact describes a Role "compact" entry: a compaction pass, placed
 	// where it happened. Its Text is the summary the agent carried forward
 	// (empty if the provider recorded none) — never a user message.

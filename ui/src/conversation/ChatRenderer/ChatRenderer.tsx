@@ -98,6 +98,12 @@ export interface ChatRendererProps {
   onRetry?: (text: string) => void;
   /** Why the latest send failed (its HTTP error, or the stream's error frame), for a send the stream reported unsaved. */
   sendFailure?: string;
+  /**
+   * Set while the session's login is signed out (useSessionAuth): a send the
+   * harness refused for auth then reads "Signed out of {provider}" with
+   * Sign in (see SendDelivery).
+   */
+  signIn?: { provider: string; onSignIn: () => void };
   /** Find in conversation (useFind): absent or an empty query is off. */
   find?: FindRequest;
   onFindStatus?: (status: FindStatus) => void;
@@ -330,6 +336,7 @@ export function ChatRenderer({
   permissionReveal,
   onRetry,
   sendFailure,
+  signIn,
   find,
   onFindStatus,
 }: ChatRendererProps) {
@@ -669,7 +676,7 @@ export function ChatRenderer({
             {sent ? (
               <div className={styles.sent}>
                 {content}
-                <SendDelivery delivery={sent} onRetry={retry} />
+                <SendDelivery delivery={sent} onRetry={retry} signIn={signIn} />
               </div>
             ) : (
               content

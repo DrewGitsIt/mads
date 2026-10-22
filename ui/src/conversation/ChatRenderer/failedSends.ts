@@ -5,12 +5,16 @@ import type { KeyedRow } from "../keyed/conversation";
 export interface FailedAttempt {
   error: string;
   timestamp?: string;
+  /** "auth" when the harness refused it for a signed-out login (its error row's `error_kind`). */
+  errorKind?: TranscriptMessage["error_kind"];
 }
 
 /** What the conversation shows about a user message's delivery. */
 export interface Delivery {
   /** Set when this send failed: the reason, shown in place of a reply. */
   error?: string;
+  /** Why `error`, when the harness classified it: "auth" for a signed-out login. */
+  errorKind?: TranscriptMessage["error_kind"];
   /** Earlier identical sends that failed, folded into this one — oldest first. */
   attempts: FailedAttempt[];
 }
@@ -83,7 +87,9 @@ export function collapseFailedSends(
       attempts = [...attempts, failure];
       return;
     }
-    if (failure || attempts.length > 0) delivery.set(seg.user.key, { error: failure?.error, attempts });
+    if (failure || attempts.length > 0) {
+      delivery.set(seg.user.key, { error: failure?.error, errorKind: failure?.errorKind, attempts });
+    }
     attempts = [];
     out.push(seg.user, ...kept);
   });
@@ -94,7 +100,9 @@ export function collapseFailedSends(
 function failureOf(replies: KeyedRow[]): FailedAttempt | undefined {
   if (replies.length === 0 || !replies.every((r) => r.role === "agent" && r.is_error)) return undefined;
   const last = replies[replies.length - 1];
-  return { error: last.text?.trim() || "The agent hit an error.", timestamp: last.timestamp };
+  const failure: FailedAttempt = { error: last.text?.trim() || "The agent hit an error.", timestamp: last.timestamp };
+  if (last.error_kind) failure.errorKind = last.error_kind;
+  return failure;
 }
 
 function sameText(a: KeyedRow, b: KeyedRow): boolean {

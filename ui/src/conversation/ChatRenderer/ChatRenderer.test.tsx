@@ -691,6 +691,19 @@ describe("ChatRenderer — sends the harness failed", () => {
     expect(screen.getByText("Login expired · Please run /login")).toBeTruthy();
   });
 
+  it("offers Sign in on a send refused for auth while the login is signed out", () => {
+    const authFailed: TranscriptMessage[] = [failed[0], { ...failed[1], error_kind: "auth" }];
+    const onSignIn = vi.fn();
+    const { rerender } = render(<ChatRenderer rows={keyed(authFailed)} signIn={{ provider: "Claude Code", onSignIn }} />);
+    expect(screen.getByRole("status").textContent).toContain("Signed out of Claude Code");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(onSignIn).toHaveBeenCalledOnce();
+
+    // Signed in again (no signIn): back to "Not delivered".
+    rerender(<ChatRenderer rows={keyed(authFailed)} />);
+    expect(screen.getByRole("status").textContent).toContain("Not delivered");
+  });
+
   it("shows a send the stream reported unsaved as not delivered, with the send's failure", () => {
     const rows: KeyedRow[] = [{ key: "u1", role: "user", text: "ship it", failed: true }];
     const { rerender } = render(<ChatRenderer rows={rows} sendFailure="HTTP 503: router unavailable" />);

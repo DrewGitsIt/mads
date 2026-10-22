@@ -85,6 +85,7 @@
   "profile.deleted",
   "config.updated",
   "attachment.added",
+  "account.auth_changed",
   "merge.attempted",
   "merge.conflicted",
   "merge.completed",

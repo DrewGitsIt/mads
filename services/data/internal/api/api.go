@@ -78,6 +78,7 @@ func NewWithIdentity(db *sql.DB, ident Identity) http.Handler {
 	sessionRoutes(mux, l)
 	linkRoutes(mux, l)
 	delegateRoutes(mux, l)
+	accountAuthRoutes(mux, l)
 	retroRoutes(mux, l)
 	proposalRoutes(mux, l, tasks)
 	configRoutes(mux, l)

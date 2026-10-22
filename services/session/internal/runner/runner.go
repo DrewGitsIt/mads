@@ -194,6 +194,9 @@ type Runner struct {
 	// harness's billing snapshot and when it last spoke (usage.go). Fed by
 	// observeConversation; own internal lock.
 	tally usageTally
+	// auth is the login the harness last named, for sign-in state reports
+	// (auth.go). Fed by observeConversation; own internal lock.
+	auth authTally
 
 	// digest accumulates the in-flight turn's activity for the per-turn
 	// digest push (docs/LINKED-SESSIONS-DESIGN.md decision 4). Always

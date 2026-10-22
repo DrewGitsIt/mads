@@ -54,6 +54,7 @@ import type {
   RegistryEntry,
   Retro,
   Session,
+  SessionAuth,
   SessionDefaults,
   SessionReport,
   SessionTrust,
@@ -1117,6 +1118,24 @@ export class FakeRouterClient implements RouterClient {
   async interrupt(): Promise<void> {}
 
   async compactSession(): Promise<void> {}
+
+  /** What getSessionAuth serves, by session id — tests set entries directly; absent answers 404, as a Router without auth does. */
+  readonly sessionAuth = new Map<string, SessionAuth>();
+  /** Accounts passed to markSignedIn, in call order. */
+  readonly signedIn: string[] = [];
+
+  async getSessionAuth(sessionId: string): Promise<SessionAuth> {
+    const auth = this.sessionAuth.get(sessionId);
+    if (!auth) throw new Error("router request failed: 404 not found");
+    return structuredClone(auth);
+  }
+
+  async markSignedIn(account: string): Promise<void> {
+    this.signedIn.push(account);
+    for (const [id, auth] of this.sessionAuth) {
+      if (auth.account === account) this.sessionAuth.set(id, { ...auth, signed_out: false });
+    }
+  }
 
   /** Reports getSessionReport serves, by session id — tests set entries directly. */
   readonly sessionReports = new Map<string, SessionReport>(Object.entries(fixtureSessionReports));

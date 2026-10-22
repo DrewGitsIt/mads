@@ -170,6 +170,11 @@ type streamSession struct {
 	// for the turn's result line: /compact's result counts no tokens, so
 	// without it the turn end would report the conversation as empty.
 	compactedTo int
+	// authFailed: this turn's assistant line said the login was refused
+	// (wireLine.isAuthFailure), held for the result line, whose EventError
+	// it marks ErrorKindAuth. Tagging the result's error rather than
+	// emitting one from the assistant line keeps one error per failed turn.
+	authFailed bool
 	// costSeen is the last total_cost_usd a turn end accounted for. The CLI
 	// reports that figure as a running total (a /compact turn that counts
 	// no tokens still raises it), so each turn end carries the difference:
@@ -311,6 +316,13 @@ func (s *streamSession) handleLine(raw []byte) {
 	}
 	model := s.model
 	interrupted := s.interrupted
+	if l.isAuthFailure() {
+		s.authFailed = true
+	}
+	authFailed := false
+	if l.Type == "result" {
+		authFailed, s.authFailed = s.authFailed, false
+	}
 	closesUnprompted := false
 	compactedTo := 0
 	turnCost := 0.0
@@ -377,6 +389,12 @@ func (s *streamSession) handleLine(raw []byte) {
 		evs = settleAfter(&l, evs)
 	}
 	for _, ev := range evs {
+		if ev.Kind == provider.EventError && authFailed {
+			ev.ErrorKind = provider.ErrorKindAuth
+			if s.account != "" {
+				ev.Account = &provider.AccountStatus{}
+			}
+		}
 		if ev.Account != nil {
 			ev.Account.Account = s.account
 		}

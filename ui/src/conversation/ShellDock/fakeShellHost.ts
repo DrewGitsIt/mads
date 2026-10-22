@@ -26,6 +26,7 @@ export function makeFakeShellHost() {
       shellId: `shell-${sessionId}`,
       created: true,
     })),
+    run: vi.fn<ShellHostBridge["run"]>(async () => ({ shellId: "run-1" })),
     detach: vi.fn(async (_shellId: string) => {}),
     end: vi.fn(async (_shellId: string) => {}),
     endSession: vi.fn(async (_sessionId: string) => {}),

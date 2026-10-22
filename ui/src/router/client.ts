@@ -53,6 +53,7 @@ import type {
   RegistryPublishItem,
   Retro,
   Session,
+  SessionAuth,
   SessionReport,
   SessionDefaults,
   SendResult,
@@ -150,6 +151,10 @@ export interface RouterClient {
   compactSession(sessionId: string, instructions?: string): Promise<void>;
   /** The session's health and usage in one read — the /usage card's input. */
   getSessionReport(sessionId: string): Promise<SessionReport>;
+  /** The login the session runs on and whether it is signed out (404 from a Router without it). */
+  getSessionAuth(sessionId: string): Promise<SessionAuth>;
+  /** The user finished signing in to `account`: clears signed-out for every session on it. */
+  markSignedIn(account: string): Promise<void>;
   bounce(sessionId: string): Promise<void>;
 
   // --- Chat/Terminal transport handoff (single provider conversation,
@@ -707,6 +712,14 @@ export class FetchRouterClient implements RouterClient {
 
   async getSessionReport(sessionId: string): Promise<SessionReport> {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/report`);
+  }
+
+  async getSessionAuth(sessionId: string): Promise<SessionAuth> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/auth`);
+  }
+
+  async markSignedIn(account: string): Promise<void> {
+    return routerPost(this.baseUrl, "/accounts/signed-in", { account });
   }
 
   async bounce(sessionId: string): Promise<void> {

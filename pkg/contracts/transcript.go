@@ -64,6 +64,10 @@ type TranscriptMessage struct {
 	// turn in the agent's place (auth rejected, API unreachable, out of
 	// credits) rather than a reply. Meaningless on other roles.
 	IsError bool `json:"is_error,omitempty"`
+	// ErrorKind classifies a Role "agent" IsError entry: "auth" when the
+	// harness refused the turn because its login is signed out. Empty means
+	// unclassified. Mirrors provider.Message.ErrorKind.
+	ErrorKind string `json:"error_kind,omitempty"`
 	// Compact describes a Role "compact" entry (a compaction pass); Text is
 	// then the summary carried forward. Mirrors provider.CompactMarker.
 	Compact *CompactMarker `json:"compact,omitempty"`

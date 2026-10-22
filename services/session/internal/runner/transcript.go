@@ -145,7 +145,7 @@ type renderOptions struct {
 func renderTranscript(msgs []provider.Message, opts renderOptions) []contracts.TranscriptMessage {
 	out := make([]contracts.TranscriptMessage, len(msgs))
 	for i, m := range msgs {
-		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp, IsError: m.IsError, Key: m.Key, Notice: m.Notice}
+		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp, IsError: m.IsError, ErrorKind: m.ErrorKind, Key: m.Key, Notice: m.Notice}
 		if l, ok := opts.userKeys[m.Key]; ok && m.Role == "user" {
 			tm.Key = l
 		}

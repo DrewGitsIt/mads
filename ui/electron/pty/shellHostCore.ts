@@ -28,10 +28,16 @@ export const DATA_BATCH_MS = 16;
  * Every shell also feeds a screen mirror (shellMirror.ts, D3) whether or not a
  * window is attached. Re-opening a live shell returns the mirror's snapshot in
  * the open result (see openExisting for why it can't be an event).
+ *
+ * `run` is the other kind of pty: one command (a provider's login, see
+ * docs/AUTH-SIGNIN-DESIGN.md), owned by the window that started it. It has no
+ * session, no mirror and no re-open; it is never listed, and it dies with
+ * its window or its own exit. Its data and exit use the shells' events.
  */
 
 export type ShellRequest =
   | { type: "open"; sessionId: string; cwd?: string; cols?: number; rows?: number }
+  | { type: "run"; argv: string[]; env?: string[]; cols?: number; rows?: number }
   | { type: "detach"; shellId: string }
   | { type: "end"; shellId: string }
   | { type: "end-session"; sessionId: string }
@@ -158,6 +164,21 @@ interface ShellEntry {
   disposeAfterCuts: boolean;
 }
 
+/**
+ * A `run` command. Output is held until the reply carrying its id is posted
+ * (`held`), like a re-open's, so the window can't miss the first bytes or
+ * an immediate exit.
+ */
+interface RunEntry {
+  shellId: string;
+  proc: PtyProcess;
+  windowId: number;
+  pending: string[];
+  cancelFlush: (() => void) | undefined;
+  held: boolean;
+  heldExit: number | undefined;
+}
+
 /** An open's result plus the step that lets held output through, after the reply is posted. */
 interface Dispatched {
   result: unknown;
@@ -175,6 +196,8 @@ export class ShellHostCore {
   // Detached-exit notices by session, consumed by that session's next open.
   private readonly tombstones = new Map<string, { exitCode: number; exitedAt: number }>();
   private readonly windows = new Map<number, SendToWindow>();
+  // `run` commands by id: kept apart so list() and onShellsChanged never see them.
+  private readonly runs = new Map<string, RunEntry>();
 
   constructor(private readonly deps: ShellHostDeps) {}
 
@@ -184,11 +207,17 @@ export class ShellHostCore {
     this.windows.set(windowId, send);
   }
 
-  /** The window is gone (reload, crash, close): detach its shells, keep them running. */
+  /**
+   * The window is gone (reload, crash, close): detach its shells, keep them
+   * running. Its run commands end: nothing else could ever see or drive them.
+   */
   disconnect(windowId: number): void {
     this.windows.delete(windowId);
     for (const entry of this.byId.values()) {
       if (entry.attachedTo === windowId) this.unhook(entry);
+    }
+    for (const run of this.runs.values()) {
+      if (run.windowId === windowId) this.endRun(run);
     }
   }
 
@@ -234,13 +263,18 @@ export class ShellHostCore {
     switch (request.type) {
       case "open":
         return this.open(windowId, request);
+      case "run":
+        return this.run(windowId, request);
       case "detach":
         // Only the attached window can detach; a stale view must not unhook a newer one.
         if (this.owned(windowId, request.shellId)) this.detach(request.shellId);
         return { result: undefined };
-      case "end":
-        await this.end(request.shellId);
+      case "end": {
+        const run = this.runs.get(request.shellId);
+        if (run) this.endRun(run);
+        else await this.end(request.shellId);
         return { result: undefined };
+      }
       case "end-session": {
         const entry = this.bySession.get(request.sessionId);
         if (entry) await this.end(entry.shellId);
@@ -249,11 +283,14 @@ export class ShellHostCore {
       case "inspect":
         return { result: await this.inspect(request.shellId) };
       case "write":
-        this.owned(windowId, request.shellId)?.proc.write(request.data);
+        (this.owned(windowId, request.shellId) ?? this.ownedRun(windowId, request.shellId))?.proc.write(
+          request.data,
+        );
         return { result: undefined };
       case "resize": {
         const entry = this.owned(windowId, request.shellId);
         if (entry) this.resize(entry, request.cols, request.rows);
+        else this.ownedRun(windowId, request.shellId)?.proc.resize(request.cols, request.rows);
         return { result: undefined };
       }
       case "list":
@@ -315,6 +352,83 @@ export class ShellHostCore {
   private owned(windowId: number, shellId: string): ShellEntry | undefined {
     const entry = this.byId.get(shellId);
     return entry && entry.attachedTo === windowId ? entry : undefined;
+  }
+
+  private ownedRun(windowId: number, shellId: string): RunEntry | undefined {
+    const run = this.runs.get(shellId);
+    return run && run.windowId === windowId ? run : undefined;
+  }
+
+  /**
+   * Starts one command in a pty: argv[0] with argv[1..], in HOME, with the
+   * docked shell's environment plus `env`'s K=V overrides. No shell wraps
+   * it, so its exit code is the command's own.
+   */
+  private async run(windowId: number, request: Extract<ShellRequest, { type: "run" }>): Promise<Dispatched> {
+    const nodePty = await this.deps.loadPty();
+    if (!nodePty) {
+      throw new Error("node-pty is unavailable on this machine");
+    }
+    const [file, ...args] = request.argv;
+    if (!file) throw new Error("run needs a command");
+    const env = shellEnv((this.deps.env ?? (() => process.env))());
+    for (const pair of request.env ?? []) {
+      const eq = pair.indexOf("=");
+      if (eq > 0) env[pair.slice(0, eq)] = pair.slice(eq + 1);
+    }
+    const proc = nodePty.spawn(file, args, {
+      name: "xterm-256color",
+      cols: request.cols ?? 80,
+      rows: request.rows ?? 24,
+      cwd: resolveCwd(undefined),
+      env,
+    });
+    const run: RunEntry = {
+      shellId: (this.deps.newId ?? randomUUID)(),
+      proc,
+      windowId,
+      pending: [],
+      cancelFlush: undefined,
+      held: true,
+      heldExit: undefined,
+    };
+    this.runs.set(run.shellId, run);
+    proc.onData((data) => {
+      if (this.runs.get(run.shellId) !== run) return;
+      run.pending.push(data);
+      if (!run.held) this.scheduleFlush(run);
+    });
+    proc.onExit(({ exitCode }) => {
+      // An `end` already removed it and nobody is waiting on it.
+      if (this.runs.get(run.shellId) !== run) return;
+      if (run.held) {
+        run.heldExit = exitCode;
+        return;
+      }
+      this.runExited(run, exitCode);
+    });
+    return {
+      result: { shellId: run.shellId },
+      release: () => {
+        if (this.runs.get(run.shellId) !== run) return;
+        run.held = false;
+        if (run.heldExit !== undefined) this.runExited(run, run.heldExit);
+        else if (run.pending.length > 0) this.scheduleFlush(run);
+      },
+    };
+  }
+
+  private runExited(run: RunEntry, exitCode: number): void {
+    this.runs.delete(run.shellId);
+    this.flush(run);
+    this.windows.get(run.windowId)?.({ event: "exit", shellId: run.shellId, exitCode });
+  }
+
+  /** Forgets the command and kills it; its window is owed nothing more. */
+  private endRun(run: RunEntry): void {
+    this.runs.delete(run.shellId);
+    this.clearPending(run);
+    run.proc.kill();
   }
 
   private async open(
@@ -553,6 +667,7 @@ export class ShellHostCore {
 
   /** Ends every shell, e.g. when the host is shutting down. */
   async endAll(): Promise<void> {
+    for (const run of this.runs.values()) this.endRun(run);
     await Promise.all([...this.byId.values()].map((entry) => this.end(entry.shellId)));
   }
 
@@ -569,7 +684,7 @@ export class ShellHostCore {
     if (entry.holdToken === undefined) this.clearPending(entry);
   }
 
-  private scheduleFlush(entry: ShellEntry): void {
+  private scheduleFlush(entry: ShellEntry | RunEntry): void {
     if (entry.cancelFlush) return;
     const schedule =
       this.deps.schedule ??
@@ -584,16 +699,18 @@ export class ShellHostCore {
   }
 
   /** Sends the batch now (one `data` event) and cancels its timer. */
-  private flush(entry: ShellEntry): void {
+  private flush(entry: ShellEntry | RunEntry): void {
     entry.cancelFlush?.();
     entry.cancelFlush = undefined;
     if (entry.pending.length === 0) return;
     const data = entry.pending.join("");
     entry.pending = [];
-    this.sendToAttached(entry, { event: "data", shellId: entry.shellId, data });
+    const event: ShellEvent = { event: "data", shellId: entry.shellId, data };
+    if ("windowId" in entry) this.windows.get(entry.windowId)?.(event);
+    else this.sendToAttached(entry, event);
   }
 
-  private clearPending(entry: ShellEntry): void {
+  private clearPending(entry: ShellEntry | RunEntry): void {
     entry.cancelFlush?.();
     entry.cancelFlush = undefined;
     entry.pending = [];

@@ -22,6 +22,7 @@ import type {
   CompactStatus,
   PermissionRequest,
   Session,
+  SessionAuth,
   StreamEvent,
   ToolStatus,
   ToolStatusChange,
@@ -77,6 +78,9 @@ import { ExpandedComposer } from "./Composer/ExpandedComposer";
 import { QueuedMessages } from "./Composer/QueuedMessages";
 import { matches } from "../platform/hotkeys";
 import { ProvisioningStrip } from "./ProvisioningStrip";
+import { SignInDialog } from "./SignIn/SignInDialog";
+import { useSessionAuth } from "./SignIn/useSessionAuth";
+import { providerLabel } from "../features/settings/providerBehaviors";
 import { ShellDock } from "./ShellDock/ShellDock";
 import { ShellBridge, type ShellDockBridge } from "./ShellDock/shellBridge";
 import { getShellDockState, setShellDockState, useShellDockState } from "./ShellDock/dockState";
@@ -219,6 +223,12 @@ export function ConversationTab({
   // and kept live by the hook's workspace.* subscription.
   const sessionWorkspace = useWorkspaceForRef(routerClient, session?.workspace);
   const agents = useAgentIndex(routerClient);
+  // The session's login: while it is signed out, a send the harness refused
+  // for auth offers Sign in (docs/AUTH-SIGNIN-DESIGN.md).
+  const { auth, refetch: refetchAuth } = useSessionAuth(routerClient, sessionId);
+  // The login being signed in to: held as it was at Sign in so the dialog's
+  // command doesn't change under it.
+  const [signingIn, setSigningIn] = useState<SessionAuth & { login: NonNullable<SessionAuth["login"]> }>();
   const checkoutBranch = useCheckoutBranch(routerClient, session);
   // The reveal's reading pace in words per minute (Native by default).
   const wordsPerMinute = streamPaceToWpm(useStreamSpeed(routerClient));
@@ -1520,6 +1530,14 @@ export function ConversationTab({
                       permissionReveal={permissionReveal}
                       onRetry={(text) => void retrySend(text)}
                       sendFailure={sendFailure}
+                      signIn={
+                        auth?.signed_out && auth.login
+                          ? {
+                              provider: providerLabel(auth.provider),
+                              onSignIn: () => auth.login && setSigningIn({ ...auth, login: auth.login }),
+                            }
+                          : undefined
+                      }
                       find={find.request}
                       onFindStatus={find.onStatus}
                     />
@@ -1730,6 +1748,21 @@ export function ConversationTab({
             }}
             onCancel={() => setStopConfirm(undefined)}
           />
+
+          {signingIn && (
+            <SignInDialog
+              auth={signingIn}
+              provider={providerLabel(signingIn.provider)}
+              routerClient={routerClient}
+              shellHost={shellHost}
+              onSignedIn={() => {
+                setSigningIn(undefined);
+                refetchAuth();
+                setCommandToast({ tone: "ok", message: `Signed in to ${providerLabel(signingIn.provider)}` });
+              }}
+              onClose={() => setSigningIn(undefined)}
+            />
+          )}
 
           {dockView && (
             <ActivityDock

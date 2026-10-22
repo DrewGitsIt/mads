@@ -33,6 +33,7 @@ func (r *Runner) observeConversation(ev provider.Event) provider.Event {
 	r.observeAgentState(ev)
 	r.observeDelegates(ev)
 	r.observeUsage(ev)
+	r.observeAuth(ev)
 	if ev.Kind == provider.EventTurnEnd {
 		r.flushInterruptedTools()
 	}

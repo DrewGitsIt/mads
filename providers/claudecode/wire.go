@@ -33,6 +33,15 @@ type wireLine struct {
 	ModelUsage   map[string]wireModelUsage `json:"modelUsage"`
 	Origin       *wireOrigin               `json:"origin"`
 
+	// assistant-line API-failure fields: the CLI writes an assistant line of
+	// its own (model "<synthetic>") when a request failed, flagged
+	// is_api_error_message, with APIError naming why. "authentication_failed"
+	// is a dead login ("Not logged in · Please run /login"; captured
+	// 2026-10-22, testdata/stream-auth-failed.jsonl). The turn's result
+	// line, which follows, says only is_error.
+	APIError          string `json:"error"`
+	IsAPIErrorMessage bool   `json:"is_api_error_message"`
+
 	// init-line fields. APIKeySource says how the CLI authenticated: "none"
 	// for a subscription login, otherwise where its API key came from
 	// ("ANTHROPIC_API_KEY", "apiKeyHelper", ...) — verified against
@@ -163,6 +172,16 @@ func (o *wireOrigin) inbound() *provider.Inbound {
 func (l *wireLine) isPeerReplay() bool {
 	return l.Type == "user" && l.IsReplay && l.Origin.isPeer()
 }
+
+// isAuthFailure reports whether this is the main agent's assistant line
+// saying the login was refused (see APIError).
+func (l *wireLine) isAuthFailure() bool {
+	return l.Type == "assistant" && l.ParentToolUseID == "" && l.IsAPIErrorMessage && l.APIError == apiErrorAuth
+}
+
+// apiErrorAuth is the "error" an API-failure line (stream or transcript)
+// carries when the login was refused.
+const apiErrorAuth = "authentication_failed"
 
 // isTaskNotificationResult reports whether this is the result line that
 // closes a background-task notification's re-invocation (see events).

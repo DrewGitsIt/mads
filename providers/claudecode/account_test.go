@@ -69,7 +69,10 @@ func TestAccountEventsFromCaptures(t *testing.T) {
 					t.Errorf("account event says nothing: %+v", a)
 				}
 			}
-			if want := strings.Count(string(raw), `"apiKeySource":"none"`); plan != want || want == 0 {
+			// stream-auth-failed.jsonl holds only the failed turn's two
+			// lines: a signed-out claude reports no billing to check.
+			needInit := name != "stream-auth-failed.jsonl"
+			if want := strings.Count(string(raw), `"apiKeySource":"none"`); plan != want || (want == 0 && needInit) {
 				t.Errorf("plan events = %d, want one per init line (%d)", plan, want)
 			}
 			if want := strings.Count(string(raw), `"type":"rate_limit_event"`); limits != want {

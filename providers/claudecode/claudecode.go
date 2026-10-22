@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -492,6 +493,34 @@ func closeWait(cmd *exec.Cmd, grace time.Duration) {
 // before keys existed most likely ran on.
 func (p *Provider) DefaultAccount() string { return accountKey(p.env(nil)) }
 
+// LoginCommand is `claude auth login` for the login account names
+// (provider.Authenticator). The account's config dir goes in as
+// CLAUDE_CONFIG_DIR only when it isn't the default ~/.claude: setting it,
+// even to the default path, makes claude use a different keychain entry,
+// so the login would land somewhere the sessions don't look.
+func (p *Provider) LoginCommand(account string) (provider.LoginCommand, bool) {
+	dir, ok := strings.CutPrefix(account, accountPrefix)
+	if !ok || dir == "" || !filepath.IsAbs(p.cfg.Bin) {
+		return provider.LoginCommand{}, false
+	}
+	cmd := provider.LoginCommand{Argv: []string{p.cfg.Bin, "auth", "login"}, Env: []string{}}
+	if accountKey(withoutConfigDir(p.env(nil))) != account {
+		cmd.Env = append(cmd.Env, "CLAUDE_CONFIG_DIR="+dir)
+	}
+	return cmd, true
+}
+
+// withoutConfigDir is env with any CLAUDE_CONFIG_DIR dropped: the
+// environment of a claude on its default login.
+func withoutConfigDir(env []string) []string {
+	return slices.DeleteFunc(slices.Clone(env), func(kv string) bool {
+		return strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=")
+	})
+}
+
+// accountPrefix starts every claude-code account key (accountKey).
+const accountPrefix = "claude-code:"
+
 // accountKey names the login a claude process with environment env runs
 // on, for sharing plan limits between sessions: the provider plus its
 // config dir — $CLAUDE_CONFIG_DIR, else ~/.claude. Two sessions with the
@@ -516,5 +545,5 @@ func accountKey(env []string) string {
 		}
 		dir = filepath.Join(home, ".claude")
 	}
-	return "claude-code:" + filepath.Clean(dir)
+	return accountPrefix + filepath.Clean(dir)
 }

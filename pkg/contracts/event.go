@@ -361,6 +361,13 @@ const (
 	// a direct Settings save or a profile activation merge.
 	ConfigUpdated EventType = "config.updated"
 
+	// AccountAuthChanged fires when a provider login (AccountAuth.Account)
+	// becomes signed out or signed back in — only on the flip, so a run of
+	// failed sends on one dead login announces once. Global (SessionID
+	// empty): every session on the login is affected. Payload:
+	// AccountAuthChangedPayload.
+	AccountAuthChanged EventType = "account.auth_changed"
+
 	AttachmentAdded EventType = "attachment.added"
 
 	// MergeAttempted fires when a session's isolated worktree branch begins
@@ -520,7 +527,7 @@ var EventTypes = []EventType{
 	LinkCreated, LinkUpdated, LinkDeleted, LinkMessageInjected, TurnEnded,
 	TemplateCreated, TemplateUpdated, TemplateDeleted,
 	ProfileCreated, ProfileUpdated, ProfileDeleted, ConfigUpdated,
-	AttachmentAdded,
+	AttachmentAdded, AccountAuthChanged,
 	MergeAttempted, MergeConflicted, MergeCompleted, MergeRefused, MergeAutoResolved, LandRetried, LandAutofixed,
 	WorktreeEnsured,
 	UsageRecorded, CapabilityInvoked,

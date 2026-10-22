@@ -89,7 +89,7 @@ func (s *server) inboundSources(ctx context.Context, sess contracts.Session) fun
 func normalizeTurns(msgs []provider.Message, src func(*provider.Inbound, time.Time) *contracts.InboundSource) []contracts.TranscriptMessage {
 	result := make([]contracts.TranscriptMessage, len(msgs))
 	for i, m := range msgs {
-		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp, IsError: m.IsError, Key: m.Key, Notice: m.Notice}
+		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp, IsError: m.IsError, ErrorKind: m.ErrorKind, Key: m.Key, Notice: m.Notice}
 		if m.Compact != nil {
 			c := contracts.CompactMarker(*m.Compact)
 			tm.Compact = &c

@@ -51,6 +51,13 @@ interface ShellOpenOptions {
   rows?: number;
 }
 
+interface ShellRunOptions {
+  /** "K=V" overrides on top of the docked shell's environment. */
+  env?: string[];
+  cols?: number;
+  rows?: number;
+}
+
 interface ShellOpenResult {
   shellId: string;
   created: boolean;
@@ -188,6 +195,8 @@ function shellSubscribe<T>(
 const shellBridge = {
   open: (sessionId: string, options?: ShellOpenOptions): Promise<ShellOpenResult> =>
     shellRequest({ type: "open", sessionId, ...options }),
+  run: (argv: string[], options?: ShellRunOptions): Promise<{ shellId: string }> =>
+    shellRequest({ type: "run", argv, ...options }),
   detach: (shellId: string): Promise<void> => shellRequest({ type: "detach", shellId }),
   end: (shellId: string): Promise<void> => shellRequest({ type: "end", shellId }),
   endSession: (sessionId: string): Promise<void> => shellRequest({ type: "end-session", sessionId }),

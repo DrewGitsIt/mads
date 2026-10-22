@@ -95,4 +95,27 @@ describe("collapseFailedSends", () => {
     expect(rows.map((r) => r.key)).toEqual([retry.key, expect.any(String)]);
     expect(delivery.get(retry.key)?.attempts).toEqual([{ error: "boom" }]);
   });
+
+  it("carries the harness's error kind on the delivery and on each folded attempt", () => {
+    const authFail = (text: string, timestamp?: string): KeyedRow => ({ ...fail(text, timestamp), error_kind: "auth" });
+    const first = user("hi");
+    const second = user("hi");
+    const { delivery } = collapseFailedSends([
+      first,
+      authFail("Login expired", "t2"),
+      second,
+      authFail("Not logged in · Please run /login", "t4"),
+    ]);
+    expect(delivery.get(second.key)).toEqual({
+      error: "Not logged in · Please run /login",
+      errorKind: "auth",
+      attempts: [{ error: "Login expired", timestamp: "t2", errorKind: "auth" }],
+    });
+  });
+
+  it("leaves an unclassified failure without a kind", () => {
+    const hi = user("hi");
+    const { delivery } = collapseFailedSends([hi, fail("ECONNREFUSED")]);
+    expect(delivery.get(hi.key)?.errorKind).toBeUndefined();
+  });
 });
