@@ -564,12 +564,12 @@ func (s *streamSession) finishTurn(resp rpcMessage, interrupted bool, ctxUsed, c
 		// is recorded in the transcript too, as an agent entry marked
 		// IsError, so the user's message reads as not delivered rather than
 		// unanswered — the shape claude-code's own transcript gives it.
-		text := resp.Error.text()
+		text, kind := resp.Error.text(), resp.Error.errorKind()
 		s.mu.Lock()
-		s.transcript = append(s.transcript, provider.Message{Role: "agent", Text: text, Timestamp: time.Now().UTC(), IsError: true})
+		s.transcript = append(s.transcript, provider.Message{Role: "agent", Text: text, Timestamp: time.Now().UTC(), IsError: true, ErrorKind: kind})
 		s.lastAgentMsgID = ""
 		s.mu.Unlock()
-		s.events <- provider.Event{Kind: provider.EventError, Text: text}
+		s.events <- provider.Event{Kind: provider.EventError, Text: text, ErrorKind: kind}
 		s.events <- provider.Event{Kind: provider.EventTurnEnd, Interrupted: interrupted}
 		return
 	}

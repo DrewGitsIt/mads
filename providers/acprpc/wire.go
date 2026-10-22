@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
+
+	"github.com/drewkidwell/mads/providers/provider"
 )
 
 // The types in this file derive from the ACP v1 spec schema
@@ -38,6 +40,16 @@ type rpcError struct {
 	Code    int             `json:"code"`
 	Message string          `json:"message"`
 	Data    json.RawMessage `json:"data,omitempty"`
+}
+
+// errorKind classifies the error for provider.Event.ErrorKind and
+// Message.ErrorKind: -32000 is ACP's reserved "authentication required",
+// so ErrorKindAuth; anything else is unclassified.
+func (e *rpcError) errorKind() string {
+	if e.Code == -32000 {
+		return provider.ErrorKindAuth
+	}
+	return ""
 }
 
 // text renders the error for EventError, mapping the two structured

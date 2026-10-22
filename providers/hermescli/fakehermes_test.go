@@ -339,6 +339,41 @@ func (f *fakeHermes) addRowReasoning(role, content, toolCalls, toolCallID, toolN
 	}
 }
 
+// fhFailures are failed turns by prompt: what hermes says live
+// (agent/turn_failure_copy.py nonretryable_copy) and the failed-turn row's
+// display_metadata. "fail-forbidden" is the one real failure in Drew's
+// ~/.hermes/state.db (row 55, 2026-10-20); the 401s follow the same shape
+// with hermes's own "HTTP 401: " summary (agent/api_error_summary.py).
+var fhFailures = map[string]struct{ said, meta string }{
+	"fail-oauth": {
+		"Nous Portal rejected your sign-in, so the model can't be reached. Sign in again: `hermes portal`.\n\nProvider said: HTTP 401: invalid or expired token",
+		`{"error": "HTTP 401: invalid or expired token", "error_surface": {"layer": "auth", "code": "auth", "retryable": false, "provider": "nous", "model": "Hermes-4-405B", "provider_label": "Nous Portal", "auth_kind": "oauth"}}`,
+	},
+	"fail-key": {
+		"GitHub Copilot rejected your API key, so the model can't be reached. Update it in Settings → Providers, or run `hermes setup` in a terminal.\n\nProvider said: HTTP 401: bad credentials",
+		`{"error": "HTTP 401: bad credentials", "error_surface": {"layer": "auth", "code": "auth", "retryable": false, "provider": "copilot", "model": "gpt-4.1", "provider_label": "GitHub Copilot", "auth_kind": "api_key", "api_key_env": "COPILOT_GITHUB_TOKEN"}}`,
+	},
+	"fail-forbidden": {
+		"GitHub Copilot rejected your API key, so the model can't be reached. Update it in Settings → Providers, or run `hermes setup` in a terminal.\n\nProvider said: HTTP 403: unauthorized: not licensed to use Copilot",
+		`{"error": "HTTP 403: unauthorized: not licensed to use Copilot", "error_surface": {"layer": "auth", "code": "auth", "retryable": false, "provider": "copilot", "model": "gpt-4.1", "provider_label": "GitHub Copilot", "auth_kind": "api_key", "api_key_env": "COPILOT_GITHUB_TOKEN"}}`,
+	},
+	"fail-server": {
+		"Nous Portal had a server error.\n\nProvider said: HTTP 500: internal error",
+		`{"error": "HTTP 500: internal error", "error_surface": {"layer": "provider", "code": "server_error", "retryable": true, "provider": "nous", "model": "Hermes-4-405B", "provider_label": "Nous Portal"}}`,
+	},
+}
+
+// addFailedTurn stores hermes's failed-turn boundary row
+// (_close_durable_failed_turn, agent/conversation_loop.py).
+func (f *fakeHermes) addFailedTurn(meta string) {
+	_, err := f.db.Exec(`INSERT INTO messages (session_id, role, content, display_kind, display_metadata, timestamp, message_uid, active)
+		VALUES (?, 'assistant', ?, 'failed_turn', ?, ?, ?, 1)`,
+		f.id, "Your request was not processed. Send it again if you still want me to carry it out.", meta, nowFloat(), randHex(16))
+	if err != nil {
+		fhFail("insert failed turn: %v", err)
+	}
+}
+
 func (f *fakeHermes) sessionResult() map[string]any {
 	return map[string]any{
 		"models": map[string]any{"availableModels": fhModels, "currentModelId": f.model},
@@ -593,6 +628,19 @@ func (f *fakeHermes) prompt(m fhMessage) {
 		reply = "started helpers"
 	case cmd == "ratelimit":
 		f.respondErr(m.ID, -32603, "Internal error: HTTP 429: rate limit exceeded")
+		return
+	case strings.HasPrefix(cmd, "fail-"):
+		// A turn the provider refused: hermes streams its own sentence as
+		// the reply, stores the failed-turn boundary row with the failure
+		// in display_metadata, and resolves end_turn having spent nothing
+		// (auth.go).
+		fail, ok := fhFailures[cmd]
+		if !ok {
+			fhFail("unknown failure %q", cmd)
+		}
+		f.chunk(fail.said, msgID)
+		f.addFailedTurn(fail.meta)
+		f.result(m.ID, "end_turn")
 		return
 	default:
 		reply = "ok"

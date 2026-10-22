@@ -125,9 +125,14 @@ func (p *Provider) ready() error {
 // home is the HERMES_HOME the spawned hermes-acp resolves — computed from
 // exactly the environment the engine hands the child (base, then Env), so
 // the TranscriptReader always reads the store the agent writes.
-func (p *Provider) home() string {
+func (p *Provider) home() string { return homeFrom(p.childEnv()) }
+
+// homeFrom is the HERMES_HOME a hermes process with environment env
+// resolves: HERMES_HOME (last wins, a leading ~/ expanded), else
+// ~/.hermes plus any HERMES_DATA_DIR_SUFFIX.
+func homeFrom(env []string) string {
 	var home, suffix string
-	for _, kv := range p.childEnv() {
+	for _, kv := range env {
 		if v, ok := strings.CutPrefix(kv, "HERMES_HOME="); ok {
 			home = strings.TrimSpace(v)
 		}
@@ -320,7 +325,7 @@ func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provi
 	if err != nil {
 		return nil, err
 	}
-	return wrapSession(sess, p, opts.Keyed), nil
+	return wrapSession(sess, p, opts.Keyed, accountKey(append(p.childEnv(), opts.Env...))), nil
 }
 
 // The first-send prefix lands inside hermes's stored user row (hermes has

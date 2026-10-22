@@ -1,6 +1,6 @@
 # Signing back in when an agent's login expires
 
-**Status:** In progress on `auth-signin` (2026-10-22). claude-code and codex done; hermes next.
+**Status:** Done on `auth-signin` (2026-10-22): claude-code, codex and hermes.
 **Driver:** Drew's claude login expired mid-session. Getting back in meant opening the
 shell dock, starting `claude`, typing `/login`, finishing in the browser, then resending.
 It worked, but nothing in mads helped.
@@ -79,6 +79,26 @@ row after the turn's items, classified the same way. The account is
 `codex:<$CODEX_HOME, else ~/.codex>`. Login command: `codex login`, with `CODEX_HOME` only
 for a non-default home.
 
+**hermes:** hermes never fails a prompt on the ACP wire: a refused turn resolves
+`end_turn`, with hermes's own sentence ("Nous Portal rejected your sign-in … Sign in
+again: `hermes portal`") as the reply. What it keeps is the failed-turn row it writes to
+`state.db` first: `display_kind` `failed_turn`, `display_metadata {error, error_surface}`.
+A row whose `error_surface.layer` is `auth` and whose error starts "HTTP 401: " is an auth
+failure. hermes's auth layer takes 403s too; they are not: the one real failure in Drew's
+store (2026-10-20) is "HTTP 403: unauthorized: not licensed to use Copilot". At a turn end
+that spent no tokens, the session reads that row and emits the auth `EventError` the wire
+never carried; the stored row gets the same `ErrorKind`. ACP's reserved `-32000` is tagged
+auth in `acprpc` for any ACP harness (hermes never sends it). The account is
+`hermes:<$HERMES_HOME, else ~/.hermes>`, but one home pools credentials for several
+inference providers, so the login command re-signs the provider whose refusal signed the
+home out: the newest 401 auth row in its `state.db`. Only an OAuth provider gets one:
+`hermes auth add <provider> --type oauth` (nous, anthropic, openai-codex, …), with
+`HERMES_HOME` only for a non-default home. Not `hermes portal`: that is the same login
+plus onboarding (model pick, Tool Gateway). A refused API key needs a new key, not a
+sign-in (copilot's may come from `gh` itself), so there Sign in stays hidden; the failure
+is still tracked. The command is withheld if launching `hermes` in that home would start
+its dependency install.
+
 ### Session runner
 
 - On an auth `EventError`: `PUT /accounts/auth/failed {account, provider, session_id, at}`.
@@ -126,5 +146,7 @@ for a non-default home.
 - **A custom-env session whose very first turn fails** has no `billing.account` yet.
   `failed_session` covers it.
 - **Hermes** pools credentials per inference provider inside one `HERMES_HOME`. One
-  account key can cover several credentials. Its login command is decided in the hermes
-  step.
+  account key covers them all: signing in to one provider clears the home, and a turn
+  answered by another provider clears it too. `hermes auth add` for a pooled OAuth
+  provider other than nous adds a fresh credential beside the refused one rather than
+  replacing it (hermes's own advice for a refused grant).

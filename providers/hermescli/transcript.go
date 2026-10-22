@@ -454,8 +454,9 @@ func normalizeRows(rows []storedRow, al aliases) []provider.Message {
 				// place (Message.IsError), with hermes's own words: the model
 				// sees this row on its next turn (survey run3), so hiding it
 				// would make the conversation read differently from what the
-				// agent knows. Never streamed: a notice, keyed by its row.
-				msgs = append(msgs, provider.Message{Role: "agent", Text: strings.TrimSpace(text), IsError: true, Notice: true, Timestamp: ts, Key: key})
+				// agent knows. Never streamed: a notice, keyed by its row. A
+				// login refused is classified from the row's metadata (auth.go).
+				msgs = append(msgs, provider.Message{Role: "agent", Text: strings.TrimSpace(text), IsError: true, ErrorKind: failedTurnErrorKind(r.displayMeta), Notice: true, Timestamp: ts, Key: key})
 				continue
 			}
 			if thought := r.thinking(); al.thinking && thought != "" {

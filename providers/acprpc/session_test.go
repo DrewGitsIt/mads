@@ -223,13 +223,15 @@ func TestCancelledStopReasonMarksInterrupted(t *testing.T) {
 }
 
 func TestErrorSurfaces(t *testing.T) {
+	// Only ACP's reserved auth code (-32000) is classified, as auth.
 	cases := []struct {
 		prompt string
 		want   string
+		kind   string
 	}{
-		{"auth", "agent authentication required"},
-		{"credits", "top up at https://example.com/topup"},
-		{"busy", "session already has active run"},
+		{"auth", "agent authentication required", provider.ErrorKindAuth},
+		{"credits", "top up at https://example.com/topup", ""},
+		{"busy", "session already has active run", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.prompt, func(t *testing.T) {
@@ -239,6 +241,11 @@ func TestErrorSurfaces(t *testing.T) {
 			errs := errorTexts(events)
 			if len(errs) != 1 || !strings.Contains(errs[0], tc.want) {
 				t.Fatalf("errors = %v, want one containing %q", errs, tc.want)
+			}
+			for _, ev := range events {
+				if ev.Kind == provider.EventError && ev.ErrorKind != tc.kind {
+					t.Errorf("error kind = %q, want %q", ev.ErrorKind, tc.kind)
+				}
 			}
 			turnEnd(t, events)
 		})
@@ -794,7 +801,7 @@ func TestACPLiveTranscriptRecordsTurnError(t *testing.T) {
 	if len(msgs) != 2 || msgs[0].Role != "user" {
 		t.Fatalf("transcript = %+v, want the user prompt then the failure", msgs)
 	}
-	if m := msgs[1]; m.Role != "agent" || !m.IsError || !strings.Contains(m.Text, "agent authentication required") {
+	if m := msgs[1]; m.Role != "agent" || !m.IsError || m.ErrorKind != provider.ErrorKindAuth || !strings.Contains(m.Text, "agent authentication required") {
 		t.Fatalf("transcript[1] = %+v, want an IsError agent entry carrying the error", m)
 	}
 }

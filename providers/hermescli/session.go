@@ -2,7 +2,9 @@ package hermescli
 
 import (
 	"context"
+	"math"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/drewkidwell/mads/providers/provider"
@@ -34,6 +36,12 @@ import (
 //     wrapper drops results whose id was never announced. The real call's
 //     own result follows under its live id (run9 line 16).
 //
+// One more for sign-in (auth.go): hermes answers a turn its provider
+// refused for auth like any other, so at a turn end that used no tokens the
+// wrapper looks for the failed-turn row hermes stored and, if it is an auth
+// failure, emits the EventError the wire never carried — tagged
+// ErrorKindAuth and naming the session's login — ahead of the turn end.
+//
 // Two more, for conversation keys (keys.go): the wrapper records what each
 // turn streamed in the provider's ledger for this ref, which the readers
 // match stored rows against; and it replaces a tool result's live text —
@@ -54,10 +62,17 @@ type session struct {
 	// swapped for what hermes stores (corrections 3 and the result swap);
 	// a consumer that didn't opt in sees the stream exactly as before.
 	keyed bool
+	// account is the login this hermes-acp runs on (accountKey of its
+	// environment), carried by an auth failure's EventError.
+	account string
+	// sentAt is when the latest Send went out, as math.Float64bits of unix
+	// seconds (hermes's own timestamp unit): a failed-turn row older than
+	// that belongs to an earlier turn.
+	sentAt atomic.Uint64
 }
 
-func wrapSession(inner provider.Session, p *Provider, keyed bool) *session {
-	s := &session{inner: inner, events: make(chan provider.Event, 256), p: p, ref: inner.Ref(), keyed: keyed}
+func wrapSession(inner provider.Session, p *Provider, keyed bool, account string) *session {
+	s := &session{inner: inner, events: make(chan provider.Event, 256), p: p, ref: inner.Ref(), keyed: keyed, account: account}
 	if p != nil {
 		s.led = p.live.add(s.ref)
 	}
@@ -75,6 +90,14 @@ func (s *session) pump() {
 		out, ok := n.apply(ev)
 		if !ok {
 			continue
+		}
+		if out.Kind == provider.EventError && out.ErrorKind == provider.ErrorKindAuth && out.Account == nil && s.account != "" {
+			out.Account = &provider.AccountStatus{Account: s.account}
+		}
+		if sent := s.sentAt.Load(); out.Kind == provider.EventTurnEnd && sent != 0 && s.p != nil && !out.Interrupted && noTokens(out.Usage) {
+			if fail, err := s.p.turnAuthFailure(context.Background(), s.ref, math.Float64frombits(sent), s.account); err == nil {
+				s.events <- fail
+			}
 		}
 		if s.led != nil {
 			switch out.Kind {
@@ -101,6 +124,12 @@ func (s *session) pump() {
 		}
 		s.events <- out
 	}
+}
+
+// noTokens: the turn end reports no tokens spent — the provider never
+// answered, so the turn may have failed before it reached the model.
+func noTokens(u *provider.Usage) bool {
+	return u == nil || (u.InputTokens == 0 && u.OutputTokens == 0)
 }
 
 // normalizer is the per-session state for the wire corrections; only the
@@ -169,6 +198,7 @@ func (s *session) Interrupt(ctx context.Context) error { return s.inner.Interrup
 // Send records the turn in the ledger first: its user row will be the
 // store's next one, so the count is taken before hermes can write it.
 func (s *session) Send(ctx context.Context, text string) error {
+	s.sentAt.Store(math.Float64bits(float64(time.Now().UnixNano()) / 1e9))
 	if s.led == nil {
 		return s.inner.Send(ctx, text)
 	}
