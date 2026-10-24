@@ -18,6 +18,7 @@ package turndigest
 
 import (
 	"context"
+	"log"
 	"strings"
 
 	"github.com/drewkidwell/mads/providers/fastmodel"
@@ -107,6 +108,10 @@ type Result struct {
 	// events wake the monitor regardless.
 	Actionable bool
 	Reason     string
+	// Rejected reports a Fast Model reply without the digestMarker — the
+	// model answered the transcript instead of digesting it ("Could you
+	// provide…"). Text is empty, so callers push nothing.
+	Rejected bool
 }
 
 // Digester compresses turns via a Fast Model runner.
@@ -117,6 +122,15 @@ func New(fm *fastmodel.Runner) *Digester {
 	return &Digester{fm: fm}
 }
 
+// shortVerbatimBytes: a rendering this small is already shorter than any
+// digest of it, so it goes out as-is with no model call — faster, and the
+// model never gets a few words to misread as a message to itself.
+const shortVerbatimBytes = 600
+
+// digestMarker opens every accepted Fast Model digest (systemPrompt asks
+// for it) and is stripped before delivery.
+const digestMarker = "DIGEST:"
+
 // estimateTokens is the crude bytes/4 heuristic — it only gates the
 // verbatim-vs-compress threshold and the truncation backstop, so precision
 // doesn't matter.
@@ -124,10 +138,12 @@ func estimateTokens(s string) int {
 	return len(s) / 4
 }
 
-// Digest runs the pipeline: normalize, render, return verbatim if within
-// budget, otherwise one Fast Model call. A skippable backend error degrades
-// to truncated verbatim with a nil error; any other error propagates for
-// the caller to decide (the job path fails the job).
+// Digest runs the pipeline: normalize, render, return verbatim if short or
+// within budget, otherwise one Fast Model call over the rendering wrapped
+// in <transcript> tags. A reply without the digestMarker is Rejected (empty
+// Text). A skippable backend error degrades to truncated verbatim with a
+// nil error; any other error propagates for the caller to decide (the job
+// path fails the job).
 func (d *Digester) Digest(ctx context.Context, req Request) (Result, error) {
 	res := Result{Source: SourceVerbatim}
 	if len(req.Turns) > 0 {
@@ -143,13 +159,17 @@ func (d *Digester) Digest(ctx context.Context, req Request) (Result, error) {
 	}
 
 	rendering := renderTurns(req.Turns)
-	if req.BudgetTokens > 0 && estimateTokens(rendering) <= req.BudgetTokens {
+	// Short-verbatim skips the model, and with it the actionability
+	// verdict — so not for Classify callers, whose on_signal readers wake
+	// on that verdict ("blocked, need permission" is short too).
+	short := !req.Classify && len(rendering) <= shortVerbatimBytes
+	if short || (req.BudgetTokens > 0 && estimateTokens(rendering) <= req.BudgetTokens) {
 		res.Text = rendering
 		return res, nil
 	}
 
 	reply, _, err := d.fm.DoText(ctx, fastmodel.Job{
-		System: systemPrompt(req), Prompt: rendering,
+		System: systemPrompt(req), Prompt: "<transcript>\n" + rendering + "</transcript>",
 	})
 	if err != nil {
 		if fastmodel.IsSkippable(err) {
@@ -163,6 +183,12 @@ func (d *Digester) Digest(ctx context.Context, req Request) (Result, error) {
 		// counts against the caller's budget.
 		res.Actionable, res.Reason, reply = parseVerdict(reply)
 	}
+	digest, ok := strings.CutPrefix(strings.TrimSpace(reply), digestMarker)
+	if !ok {
+		log.Printf("turndigest: rejected a reply without %s: %.120q", digestMarker, reply)
+		return Result{Source: SourceCompressed, FromTurn: res.FromTurn, ToTurn: res.ToTurn, Rejected: true}, nil
+	}
+	reply = strings.TrimSpace(digest)
 	// Backstop for a model that ignored the prompt-side length target; a
 	// zero budget passes the reply through untouched.
 	if req.BudgetTokens > 0 && estimateTokens(reply) > 2*req.BudgetTokens {

@@ -98,7 +98,9 @@ test.describe("linked sessions: link UI behind the flag", () => {
     // A real chat turn on the worker drives the real digest pipeline
     // (session.turn_ended -> digestwatch -> job.GenerateDigest -> Fast Model
     // fixture -> deliverDigest) rather than seeding a fake event directly.
-    await sendChatMessage(routerURL, workerId, "echo digest trigger");
+    // Padded past turndigest's short-verbatim cutoff (600 bytes), so the
+    // turn reaches the Fast Model instead of going out as-is.
+    await sendChatMessage(routerURL, workerId, `echo digest trigger ${"padding ".repeat(80)}`);
     await pollTranscriptContains(routerURL, leaderId, DIGEST_FIXTURE_TEXT);
 
     // Leader session's conversation: the digest card, not an inject chip,

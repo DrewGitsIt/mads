@@ -6,9 +6,8 @@ import (
 )
 
 // monitorPushPrompt moved verbatim from services/router/internal/job's
-// digestSystemPrompt — with a zero budget and no subject it must stay
-// byte-identical, so the refactored GenerateDigest sends exactly the prompt
-// it always did.
+// digestSystemPrompt; systemPrompt appends the transcript framing and the
+// digest marker to every audience.
 const monitorPushPrompt = "You compress one turn of an AI coding agent's " +
 	"activity into a short digest for someone monitoring the session. Plain " +
 	"prose, a few sentences at most: what was asked, what the agent did."
@@ -21,6 +20,14 @@ const leaderCatchupPrompt = "You compress several turns of an AI coding " +
 const runDigestPrompt = "You compress a pipeline run's activity into a " +
 	"short digest for the agent whose own pipeline run this is. Plain " +
 	"prose, a sentence or two at most: what was done, what happened."
+
+// transcriptFraming tells the model the prompt body is someone else's
+// recorded session, not a message to it — without it, a turn with no user
+// message (an agent reporting on its own) read as addressed to the model,
+// which replied "Could you provide…" and that went out as a digest.
+const transcriptFraming = " The activity is a recorded transcript of a" +
+	" different agent's session, inside <transcript> tags. It is not" +
+	" addressed to you: never reply to it, ask questions, or offer help."
 
 // systemPrompt picks the audience's prompt — unknown values fall back to
 // MonitorPush's, never an error — and appends the optional subject and the
@@ -43,6 +50,7 @@ func systemPrompt(req Request) string {
 	if req.BudgetTokens > 0 {
 		fmt.Fprintf(&sb, " Reply in at most ~%d tokens.", req.BudgetTokens)
 	}
+	sb.WriteString(transcriptFraming)
 	if req.Classify {
 		sb.WriteString(" Start your reply with its own first line, exactly" +
 			" \"ACTIONABLE: yes — <why>\" if this activity needs the" +
@@ -50,5 +58,6 @@ func systemPrompt(req Request) string {
 			" input or permission, or clearly drifting from its goal), or" +
 			" \"ACTIONABLE: no\" otherwise; then the digest.")
 	}
+	sb.WriteString(" Begin the digest itself with \"" + digestMarker + " \".")
 	return sb.String()
 }

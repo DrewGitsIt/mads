@@ -38,7 +38,8 @@ function bodyFor(requestText: string): string {
   if (requestText.includes("background task synthesizer")) {
     content = SYNTHESIS_CONTENT;
   } else if (requestText.includes("digest")) {
-    content = DIGEST_FIXTURE_TEXT;
+    // pkg/turndigest drops a digest reply without its "DIGEST:" marker.
+    content = `DIGEST: ${DIGEST_FIXTURE_TEXT}`;
   } else {
     content = DPA_CONTENT;
   }

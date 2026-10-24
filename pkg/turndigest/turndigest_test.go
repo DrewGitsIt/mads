@@ -228,16 +228,16 @@ func TestRenderDropsOldestTurnsOverPromptCap(t *testing.T) {
 			{Kind: turndigest.KindAssistant, Text: big},
 		}})
 	}
-	backend := &countingBackend{reply: "digest"}
+	backend := &countingBackend{reply: "DIGEST: digest"}
 	d := newDigester(backend)
 	if _, err := d.Digest(context.Background(), turndigest.Request{Turns: turns}); err != nil {
 		t.Fatalf("Digest: %v", err)
 	}
 	prompt := backend.prompts[0]
-	if len(prompt) > 24000+64 {
+	if len(prompt) > 24000+96 { // + the <transcript> wrapper
 		t.Errorf("prompt is %d bytes, want ≲ the 24000-byte cap", len(prompt))
 	}
-	if !strings.HasPrefix(prompt, "[2 earlier turns omitted]\n— turn 3 —\n") {
+	if !strings.HasPrefix(prompt, "<transcript>\n[2 earlier turns omitted]\n— turn 3 —\n") {
 		t.Errorf("prompt head = %q, want the omission note then turn 3", prompt[:60])
 	}
 	if !strings.Contains(prompt, "— turn 5 —") {
@@ -289,7 +289,7 @@ func TestNormalizeGoldenMultiTurn(t *testing.T) {
 // Over budget: exactly one backend call, Source=compressed, and the system
 // prompt carries the audience prompt plus the prompt-side length target.
 func TestDigestOverBudgetCompresses(t *testing.T) {
-	backend := &countingBackend{reply: "short"}
+	backend := &countingBackend{reply: "DIGEST: short"}
 	d := newDigester(backend)
 
 	res, err := d.Digest(context.Background(), turndigest.Request{
@@ -319,17 +319,19 @@ func TestDigestOverBudgetCompresses(t *testing.T) {
 	}
 }
 
-// With MonitorPush, budget 0, no subject — GenerateDigest's exact call —
-// the system prompt is byte-identical to the legacy digestSystemPrompt and
-// the reply passes through untruncated.
-func TestDigestBudgetZeroMatchesLegacyPrompt(t *testing.T) {
-	backend := &countingBackend{reply: "compressed digest"}
+// GenerateDigest's call shape (MonitorPush, budget 0, no subject): the
+// system prompt is the monitor prompt plus the transcript framing and the
+// digest marker, the body arrives wrapped in <transcript> tags, and the
+// reply passes through untruncated with its marker stripped.
+func TestDigestBudgetZeroPromptShape(t *testing.T) {
+	backend := &countingBackend{reply: "DIGEST: compressed digest"}
 	d := newDigester(backend)
+	reply := strings.Repeat("did stuff ", 70)
 
 	res, err := d.Digest(context.Background(), turndigest.Request{
 		Turns: []turndigest.Turn{{Entries: []turndigest.Entry{
 			{Kind: turndigest.KindUser, Text: "hi"},
-			{Kind: turndigest.KindAssistant, Text: "did stuff"},
+			{Kind: turndigest.KindAssistant, Text: reply},
 		}}},
 		Audience: turndigest.MonitorPush,
 	})
@@ -337,22 +339,69 @@ func TestDigestBudgetZeroMatchesLegacyPrompt(t *testing.T) {
 		t.Fatalf("Digest: %v", err)
 	}
 	if res.Source != turndigest.SourceCompressed || res.Text != "compressed digest" {
-		t.Errorf("Result = %+v, want the compressed reply", res)
+		t.Errorf("Result = %+v, want the compressed reply without its marker", res)
 	}
 	if got := backend.count(); got != 1 {
 		t.Fatalf("backend called %d times, want 1 (budget 0 always compresses)", got)
 	}
-	if backend.systems[0] != legacyMonitorPrompt {
-		t.Errorf("system prompt = %q, want the legacy digestSystemPrompt byte-identical", backend.systems[0])
+	sys := backend.systems[0]
+	if !strings.HasPrefix(sys, legacyMonitorPrompt) {
+		t.Errorf("system prompt %q does not start with the monitor prompt", sys)
 	}
-	if want := "user: hi\nassistant: did stuff\n"; backend.prompts[0] != want {
+	for _, want := range []string{"not addressed to you", "<transcript>", `"DIGEST: "`} {
+		if !strings.Contains(sys, want) {
+			t.Errorf("system prompt %q missing %q", sys, want)
+		}
+	}
+	if want := "<transcript>\nuser: hi\nassistant: " + reply + "\n</transcript>"; backend.prompts[0] != want {
 		t.Errorf("prompt body = %q, want %q", backend.prompts[0], want)
+	}
+}
+
+// A reply without the DIGEST: marker — the model answering the transcript
+// instead of digesting it — is rejected: empty Text, nothing to push.
+func TestDigestRejectsReplyWithoutMarker(t *testing.T) {
+	backend := &countingBackend{reply: "I don't have a clear activity summary to digest here. Could you provide more?"}
+	res, err := newDigester(backend).Digest(context.Background(), turndigest.Request{
+		Turns: []turndigest.Turn{{Number: 7, Entries: []turndigest.Entry{
+			{Kind: turndigest.KindAssistant, Text: strings.Repeat("long output ", 60)},
+		}}},
+		Audience: turndigest.MonitorPush,
+	})
+	if err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+	if !res.Rejected || res.Text != "" || res.Actionable {
+		t.Errorf("Result = %+v, want Rejected with empty Text", res)
+	}
+	if res.FromTurn != 7 || res.ToTurn != 7 {
+		t.Errorf("anchors = %d..%d, want 7..7", res.FromTurn, res.ToTurn)
+	}
+}
+
+// A short turn goes out verbatim with no model call, even at budget 0.
+func TestDigestShortTurnIsVerbatim(t *testing.T) {
+	backend := &countingBackend{reply: "DIGEST: never"}
+	res, err := newDigester(backend).Digest(context.Background(), turndigest.Request{
+		Turns: []turndigest.Turn{{Entries: []turndigest.Entry{
+			{Kind: turndigest.KindAssistant, Text: "Offer v0 is already scored."},
+		}}},
+		Audience: turndigest.MonitorPush,
+	})
+	if err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+	if res.Source != turndigest.SourceVerbatim || res.Text != "assistant: Offer v0 is already scored.\n" {
+		t.Errorf("Result = %+v, want the rendering verbatim", res)
+	}
+	if got := backend.count(); got != 0 {
+		t.Errorf("backend called %d times, want 0", got)
 	}
 }
 
 // A reply blowing past ~2× the budget is hard-truncated as the backstop.
 func TestDigestTruncatesRunawayReply(t *testing.T) {
-	backend := &countingBackend{reply: strings.Repeat("y", 200)}
+	backend := &countingBackend{reply: "DIGEST: " + strings.Repeat("y", 200)}
 	d := newDigester(backend)
 
 	res, err := d.Digest(context.Background(), turndigest.Request{

@@ -53,7 +53,7 @@ func runDigest(t *testing.T, f deferFixture, runner *job.Runner) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if _, err := runner.Spawn(ctx, job.DigestKind, f.watched.ID,
-		job.GenerateDigest(f.watched.ID, []string{"user: hi\nassistant: did stuff\n"})); err != nil {
+		job.GenerateDigest(f.watched.ID, []string{longDelta})); err != nil {
 		t.Fatalf("Spawn digest: %v", err)
 	}
 	eventually(t, 5*time.Second, func() bool {
@@ -64,7 +64,7 @@ func runDigest(t *testing.T, f deferFixture, runner *job.Runner) {
 
 func TestPerTurnDigestToSleepingMonitorDefersWithoutWaking(t *testing.T) {
 	f := newDeferFixture(t, contracts.CadencePerTurn)
-	runner := f.runner("compressed digest")
+	runner := f.runner("DIGEST: compressed digest")
 	waker := &stubWaker{addrs: map[string]string{}}
 	runner.SetResolver(stubResolver{}) // monitor asleep
 	runner.SetWaker(waker)

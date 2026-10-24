@@ -91,6 +91,10 @@ func (s stubResolver) SessionAddr(sessionID string) (string, bool) {
 	return addr, ok
 }
 
+// longDelta is a turn too long for turndigest's short-verbatim path, so
+// a digest of it reaches the (fake) Fast Model.
+var longDelta = "user: hi\nassistant: " + strings.Repeat("did stuff ", 70) + "\n"
+
 // countingBackend is a fastmodel.Backend that counts calls, so tests can
 // assert the compression step was (or wasn't) reached.
 type countingBackend struct {
@@ -147,7 +151,7 @@ func TestGenerateDigestDeliversToPerTurnReadersOnly(t *testing.T) {
 	manualServer := newCaptureServer(t, http.StatusAccepted)
 	injectOnlyServer := newCaptureServer(t, http.StatusAccepted)
 
-	backend := &countingBackend{reply: "compressed digest"}
+	backend := &countingBackend{reply: "DIGEST: compressed digest"}
 	fm := fastmodel.NewWithBackend(backend, fastmodel.Config{})
 
 	runner := job.New(data, fm, registryclient.New(""))
@@ -160,7 +164,7 @@ func TestGenerateDigestDeliversToPerTurnReadersOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	if _, err := runner.Spawn(ctx, job.DigestKind, watched.ID, job.GenerateDigest(watched.ID, []string{"user: hi\nassistant: did stuff\n"})); err != nil {
+	if _, err := runner.Spawn(ctx, job.DigestKind, watched.ID, job.GenerateDigest(watched.ID, []string{longDelta})); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
 
@@ -265,7 +269,7 @@ func TestGenerateDigestObserverFailureDoesNotAffectOthers(t *testing.T) {
 	goodServer := newCaptureServer(t, http.StatusAccepted)
 	badServer := newCaptureServer(t, http.StatusInternalServerError)
 
-	backend := &countingBackend{reply: "compressed digest"}
+	backend := &countingBackend{reply: "DIGEST: compressed digest"}
 	fm := fastmodel.NewWithBackend(backend, fastmodel.Config{})
 
 	runner := job.New(data, fm, registryclient.New(""))

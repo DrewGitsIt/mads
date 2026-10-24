@@ -31,7 +31,7 @@ func TestDigestQueuesToOnSignalMailboxAndSignalFlushesIt(t *testing.T) {
 	})
 
 	server := newCaptureServer(t, http.StatusAccepted)
-	backend := &countingBackend{reply: "compressed digest"}
+	backend := &countingBackend{reply: "DIGEST: compressed digest"}
 	fm := fastmodel.NewWithBackend(backend, fastmodel.Config{})
 
 	runner := job.New(data, fm, registryclient.New(""))
@@ -43,7 +43,7 @@ func TestDigestQueuesToOnSignalMailboxAndSignalFlushesIt(t *testing.T) {
 	// The digest job compresses (fast model IS called — the mailbox stores
 	// compressed text) but must not deliver anything to the monitor.
 	if _, err := runner.Spawn(ctx, job.DigestKind, watched.ID,
-		job.GenerateDigest(watched.ID, []string{"user: hi\nassistant: did stuff\n"})); err != nil {
+		job.GenerateDigest(watched.ID, []string{longDelta})); err != nil {
 		t.Fatalf("Spawn digest: %v", err)
 	}
 	verify := dataclient.New(base, "test-verify")
@@ -106,7 +106,7 @@ func TestDigestNeverWakesOnSignalMonitor(t *testing.T) {
 
 	onSignalServer := newCaptureServer(t, http.StatusAccepted)
 	perTurnServer := newCaptureServer(t, http.StatusAccepted)
-	backend := &countingBackend{reply: "ACTIONABLE: yes — blocked waiting on its own subagents\nThe agent is waiting."}
+	backend := &countingBackend{reply: "ACTIONABLE: yes — blocked waiting on its own subagents\nDIGEST: The agent is waiting."}
 	fm := fastmodel.NewWithBackend(backend, fastmodel.Config{})
 
 	runner := job.New(data, fm, registryclient.New(""))

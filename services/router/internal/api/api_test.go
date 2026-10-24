@@ -93,10 +93,18 @@ func TestMain(m *testing.M) {
 }
 
 // testJobs builds a job.Runner over a fake-backed Fast Model — no scripted
-// reply needed for tests that don't exercise agent generation.
+// reply needed for tests that don't exercise agent generation, except a
+// digest's: pkg/turndigest rejects a reply without its DIGEST: marker, and
+// only digest prompts carry a <transcript> wrapper.
 func testJobs(t *testing.T, data *dataclient.Client) *job.Runner {
 	t.Helper()
-	fm := fastmodel.New(fake.New(), fastmodel.Config{})
+	fk, err := fake.NewWithScenario(fake.Scenario{Name: "digest", Rules: []fake.Rule{
+		{Match: "<transcript>", Reply: "DIGEST: ok"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := fastmodel.New(fk, fastmodel.Config{})
 	return job.New(data, fm, testRegistry(t))
 }
 
