@@ -28,7 +28,11 @@ const (
 // conversationTurn is one turn reduced for the digest prompt: every user
 // entry in order, a tool-call tally, and only the terminal assistant reply
 // (the last run of adjacent assistant fragments, merged) — interim
-// narration between tool calls is dropped.
+// narration between tool calls is dropped. Fragments are streamed chunks,
+// one per provider text delta ("The decision v", "0 run is"), so they
+// concatenate with no separator: the session runner's textJoiner already
+// put a blank line where one text block ends and the next begins, and the
+// UI's live stream joins the same events the same way.
 type conversationTurn struct {
 	users []string
 	tools string // "" when the turn made no tool calls
@@ -63,7 +67,7 @@ func normalizeTurn(entries []Entry) conversationTurn {
 		}
 	}
 	if len(reply) > 0 {
-		ct.reply = capText(strings.Join(reply, "\n"))
+		ct.reply = capText(strings.Join(reply, ""))
 	}
 	if total > 0 {
 		ct.tools = toolTally(total, counts, order)

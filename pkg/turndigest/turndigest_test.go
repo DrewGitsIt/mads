@@ -110,7 +110,7 @@ func TestDigestNoEntriesIsEmptyVerbatim(t *testing.T) {
 
 // The normalize pass: interim assistant narration between tool calls is
 // dropped, tool calls tally into one "tools:" line (busiest first, no ×1),
-// the terminal reply's adjacent fragments merge, and an over-long reply
+// the terminal reply's adjacent streamed chunks rejoin, and an over-long reply
 // keeps its head and tail around an explicit omission marker.
 func TestNormalizeGoldenSingleTurn(t *testing.T) {
 	entries := []turndigest.Entry{
@@ -126,7 +126,7 @@ func TestNormalizeGoldenSingleTurn(t *testing.T) {
 		turndigest.Entry{Kind: turndigest.KindTool, Tool: "Bash"},
 		turndigest.Entry{Kind: turndigest.KindTool, Tool: "Bash"},
 		turndigest.Entry{Kind: turndigest.KindAssistant, Text: "the test races on"},
-		turndigest.Entry{Kind: turndigest.KindAssistant, Text: "the shared counter"},
+		turndigest.Entry{Kind: turndigest.KindAssistant, Text: " the shared counter.\n"},
 		turndigest.Entry{Kind: turndigest.KindAssistant,
 			Text: strings.Repeat("h", 1500) + strings.Repeat("x", 3000) + strings.Repeat("t", 2500)},
 	)
@@ -146,7 +146,7 @@ func TestNormalizeGoldenSingleTurn(t *testing.T) {
 	if strings.Contains(res.Text, "let me look") || strings.Contains(res.Text, "found it") {
 		t.Errorf("interim narration leaked into the rendering:\n%s", res.Text)
 	}
-	if !strings.Contains(res.Text, "[…3037 chars omitted…]") {
+	if !strings.Contains(res.Text, "[…3038 chars omitted…]") {
 		t.Errorf("rendering missing the omission marker")
 	}
 	golden.Assert(t, "normalize_single_turn.txt", []byte(res.Text))
@@ -187,6 +187,33 @@ func TestNormalizeEdgeTurns(t *testing.T) {
 				t.Errorf("Text = %q, want %q", res.Text, tc.want)
 			}
 		})
+	}
+}
+
+// Assistant fragments are streamed chunks: the final reply rejoins them
+// byte-for-byte, through the stored Render/Parse round trip, including a
+// chunk that opens a new paragraph. Real fragments from a digest Haiku
+// misread as "incomplete or fragmented" (2026-10-23).
+func TestNormalizeRejoinsStreamedChunks(t *testing.T) {
+	chunks := []string{"The offer v", "0 run is done: 300", " calls, no failures.",
+		"\n\nMost of its ext", "ra marks are lines I", " coded as another type."}
+	entries := []turndigest.Entry{{Kind: turndigest.KindTool, Tool: "Bash"}}
+	for _, c := range chunks {
+		entries = append(entries, turndigest.Entry{Kind: turndigest.KindAssistant, Text: c})
+	}
+	stored := turndigest.Parse(turndigest.Render(entries)) // as session.turn_ended carries it
+
+	d := newDigester(&countingBackend{})
+	res, err := d.Digest(context.Background(), turndigest.Request{
+		Turns: []turndigest.Turn{{Entries: stored}}, BudgetTokens: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+	want := "tools: 1 call (Bash)\nassistant: The offer v0 run is done: 300 calls, no failures." +
+		"\n\nMost of its extra marks are lines I coded as another type.\n"
+	if res.Text != want {
+		t.Errorf("Text = %q, want %q", res.Text, want)
 	}
 }
 
