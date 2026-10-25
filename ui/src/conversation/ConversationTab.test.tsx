@@ -704,6 +704,9 @@ describe("ConversationTab", () => {
 
   it("shows the provisioning strip when provisioning, and clears it via onProvisioningDone once the session goes active", async () => {
     const client = new FakeRouterClient();
+    // Still starting when the strip mounts: the record reads inactive.
+    const record = await client.getSession("session-active");
+    vi.spyOn(client, "getSession").mockResolvedValue({ ...record, activity: "inactive" });
     const onProvisioningDone = vi.fn();
     render(
       <ConversationTab

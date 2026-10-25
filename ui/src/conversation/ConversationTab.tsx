@@ -1439,7 +1439,11 @@ export function ConversationTab({
               >
                 {provisioning && (
                   <div className={styles.provisioningWrap}>
-                    <ProvisioningStrip sessionId={sessionId} onDone={onProvisioningDone} />
+                    <ProvisioningStrip
+                    sessionId={sessionId}
+                    routerClient={routerClient}
+                    onDone={onProvisioningDone}
+                  />
                   </div>
                 )}
                 {conv.rows.length === 0 && worktree.cards.length === 0 && !inChatTurn ? (

@@ -10,7 +10,17 @@
 }
 
 .step {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   color: var(--text3);
+}
+
+/* Same opacity as the rail's spinner track (.statusMarkTrack). */
+.pendingMark {
+  flex: none;
+  display: block;
+  opacity: 0.26;
 }
 
 .pending {
