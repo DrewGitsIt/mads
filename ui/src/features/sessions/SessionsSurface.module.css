@@ -107,3 +107,8 @@
   padding: var(--space-4);
   overflow: auto;
 }
+
+/* The session list's own load/refresh failure, above the cards it's about. */
+.railBanner {
+  margin-bottom: var(--space-3);
+}

@@ -252,15 +252,6 @@
   color: var(--text3);
 }
 
-.toast {
-  position: absolute;
-  right: var(--space-3);
-  bottom: var(--space-3);
-  z-index: 10;
-  max-width: 420px;
-  white-space: pre-line;
-}
-
 .groupBy {
   flex-wrap: nowrap;
 }

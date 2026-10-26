@@ -446,13 +446,6 @@ export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, fo
     return files.find((f) => f.path === path)?.display ?? path;
   }
 
-  // Success toasts go away by themselves; skips and failures wait to be read.
-  useEffect(() => {
-    if (!toast || toast.tone !== "ok") return;
-    const t = setTimeout(() => setToast(null), 6000);
-    return () => clearTimeout(t);
-  }, [toast]);
-
   // --- Render -----------------------------------------------------------------
 
   if (!cs) {
@@ -707,9 +700,7 @@ export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, fo
       />
 
       {toast && (
-        <div className={styles.toast}>
-          <Toast tone={toast.tone} title={toast.title} description={toast.description} onDismiss={() => setToast(null)} />
-        </div>
+        <Toast tone={toast.tone} title={toast.title} description={toast.description} onDismiss={() => setToast(null)} />
       )}
     </div>
   );

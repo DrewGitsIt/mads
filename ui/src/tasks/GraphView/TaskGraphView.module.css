@@ -52,13 +52,6 @@
   background: var(--warn);
 }
 
-.toast {
-  position: absolute;
-  right: var(--space-3);
-  bottom: var(--space-3);
-  z-index: 10;
-}
-
 .cycleBanner {
   position: absolute;
   top: var(--space-3);

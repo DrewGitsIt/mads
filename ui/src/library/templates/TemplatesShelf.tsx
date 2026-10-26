@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Button } from "../../components/Button/Button";
 import { Card } from "../../components/Card/Card";
 import { Chip } from "../../components/Chip/Chip";
-import { Toast } from "../../components/Toast/Toast";
+import { Banner } from "../../components/Banner/Banner";
 import { router } from "../../router/client";
 import type { Template } from "../../router/types";
 import { TemplateEditor } from "./TemplateEditor";
@@ -42,7 +42,7 @@ export function TemplatesShelf() {
           New template
         </Button>
       </div>
-      {error && <Toast tone="bad" title="Couldn't load templates" description={error} />}
+      <Banner active={!!error} tone="bad" variant="inline" title="Couldn't load templates" description={error ?? undefined} />
       {!loading && templates.length === 0 && (
         <div className={styles.empty}>No templates yet.</div>
       )}

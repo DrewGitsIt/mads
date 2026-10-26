@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button } from "../../components/Button/Button";
-import { Toast } from "../../components/Toast/Toast";
+import { Banner } from "../../components/Banner/Banner";
 import { AgentCard } from "./AgentCard";
 import { AgentEditor } from "./AgentEditor";
 import { useAgents } from "./useAgents";
@@ -19,7 +19,7 @@ export function AgentsShelf() {
           New agent
         </Button>
       </div>
-      {error && <Toast tone="bad" title="Couldn't load agents" description={error} />}
+      <Banner active={!!error} tone="bad" variant="inline" title="Couldn't load agents" description={error ?? undefined} />
       {!loading && agents.length === 0 && (
         <div className={styles.empty}>No agents yet.</div>
       )}

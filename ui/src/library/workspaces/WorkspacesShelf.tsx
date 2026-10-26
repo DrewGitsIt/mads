@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "../../components/Button/Button";
 import { Card } from "../../components/Card/Card";
-import { Toast } from "../../components/Toast/Toast";
+import { Banner } from "../../components/Banner/Banner";
 import type { Workspace } from "../../router/types";
 import { useWorkspaces } from "./useWorkspaces";
 import { WorkspaceEditor } from "./WorkspaceEditor";
@@ -20,7 +20,7 @@ export function WorkspacesShelf() {
           New workspace
         </Button>
       </div>
-      {error && <Toast tone="bad" title="Couldn't load workspaces" description={error} />}
+      <Banner active={!!error} tone="bad" variant="inline" title="Couldn't load workspaces" description={error ?? undefined} />
       {!loading && workspaces.length === 0 && (
         <div className={styles.empty}>No workspaces yet.</div>
       )}

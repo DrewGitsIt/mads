@@ -272,25 +272,20 @@ export function SettingsSurface() {
       />
 
       {toast && (
-        <div className={styles.toastHost}>
-          <Toast
-            title={toast.title}
-            description={
-              toast.undoTo && undoBlocked
-                ? [toast.description, "Save or discard your changes to undo."].filter(Boolean).join(" ")
-                : toast.description
+        <Toast
+          title={toast.title}
+          description={toast.description}
+          tone={toast.tone ?? "ok"}
+          action={
+            toast.undoTo && {
+              label: "Undo",
+              disabled: undoBlocked,
+              hint: "Save or discard your changes to undo.",
+              onClick: () => void undoSwitch(toast.undoTo!),
             }
-            tone={toast.tone ?? "ok"}
-            action={
-              toast.undoTo && {
-                label: "Undo",
-                disabled: undoBlocked,
-                onClick: () => void undoSwitch(toast.undoTo!),
-              }
-            }
-            onDismiss={() => setToast(null)}
-          />
-        </div>
+          }
+          onDismiss={() => setToast(null)}
+        />
       )}
     </div>
   );

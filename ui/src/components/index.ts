@@ -4,6 +4,7 @@ export * from "./Card/Card";
 export * from "./Panel/Panel";
 export * from "./SideSheet/SideSheet";
 export * from "./Toast/Toast";
+export * from "./Banner/Banner";
 export * from "./ResizablePanel/ResizablePanel";
 export * from "./IconRail/IconRail";
 export * from "./Draft/Draft";

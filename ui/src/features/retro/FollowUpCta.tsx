@@ -55,7 +55,9 @@ export function FollowUpCta({
       >
         Create follow-up session ({acceptedCount} accepted)
       </Button>
-      {error && <Toast tone="bad" title="Couldn't create follow-up session" description={error} />}
+      {error && (
+        <Toast tone="bad" title="Couldn't create follow-up session" description={error} onDismiss={() => setError(null)} />
+      )}
     </div>
   );
 }

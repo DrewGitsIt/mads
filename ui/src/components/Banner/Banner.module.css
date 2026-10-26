@@ -1,0 +1,140 @@
+.banner {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+  border-left: 3px solid var(--line);
+  font: var(--fs-body) var(--sans);
+}
+
+/* Edge to edge across the surface area, for a condition of the whole app. */
+.bar {
+  flex: none;
+  border-bottom: 1px solid var(--line);
+}
+
+/* A box inside the content it describes. */
+.inline,
+.compact {
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--r-sm);
+}
+
+/* Narrow column: message on top, the action under it. */
+.compact {
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-2) var(--space-1) var(--space-2) var(--space-3);
+  font-size: 12px;
+}
+.compact .message {
+  display: flex;
+  flex-direction: column;
+  padding-top: 3px;
+}
+.compact .icon {
+  line-height: 26px;
+}
+.compact .action {
+  grid-column: 2;
+  grid-row: 2;
+  justify-self: start;
+}
+.compact .x {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.icon {
+  width: 16px;
+  text-align: center;
+  font-weight: 650;
+}
+
+.message {
+  min-width: 0;
+  color: var(--text);
+}
+.title {
+  font-weight: 650;
+  margin-right: 6px;
+}
+.description {
+  color: var(--text2);
+}
+
+.x {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--text2);
+  font: 14px/1 var(--sans);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.x:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+.x:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.warn {
+  background: var(--warn-soft);
+  border-left-color: var(--warn);
+}
+.warn .icon {
+  color: var(--warn);
+}
+.bad {
+  background: var(--bad-soft);
+  border-left-color: var(--bad);
+}
+.bad .icon {
+  color: var(--bad);
+}
+.info {
+  background: var(--info-soft);
+  border-left-color: var(--info);
+}
+.info .icon {
+  color: var(--info);
+}
+.ok {
+  background: var(--ok-soft);
+  border-left-color: var(--ok);
+}
+.ok .icon {
+  color: var(--ok);
+}
+
+.inline.warn,
+.compact.warn {
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--line));
+  border-left-color: var(--warn);
+}
+.inline.bad,
+.compact.bad {
+  border-color: color-mix(in srgb, var(--bad) 35%, var(--line));
+  border-left-color: var(--bad);
+}
+.inline.info,
+.compact.info {
+  border-color: color-mix(in srgb, var(--info) 35%, var(--line));
+  border-left-color: var(--info);
+}
+.inline.ok,
+.compact.ok {
+  border-color: color-mix(in srgb, var(--ok) 35%, var(--line));
+  border-left-color: var(--ok);
+}

@@ -3,6 +3,22 @@
   height: 100vh;
 }
 
+/* Everything right of the icon rail: app-wide banners, then the surface. */
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The surface and the toast stack that floats over it. */
+.surface {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
 .empty {
   flex: 1;
   display: flex;

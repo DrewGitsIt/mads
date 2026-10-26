@@ -54,13 +54,6 @@
   margin-top: var(--space-3);
 }
 
-.toastHost {
-  position: fixed;
-  bottom: var(--space-5);
-  right: var(--space-5);
-  z-index: 300;
-}
-
 .loading {
   padding: var(--space-5);
   color: var(--text2);

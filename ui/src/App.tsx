@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { Banner } from "./components/Banner/Banner";
 import { ErrorBoundary } from "./components/ErrorBoundary/ErrorBoundary";
+import { ToastViewport } from "./components/Toast/Toast";
 import { IconRail, type IconRailItem } from "./components/IconRail/IconRail";
 import { ConfigGateFailure } from "./ConfigGateFailure";
 import { CommandPalette } from "./features/command-palette/CommandPalette";
@@ -14,6 +16,7 @@ import { applyMotion } from "./features/settings/theme/applyMotion";
 import { FirstRunWizard } from "./onboarding/FirstRunWizard";
 import { setFlags } from "./featureFlags";
 import { router } from "./router/client";
+import { useBusHealth } from "./router/useBusHealth";
 import type { Config } from "./router/types";
 import { LibrarySurface } from "./library/LibrarySurface";
 import { DashboardTab } from "./dashboard/DashboardTab";
@@ -109,6 +112,13 @@ export function App() {
 
   useAttentionBadge(sessions, openTaskCounts);
 
+  // Every surface is only as fresh as the window's live-event stream: when it
+  // can't connect, the rail, task counts and pipeline state keep showing
+  // whatever they last fetched with nothing on screen to say so. That is how a
+  // rail reading "Sleeping" sat beside a conversation that was plainly
+  // working, 2026-09-30. Say it out loud, above whichever surface is showing.
+  const busHealth = useBusHealth();
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       // ⌘/Ctrl-⇧-P, not ⌘K: the sessions rail's omni search owns ⌘K (#2b),
@@ -201,35 +211,49 @@ export function App() {
   return (
     <div className={styles.shell}>
       <IconRail items={RAIL_ITEMS} activeId={activeId} onSelect={(id) => setActiveId(id)} />
-      <ErrorBoundary key={activeId}>
-        {(() => {
-          if (activeId === "sessions") {
-            return (
-              <SessionsSurface
-                jumpToSessionId={jumpToSessionId}
-                jumpToTab={jumpToTab}
-                jumpToRun={jumpToRun}
-                pipelineClient={pipelineClient}
-              />
-            );
-          }
-          const Surface = SURFACES[activeId];
-          return Surface ? (
-            <Surface />
-          ) : (
-            <div className={styles.empty}>
-              <div className={styles.emptyInner}>
-                <div className={styles.emptyTitle}>No surfaces wired up yet</div>
-                <div className={styles.emptyBody}>
-                  This is the app shell scaffold — sessions, retro, and library views
-                  land in later work items. Run <code>npm run gallery</code> to
-                  review the component kit this shell is built from.
-                </div>
-              </div>
-            </div>
-          );
-        })()}
-      </ErrorBoundary>
+      <div className={styles.main}>
+        <Banner
+          active={busHealth.state === "failing"}
+          tone="warn"
+          title="Live updates paused"
+          description="Can't reach the event stream, so session status, task counts and pipeline state may be out of date. Reconnecting automatically."
+          action={{ label: "Reload", onClick: () => window.location.reload() }}
+          resolvedTitle="Live updates resumed"
+        />
+        <div className={styles.surface}>
+          <ToastViewport>
+            <ErrorBoundary key={activeId}>
+              {(() => {
+                if (activeId === "sessions") {
+                  return (
+                    <SessionsSurface
+                      jumpToSessionId={jumpToSessionId}
+                      jumpToTab={jumpToTab}
+                      jumpToRun={jumpToRun}
+                      pipelineClient={pipelineClient}
+                    />
+                  );
+                }
+                const Surface = SURFACES[activeId];
+                return Surface ? (
+                  <Surface />
+                ) : (
+                  <div className={styles.empty}>
+                    <div className={styles.emptyInner}>
+                      <div className={styles.emptyTitle}>No surfaces wired up yet</div>
+                      <div className={styles.emptyBody}>
+                        This is the app shell scaffold — sessions, retro, and library views
+                        land in later work items. Run <code>npm run gallery</code> to
+                        review the component kit this shell is built from.
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </ErrorBoundary>
+          </ToastViewport>
+        </div>
+      </div>
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}

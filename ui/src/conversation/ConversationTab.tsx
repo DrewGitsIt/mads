@@ -1725,15 +1725,7 @@ export function ConversationTab({
             tone={commandToast.tone}
             title={commandToast.tone === "ok" ? commandToast.message : "Command failed"}
             description={commandToast.tone === "bad" ? commandToast.message : undefined}
-            action={
-              commandToast.action && {
-                label: commandToast.action.label,
-                onClick: () => {
-                  setCommandToast(undefined);
-                  commandToast.action?.onClick();
-                },
-              }
-            }
+            target={commandToast.action}
             onDismiss={() => setCommandToast(undefined)}
           />
         )}

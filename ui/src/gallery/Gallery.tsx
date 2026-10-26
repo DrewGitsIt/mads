@@ -10,6 +10,7 @@ import {
   SideSheetFooter,
 } from "../components/SideSheet/SideSheet";
 import { Toast, type ToastTone } from "../components/Toast/Toast";
+import { Banner } from "../components/Banner/Banner";
 import { ResizablePanel } from "../components/ResizablePanel/ResizablePanel";
 import { IconRail, type IconRailItem } from "../components/IconRail/IconRail";
 import { Draft, DraftChip } from "../components/Draft/Draft";
@@ -151,7 +152,7 @@ function ComboSection({
           <Toast
             tone="neutral"
             title="neutral toast"
-            description="Hover or focus to reveal dismiss."
+            description="Clears itself in 12s; hover to pause."
             onDismiss={() => setDismissedToast(true)}
           />
         )}
@@ -160,9 +161,16 @@ function ComboSection({
             key={tone}
             tone={tone}
             title={`${tone} toast`}
-            description="Presentational only — no queue/provider yet."
+            description="No onDismiss: no ✕, no timer."
+            target={tone === "info" ? { label: "Open task", onClick: () => {} } : undefined}
           />
         ))}
+      </ComponentGroup>
+
+      <ComponentGroup name="Banner">
+        <Banner active tone="warn" title="Live updates paused" description="Reconnecting automatically." action={{ label: "Reload", onClick: () => {} }} />
+        <Banner active tone="bad" variant="inline" title="Couldn't load agents" description="Router returned 502." />
+        <Banner active tone="bad" variant="compact" title="Couldn't refresh sessions" description="Retrying automatically." action={{ label: "Retry now", onClick: () => {} }} />
       </ComponentGroup>
 
       <ComponentGroup name="ResizablePanel">

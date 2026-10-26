@@ -71,6 +71,26 @@ describe("App", () => {
     expect(screen.getByLabelText("Settings")).toBeTruthy();
   });
 
+  // 2026-09-30: with the event stream refused, the rail kept a pre-wake
+  // record ("Sleeping", a stale context %) and nothing said it was stale. The
+  // warning is the shell's, above whichever surface is showing.
+  it("warns that live updates are paused once the event stream keeps failing", async () => {
+    vi.stubGlobal("fetch", routedFetch({ "GET /config": fixtureConfig }));
+    render(<App />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    expect(screen.queryByText("Live updates paused")).toBeNull();
+
+    const liveSource = () => FakeEventSource.instances.filter((s) => !s.closed).at(-1);
+    const first = liveSource()!;
+    act(() => first.simulateError());
+    expect(screen.queryByText("Live updates paused")).toBeNull(); // one drop is ordinary
+    await waitFor(() => expect(liveSource() ?? first).not.toBe(first), { timeout: 3000 });
+    act(() => liveSource()!.simulateError());
+
+    await waitFor(() => expect(screen.getByText("Live updates paused")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
+  });
+
   it("Settings rail item renders SettingsSurface", async () => {
     vi.stubGlobal("fetch", routedFetch({ "GET /config": fixtureConfig }));
     render(<App />);

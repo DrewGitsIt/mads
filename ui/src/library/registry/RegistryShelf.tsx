@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Button } from "../../components/Button/Button";
-import { Toast } from "../../components/Toast/Toast";
+import { Banner } from "../../components/Banner/Banner";
+import { Toast, useDismissible } from "../../components/Toast/Toast";
 import { useAgents } from "../agents/useAgents";
 import { useCapabilities } from "../capabilities/useCapabilities";
 import { useTemplates } from "../templates/useTemplates";
@@ -30,6 +31,7 @@ export function RegistryShelf() {
   const { templates } = useTemplates();
   const { pending, error: jobError, install, update, publish } = useRegistryJob();
   const [publishing, setPublishing] = useState(false);
+  const [shownJobError, dismissJobError] = useDismissible(jobError);
 
   const agentNames = new Set(agents.map((a) => a.name));
   const capabilityNames = new Set(capabilities.map((c) => c.name));
@@ -53,8 +55,17 @@ export function RegistryShelf() {
           </Button>
         </div>
       </div>
-      {error && <Toast tone="bad" title="Couldn't load the registry" description={error} />}
-      {jobError && <Toast tone="bad" title="Registry job failed" description={jobError} />}
+      <Banner
+        active={!!error}
+        tone="bad"
+        variant="inline"
+        title="Couldn't load the registry"
+        description={error ?? undefined}
+        action={{ label: "Retry", onClick: refetch }}
+      />
+      {shownJobError && (
+        <Toast tone="bad" title="Registry job failed" description={shownJobError} onDismiss={dismissJobError} />
+      )}
       {!loading && entries.length === 0 && <div className={styles.empty}>No matching items.</div>}
       <div className={styles.grid}>
         {entries.map((entry) => (

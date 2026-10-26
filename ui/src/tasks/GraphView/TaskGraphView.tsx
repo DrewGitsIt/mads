@@ -100,9 +100,9 @@ interface PendingDragOut {
 }
 
 /**
- * `Toast.tsx` has no queue — exactly one can show at a time. Drag-out undo,
- * removal undo, and creation/removal errors all compete for that one slot,
- * so they're a single tagged union rather than parallel useStates.
+ * The graph keeps one toast at a time: only the latest edit is undoable, so
+ * drag-out undo, removal undo, and creation/removal errors share one slot — a
+ * single tagged union rather than parallel useStates.
  */
 type GraphToast =
   | { kind: "moved-to-tray"; taskId: string; plan: EdgeStripPlan; previousPosition: Point | undefined }
@@ -482,15 +482,13 @@ export function TaskGraphView({
         onCancel={handleCancelDragOut}
       />
       {toast && (
-        <div className={styles.toast}>
-          <Toast
-            tone={toast.kind === "error" ? "bad" : "neutral"}
-            title={toastTitle}
-            description={toast.kind === "error" ? toast.message : undefined}
-            action={toast.kind === "error" ? undefined : { label: "Undo", onClick: handleUndoToast }}
-            onDismiss={() => setToast(null)}
-          />
-        </div>
+        <Toast
+          tone={toast.kind === "error" ? "bad" : "neutral"}
+          title={toastTitle}
+          description={toast.kind === "error" ? toast.message : undefined}
+          action={toast.kind === "error" ? undefined : { label: "Undo", onClick: handleUndoToast }}
+          onDismiss={() => setToast(null)}
+        />
       )}
     </div>
   );

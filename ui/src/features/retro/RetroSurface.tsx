@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Button } from "../../components/Button/Button";
 import { ContentColumn } from "../../components/ContentColumn/ContentColumn";
-import { Toast } from "../../components/Toast/Toast";
+import { Toast, useDismissible } from "../../components/Toast/Toast";
+import { requestOpenSession } from "../../appNavigation";
 import type { Session, Task } from "../../router/types";
 import { ChipStrip } from "./picker/ChipStrip";
 import { SessionPicker } from "./picker/SessionPicker";
@@ -37,6 +38,7 @@ export function RetroSurface() {
   );
 
   const generation = useRetroGeneration();
+  const [generationError, dismissGenerationError] = useDismissible(generation.error);
   const sessionsForPicker = useSessionsForPicker();
   const history = useRetroHistory();
   const detail = useRetroDetail(viewedRetroId);
@@ -94,8 +96,13 @@ export function RetroSurface() {
             <Button variant="primary" onClick={handleGenerate} disabled={selectedSessionIds.length === 0}>
               Generate retro
             </Button>
-            {generation.error && (
-              <Toast tone="bad" title="Couldn't generate retro" description={generation.error} />
+            {generationError && (
+              <Toast
+                tone="bad"
+                title="Couldn't generate retro"
+                description={generationError}
+                onDismiss={dismissGenerationError}
+              />
             )}
             <RetroHistoryList retros={history.retros} onSelect={setViewedRetroId} />
           </div>
@@ -131,6 +138,8 @@ export function RetroSurface() {
                 tone="ok"
                 title="Tasks imported"
                 description={`${followUpResult.taskCount} tasks imported`}
+                target={{ label: "Open session", onClick: () => requestOpenSession(followUpResult.sessionId) }}
+                onDismiss={() => setFollowUpResult(null)}
               />
             )}
             <Button variant="ghost" onClick={handleStartNew}>

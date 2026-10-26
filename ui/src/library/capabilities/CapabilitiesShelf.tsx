@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button } from "../../components/Button/Button";
 import { Card } from "../../components/Card/Card";
 import { Chip } from "../../components/Chip/Chip";
-import { Toast } from "../../components/Toast/Toast";
+import { Banner } from "../../components/Banner/Banner";
 import type { Capability } from "../../router/types";
 import { CapabilityEditor } from "./CapabilityEditor";
 import { HealthDot } from "./HealthDot";
@@ -22,7 +22,7 @@ export function CapabilitiesShelf() {
           New capability
         </Button>
       </div>
-      {error && <Toast tone="bad" title="Couldn't load capabilities" description={error} />}
+      <Banner active={!!error} tone="bad" variant="inline" title="Couldn't load capabilities" description={error ?? undefined} />
       {!loading && capabilities.length === 0 && (
         <div className={styles.empty}>No capabilities yet.</div>
       )}

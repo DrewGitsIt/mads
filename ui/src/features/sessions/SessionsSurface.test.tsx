@@ -239,25 +239,6 @@ describe("SessionsSurface", () => {
     await waitFor(() => expect(screen.getByText("No sessions yet")).toBeTruthy());
   });
 
-  // 2026-09-30: with the event stream refused, the rail kept a pre-wake
-  // record ("Sleeping", a stale context %) and nothing said it was stale.
-  it("warns that live updates are paused once the event stream keeps failing", async () => {
-    stubSessionsAndConversationFetch([makeSession({ id: "a", name: "Alpha" })]);
-    render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
-    await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
-    expect(screen.queryByText("Live updates paused")).toBeNull();
-
-    const liveSource = () => FakeEventSource.instances.filter((s) => !s.closed).at(-1);
-    const first = liveSource()!;
-    first.simulateError();
-    expect(screen.queryByText("Live updates paused")).toBeNull(); // one drop is ordinary
-    await waitFor(() => expect(liveSource() ?? first).not.toBe(first), { timeout: 3000 });
-    liveSource()!.simulateError();
-
-    await waitFor(() => expect(screen.getByText("Live updates paused")).toBeTruthy());
-    expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
-  });
-
   it("creating a session via the Launchpad lands directly in the conversation, goal visible, no rail click", async () => {
     const created = makeSession({ id: "s99", name: "Fix the deploy script" });
     let sessions: Session[] = [];

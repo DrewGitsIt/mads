@@ -357,7 +357,7 @@ export function SessionWorkspace({
       </div>
 
       {actionError && (
-        <Toast tone="bad" title="Session action failed" description={actionError} />
+        <Toast tone="bad" title="Session action failed" description={actionError} onDismiss={() => setActionError(undefined)} />
       )}
 
       {session && (

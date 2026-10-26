@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../../components/Button/Button";
+import { Banner } from "../../components/Banner/Banner";
 import { Toast } from "../../components/Toast/Toast";
-import { useBusHealth } from "../../router/useBusHealth";
 import type { PipelineClient } from "../../pipeline/client/pipelineClient";
 import { useAgents } from "../../library/agents/useAgents";
 import { useWorkspaces } from "../../library/workspaces/useWorkspaces";
@@ -39,22 +39,6 @@ export interface SessionsSurfaceProps {
 /** Top-level Sessions surface (registered in App.tsx) — owns the shared session list so the rail and launchpad don't duplicate fetch/subscribe logic. */
 export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelineClient }: SessionsSurfaceProps) {
   const { sessions, loading, error, retry, createSession } = useSessionsList();
-  // The error a user dismissed; a later, different failure shows again.
-  const [dismissedError, setDismissedError] = useState<string | null>(null);
-  useEffect(() => {
-    if (!error) setDismissedError(null);
-  }, [error]);
-  // The rail, its task counts and agent states are only as fresh as the
-  // window's live-event stream: when that stream can't connect they keep
-  // showing whatever they last fetched, with nothing on screen to say so. That
-  // is how a rail reading "Sleeping" (and a stale context %) sat beside a
-  // conversation that was plainly working, 2026-09-30. Say it out loud.
-  const busHealth = useBusHealth();
-  const [busWarningDismissed, setBusWarningDismissed] = useState(false);
-  useEffect(() => {
-    // Each new outage gets its own warning, even if the last one was waved off.
-    if (busHealth.state === "live") setBusWarningDismissed(false);
-  }, [busHealth.state]);
   const openTaskCounts = useOpenTaskCounts();
   const links = useSessionLinks(sessions.map((s) => s.id));
   // Only the rail's adaptive context labels need these: a workspace's
@@ -77,7 +61,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelin
   const agentStates = useSessionAgentState(sessions, selectedId, fadeMs);
   const [initialTab, setInitialTab] = useState<WorkspaceTabId>();
   const [openRun, setOpenRun] = useState<{ run: number | "new" }>();
-  const [actionError, setActionError] = useState<{ title: string; message: string }>();
+  const [actionError, setActionError] = useState<{ title: string; message: string; sessionId: string }>();
   const [provisioningSessionId, setProvisioningSessionId] = useState<string>();
   const [pendingFirstMessage, setPendingFirstMessage] =
     useState<{ sessionId: string; text: string }>();
@@ -101,6 +85,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelin
     setActionError({
       title: `Couldn't ${verb} “${name}”`,
       message: err instanceof Error ? err.message : String(err),
+      sessionId,
     });
   }
 
@@ -192,6 +177,18 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelin
             New session
           </Button>
         </div>
+        {/* With a list already on screen this is a failed refresh, not a
+            failed load — say so, or the banner contradicts the visible rail. */}
+        <Banner
+          active={!!error}
+          tone="bad"
+          variant="compact"
+          className={styles.railBanner}
+          title={sessions.length > 0 ? "Couldn't refresh sessions" : "Couldn't load sessions"}
+          description={`${sessions.length > 0 ? "The list may be out of date. " : ""}Retrying automatically. (${error})`}
+          action={{ label: "Retry now", onClick: retry }}
+          resolvedTitle={sessions.length > 0 ? "Sessions refreshed" : undefined}
+        />
         {!loading && sessions.length === 0 ? (
           <NoSessionsEmptyState />
         ) : (
@@ -316,35 +313,24 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelin
           </div>
         )}
         <SessionSleepPrompt sleep={sleep} routerClient={router} />
-        {error && error !== dismissedError && (
-          // With a list already on screen this is a failed refresh, not a
-          // failed load — say so, or the toast contradicts the visible rail.
-          <Toast
-            tone="bad"
-            title={sessions.length > 0 ? "Couldn't refresh sessions" : "Couldn't load sessions"}
-            description={
-              sessions.length > 0
-                ? `The list may be out of date. Retrying automatically. (${error})`
-                : `Retrying automatically. (${error})`
-            }
-            action={{ label: "Retry now", onClick: retry }}
-            onDismiss={() => setDismissedError(error)}
-          />
-        )}
-        {busHealth.state === "failing" && !busWarningDismissed && (
-          <Toast
-            tone="warn"
-            title="Live updates paused"
-            description="Can't reach the event stream, so session status, task counts and pipeline state may be out of date. Reconnecting automatically."
-            action={{ label: "Reload", onClick: () => window.location.reload() }}
-            onDismiss={() => setBusWarningDismissed(true)}
-          />
-        )}
         {actionError && (
           <Toast
             tone="bad"
             title={actionError.title}
             description={actionError.message}
+            target={
+              actionError.sessionId !== selectedId || openDelegate
+                ? {
+                    label: "Go to session",
+                    onClick: () => {
+                      setOpenDelegate(undefined);
+                      setSelectedId(actionError.sessionId);
+                      setInitialTab(undefined);
+                      setOpenRun(undefined);
+                    },
+                  }
+                : undefined
+            }
             onDismiss={() => setActionError(undefined)}
           />
         )}
