@@ -125,6 +125,26 @@ func TestPeerMidTurnStream(t *testing.T) {
 	}
 }
 
+// testdata/stream-task-absorbed-send.jsonl (claude-code 2.1.285, haiku): mads's
+// turn leaves a background sleep running and ends; the sleep's completion
+// makes the CLI run a turn of its own, and a message mads sends while that
+// turn runs is folded into it (its replay lands after the running tool's
+// result) instead of getting a turn of its own. The task-notification result
+// is the only end the CLI writes for both. Before the fix the send opened a
+// turn, that result read as an in-turn continuation and was suppressed, and
+// nothing ever ended the turn again: ses_359adef5b1c66ed5, 2026-10-25, a
+// linked leader's message landing in a self-started turn left the session on
+// "Thinking…" with every later turn end dropped.
+func TestSendAbsorbedIntoUnpromptedTurn(t *testing.T) {
+	s, evs := replayStream(t, "stream-task-absorbed-send.jsonl")
+	if n := len(ofKind(evs, provider.EventTurnEnd)); n != 2 {
+		t.Fatalf("turn ends = %d, want 2 (mads's turn, then the self-started one the send landed in)", n)
+	}
+	if s.turnOpen || s.unprompted {
+		t.Errorf("after the last result: turnOpen=%v unprompted=%v, want both false", s.turnOpen, s.unprompted)
+	}
+}
+
 // A peer message that lands idle with no turn mads opened: the turn the CLI
 // runs for it ends exactly once, on its origin-"peer" result line.
 func TestPeerIdleArrivalEndsOnce(t *testing.T) {

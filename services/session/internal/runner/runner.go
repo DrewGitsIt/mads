@@ -241,6 +241,14 @@ type Runner struct {
 	turnStartedAt time.Time
 	interrupted   bool
 	closing       bool // Shutdown has started tearing this session down
+	// turnEpoch moves on every turn edge, a turn delivered (deliverLocked)
+	// or ended (endTurn), so a Stop's watchdog can tell whether anything
+	// happened to the turn since (stopwatch.go).
+	turnEpoch uint64
+	// stopChecks carries Stop watchdog firings to the pump; stopGrace
+	// overrides the const (tests; zero means stopGrace).
+	stopChecks chan stopCheck
+	stopGrace  time.Duration
 
 	// landing is set while Land runs (worktreeops.go): no turn may start,
 	// so Send refuses, and SendOrQueue and Inject queue behind it exactly
@@ -402,6 +410,7 @@ func New(sessionID string, data *dataclient.Client, providers *provider.Registry
 	h := newHub()
 	h.tap = chat.event
 	return &Runner{
+		stopChecks:    make(chan stopCheck, 1),
 		sessionID:     sessionID,
 		data:          data,
 		providers:     providers,
@@ -936,6 +945,7 @@ func (r *Runner) refreshCountsAsync() {
 // the caller sends on r.sess itself, after unlocking.
 func (r *Runner) deliverLocked() {
 	r.busy = true
+	r.turnEpoch++
 	r.sentAny = true
 	r.turnStartedAt = time.Now()
 	r.interrupted = false
@@ -1185,6 +1195,7 @@ func (r *Runner) endTurn(ev *provider.Event) {
 
 	r.mu.Lock()
 	r.busy = false
+	r.turnEpoch++
 	r.turnStartedAt, r.interrupted = time.Time{}, false
 	if ev != nil {
 		turn := r.chat.turnEnd(*ev)
@@ -1374,7 +1385,10 @@ func (r *Runner) pushTurnEnded() {
 
 // Interrupt stops the in-flight response, if any. The session remains
 // usable — the pump clears the in-flight flag when the resulting
-// EventTurnEnd (Interrupted: true) arrives.
+// EventTurnEnd (Interrupted: true) arrives. Should none arrive, because the
+// harness had nothing running for the interrupt to stop, the Stop
+// watchdog ends the turn instead (stopwatch.go), so Stop always gets a
+// session out of "working".
 func (r *Runner) Interrupt(ctx context.Context) error {
 	r.mu.Lock()
 	if r.sess == nil {
@@ -1385,8 +1399,16 @@ func (r *Runner) Interrupt(ctx context.Context) error {
 	if r.busy {
 		r.interrupted = true
 	}
+	epoch := r.turnEpoch
+	terminal := r.terminalLocked()
 	r.mu.Unlock()
-	return sess.Interrupt(ctx)
+	if err := sess.Interrupt(ctx); err != nil {
+		return err
+	}
+	if !terminal {
+		r.armStopWatch(epoch)
+	}
+	return nil
 }
 
 // SwitchTransport tears down the current transport's provider process —
@@ -1966,7 +1988,22 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 // session.crashed), which fires independently when this OS process exits.
 func (r *Runner) pump(sess provider.Session) {
 	var join textJoiner
-	for ev := range sess.Events() {
+	events := sess.Events()
+stream:
+	for {
+		var ev provider.Event
+		select {
+		case e, ok := <-events:
+			if !ok {
+				break stream
+			}
+			ev = e
+		case c := <-r.stopChecks:
+			if !r.stuckAfterStop(sess, c) {
+				continue
+			}
+			ev = r.forcedTurnEnd()
+		}
 		if ev.Kind == provider.EventSettle {
 			// For the v2 tail alone: a contentless hint the legacy
 			// pipeline below never saw before the keyed contract, and
