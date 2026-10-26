@@ -196,8 +196,8 @@ func (l *wireLine) turnEnd(interrupted bool) provider.Event {
 // figure, and counting it again would double-count the session's cost —
 // the streaming transport, which knows the running total, puts back the
 // turn's own share (streamSession.costSeen).
-func (l *wireLine) notificationTurnEnd() []provider.Event {
-	ev := l.turnEnd(false)
+func (l *wireLine) notificationTurnEnd(interrupted bool) []provider.Event {
+	ev := l.turnEnd(interrupted)
 	if ev.Usage != nil {
 		ev.Usage.CostUSD = 0
 	}

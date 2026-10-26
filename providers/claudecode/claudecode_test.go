@@ -1356,6 +1356,27 @@ func TestStreamSessionLateNotificationEndsUnpromptedTurn(t *testing.T) {
 	}
 }
 
+// A Stop during an unprompted turn belongs to that turn: its end says
+// interrupted, and the next turn's doesn't inherit the flag.
+func TestStreamSessionInterruptedUnpromptedTurn(t *testing.T) {
+	s := &streamSession{events: make(chan provider.Event, 16), announced: make(chan string, 1), stdin: discardWriteCloser{}}
+	s.handleLine([]byte(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_late","name":"Bash","input":{"command":"cat out"}}]}}`))
+	if err := s.Interrupt(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s.handleLine([]byte(`{"type":"result","subtype":"error_during_execution","origin":{"kind":"task-notification"}}`))
+	if ends := drainTurnEnds(s); len(ends) != 1 || !ends[0].Interrupted {
+		t.Fatalf("interrupted unprompted turn ends = %+v, want one, interrupted", ends)
+	}
+	if err := s.Send(context.Background(), "next"); err != nil {
+		t.Fatal(err)
+	}
+	s.handleLine([]byte(`{"type":"result","subtype":"success"}`))
+	if ends := drainTurnEnds(s); len(ends) != 1 || ends[0].Interrupted {
+		t.Fatalf("next turn ends = %+v, want one, not interrupted", ends)
+	}
+}
+
 // The shape the notification suppression exists for: a continuation whose
 // result follows the turn's own with no output of its own past it (as in
 // testdata/stream-task-subagent.jsonl), or one that lands while the user's

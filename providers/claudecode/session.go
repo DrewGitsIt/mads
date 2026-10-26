@@ -327,6 +327,8 @@ func (s *streamSession) handleLine(raw []byte) {
 		s.unprompted = false
 		if closesUnprompted {
 			turnCost = s.turnCostLocked(l.TotalCostUSD)
+			// A Stop pressed during this turn belongs to it, not the next.
+			s.interrupted = false
 		}
 	case l.Type == "result":
 		turnCost = s.turnCostLocked(l.TotalCostUSD)
@@ -366,7 +368,7 @@ func (s *streamSession) handleLine(raw []byte) {
 
 	evs := l.keyedEvents(interrupted, true, keys)
 	if closesUnprompted {
-		evs = l.notificationTurnEnd()
+		evs = l.notificationTurnEnd(interrupted)
 	}
 	if dropTask {
 		evs = nil
@@ -589,7 +591,19 @@ func (s *streamSession) send(text, id string) error {
 		return err
 	}
 	s.mu.Lock()
-	s.turnOpen = true
+	// Sent while the CLI runs a turn of its own (a background task's late
+	// notification woke it), the message is folded into that turn rather
+	// than run as one of its own, and the turn's task-notification result is
+	// the only end both get (testdata/stream-task-absorbed-send.jsonl).
+	// Opening a turn here would make that result read as an in-turn
+	// continuation and suppress it, and nothing would ever end the turn
+	// again: ses_359adef5b1c66ed5, 2026-10-25. The same rule as a peer
+	// message landing in an unprompted turn (handleLine). Should the CLI's
+	// own turn end just ahead of the message, the message runs as an
+	// unprompted turn and its plain result still ends it.
+	if !s.unprompted {
+		s.turnOpen = true
+	}
 	s.mu.Unlock()
 	return s.write(append(line, '\n'))
 }
