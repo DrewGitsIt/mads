@@ -22,7 +22,10 @@ export interface KeyedRow extends TranscriptMessage {
   failed?: boolean;
   /** A subagent's item: the spawning tool call's id. Not in the main list. */
   parent?: string;
-  /** Arrived after replay_end: the pacer reveals it at reading pace. */
+  /**
+   * Arrived after replay_end: the pacer reveals agent text at reading pace,
+   * and a user-role row opens a reading runway (useRunway).
+   */
   paced?: boolean;
   /**
    * Built from this turn's frames (kept when it settles or its stored row
@@ -362,6 +365,7 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
         timestamp: str(d.ts),
         live: true,
         current: true,
+        paced,
       }));
     }
     case "item_start": {
@@ -449,6 +453,7 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
         timestamp: str(d.timestamp) ?? new Date().toISOString(),
         live: true,
         current: true,
+        paced,
       }));
     }
     case "settled": {

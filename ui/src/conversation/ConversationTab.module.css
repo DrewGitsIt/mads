@@ -100,6 +100,11 @@
    its child, so it spans the full pane and the scrollbar stops at its top
    edge. Each child keeps its own surface; the strip itself is transparent
    over the stream. */
+/* The reading runway's reserved space (useRunway sets its height). */
+.runwaySpacer {
+  flex: none;
+}
+
 .pinned {
   position: sticky;
   bottom: 0;

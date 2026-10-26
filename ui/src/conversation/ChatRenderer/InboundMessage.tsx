@@ -3,6 +3,7 @@ import type { InboundSource } from "../../router/types";
 import { HarnessMark, harnessLabel } from "../../features/sessions/rail/HarnessMark";
 import { Markdown } from "./markdown";
 import { formatMessageTime, parseMessageTime } from "./messageTime";
+import type { RunwayAnchorAttrs } from "../runway";
 import styles from "./InboundMessage.module.css";
 
 /** Bodies longer than this fold behind "Show more" (the full text stays in the DOM, so find still reaches it). */
@@ -27,12 +28,15 @@ export function InboundMessage({
   timestamp,
   relation,
   findKey,
+  anchor,
 }: {
   text?: string;
   inbound: InboundSource;
   timestamp?: string;
   relation?: string;
   findKey?: string;
+  /** Marks it as a reading-runway anchor (useRunway). */
+  anchor?: RunwayAnchorAttrs;
 }) {
   const [open, setOpen] = useState(false);
   const at = parseMessageTime(timestamp);
@@ -43,7 +47,7 @@ export function InboundMessage({
   const long = body.length > FOLD_CHARS || body.split("\n").length > FOLD_LINES;
   const folded = long && !open;
   return (
-    <div className={`${styles.inbound} ${held ? styles.held : ""}`} role="note" data-find={findKey}>
+    <div className={`${styles.inbound} ${held ? styles.held : ""}`} role="note" data-find={findKey} {...anchor}>
       <div className={styles.header}>
         <HarnessMark provider={inbound.provider} />
         {held ? (

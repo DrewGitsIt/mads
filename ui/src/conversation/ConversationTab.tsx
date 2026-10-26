@@ -85,6 +85,7 @@ import { useWorktreeCards } from "./Worktree/useWorktreeCards";
 import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
 import { STREAM_REATTACH_EVENT, type StreamReattachDetail } from "./streamReattachSignal";
 import { useStickToBottom } from "./useStickToBottom";
+import { useRunway } from "./useRunway";
 import { useOlderPages } from "./useOlderPages";
 import { FindBar, useFindBar } from "./Find/FindBar";
 import { useVisibleCards } from "./useVisibleCards";
@@ -611,7 +612,12 @@ export function ConversationTab({
   // back at the bottom (useStickToBottom). The chat stream mounts and
   // unmounts with the transport, so its ref is the hook's callback ref; the
   // terminal stream just takes the element ref.
-  const stick = useStickToBottom();
+  // The bottom it follows is the reading runway's (useRunway): a person's
+  // latest message held at the top while the reply fills in under it, a page
+  // at a time. The runway sizes a spacer before every pin; only the lock
+  // scrolls.
+  const runway = useRunway(turnPhase !== "idle");
+  const stick = useStickToBottom<HTMLDivElement>({ beforePin: runway.beforePin });
   // Scrolling near the top loads the page before the oldest row, keeping
   // the item being read where it was.
   const olderPages = useOlderPages(stick.element, {
@@ -1039,6 +1045,25 @@ export function ConversationTab({
     setPermissionReveal((cur) => ({ id, nonce: (cur?.nonce ?? 0) + 1 }));
   }, [stick]);
 
+  // Back at the composer after a turn (typing, or focusing it after clicking
+  // away): the runway's leftover space collapses (useRunway.settle).
+  // Listens on the document: the tab mounts after the session loads, so
+  // tabRef can still be empty when this runs.
+  useEffect(() => {
+    const onComposer = (e: Event) => {
+      const t = e.target as HTMLElement | null;
+      const dock = t?.closest('[data-testid="session-dock"]');
+      if (dock && tabRef.current?.contains(dock) && (t!.tagName === "TEXTAREA" || t!.isContentEditable))
+        runway.settle();
+    };
+    document.addEventListener("focusin", onComposer);
+    document.addEventListener("input", onComposer);
+    return () => {
+      document.removeEventListener("focusin", onComposer);
+      document.removeEventListener("input", onComposer);
+    };
+  }, [runway]);
+
   // Ctrl/Cmd+↑/↓ hops between the user's own messages — anchored on the
   // [data-user-msg] elements ChatRenderer stamps on each user bubble.
   useEffect(() => {
@@ -1433,6 +1458,7 @@ export function ConversationTab({
                 ref={stick.ref}
                 onScroll={() => {
                   stick.onScroll();
+                  runway.onScroll();
                   olderPages.onScroll();
                 }}
                 data-testid="conversation-stream"
@@ -1552,6 +1578,7 @@ export function ConversationTab({
                     the session dock — none can scroll off screen while the
                     conversation is on screen. The dock itself sits below the
                     stream, outside it, so the scrollbar ends at its top edge. */}
+                <div ref={runway.spacerRef} className={styles.runwaySpacer} aria-hidden="true" data-testid="runway-spacer" />
                 <div className={styles.pinned} data-testid="pinned-cluster" ref={pinnedRef}>
                   <ApprovalJump
                     pending={pendingPermissions}

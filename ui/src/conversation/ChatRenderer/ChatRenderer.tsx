@@ -23,6 +23,7 @@ import {
   type TaskModel,
 } from "../activity/conversationItems";
 import type { KeyedRow } from "../keyed/conversation";
+import type { RunwayAnchorAttrs } from "../runway";
 import { joinRows } from "../keyed/joinRule";
 import { PlanWidget } from "../activity/PlanWidget";
 import { findAll, findPattern, searchEntries, type EntryMatch, type SearchCache } from "../Find/findText";
@@ -137,16 +138,17 @@ function isThinkingOnly(item: ReturnType<typeof buildItems>[number] | undefined)
   );
 }
 
-function DigestCard({ findKey, source, kind = "digest", time, text, cadence }: {
+function DigestCard({ findKey, source, kind = "digest", time, text, cadence, anchor }: {
   findKey?: string;
   source: string;
   kind?: QuietDigest["kind"];
   time?: Date;
   text: string;
   cadence?: Link["cadence"];
+  anchor?: RunwayAnchorAttrs;
 }) {
   return (
-    <div className={styles.digest} data-find={findKey}>
+    <div className={styles.digest} data-find={findKey} {...anchor}>
       <div className={styles.digestHeader}>
         ⌗ {kind} · <b>{source}</b>
         {time && ` · ${formatMessageTime(time)}`}
@@ -335,6 +337,17 @@ export function ChatRenderer({
   // Adjacent text joins into one bubble (§6), then failed sends fold.
   const { rows: shown, delivery } = collapseFailedSends(joinRows(rows), sendFailure);
   const latestSend = [...shown].reverse().find((m) => m.role === "user" && !m.attribution);
+  // The reading runway's anchors (useRunway): a person's message, the user's
+  // own or a linked session's — never mads' own notices.
+  const runwayAnchors = new Map(
+    shown
+      .filter((m) => (m.role === "user" && !isNotice(m)) || m.role === "inbound")
+      .map((m) => [m.key, Boolean(m.paced)]),
+  );
+  const anchorAttrs = (key: string): RunwayAnchorAttrs => {
+    const live = runwayAnchors.get(key);
+    return live === undefined ? {} : { "data-runway-anchor": key, "data-runway-live": live ? "" : undefined };
+  };
 
   const cardsById = new Map(worktreeCards.map((c) => [c.id, c]));
   const items = buildItems(interleaveCards(rowsToEntries(shown), worktreeCards));
@@ -533,11 +546,12 @@ export function ChatRenderer({
                 time={parseMessageTime(message.timestamp)}
                 text={message.text ?? ""}
                 cadence={digestLink(message.attribution, links, viewedSessionId, linkName)?.cadence}
+                anchor={anchorAttrs(item.key)}
               />
             );
           }
           return (
-            <div key={item.key} className={styles.injected} data-find={item.key}>
+            <div key={item.key} className={styles.injected} data-find={item.key} {...anchorAttrs(item.key)}>
               <Chip tone="info">
                 ⇄ from {message.attribution.relation ?? "a linked session"} · {message.attribution.source_name}
               </Chip>
@@ -575,6 +589,7 @@ export function ChatRenderer({
               timestamp={message.timestamp}
               relation={relation}
               findKey={item.key}
+              anchor={anchorAttrs(item.key)}
             />
           );
         }
@@ -647,6 +662,7 @@ export function ChatRenderer({
             // Anchor for the Ctrl+↑/↓ "hop between my messages" shortcut.
             data-user-msg={isUser ? "" : undefined}
             data-undelivered={sent?.error ? "" : undefined}
+            {...anchorAttrs(item.key)}
           >
             {/* Revealed on hover (styles.stamp), on the bubble's open side. */}
             {isUser && stamp}

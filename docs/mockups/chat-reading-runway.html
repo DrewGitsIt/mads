@@ -1,0 +1,460 @@
+<!doctype html>
+<!--
+  mads — chat reading runway: how the history moves while a reply streams
+  ======================================================================
+
+  Problem (Drew, 2026-10-26): with a paced reveal (Settings → Appearance →
+  Reply streaming), every wrapped line grows the stream by one line height and
+  useStickToBottom snaps scrollTop to the bottom. At 250 wpm in a wide column
+  that is a hard ~20px jump every 3–4 seconds, under the eye that is reading.
+
+  Live, side by side, same reply at the same pace:
+    1. Today      — pin to the bottom on every growth (useStickToBottom.pin).
+    2. Glide      — still follows the tail, but scrollTop eases toward it, so
+                    there are no discrete jumps, just a slow drift.
+    3. Runway     — Drew's idea: when the turn starts, the user's message is
+                    scrolled to the top of the viewport and the turn reserves
+                    a viewport of empty space below it. The reply fills that
+                    space downward and the history does not move. When the
+                    text reaches the bottom edge, one of three things happens
+                    (toggle): a page turn, a stop + "More below" pill, or
+                    hand-off to Glide.
+
+  Drew's calls (2026-10-26):
+  - The runway anchors once, on the user's message; long agentic turns page
+    from there (no re-anchoring per prose block).
+  - Only user-role messages start a runway: a human's send or a message from
+    a linked mads session. A turn the agent starts by itself does not.
+  - Native (unpaced) gets tried hands-on against Opus bursts, then iterated.
+
+  Open: what happens to the reserved space once the turn ends. Second toggle
+  ("After the turn"):
+    Keep        — stays until the next send (the usual pattern elsewhere).
+    Trim        — space below the viewport is removed as soon as it's off
+                  screen. Removing space nobody can see moves nothing, so
+                  scrolling up eats the blank for good.
+    Settle      — when you click into the composer, the space collapses and
+                  the reply slides down to sit just above it. One smooth
+                  move while your eyes are on the composer.
+
+  The "moves" counter counts separate scroll motions the reader sees.
+  Not a real ConversationTab: no tool output, no find, no scroll-up release.
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — chat reading runway</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-soft:rgba(192,133,82,.15);
+    --info:#96afc7; --user:#3a2f24; --bad:#e07a5f;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --fs-sm:12px; --fs-body:13px; --fs-ui:14px;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.5 var(--sans); }
+  button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+  code { font:var(--fs-sm) var(--mono); background:var(--bg2); border-radius:3px; padding:1px 4px; }
+
+  .page { max-width:1480px; margin:0 auto; padding:28px 24px 80px; display:flex; flex-direction:column; gap:22px; }
+  header h1 { font-size:20px; font-weight:650; }
+  header p { color:var(--text2); max-width:110ch; margin-top:8px; }
+
+  .controls { display:flex; flex-wrap:wrap; gap:18px; align-items:center; padding:12px 16px;
+              background:var(--bg1); border:1px solid var(--line-soft); border-radius:var(--r); }
+  .controls label { color:var(--text3); font-size:var(--fs-sm); margin-right:6px; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+  .seg button { padding:4px 10px; font-size:var(--fs-sm); color:var(--text2); }
+  .seg button + button { border-left:1px solid var(--line); }
+  .seg button[aria-pressed="true"] { background:var(--accent-soft); color:var(--text); }
+  .play { background:var(--accent); color:#1a130b; font-weight:600; padding:6px 14px; border-radius:6px; }
+
+  .cols { display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; }
+  .panel { background:var(--bg1); border:1px solid var(--line-soft); border-radius:var(--r); padding:12px 12px 10px;
+           display:flex; flex-direction:column; gap:8px; }
+  .panel.pick { border-color:var(--accent); }
+  .panel h3 { font-size:var(--fs-sm); letter-spacing:.06em; text-transform:uppercase; color:var(--text2); }
+  .panel.today h3 { color:var(--bad); }
+  .panel.pick h3 { color:var(--accent); }
+  .panel .why { color:var(--text3); font-size:var(--fs-sm); min-height:54px; }
+  .meter { display:flex; justify-content:space-between; font:var(--fs-sm) var(--mono); color:var(--text3); }
+  .meter b { color:var(--text); font-weight:500; }
+
+  .frame { position:relative; height:440px; border:1px solid var(--line); border-radius:6px; background:var(--bg0); overflow:hidden; }
+  .scroller { position:absolute; inset:0; overflow-y:auto; padding:12px 14px; }
+  .scroller::-webkit-scrollbar { width:6px; }
+  .scroller::-webkit-scrollbar-thumb { background:var(--bg4); border-radius:3px; }
+
+  .msg { margin-bottom:14px; }
+  .msg.user { margin-left:auto; max-width:85%; width:max-content; background:var(--user); border-radius:10px; padding:7px 12px; }
+  .prose p { margin-bottom:8px; }
+  .prose li { margin:0 0 4px 18px; }
+  .tool { display:flex; gap:8px; align-items:center; font:var(--fs-sm) var(--mono); color:var(--text2);
+          background:var(--bg2); border:1px solid var(--line-soft); border-radius:6px; padding:6px 10px; margin-bottom:12px; }
+  .tool::before { content:"✓"; color:var(--accent); }
+  .tool.running::before { content:"◌"; color:var(--info); }
+  .thinking { color:var(--text3); font-style:italic; margin-bottom:12px; }
+  .caret { display:inline-block; width:7px; height:13px; background:var(--accent); vertical-align:-2px; margin-left:2px; opacity:.7; }
+
+  /* The reserved runway: visible here so the mechanism is legible. Real build: invisible. */
+  .turn.runway { background:repeating-linear-gradient(0deg, transparent 0 22px, rgba(192,133,82,.035) 22px 23px); border-radius:4px; }
+  .showRunway .turn.runway { outline:1px dashed rgba(192,133,82,.25); }
+
+  .pill { position:absolute; left:50%; bottom:12px; transform:translate(-50%, 8px); opacity:0; pointer-events:none;
+          background:var(--info); color:#0f1720; font-weight:600; font-size:var(--fs-sm); padding:4px 12px; border-radius:999px;
+          transition:opacity .18s, transform .18s; }
+  .pill.on { opacity:1; transform:translate(-50%, 0); pointer-events:auto; }
+
+  .composer { background:var(--bg2); border:1px solid var(--line); border-radius:6px; padding:7px 10px; color:var(--text); font:inherit; }
+  .composer:focus { outline:1px solid var(--accent); }
+  .doneMark { color:var(--text3); font-size:var(--fs-sm); margin-top:4px; }
+  section.notes { background:var(--bg1); border:1px solid var(--line-soft); border-radius:var(--r); padding:14px 18px; color:var(--text2); }
+  section.notes h2 { font-size:var(--fs-ui); color:var(--text); margin-bottom:8px; }
+  section.notes li { margin:0 0 6px 18px; }
+  section.notes b { color:var(--text); font-weight:600; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>Reading runway: three ways the history can behave while a reply streams</h1>
+    <p>Same reply, same pace, three scroll policies. Press <b>Send</b> and read along in each pane.
+      “Moves” counts separate scroll motions. Mock column is narrower than the real one, so lines wrap more often
+      than in the app. At 250 wpm, today’s pane jumps about once every 3–4 s.</p>
+  </header>
+
+  <div class="controls">
+    <button class="play" id="play">Send ▸</button>
+    <span><label>Pace</label><span class="seg" id="pace">
+      <button data-v="250" aria-pressed="false">Slow 250</button>
+      <button data-v="600" aria-pressed="true">600 (demo)</button>
+      <button data-v="1500" aria-pressed="false">Fast 1500</button>
+    </span></span>
+    <span><label>Reply</label><span class="seg" id="length">
+      <button data-v="long" aria-pressed="true">Long, with tools</button>
+      <button data-v="short" aria-pressed="false">Short</button>
+    </span></span>
+    <span><label>Runway, when text reaches the bottom</label><span class="seg" id="overflow">
+      <button data-v="page" aria-pressed="true">Page turn</button>
+      <button data-v="pill" aria-pressed="false">Stop + pill</button>
+      <button data-v="glide" aria-pressed="false">Hand off to glide</button>
+    </span></span>
+    <span><label>After the turn</label><span class="seg" id="after">
+      <button data-v="keep" aria-pressed="false">Keep</button>
+      <button data-v="trim" aria-pressed="true">Trim off-screen</button>
+      <button data-v="settle" aria-pressed="false">Settle on type</button>
+      <button data-v="both" aria-pressed="false">Trim + settle</button>
+    </span></span>
+    <span><label>Reduce motion</label><span class="seg" id="rm">
+      <button data-v="off">Off</button>
+      <button data-v="snap">Snap</button>
+      <button data-v="fade">Fade</button>
+      <button data-v="skip">Snap, no settle</button>
+    </span></span>
+    <span><label>Outline the runway</label><span class="seg" id="outline">
+      <button data-v="on" aria-pressed="true">On</button>
+      <button data-v="off" aria-pressed="false">Off</button>
+    </span></span>
+  </div>
+
+  <div class="cols">
+    <div class="panel today" data-policy="today">
+      <h3>1 · Today</h3>
+      <p class="why">Pinned to the bottom. Each wrapped line moves the whole history up by one line height, right away.</p>
+      <div class="frame"><div class="scroller"></div><button class="pill">↓ More below</button></div>
+      <div class="meter"><span>moves <b class="moves">0</b></span><span class="state"></span></div>
+    </div>
+    <div class="panel" data-policy="glide">
+      <h3>2 · Glide</h3>
+      <p class="why">Still follows the bottom, but eases there over about half a second. No jumps, a slow steady drift instead. The smallest change to the code.</p>
+      <div class="frame"><div class="scroller"></div><button class="pill">↓ More below</button></div>
+      <div class="meter"><span>moves <b class="moves">continuous</b></span><span class="state"></span></div>
+    </div>
+    <div class="panel pick" data-policy="runway">
+      <h3>3 · Runway (your idea)</h3>
+      <p class="why">On send, your message slides to the top and the turn reserves a screen of space under it. The reply fills downward and the history stays still until the text reaches the bottom.</p>
+      <div class="frame"><div class="scroller"></div><button class="pill">↓ More below</button></div>
+      <input class="composer" placeholder="Reply… (click here once the turn ends)" />
+      <div class="meter"><span>moves <b class="moves">0</b></span><span class="state"></span></div>
+    </div>
+  </div>
+
+  <section class="notes">
+    <h2>What to look for</h2>
+    <ul>
+      <li><b>Runway, page turn:</b> when the text reaches the bottom edge, one smooth scroll brings the last three lines up near the top, giving a new runway. That's about one move per screen of text.</li>
+      <li><b>Runway, stop + pill:</b> the history never moves by itself after the first slide. The reply keeps revealing below the edge, and the pill (or scrolling down) brings it into view. Calmest option, but you have to act to keep reading.</li>
+      <li><b>Tool cards</b> take up runway like text does. In a long agentic turn the runway fills with tool rows, then pages.</li>
+      <li><b>After the turn, Keep:</b> the space stays until your next send. Collapsing it the moment the turn ends would pull the view down, the same jump we're removing.</li>
+      <li><b>After the turn, Trim off-screen:</b> only space below the bottom edge is removed, so nothing you can see moves. Scroll up a little after the turn and scroll back down: the blank is gone.</li>
+      <li><b>After the turn, Settle on type:</b> click into the composer under the runway pane and the reply slides down to sit just above it.</li>
+      <li><b>Reduce motion</b> (mads follows the system setting or its own Appearance toggle): <b>Snap</b> makes every move instant, settle included. <b>Fade</b> dips the pane out for about 120ms, moves it, and dips it back in, so nothing visibly travels. <b>Snap, no settle</b> keeps the blank (trim still removes the off-screen part). Try Short + Trim + settle, then click the composer.</li>
+      <li><b>Unchanged in all three:</b> scrolling up still lets go, and scrolling back to the bottom picks it up again. Reduce motion swaps the smooth scrolls for instant ones.</li>
+    </ul>
+  </section>
+</div>
+
+<script>
+const HISTORY = [
+  ["user", "Why does the Changes tab strip push the prompt off screen?"],
+  ["agent", ["The strip's columns are sized by turn count with no cap, so in a long session they take the whole row and the context block wraps under it.", "Capping the columns at half the width and letting them scroll sideways keeps the prompt visible."]],
+  ["user", "Ok, do that. Keep the arrows."],
+  ["agent", ["Done — the columns get at most 50% of the strip and the arrows step one turn at a time. The window shifts by one column when the selection hits an edge.", "I ran the strip tests and the ui-smoke suite; both pass."]],
+];
+const USER_MSG = "The new-line jumps while a reply streams are annoying. What would fix them?";
+const SCRIPT = [
+  { t: "think", ms: 1100 },
+  { t: "text", blocks: [
+    ["p", "The jumps come from the scroll lock, not the pacer. Every time a paced word wraps onto a new line the stream grows by one line height, and the lock sets scrollTop straight to the bottom in the same frame, so everything you were reading shifts up at once."],
+  ]},
+  { t: "tool", title: "Read ui/src/conversation/useStickToBottom.ts", ms: 900 },
+  { t: "text", blocks: [
+    ["p", "That matches what the hook does. It re-pins on every ResizeObserver callback and every commit, with no easing, so there are three ways to soften it:"],
+    ["li", "ease the follow, so the view drifts toward the tail instead of snapping;"],
+    ["li", "reserve space below the newest message, so growth fills empty room and nothing above it moves;"],
+    ["li", "or move only in larger steps, once per screen, rather than once per line."],
+    ["p", "The second and third combine well: reserve a screen of runway when the turn starts, and when the text reaches the bottom edge turn one page in a single smooth scroll that keeps the last few lines in view for context."],
+  ]},
+  { t: "tool", title: "Run vitest useStickToBottom", ms: 1100 },
+  { t: "text", blocks: [
+    ["p", "The existing tests pin the follow behaviour at the tail, so whichever policy we pick needs new cases: the runway kept after the turn ends, the scroll-up release still winning, and reduce motion turning the smooth scrolls into instant ones. I'd keep the hook's public shape and swap only the pin strategy behind it."],
+    ["p", "One open question is what the runway anchors to in a long agentic turn: the user's message once, or each new block of prose after a run of tool calls."],
+  ]},
+];
+
+const SHORT = [
+  { t: "think", ms: 900 },
+  { t: "text", blocks: [["p", "It's the scroll lock: every wrapped line re-pins the view to the bottom with no easing. Reserving space under your message would stop it."]] },
+];
+let script = SCRIPT;
+// Reduce motion: off, or how the runway's moves happen under it.
+//   snap  — every move is instant (settle included)
+//   fade  — the pane dips out (~120ms), moves, dips back in; no visible travel
+//   skip  — moves snap, but settle doesn't happen at all (trim still does)
+let rm = matchMedia("(prefers-reduced-motion: reduce)").matches ? "snap" : "off";
+const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+let overflowMode = "page";
+let afterMode = "trim";
+
+class Panel {
+  constructor(root) {
+    this.root = root;
+    this.policy = root.dataset.policy;
+    this.sc = root.querySelector(".scroller");
+    this.pill = root.querySelector(".pill");
+    this.movesEl = root.querySelector(".moves");
+    this.stateEl = root.querySelector(".state");
+    this.pill.onclick = () => this.pageTurn();
+    this.composer = root.querySelector(".composer");
+    this.composer?.addEventListener("focus", () => this.settle());
+    this.sc.addEventListener("scroll", () => this.trim());
+    this.reset();
+  }
+  reset() {
+    this.sc.innerHTML = "";
+    for (const [role, body] of HISTORY) {
+      const m = document.createElement("div");
+      m.className = "msg " + role + (role === "agent" ? " prose" : "");
+      if (role === "user") m.textContent = body;
+      else for (const p of body) { const e = document.createElement("p"); e.textContent = p; m.appendChild(e); }
+      this.sc.appendChild(m);
+    }
+    this.turn = null; this.inner = null; this.cur = null; this.ended = false;
+    this.moves = 0; this.anim = null; this.paused = false; this.gliding = this.policy === "glide";
+    this.pos = 0; this.pill.classList.remove("on");
+    this.sc.scrollTop = this.sc.scrollHeight; this.pos = this.sc.scrollTop;
+    this.show();
+  }
+  show() {
+    if (this.policy !== "glide") this.movesEl.textContent = this.moves;
+    this.stateEl.textContent = this.paused ? "paused at edge" : this.gliding && this.policy === "runway" ? "gliding" : "";
+  }
+  // --- content ---
+  startTurn() {
+    const u = document.createElement("div"); u.className = "msg user"; u.textContent = USER_MSG;
+    this.turn = document.createElement("div"); this.turn.className = "turn" + (this.policy === "runway" ? " runway" : "");
+    this.inner = document.createElement("div"); this.inner.className = "prose";
+    this.turn.appendChild(u); this.turn.appendChild(this.inner);
+    this.sc.appendChild(this.turn);
+    if (this.policy === "runway") {
+      this.turn.style.minHeight = this.sc.clientHeight - 8 + "px";
+      this.animateTo(this.turn.offsetTop - 12);
+    } else this.grew();
+  }
+  thinking(on) {
+    if (on) { this.th = document.createElement("div"); this.th.className = "thinking"; this.th.textContent = "Thinking…"; this.inner.appendChild(this.th); }
+    else this.th?.remove();
+    this.grew();
+  }
+  tool(title, running) {
+    if (running) { this.tc = document.createElement("div"); this.tc.className = "tool running"; this.tc.textContent = title; this.inner.appendChild(this.tc); }
+    else this.tc.classList.remove("running");
+    this.grew();
+  }
+  block(tag) {
+    if (tag === "li") {
+      if (!this.ul || this.lastTag !== "li") { this.ul = document.createElement("ul"); this.inner.appendChild(this.ul); }
+      this.cur = document.createElement("li"); this.ul.appendChild(this.cur);
+    } else { this.cur = document.createElement("p"); this.inner.appendChild(this.cur); }
+    this.lastTag = tag;
+  }
+  word(w) {
+    this.cur.textContent += (this.cur.textContent ? " " : "") + w;
+    this.grew();
+  }
+  endTurn() {
+    this.ended = true;
+    const d = document.createElement("div"); d.className = "doneMark"; d.textContent = "— turn ended —";
+    this.inner.appendChild(d);
+    this.trim();
+  }
+  // After the turn: remove reserved space that's below the viewport. Nothing visible moves.
+  trim() {
+    if (this.policy !== "runway" || !this.ended || this.anim || !(afterMode === "trim" || afterMode === "both")) return;
+    const turnTop = this.turn.offsetTop, tailTop = this.tail() - turnTop;
+    const keepTo = Math.max(tailTop + 8, this.sc.scrollTop + this.sc.clientHeight - turnTop);
+    if (keepTo < this.turn.offsetHeight - 1) this.turn.style.minHeight = keepTo + "px";
+  }
+  // After the turn: on composer focus, collapse the space; the reply slides down to the composer.
+  settle() {
+    if (this.policy !== "runway" || !this.ended || this.anim || !(afterMode === "settle" || afterMode === "both")) return;
+    const turnTop = this.turn.offsetTop, from = this.turn.offsetHeight, to = this.tail() - turnTop + 8;
+    if (from - to < 2) return;
+    this.moves++; this.show();
+    if (rm === "skip") return;
+    const land = () => { this.turn.style.minHeight = to + "px"; this.sc.scrollTop = this.sc.scrollHeight - this.sc.clientHeight; };
+    if (rm === "fade") return this.fadeMove(land);
+    if (rm === "snap") return land();
+    const dur = 420, t0 = performance.now();
+    this.anim = true;
+    const step = (now) => {
+      const k = dur ? Math.min(1, (now - t0) / dur) : 1;
+      this.turn.style.minHeight = from + (to - from) * ease(k) + "px";
+      this.sc.scrollTop = this.sc.scrollHeight - this.sc.clientHeight;
+      if (k < 1) requestAnimationFrame(step); else this.anim = null;
+    };
+    requestAnimationFrame(step);
+  }
+  // Reduce motion, fade: dissolve out, move instantly, dissolve back in.
+  fadeMove(move) {
+    this.anim = true;
+    this.sc.style.transition = "opacity 120ms ease-out";
+    this.sc.style.opacity = "0";
+    setTimeout(() => {
+      move();
+      this.sc.style.opacity = "1";
+      setTimeout(() => { this.anim = null; this.pos = this.sc.scrollTop; this.grew(); }, 130);
+    }, 130);
+  }
+  // --- scroll policies ---
+  tail() {
+    const r = this.inner.getBoundingClientRect(), s = this.sc.getBoundingClientRect();
+    return r.bottom - s.top + this.sc.scrollTop;
+  }
+  grew() {
+    if (this.policy === "today") {
+      const before = this.sc.scrollTop;
+      this.sc.scrollTop = this.sc.scrollHeight;
+      if (this.sc.scrollTop !== before) { this.moves++; this.show(); }
+      return;
+    }
+    if (this.policy !== "runway" || !this.inner || this.anim || this.gliding) return;
+    const edge = this.sc.scrollTop + this.sc.clientHeight - 16;
+    if (this.tail() <= edge) return;
+    if (overflowMode === "page") this.pageTurn();
+    else if (overflowMode === "pill") { if (!this.paused) { this.paused = true; this.pill.classList.add("on"); this.show(); } }
+    else { this.gliding = true; this.pos = this.sc.scrollTop; this.show(); }
+  }
+  pageTurn() {
+    // Bring the last ~3 lines near the top; grow the runway so there's room to.
+    const target = Math.max(this.sc.scrollTop, this.tail() - 3 * 20 - 12);
+    const need = target + this.sc.clientHeight - this.turn.offsetTop;
+    this.turn.style.minHeight = need + "px";
+    this.paused = false; this.pill.classList.remove("on");
+    this.animateTo(target);
+  }
+  animateTo(target) {
+    this.moves++; this.show();
+    if (rm === "fade") return this.fadeMove(() => (this.sc.scrollTop = target));
+    if (rm !== "off") { this.sc.scrollTop = target; return; }
+    const from = this.sc.scrollTop, dur = 420, t0 = performance.now();
+    this.anim = true;
+    const step = (now) => {
+      const k = Math.min(1, (now - t0) / dur);
+      this.sc.scrollTop = from + (target - from) * ease(k);
+      if (k < 1) requestAnimationFrame(step);
+      else { this.anim = null; this.pos = this.sc.scrollTop; this.grew(); }
+    };
+    requestAnimationFrame(step);
+  }
+  frame(dt) {
+    if (!this.gliding || this.anim) return;
+    const target = this.sc.scrollHeight - this.sc.clientHeight;
+    const diff = target - this.pos;
+    if (diff <= 0.25) return;
+    this.pos += rm !== "off" ? diff : diff * (1 - Math.exp(-dt * 5));
+    this.sc.scrollTop = this.pos;
+  }
+}
+
+const panels = [...document.querySelectorAll(".panel")].map((p) => new Panel(p));
+const each = (fn) => panels.forEach(fn);
+let wpm = 600, runId = 0;
+
+function wire(id, fn) {
+  const seg = document.getElementById(id);
+  seg.addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    seg.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    fn(b.dataset.v);
+  });
+}
+wire("pace", (v) => (wpm = +v));
+wire("overflow", (v) => (overflowMode = v));
+wire("length", (v) => (script = v === "short" ? SHORT : SCRIPT));
+document.querySelectorAll("#rm button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === rm)));
+wire("rm", (v) => (rm = v));
+wire("after", (v) => (afterMode = v));
+wire("outline", (v) => document.body.classList.toggle("showRunway", v === "on"));
+document.body.classList.add("showRunway");
+
+const wait = (ms, id) => new Promise((res) => setTimeout(() => res(id === runId), ms));
+
+async function run() {
+  const id = ++runId;
+  each((p) => p.reset());
+  await wait(300, id);
+  each((p) => p.startTurn());
+  await wait(500, id);
+  for (const seg of script) {
+    if (id !== runId) return;
+    if (seg.t === "think") { each((p) => p.thinking(true)); if (!(await wait(seg.ms, id))) return; each((p) => p.thinking(false)); }
+    if (seg.t === "tool") { each((p) => p.tool(seg.title, true)); if (!(await wait(seg.ms, id))) return; each((p) => p.tool(seg.title, false)); }
+    if (seg.t === "text") {
+      for (const [tag, text] of seg.blocks) {
+        each((p) => p.block(tag));
+        for (const w of text.split(" ")) {
+          if (!(await wait(60000 / wpm, id))) return;
+          each((p) => p.word(w));
+        }
+      }
+    }
+  }
+  each((p) => p.endTurn());
+}
+document.getElementById("play").onclick = run;
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  each((p) => p.frame(dt));
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>

@@ -28,8 +28,9 @@ const watched = () => new Set(observers.flatMap((o) => [...o.targets]));
 let height = 2000;
 let client = 500;
 let top = 0;
+let beforePin: ((el: HTMLDivElement) => boolean | void) | undefined;
 function Host({ rows, onStick }: { rows: number; onStick?: (s: StickToBottom<HTMLDivElement>) => void }) {
-  const stick = useStickToBottom();
+  const stick = useStickToBottom<HTMLDivElement>({ beforePin: (el) => beforePin?.(el) });
   onStick?.(stick);
   return (
     <div data-testid="scroller" ref={stick.ref} onScroll={stick.onScroll}>
@@ -61,9 +62,13 @@ describe("useStickToBottom", () => {
     height = 2000;
     client = 500;
     top = 0;
+    beforePin = undefined;
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete document.documentElement.dataset.motion;
+  });
 
   it("follows content that grows without the host re-rendering", () => {
     mount();
@@ -159,6 +164,89 @@ describe("useStickToBottom", () => {
     height = 2900;
     resize();
     expect(top).toBe(400);
+  });
+
+  it("shows its mode on the scroller", () => {
+    let stick!: StickToBottom<HTMLDivElement>;
+    const { el } = mount(1, (s) => (stick = s));
+    expect(el.dataset.stick).toBe("follow");
+    scrollTo(el, 200);
+    expect(el.dataset.stick).toBe("free");
+    stick.hold(true);
+    expect(el.dataset.stick).toBe("held");
+    scrollTo(el, 1500);
+    expect(el.dataset.stick).toBe("held");
+    stick.hold(false);
+    expect(el.dataset.stick).toBe("follow");
+  });
+
+  it("calls beforePin before every pin, in every mode, so the bottom is sized first", () => {
+    const seen: string[] = [];
+    const { el } = mount();
+    beforePin = (e) => {
+      seen.push(e.dataset.stick!);
+      height = 2400; // the spacer grows
+    };
+    resize();
+    expect(top).toBe(2400);
+    scrollTo(el, 200);
+    resize();
+    expect(seen).toEqual(["follow", "free"]);
+    expect(top).toBe(200);
+  });
+
+  describe("a move beforePin asks to be smooth", () => {
+    let calls: ScrollToOptions[];
+    const withScrollTo = (el: HTMLElement) => {
+      calls = [];
+      el.scrollTo = ((o: ScrollToOptions) => calls.push(o)) as typeof el.scrollTo;
+    };
+
+    it("glides down to the new bottom, once per target", () => {
+      const { el } = mount();
+      withScrollTo(el);
+      beforePin = () => true;
+      height = 2400;
+      resize();
+      resize();
+      expect(calls).toEqual([{ top: 1900, behavior: "smooth" }]);
+      expect(top).toBe(1500);
+    });
+
+    it("keeps gliding to a bottom that moves on while in flight, without letting go", () => {
+      const { el } = mount();
+      withScrollTo(el);
+      beforePin = () => true;
+      height = 2400;
+      resize();
+      beforePin = undefined;
+      scrollTo(el, 1700); // the glide's own scroll event
+      height = 2500;
+      resize();
+      expect(calls.at(-1)).toEqual({ top: 2000, behavior: "smooth" });
+      expect(el.dataset.stick).toBe("follow");
+    });
+
+    it("is instant under reduce motion", () => {
+      document.documentElement.dataset.motion = "reduce";
+      const { el } = mount();
+      withScrollTo(el);
+      beforePin = () => true;
+      height = 2400;
+      resize();
+      expect(calls).toEqual([]);
+      expect(top).toBe(2400);
+    });
+
+    it("is instant when the bottom rose (content shrank)", () => {
+      const { el } = mount();
+      withScrollTo(el);
+      beforePin = () => true;
+      height = 1800;
+      resize();
+      expect(calls).toEqual([]);
+      expect(top).toBe(1800);
+    });
   });
 
   it("disconnects when the scroller unmounts", () => {
