@@ -99,7 +99,7 @@
    can never scroll off screen. The dock itself is the stream's sibling, not
    its child, so it spans the full pane and the scrollbar stops at its top
    edge. Each child keeps its own surface; the strip itself is transparent
-   over the stream. */
+   over the stream, except for its band of text rows (.pinnedBand). */
 /* The reading runway's reserved space (useRunway sets its height). */
 .runwaySpacer {
   flex: none;
@@ -118,6 +118,20 @@
 
 .pinned:empty {
   display: none;
+}
+
+/* The working line, queued messages and Show all: solid --bg0, the pane's
+   own colour, so it's invisible at the bottom of the stream and hides the
+   conversation scrolled up behind it. Bleeds over the strip's side and
+   bottom padding so no text shows around it; the approval pill and running
+   stack above keep floating on their own surfaces. */
+.pinnedBand {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-3));
+  padding: var(--space-2) var(--space-4) var(--space-3);
+  background: var(--bg0);
 }
 
 /* The queue's own inset is for inside the composer; above the dock the

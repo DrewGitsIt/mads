@@ -1598,25 +1598,32 @@ export function ConversationTab({
                       openSubagent(model.toolUseId, model.description ?? "Subagent", model.subagentType)
                     }
                   />
-                  {working && (
-                    <WorkingIndicator
-                      tool={working.tool}
-                      activity={currentActivity}
-                      since={agentSince ?? conv.state.turn.startedAt}
-                    />
-                  )}
-                  <QueuedMessages
-                    queued={queuedMessages}
-                    onCancel={handleCancelQueued}
-                    className={styles.queuedAbove}
-                  />
-                  {showAll.present && (
-                    // The paced reveal trails the agent by more than a couple of
-                    // seconds' reading — offer to skip to the end of it.
-                    <div className={styles.revealAll} data-leaving={showAll.leaving || undefined}>
-                      <Chip tone="info" onClick={() => reveal.revealAll()}>
-                        Show all
-                      </Chip>
+                  {(working || queuedMessages.length > 0 || showAll.present) && (
+                    // The strip's text rows sit on a solid band of the pane's
+                    // own background: scrolled up, the conversation passes
+                    // behind them instead of through them.
+                    <div className={styles.pinnedBand} data-testid="pinned-band">
+                      {working && (
+                        <WorkingIndicator
+                          tool={working.tool}
+                          activity={currentActivity}
+                          since={agentSince ?? conv.state.turn.startedAt}
+                        />
+                      )}
+                      <QueuedMessages
+                        queued={queuedMessages}
+                        onCancel={handleCancelQueued}
+                        className={styles.queuedAbove}
+                      />
+                      {showAll.present && (
+                        // The paced reveal trails the agent by more than a couple of
+                        // seconds' reading — offer to skip to the end of it.
+                        <div className={styles.revealAll} data-leaving={showAll.leaving || undefined}>
+                          <Chip tone="info" onClick={() => reveal.revealAll()}>
+                            Show all
+                          </Chip>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

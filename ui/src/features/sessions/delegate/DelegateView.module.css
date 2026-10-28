@@ -93,6 +93,9 @@
   bottom: 0;
   z-index: 40;
   padding: var(--space-3) var(--space-4) 0;
+  /* Solid in the pane's own colour, as the conversation's .pinnedBand, so
+     the stream scrolls behind the indicator rather than through it. */
+  background: var(--bg0);
 }
 
 .note {
