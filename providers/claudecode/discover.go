@@ -173,6 +173,7 @@ func toModels(wire []wireModel) []provider.Model {
 		if name == "" {
 			name = m.Value
 		}
+		name = withResolvedVersion(name, m)
 		models = append(models, provider.Model{
 			ID:      m.Value,
 			Name:    name,
@@ -180,4 +181,54 @@ func toModels(wire []wireModel) []provider.Model {
 		})
 	}
 	return models
+}
+
+// withResolvedVersion appends the version an alias currently resolves to
+// when the harness's label leaves it out: some claude releases name the
+// alias "Opus", others "Opus 5.5", and the picker should read the same on
+// either. A label that already carries a digit is taken as versioned and
+// kept, and "default" is skipped — a bare version says nothing without the
+// family it belongs to. ID is untouched; this is display only.
+func withResolvedVersion(name string, m wireModel) string {
+	if m.Value == "default" || strings.ContainsAny(name, "0123456789") {
+		return name
+	}
+	if v := modelVersion(m.ResolvedModel); v != "" {
+		return name + " " + v
+	}
+	return name
+}
+
+// modelVersion reads the dotted version off a concrete model id:
+// "claude-opus-5-5" → "5.5", "claude-fable-5-1[1m]" → "5.1". Trailing
+// numeric segments make the version; a date stamp ("-20251001") is not part
+// of it. An id with no version tail yields "".
+func modelVersion(id string) string {
+	if i := strings.IndexByte(id, '['); i >= 0 {
+		id = id[:i]
+	}
+	parts := strings.Split(id, "-")
+	if n := len(parts); n > 0 && len(parts[n-1]) == 8 && isDigits(parts[n-1]) {
+		parts = parts[:n-1]
+	}
+	start := len(parts)
+	for start > 0 && isDigits(parts[start-1]) {
+		start--
+	}
+	if start == len(parts) || start == 0 {
+		return ""
+	}
+	return strings.Join(parts[start:], ".")
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
