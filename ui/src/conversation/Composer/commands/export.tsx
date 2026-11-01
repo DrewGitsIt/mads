@@ -3,19 +3,45 @@ import type { CommandApi, CommandDescriptor } from "./types";
 
 type Format = "md" | "json";
 
-/** Saves a file via the router's attachment URL — works in the browser and Electron. */
-function download(url: string) {
+/** The name in `Content-Disposition: attachment; filename="…"` (Go's %q quoting). */
+export function dispositionFilename(header: string | null): string {
+  const m = header?.match(/filename="((?:[^"\\]|\\.)*)"/);
+  return m ? m[1].replace(/\\(.)/g, "$1") : "";
+}
+
+/**
+ * Fetches the export and saves it from a blob. Not a plain <a download>
+ * pointing at the Router: that's a navigation, which sends no Origin, and
+ * the Router refuses an Origin-less request from another localhost page —
+ * so from the UI dev server the download never arrived. A fetch carries
+ * Origin like every other API call. Works in the browser and Electron.
+ */
+async function download(api: CommandApi, url: string) {
+  let blob: Blob;
+  let name: string;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`the Router answered ${res.status}`);
+    name = dispositionFilename(res.headers.get("Content-Disposition"));
+    blob = await res.blob();
+  } catch (err) {
+    api.fail(`Couldn't export this conversation: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  const href = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url;
-  a.download = "";
+  a.href = href;
+  a.download = name;
   a.rel = "noopener";
   document.body.appendChild(a);
   a.click();
   a.remove();
+  // The click has started the save; the blob URL isn't needed after it.
+  setTimeout(() => URL.revokeObjectURL(href), 0);
 }
 
-function start(api: CommandApi, format: Format) {
-  download(api.ctx.routerClient.exportSessionUrl(api.ctx.sessionId, format));
+function start(api: CommandApi, format: Format): Promise<void> {
+  return download(api, api.ctx.routerClient.exportSessionUrl(api.ctx.sessionId, format));
 }
 
 /**
@@ -34,7 +60,7 @@ export const exportCommand: CommandDescriptor = {
         api.fail(`Unknown export format "${args.trim()}" (use md or json)`);
         return;
       }
-      start(api, arg);
+      await start(api, arg);
       return;
     }
     const { routerClient } = api.ctx;
@@ -45,14 +71,14 @@ export const exportCommand: CommandDescriptor = {
       // Can't read the preference: fall through to asking.
     }
     if (saved === "md" || saved === "json") {
-      start(api, saved);
+      await start(api, saved);
       return;
     }
     api.openCard((close) => (
       <ExportCard
         onDownload={async (format, remember) => {
           close();
-          start(api, format);
+          void start(api, format);
           if (!remember) return;
           try {
             // PUT /config replaces the row, so read-modify-write.

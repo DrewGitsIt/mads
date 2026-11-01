@@ -48,6 +48,12 @@ var loopbackHosts = map[string]bool{"localhost": true, "127.0.0.1": true, "::1":
 type Guard struct {
 	origins map[string]bool
 	name    string
+	// sameSiteImages lets another localhost page load images without an
+	// Origin — only when such a page is expected at all (an extra origin,
+	// i.e. the opted-in dev server, which shows attachments from the
+	// Router). Otherwise no same-site page is legitimate, and an image
+	// would still reach every GET route.
+	sameSiteImages bool
 }
 
 // New returns a guard for a service called name (for its log lines)
@@ -64,6 +70,7 @@ func New(name, port string, extraOrigins []string) *Guard {
 	for _, o := range extraOrigins {
 		if n, err := NormalizeOrigin(o); err == nil {
 			g.origins[n] = true
+			g.sameSiteImages = true
 		}
 	}
 	return g
@@ -142,8 +149,8 @@ func (g *Guard) Check(r *http.Request) string {
 	// request that leaves Origin out — an <img>, a link, a frame — from
 	// another page. That last kind is refused, whether the page is another
 	// site or another localhost port ("same-site": the port doesn't change
-	// the site), except an image: a dev-server page shows attachments from
-	// the Router, and an image can't change anything or be read back.
+	// the site), except an image when a dev server is allowed: its page
+	// shows attachments from the Router, and an image can't be read back.
 	site := r.Header.Values("Sec-Fetch-Site")
 	switch {
 	case len(site) == 0:
@@ -155,7 +162,7 @@ func (g *Guard) Check(r *http.Request) string {
 	case "none", "same-origin":
 		return ""
 	case "same-site":
-		if (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
+		if g.sameSiteImages && (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
 			strings.EqualFold(r.Header.Get("Sec-Fetch-Dest"), "image") {
 			return ""
 		}

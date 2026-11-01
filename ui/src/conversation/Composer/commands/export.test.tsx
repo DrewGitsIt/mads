@@ -5,16 +5,34 @@ import { FakeRouterClient, fixtureConfig } from "../../../router/fixtures";
 import { exportCommand } from "./export";
 import type { CommandApi } from "./types";
 
+// The URLs fetched, in order — each export is a fetch of the Router's
+// export URL, then a click on a blob link carrying the server's filename.
 let clicked: string[];
+let saved: { name: string; href: string }[];
+let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   clicked = [];
+  saved = [];
+  fetchMock = vi.fn(async (url: string) => {
+    clicked.push(url);
+    return new Response("# chat", {
+      status: 200,
+      headers: { "Content-Disposition": 'attachment; filename="My \\"chat\\" 2026-11-01.md"' },
+    });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:mads/1");
+  vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
     this: HTMLAnchorElement,
   ) {
-    clicked.push(this.getAttribute("href") ?? "");
+    saved.push({ name: this.download, href: this.getAttribute("href") ?? "" });
   });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 function setup(exportFormat: "" | "md" | "json") {
   const client = new FakeRouterClient();
@@ -53,6 +71,20 @@ describe("/export", () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  it("saves the fetched file under the Router's filename, never linking to the Router itself", async () => {
+    const { api } = setup("md");
+    await exportCommand.execute({ args: "" }, api);
+    expect(saved).toEqual([{ name: 'My "chat" 2026-11-01.md', href: "blob:mads/1" }]);
+  });
+
+  it("says so when the Router refuses", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("forbidden", { status: 403 }));
+    const { api } = setup("md");
+    await exportCommand.execute({ args: "" }, api);
+    expect(api.fail).toHaveBeenCalledWith(expect.stringContaining("403"));
+    expect(saved).toEqual([]);
+  });
+
   it("rejects an invalid argument", async () => {
     const { api } = setup("");
     await exportCommand.execute({ args: "pdf" }, api);
@@ -85,7 +117,7 @@ describe("/export", () => {
     render(<>{card()!(vi.fn())}</>);
     fireEvent.click(screen.getByLabelText("Always use this format"));
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
-    expect(clicked).toEqual([url("md")]);
+    await waitFor(() => expect(clicked).toEqual([url("md")]));
     expect(update).not.toHaveBeenCalled();
   });
 });

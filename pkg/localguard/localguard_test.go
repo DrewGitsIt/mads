@@ -122,8 +122,23 @@ func TestCheckRefusesAbsoluteForm(t *testing.T) {
 	}
 }
 
+func TestSameSiteImageOnlyWithADevServer(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/capabilities/x/diagnose", nil)
+	r.Host = "127.0.0.1:17373"
+	r.Header.Set("Sec-Fetch-Site", "same-site")
+	r.Header.Set("Sec-Fetch-Dest", "image")
+	// A session child or the Data Service, or the Router without a dev
+	// server: no same-site page is legitimate, so not even an image.
+	if New("test", "17373", nil).Check(r) == "" {
+		t.Fatal("same-site image accepted with no extra origin")
+	}
+	if reason := New("test", "17373", DevServerOrigins).Check(r); reason != "" {
+		t.Fatalf("same-site image refused with the dev server allowed: %s", reason)
+	}
+}
+
 func TestSameSiteImageNeedsGET(t *testing.T) {
-	g := New("test", "17373", nil)
+	g := New("test", "17373", DevServerOrigins)
 	r := httptest.NewRequest(http.MethodPost, "/x", nil)
 	r.Host = "localhost:17373"
 	r.Header.Set("Sec-Fetch-Site", "same-site")
