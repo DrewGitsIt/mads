@@ -234,6 +234,12 @@ func (s *server) proxyTo(w http.ResponseWriter, r *http.Request, addr, childPath
 	r2 := r.Clone(r.Context())
 	r2.URL.Path = childPath
 	r2.URL.RawPath = ""
+	// The browser's own headers stop here: localguard has already checked
+	// them at the Router's door, and a child accepts no browser origin at
+	// all — passing them on would refuse the app's own messages.
+	for _, h := range []string{"Origin", "Referer", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User"} {
+		r2.Header.Del(h)
+	}
 	proxy.ServeHTTP(w, r2)
 }
 

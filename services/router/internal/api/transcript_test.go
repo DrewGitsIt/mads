@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -168,6 +169,46 @@ func newTestServerWithRealSession(t *testing.T) (*httptest.Server, string) {
 	srv := httptest.NewServer(api.New(testOptions(t, data, sup)))
 	t.Cleanup(srv.Close)
 	return srv, base
+}
+
+// TestProxiedRoutesTakeTheAppsBrowserRequests: routes the Router passes
+// through to a session child (proxyTo) must not carry the browser's Origin
+// on — the child's localguard allows no browser origin, so it refused the
+// app's own messages (a page's same-origin POST always sends Origin).
+func TestProxiedRoutesTakeTheAppsBrowserRequests(t *testing.T) {
+	srv, _ := newTestServerWithRealSession(t)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "browser-proxy", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	id := decodeJSON[struct {
+		Session contracts.Session `json:"session"`
+	}](t, resp).Session.ID
+
+	browser := func(method, path, body string) int {
+		req, err := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		// What the UI dev server's page sends (testOptions allows its origin).
+		req.Header.Set("Origin", "http://localhost:5173")
+		req.Header.Set("Sec-Fetch-Site", "same-site")
+		req.Header.Set("Sec-Fetch-Mode", "cors")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = res.Body.Close()
+		return res.StatusCode
+	}
+	if code := browser(http.MethodPost, "/sessions/"+id+"/messages", `{"text":"hi"}`); code != http.StatusAccepted {
+		t.Fatalf("send from a browser page = %d, want 202", code)
+	}
+	if code := browser(http.MethodGet, "/sessions/"+id+"/transcript", ""); code != http.StatusOK {
+		t.Fatalf("transcript from a browser page = %d, want 200", code)
+	}
 }
 
 // TestSessionTranscriptProxiesLiveChild is the topology test for the

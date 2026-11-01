@@ -16,6 +16,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localguard"
 	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/testleakcheck"
 	"github.com/drewkidwell/mads/pkg/vault"
@@ -132,6 +133,9 @@ func testOptions(t *testing.T, data *dataclient.Client, sup *supervisor.Supervis
 		Version:     "test",
 		Registry:    testRegistry(t),
 		Attachments: attachments.New(t.TempDir()),
+		// As if the Router were started with the dev server allowed
+		// (-allowed-origins): the CORS tests send its origin.
+		OriginAllowed: localguard.New("router", "", localguard.DevServerOrigins).OriginAllowed,
 	}
 }
 

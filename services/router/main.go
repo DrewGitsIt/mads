@@ -208,7 +208,7 @@ func newIdentity(uiDist string) identity {
 func main() {
 	routerStart := time.Now()
 	addr := flag.String("addr", "localhost:17373", "listen address")
-	allowedOrigins := flag.String("allowed-origins", strings.Join(localguard.DevServerOrigins, ","), "comma-separated browser origins, besides the Router's own, allowed to call it (the UI dev server)")
+	allowedOrigins := flag.String("allowed-origins", "", "comma-separated browser origins, besides the Router's own, allowed to call it — e.g. the Vite dev server: "+strings.Join(localguard.DevServerOrigins, ","))
 	dataURL := flag.String("data-url", "http://localhost:17374", "Data Service base URL")
 	sessionCmd := flag.String("session-cmd", defaultChildCmd("session", "go run ./services/session"), "command to spawn a Session Service child")
 	pipelineCmd := flag.String("pipeline-cmd", defaultChildCmd("pipeline", "go run ./services/pipeline"), "command to spawn a Pipeline Engine child")

@@ -35,7 +35,10 @@ import (
 )
 
 // DevServerOrigins are the Vite dev server's origins (ui/, `npm run dev`),
-// whose page calls the Router cross-origin during UI development.
+// whose page calls the Router cross-origin during UI development. Not
+// allowed by default — 5173 is every Vite project's default port, so any
+// dev server an agent starts would get the Router's API. Opt in with the
+// Router's -allowed-origins.
 var DevServerOrigins = []string{"http://localhost:5173", "http://127.0.0.1:5173", "http://[::1]:5173"}
 
 // loopbackHosts are the names a legitimate local caller puts in Host.
@@ -104,16 +107,24 @@ func isPort(s string) bool {
 	if s == "" || len(s) > 5 {
 		return false
 	}
+	n := 0
 	for _, c := range s {
 		if c < '0' || c > '9' {
 			return false
 		}
+		n = n*10 + int(c-'0')
 	}
-	return true
+	return n > 0 && n <= 65535
 }
 
 // Check returns why r must be refused, or "" to let it through.
 func (g *Guard) Check(r *http.Request) string {
+	// Absolute-form (`POST http://host/path`) is what a client sends to a
+	// proxy, never a browser to a server; Go takes r.Host from it and drops
+	// the Host header, which would hide a rebinding page's name.
+	if r.URL.IsAbs() {
+		return "absolute-form request target"
+	}
 	if !HostAllowed(r.Host) {
 		return fmt.Sprintf("host %q is not this machine", r.Host)
 	}
@@ -126,17 +137,39 @@ func (g *Guard) Check(r *http.Request) string {
 		}
 		return ""
 	}
-	// No Origin: a program, a typed URL, or a browser request that leaves
-	// it out (an <img>, a top-level link). Browsers mark the last kind.
-	if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
-		return "cross-site browser request without an allowed origin"
+	// No Origin: a program (no Sec-Fetch-Site either), a typed URL or
+	// bookmark ("none"), the app's own page ("same-origin"), or a browser
+	// request that leaves Origin out — an <img>, a link, a frame — from
+	// another page. That last kind is refused, whether the page is another
+	// site or another localhost port ("same-site": the port doesn't change
+	// the site), except an image: a dev-server page shows attachments from
+	// the Router, and an image can't change anything or be read back.
+	site := r.Header.Values("Sec-Fetch-Site")
+	switch {
+	case len(site) == 0:
+		return ""
+	case len(site) > 1:
+		return "more than one Sec-Fetch-Site"
 	}
-	return ""
+	switch strings.ToLower(site[0]) {
+	case "none", "same-origin":
+		return ""
+	case "same-site":
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
+			strings.EqualFold(r.Header.Get("Sec-Fetch-Dest"), "image") {
+			return ""
+		}
+	}
+	return fmt.Sprintf("%s browser request without an allowed origin", strings.ToLower(site[0]))
 }
 
-// Wrap refuses with 403 whatever Check refuses, before next sees it.
+// Wrap refuses with 403 whatever Check refuses, before next sees it, and
+// tells browsers never to show a response inside another page's frame (a
+// framed mads app would be the user's own clicks working for that page).
 func (g *Guard) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
 		if reason := g.Check(r); reason != "" {
 			log.Printf("%s: refused %s %s: %s", g.name, r.Method, r.URL.Path, reason)
 			http.Error(w, "forbidden: mads only accepts requests from this machine's mads app ("+reason+")", http.StatusForbidden)

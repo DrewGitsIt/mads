@@ -16,7 +16,6 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
-	"github.com/drewkidwell/mads/pkg/localguard"
 	"github.com/drewkidwell/mads/pkg/preflight"
 	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/vault"
@@ -118,7 +117,7 @@ type Options struct {
 
 	// OriginAllowed says which browser pages CORS lets call the Router —
 	// the same list localguard enforces in front of it (main.go). Nil
-	// allows only the UI dev server, which is what tests send.
+	// grants none.
 	OriginAllowed func(origin string) bool
 }
 
@@ -127,7 +126,7 @@ type Options struct {
 func New(opts Options) http.Handler {
 	allowed := opts.OriginAllowed
 	if allowed == nil {
-		allowed = localguard.New("router", "", localguard.DevServerOrigins).OriginAllowed
+		allowed = func(string) bool { return false }
 	}
 	return withCORS(allowed, NewMux(opts))
 }
