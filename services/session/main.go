@@ -22,6 +22,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localguard"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/codexcli"
@@ -264,7 +265,8 @@ func main() {
 	// a moment later.
 	log.Printf("session: listening on %s", ln.Addr())
 
-	srv := &http.Server{Handler: api.New(r)}
+	// Only the Router and the agent's own tools call a session; none is a browser page.
+	srv := &http.Server{Handler: localguard.New("session", "", nil).Wrap(api.New(r))}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
 

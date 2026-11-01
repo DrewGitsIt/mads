@@ -16,6 +16,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localguard"
 	"github.com/drewkidwell/mads/pkg/preflight"
 	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/vault"
@@ -114,12 +115,21 @@ type Options struct {
 	Root      string
 	UIDist    string
 	StartedAt time.Time
+
+	// OriginAllowed says which browser pages CORS lets call the Router —
+	// the same list localguard enforces in front of it (main.go). Nil
+	// allows only the UI dev server, which is what tests send.
+	OriginAllowed func(origin string) bool
 }
 
 // New returns the Router's HTTP handler. See Options's doc for the
 // nil-tolerant behavior of individual fields.
 func New(opts Options) http.Handler {
-	return withCORS(NewMux(opts))
+	allowed := opts.OriginAllowed
+	if allowed == nil {
+		allowed = localguard.New("router", "", localguard.DevServerOrigins).OriginAllowed
+	}
+	return withCORS(allowed, NewMux(opts))
 }
 
 // NewMux builds the Router's route table without the CORS wrapper. Exported

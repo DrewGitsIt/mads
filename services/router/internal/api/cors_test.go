@@ -81,10 +81,17 @@ func TestCORSSimplePost(t *testing.T) {
 	}
 }
 
-func TestCORSPortVariation(t *testing.T) {
+// Only listed origins: the dev server in each loopback spelling, not any
+// localhost port — a dev server an agent starts is a localhost page too.
+func TestCORSOnlyListedOrigins(t *testing.T) {
 	srv := newTestServer(t)
 
-	for _, origin := range []string{"http://127.0.0.1:5173", "http://localhost:44123"} {
+	for origin, want := range map[string]bool{
+		"http://127.0.0.1:5173":  true,
+		"http://[::1]:5173":      true,
+		"http://localhost:44123": false,
+		"http://localhost:3000":  false,
+	} {
 		req, err := http.NewRequest(http.MethodGet, srv.URL+"/health", nil)
 		if err != nil {
 			t.Fatal(err)
@@ -97,8 +104,11 @@ func TestCORSPortVariation(t *testing.T) {
 		}
 		got := resp.Header.Get("Access-Control-Allow-Origin")
 		_ = resp.Body.Close()
-		if got != origin {
+		if want && got != origin {
 			t.Fatalf("origin %q: Access-Control-Allow-Origin = %q, want %q", origin, got, origin)
+		}
+		if !want && got != "" {
+			t.Fatalf("origin %q: Access-Control-Allow-Origin = %q, want none", origin, got)
 		}
 	}
 }

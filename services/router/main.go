@@ -24,6 +24,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localguard"
 	"github.com/drewkidwell/mads/pkg/preflight"
 	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/vault"
@@ -159,8 +160,8 @@ func buildProviderRegistry(madsHome string) (*provider.Registry, error) {
 	return providers, nil
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, attachmentStore *attachments.Store, fastModelFlagBaseURL string, models *modelcatalog.Catalog, routerURL string, ident identity) http.Handler {
-	return api.New(api.Options{
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, attachmentStore *attachments.Store, fastModelFlagBaseURL string, models *modelcatalog.Catalog, routerURL string, ident identity, guard *localguard.Guard) http.Handler {
+	return guard.Wrap(api.New(api.Options{
 		Data:                 data,
 		Sup:                  sup,
 		Jobs:                 jobs,
@@ -180,7 +181,8 @@ func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runne
 		Root:                 ident.root,
 		UIDist:               ident.uiDist,
 		StartedAt:            ident.startedAt,
-	})
+		OriginAllowed:        guard.OriginAllowed,
+	}))
 }
 
 // identity is what GET /health reports about this process's origin (see
@@ -206,6 +208,7 @@ func newIdentity(uiDist string) identity {
 func main() {
 	routerStart := time.Now()
 	addr := flag.String("addr", "localhost:17373", "listen address")
+	allowedOrigins := flag.String("allowed-origins", strings.Join(localguard.DevServerOrigins, ","), "comma-separated browser origins, besides the Router's own, allowed to call it (the UI dev server)")
 	dataURL := flag.String("data-url", "http://localhost:17374", "Data Service base URL")
 	sessionCmd := flag.String("session-cmd", defaultChildCmd("session", "go run ./services/session"), "command to spawn a Session Service child")
 	pipelineCmd := flag.String("pipeline-cmd", defaultChildCmd("pipeline", "go run ./services/pipeline"), "command to spawn a Pipeline Engine child")
@@ -282,10 +285,15 @@ func main() {
 
 	pf := preflight.New(preflight.Deps{Data: data, Providers: providers, MadsHome: *madsHome})
 
+	extraOrigins, err := localguard.ParseOrigins(*allowedOrigins)
+	if err != nil {
+		log.Fatalf("router: -allowed-origins: %v", err)
+	}
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatalf("router: listen %s: %v", *addr, err)
 	}
+	guard := localguard.New("router", localguard.PortOf(ln.Addr()), extraOrigins)
 
 	// Best-effort, never fatal if it fails: `mads update apply`'s Stop hook
 	// reads this to find and gracefully drain a locally-running Router
@@ -308,7 +316,7 @@ func main() {
 	// A launchpad draft that was attached to but never started leaves files
 	// no session will ever delete; a week is long enough to come back to it.
 	go attachmentStore.SweepDrafts(7 * 24 * time.Hour)
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), attachmentStore, *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist))}
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), attachmentStore, *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist), guard)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

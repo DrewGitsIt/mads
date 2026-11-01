@@ -2,12 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localguard"
 	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
@@ -31,7 +34,7 @@ func TestHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}))
+	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", nil)))
 	defer srv.Close()
 
 	resp, err := srv.Client().Get(srv.URL + "/health")
@@ -48,6 +51,62 @@ func TestHealth(t *testing.T) {
 	}
 	if body["service"] != "router" || body["status"] != "ok" {
 		t.Errorf("unexpected health body: %v", body)
+	}
+}
+
+// TestGuardRefusesForgedRequests: the Router as main() wires it refuses a
+// DNS-rebinding request and a blind cross-site POST before any handler runs
+// (POST /sessions would start an agent with the page's prompt), while the
+// same request from a local program reaches the handler.
+func TestGuardRefusesForgedRequests(t *testing.T) {
+	data := dataclient.New("http://localhost:0", "router")
+	sup := supervisor.New(data, nil, nil, nil)
+	reg := registryclient.New("")
+	jobs := job.New(data, fastmodel.New(fake.New(), fastmodel.Config{}), reg)
+	providers := provider.NewRegistry()
+	creds, err := credstore.Open(t.TempDir() + "/credentials.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", localguard.DevServerOrigins)))
+	defer srv.Close()
+
+	post := func(host string, headers map[string]string) int {
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/sessions", strings.NewReader(`{"opening_prompt":"run this"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "text/plain")
+		if host != "" {
+			req.Host = host
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if code := post("attacker.example:17373", map[string]string{"Origin": "http://attacker.example:17373", "Sec-Fetch-Site": "same-origin"}); code != http.StatusForbidden {
+		t.Errorf("DNS rebinding: %d, want 403", code)
+	}
+	if code := post("", map[string]string{"Origin": "https://attacker.example", "Sec-Fetch-Site": "cross-site"}); code != http.StatusForbidden {
+		t.Errorf("blind cross-site POST: %d, want 403", code)
+	}
+	if code := post("", map[string]string{"Origin": "http://localhost:3000", "Sec-Fetch-Site": "same-site"}); code != http.StatusForbidden {
+		t.Errorf("another local dev server: %d, want 403", code)
+	}
+	// A program: no browser headers. It gets past the guard to the handler
+	// (which fails on its own terms here — there's no Data Service).
+	if code := post("", nil); code == http.StatusForbidden {
+		t.Errorf("local program: 403, want the handler's answer")
+	}
+	if code := post("", map[string]string{"Origin": "http://localhost:5173", "Sec-Fetch-Site": "same-site"}); code == http.StatusForbidden {
+		t.Errorf("UI dev server: 403, want the handler's answer")
 	}
 }
 
@@ -86,7 +145,7 @@ func TestProvidersEndpointListsGoose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}))
+	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", nil)))
 	defer srv.Close()
 
 	resp, err := srv.Client().Get(srv.URL + "/providers")

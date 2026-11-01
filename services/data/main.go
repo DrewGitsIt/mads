@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/localguard"
 	"github.com/drewkidwell/mads/services/data/internal/api"
 	"github.com/drewkidwell/mads/services/data/internal/store"
 )
@@ -117,5 +118,7 @@ func main() {
 	if root, err := os.Getwd(); err == nil {
 		ident.Root = root
 	}
-	log.Fatal(http.Serve(ln, api.NewWithIdentity(db, ident)))
+	// No browser page ever calls the Data Service; only programs (which send no Origin) may.
+	guard := localguard.New("data", "", nil)
+	log.Fatal(http.Serve(ln, guard.Wrap(api.NewWithIdentity(db, ident))))
 }

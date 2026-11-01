@@ -23,6 +23,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/agentenv"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localguard"
 	"github.com/drewkidwell/mads/pkg/pipelinerun"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/providers/claudecode"
@@ -381,7 +382,8 @@ func main() {
 	}
 	log.Printf("pipeline: listening on %s", ln.Addr())
 
-	srv := &http.Server{Handler: newMux()}
+	// Only the Router calls the pipeline engine; no browser page does.
+	srv := &http.Server{Handler: localguard.New("pipeline", "", nil).Wrap(newMux())}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
 
