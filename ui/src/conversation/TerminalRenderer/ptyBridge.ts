@@ -141,6 +141,7 @@ declare global {
       /** Markdown links, opened by main (see ui/src/platform/links.ts). */
       links?: {
         open(href: string, baseDir?: string): Promise<string>;
+        openFile(path: string): Promise<string>;
         describe(hrefs: string[], baseDir?: string): Promise<string[]>;
       };
       shell?: ShellHostBridge;

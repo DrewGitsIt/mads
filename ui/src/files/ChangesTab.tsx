@@ -4,6 +4,7 @@ import { Chip } from "../components/Chip/Chip";
 import { ConfirmDialog } from "../components/ConfirmDialog/ConfirmDialog";
 import { SegmentedControl, type SegmentedOption } from "../components/SegmentedControl/SegmentedControl";
 import { Toast, type ToastTone } from "../components/Toast/Toast";
+import { getLinkOpener } from "../platform/links";
 import type { RouterClient } from "../router/client";
 import type { ChangeBaselineId, ChangeTurn, ChangedFile, FileDiff } from "../router/types";
 import { FileCounts, KindBadge, LineCounts } from "./ChangeBits";
@@ -633,7 +634,7 @@ export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, fo
                   ? "No changes yet."
                   : "Select a file to see its diff."
             }
-            onOpenInEditor={(p) => void routerClient.openInEditor(p)}
+            onOpenInEditor={(p) => getLinkOpener().openFile(p)}
             header={
               selection ? (
                 <>

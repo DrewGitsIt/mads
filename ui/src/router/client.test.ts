@@ -193,12 +193,6 @@ describe("FetchRouterClient", () => {
     await expect(client.getToolDiff("s1", "toolu_42")).rejects.toThrow(/500/);
   });
 
-  it("openInEditor POSTs the path and throws on a non-ok response", async () => {
-    mockFetchOnce(undefined, false, 500);
-    const client = new FetchRouterClient("http://router.local");
-    await expect(client.openInEditor("a.go")).rejects.toThrow(/500/);
-  });
-
   it("getWorktreeStatus GETs /sessions/:id/worktree", async () => {
     const fetchMock = mockFetchOnce({ isolated: true, files: [], uncommitted_count: 0, unlanded_count: 2 });
     const client = new FetchRouterClient("http://router.local");

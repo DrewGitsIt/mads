@@ -128,7 +128,7 @@ Session-level and per-task file changes (§5 dual granularity). File list with A
 
 - **Reads:** `GET /sessions/:id/changes?task=` (diffs, attribution)
 - **Subscribes:** `file.changed`, `commit.created`, `commit.linked` (session filter)
-- **Actions:** `POST /system/open-editor {path}`, `POST /sessions/:id/merge {target_branch}`
+- **Actions:** `POST /sessions/:id/merge {target_branch}`. "Open in editor" is not a Router action: the Electron main process opens the file (`ui/electron/linkOpener.ts`), since the Router is unauthenticated and any localhost page can call it.
 
 #### Pipeline runs (inside the Tasks tab)
 Replaces the Build page (#11–13) and the former Pipeline tab. Design, decisions and contracts: [TASKS-PIPELINE-DESIGN.md](TASKS-PIPELINE-DESIGN.md); mockup `docs/mockups/tasks-pipeline.html`. A **run bar** tops the Tasks tab: List | Graph toggle · `Run N ▾` (this session's run history; `+ New run` enters Plan) · template · status · elapsed · Stop (live) / Run N tasks (Plan) / New run (finished). **Stop** ends the run and keeps all state: tasks in flight become Interrupted, and a stopped run reads `Run N · stopped` (a crashed or lost one, `Run N · interrupted`). No cost, no progress bar. The tab opens on the live run if one exists, else the newest past run, else Plan.

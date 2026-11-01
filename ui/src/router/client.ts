@@ -230,7 +230,6 @@ export interface RouterClient {
    * answer, expected for old sessions and non-captured calls.
    */
   getToolDiff(sessionId: string, toolUseId: string): Promise<ToolDiff | null>;
-  openInEditor(path: string): Promise<void>;
 
   // Commit and Land (docs/SESSION-WORKTREES-DESIGN.md D5, D6).
   /** Runs git status server-side — call when a dialog opens or at confirm time, never per render. */
@@ -947,12 +946,6 @@ export class FetchRouterClient implements RouterClient {
     // capture for this call) — "keep the input-derived diff", not an error.
     if (res.status === 404) return null;
     return readJSON<ToolDiff>(res);
-  }
-
-  // MADS-UX §3.3's open-in-editor action; no `/system/open-editor` route
-  // exists anywhere in the codebase yet (HANDOFF §1).
-  async openInEditor(path: string): Promise<void> {
-    return routerPost(this.baseUrl, "/system/open-editor", { path });
   }
 
   async getWorktreeStatus(sessionId: string): Promise<WorktreeStatus> {

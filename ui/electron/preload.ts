@@ -221,10 +221,12 @@ const shellBridge = {
 /**
  * Renderer-facing links namespace — mirrors LinkOpener in
  * ui/src/platform/links.ts. Only carries the href as written and the
- * session's folder; main decides what it is and how it opens (linkOpener.ts).
+ * session's folder (or an absolute path); main decides what it is and how
+ * it opens (linkOpener.ts).
  */
 const links = {
   open: (href: string, baseDir?: string): Promise<string> => ipcRenderer.invoke("links:open", href, baseDir),
+  openFile: (path: string): Promise<string> => ipcRenderer.invoke("links:open-file", path),
   describe: (hrefs: string[], baseDir?: string): Promise<string[]> =>
     ipcRenderer.invoke("links:describe", hrefs, baseDir),
 };

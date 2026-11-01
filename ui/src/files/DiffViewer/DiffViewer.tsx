@@ -104,7 +104,12 @@ export interface DiffViewerProps {
   diff: FileDiff | null;
   loading?: boolean;
   error?: string;
-  onOpenInEditor: (path: string) => void;
+  /**
+   * Opens `path` in the user's editor. May resolve to what happened; "missing"
+   * (the file isn't on disk — deleted, or only in an old commit) turns the
+   * button into a disabled "Not on disk" for that path.
+   */
+  onOpenInEditor: (path: string) => void | Promise<unknown>;
   /**
    * Replaces the path label with a richer header (the Changes tab's badge,
    * path, counts, commit link and turn chips); the view toggles and "Open in
@@ -138,6 +143,13 @@ export function DiffViewer({
     }
   };
   const showToggle = !diff || diffShape(diff) === "changed";
+  // The path the last click found missing; another selection gets a fresh button.
+  const [missingPath, setMissingPath] = useState<string>();
+  const missing = !!path && path === missingPath;
+  const openInEditor = async () => {
+    if (!path) return;
+    if ((await onOpenInEditor(path)) === "missing") setMissingPath(path);
+  };
 
   return (
     <div className={styles.viewer}>
@@ -165,8 +177,14 @@ export function DiffViewer({
             </>
           )}
           {commitHash && <Chip tone="neutral">Diff from commit {commitHash.slice(0, 7)}</Chip>}
-          <Button variant="secondary" size="sm" disabled={!path} onClick={() => path && onOpenInEditor(path)}>
-            Open in editor
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={!path || missing}
+            title={missing ? "This file isn't on disk anymore" : undefined}
+            onClick={() => void openInEditor()}
+          >
+            {missing ? "Not on disk" : "Open in editor"}
           </Button>
         </span>
       </div>

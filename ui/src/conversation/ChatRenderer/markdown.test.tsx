@@ -177,7 +177,7 @@ describe("Markdown links", () => {
   function stubLinks(states: Record<string, string> = {}) {
     const open = vi.fn().mockResolvedValue("opened");
     const describe = vi.fn(async (hrefs: string[]) => hrefs.map((h) => states[h] ?? "file"));
-    window.mads = { links: { open, describe } };
+    window.mads = { links: { open, openFile: vi.fn(), describe } };
     return { open, describe };
   }
 

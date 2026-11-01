@@ -207,6 +207,35 @@ describe("links:open", () => {
   });
 });
 
+describe("links:open-file", () => {
+  it("opens an absolute path through the same flow as a file link", async () => {
+    writeFileSync(join(dir, "notes.md"), "");
+    expect(await invoke("links:open-file", join(dir, "notes.md"))).toBe("opened");
+    expect(openPath).toHaveBeenCalledWith(join(dir, "notes.md"));
+  });
+
+  it("takes the name literally — no URL decoding, no :line stripping", async () => {
+    const odd = join(dir, "a#b?c%20d:12.ts");
+    writeFileSync(odd, "");
+    expect(await invoke("links:open-file", odd)).toBe("opened");
+    expect(openPath).toHaveBeenCalledWith(odd);
+  });
+
+  it("still asks before opening a runnable file", async () => {
+    writeFileSync(join(dir, "run.command"), "");
+    answer("Cancel");
+    expect(await invoke("links:open-file", join(dir, "run.command"))).toBe("cancelled");
+    expect(openPath).not.toHaveBeenCalled();
+  });
+
+  it("says missing for a file that's gone, and refuses a relative path", async () => {
+    expect(await invoke("links:open-file", join(dir, "gone.go"))).toBe("missing");
+    writeFileSync(join(dir, "rel.md"), "");
+    expect(await invoke("links:open-file", "rel.md")).toBe("none");
+    expect(await invoke("links:open-file", 42)).toBe("none");
+  });
+});
+
 describe("links:describe", () => {
   it("says what each link is, and which files are missing", async () => {
     writeFileSync(join(dir, "here.md"), "");

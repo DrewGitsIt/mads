@@ -6,7 +6,8 @@
  * shape is declared once in ui/src/conversation/TerminalRenderer/ptyBridge.ts.
  *
  * Outside Electron (a plain browser preview, vitest) there is no main to ask,
- * so http(s) opens in a new tab and nothing else opens at all.
+ * so http(s) opens in a new tab and nothing else opens at all — a file
+ * answers "none".
  */
 
 /** What became of a click (ui/electron/linkOpener.ts OpenOutcome). */
@@ -17,6 +18,8 @@ export type LinkState = "web" | "localhost" | "file" | "missing" | "none";
 export interface LinkOpener {
   /** `baseDir` is the session's folder, where a relative path resolves. */
   open(href: string, baseDir?: string): Promise<OpenOutcome>;
+  /** A file the app already knows by absolute path — same editor, prompts and fallbacks as a file link. */
+  openFile(path: string): Promise<OpenOutcome>;
   describe(hrefs: string[], baseDir?: string): Promise<LinkState[]>;
 }
 
@@ -28,6 +31,9 @@ const browserOpener: LinkOpener = {
     window.open(href, "_blank", "noopener,noreferrer");
     return "opened";
   },
+  async openFile() {
+    return "none";
+  },
   async describe(hrefs) {
     return hrefs.map((href) => (isHttp(href) ? "web" : "none"));
   },
@@ -38,6 +44,7 @@ export function getLinkOpener(): LinkOpener {
   if (!bridge) return browserOpener;
   return {
     open: (href, baseDir) => bridge.open(href, baseDir) as Promise<OpenOutcome>,
+    openFile: (path) => bridge.openFile(path) as Promise<OpenOutcome>,
     describe: (hrefs, baseDir) => bridge.describe(hrefs, baseDir) as Promise<LinkState[]>,
   };
 }

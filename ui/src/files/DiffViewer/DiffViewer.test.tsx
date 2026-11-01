@@ -115,6 +115,16 @@ describe("DiffViewer", () => {
     expect(onOpenInEditor).toHaveBeenCalledWith(diff.path);
   });
 
+  it("says Not on disk when the file is gone, for that path only", async () => {
+    const onOpenInEditor = vi.fn().mockResolvedValue("missing");
+    const { rerender } = render(<DiffViewer path="/w/gone.go" diff={null} onOpenInEditor={onOpenInEditor} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open in editor" }));
+    const button = await screen.findByRole("button", { name: "Not on disk" });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    rerender(<DiffViewer path="/w/here.go" diff={null} onOpenInEditor={onOpenInEditor} />);
+    expect(screen.getByRole("button", { name: "Open in editor" }).hasAttribute("disabled")).toBe(false);
+  });
+
   it("fills the pane instead of a fixed height, with automaticLayout for resizes", async () => {
     render(<DiffViewer path={diff.path} diff={diff} onOpenInEditor={vi.fn()} />);
 

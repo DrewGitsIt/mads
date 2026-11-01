@@ -108,6 +108,21 @@ describe("ChangesTab", () => {
     expect(screen.getByRole("button", { name: "Open in editor" })).toBeTruthy();
   });
 
+  // Not a Router call: main opens it (ui/electron/linkOpener.ts), with the
+  // same editor command, prompts and fallbacks as a file link in chat.
+  it("Open in editor hands the selected file's path to main's opener", async () => {
+    const openFile = vi.fn().mockResolvedValue("opened");
+    window.mads = { links: { open: vi.fn(), openFile, describe: vi.fn() } };
+    try {
+      render(<ChangesTab sessionId={SID} routerClient={new FakeRouterClient()} />);
+      fireEvent.click(await (await inList()).findByText("ingest.go"));
+      fireEvent.click(await screen.findByRole("button", { name: "Open in editor" }));
+      await waitFor(() => expect(openFile).toHaveBeenCalledWith("services/data/internal/ingest.go"));
+    } finally {
+      delete window.mads;
+    }
+  });
+
   it("auto-selects focusPath (the Commit dialog's link)", async () => {
     render(
       <ChangesTab sessionId={SID} routerClient={new FakeRouterClient()} focusPath="services/data/internal/ingest.go" />,

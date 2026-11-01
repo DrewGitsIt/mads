@@ -152,7 +152,6 @@ var knownGapRoutes = []struct {
 	method, path, pattern, reason string
 }{
 	{"GET", "/mentionables", "GET /mentionables", "getMentionables, not built"},
-	{"POST", "/system/open-editor", "POST /system/open-editor", "Files tab diff viewer (openInEditor), not built"},
 }
 
 // TestRouteManifestMatchesRouterClient introspects the mux directly via

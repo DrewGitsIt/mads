@@ -1013,8 +1013,6 @@ export class FakeRouterClient implements RouterClient {
   private nextLinkSeq = 1000;
   /** Every data-plane stream source this client has handed out via streamSession, in creation order — tests grab the latest and call `.emit(...)` on it. */
   readonly sessionEventSources: FakeSessionEventSource[] = [];
-  /** Paths passed to openInEditor, in call order — lets tests assert the button fired without a real editor to open. */
-  readonly openedPaths: string[] = [];
   /** When true, setSessionModel answers queued: true — the "a turn was in flight, the switch lands at turn end" branch. */
   queueModelSwitches = false;
   /** Per-session live transport mode, mutated by switchTransport and read back by getTransportMode — mirrors the real child's runner-held mode being the single source of truth (no live child = no entry = defaults "chat"). */
@@ -1492,10 +1490,6 @@ export class FakeRouterClient implements RouterClient {
     const diff = this.commitFileDiffs[`${hash}:${path}`];
     if (!diff) throw new Error(`no fixture diff for commit ${hash} path ${path}`);
     return diff;
-  }
-
-  async openInEditor(path: string): Promise<void> {
-    this.openedPaths.push(path);
   }
 
   // --- Commit and Land: canned answers a test can swap, plus every call ---

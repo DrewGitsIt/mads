@@ -1,13 +1,15 @@
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import { BrowserWindow, dialog, ipcMain, shell, type MessageBoxOptions, type WebContents } from "electron";
 import { isRunnable, resolveLinkTarget, splitCommand, type LinkTarget } from "./links";
 
 /**
- * Opens links clicked in rendered markdown (agent replies, task text). The
- * renderer only hands over the href as written and the session's folder;
+ * Opens links clicked in rendered markdown (agent replies, task text), and
+ * files the app already knows by absolute path (the Changes tab's "Open in
+ * editor"). The renderer only hands over the href as written and the
+ * session's folder, or the path;
  * everything that decides what runs on this machine happens here, where page
  * content can't skip it:
  *   - web and localhost URLs go to the user's browser;
@@ -64,6 +66,14 @@ export function registerLinkHandlers(deps: Deps): void {
         return openFile(event.sender, path, deps);
       }
     }
+  });
+
+  // A path the app already has (a change-set entry), not an href: no URL
+  // parsing, so a name with "#", "?", "%" or ":12" in it means just that file.
+  ipcMain.handle("links:open-file", async (event, path: unknown): Promise<OpenOutcome> => {
+    if (typeof path !== "string" || path.length > MAX_HREF || !isAbsolute(path)) return "none";
+    if (!(await firstExisting([path]))) return "missing";
+    return openFile(event.sender, path, deps);
   });
 }
 
