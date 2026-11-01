@@ -16,6 +16,26 @@
   color: var(--info-fg);
 }
 
+/* A file link whose file isn't on this computer (a removed worktree, a path
+   from another machine). Still clickable — the file may appear later. */
+.markdown a[data-link-state="missing"] {
+  color: var(--text3);
+  text-decoration-style: dotted;
+  text-decoration-color: currentColor;
+}
+
+.markdown a[data-link-state="missing"]::after {
+  content: " (not found)";
+  font-size: 0.85em;
+}
+
+/* Nothing mads opens (mailto:, a relative path outside a session): reads as text. */
+.markdown a[data-link-state="none"] {
+  color: inherit;
+  text-decoration: none;
+  cursor: text;
+}
+
 /* Each top-level block is its own element (so a streaming reply only
    rebuilds the block still growing) but lays out as if it weren't: margins
    collapse between blocks exactly as they did in one innerHTML. */

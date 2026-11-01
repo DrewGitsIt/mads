@@ -218,4 +218,15 @@ const shellBridge = {
   },
 };
 
-contextBridge.exposeInMainWorld("mads", { badge, dialog, contextMenu, clipboard, shell: shellBridge });
+/**
+ * Renderer-facing links namespace — mirrors LinkOpener in
+ * ui/src/platform/links.ts. Only carries the href as written and the
+ * session's folder; main decides what it is and how it opens (linkOpener.ts).
+ */
+const links = {
+  open: (href: string, baseDir?: string): Promise<string> => ipcRenderer.invoke("links:open", href, baseDir),
+  describe: (hrefs: string[], baseDir?: string): Promise<string[]> =>
+    ipcRenderer.invoke("links:describe", hrefs, baseDir),
+};
+
+contextBridge.exposeInMainWorld("mads", { badge, dialog, contextMenu, clipboard, links, shell: shellBridge });

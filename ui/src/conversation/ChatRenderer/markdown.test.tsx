@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { Markdown } from "./markdown";
+import { LinkBaseProvider } from "./linkBase";
 import styles from "./markdown.module.css";
 
 describe("Markdown", () => {
@@ -89,7 +90,7 @@ describe("Markdown", () => {
     const wrapper = container.firstElementChild!;
     expect(wrapper.classList.contains(styles.markdown)).toBe(true);
     expect(wrapper.classList.contains("prose")).toBe(true);
-    expect(wrapper.querySelector("a")?.getAttribute("href")).toBe("https://example.com");
+    expect(wrapper.querySelector("a")?.getAttribute("data-mads-href")).toBe("https://example.com");
 
     const css = readFileSync("src/conversation/ChatRenderer/markdown.module.css", "utf8");
     expect(css).toMatch(/\.markdown a \{[^}]*color: var\(--info-fg\)/);
@@ -107,7 +108,7 @@ describe("Markdown", () => {
 
   it("resolves a reference link defined in a later block", () => {
     const { container } = render(<Markdown text={"See [the docs][d].\n\n[d]: https://example.com"} />);
-    expect(container.querySelector("a")?.getAttribute("href")).toBe("https://example.com");
+    expect(container.querySelector("a")?.getAttribute("data-mads-href")).toBe("https://example.com");
   });
 
   const foldOf = (pre: Element) => pre.closest("[data-open]")!;
@@ -165,5 +166,96 @@ describe("Markdown code block Copy", () => {
   it("gives each top-level code block its own button, and inline code none", () => {
     render(<Markdown text={"`inline`\n\n```\none\n```\n\n```\ntwo\n```\n"} />);
     expect(screen.getAllByRole("button", { name: "Copy code" })).toHaveLength(2);
+  });
+});
+
+describe("Markdown links", () => {
+  afterEach(() => {
+    delete window.mads;
+  });
+
+  function stubLinks(states: Record<string, string> = {}) {
+    const open = vi.fn().mockResolvedValue("opened");
+    const describe = vi.fn(async (hrefs: string[]) => hrefs.map((h) => states[h] ?? "file"));
+    window.mads = { links: { open, describe } };
+    return { open, describe };
+  }
+
+  // A link that could navigate would move the app window off its page (or,
+  // Cmd-clicked, open the Router in a browser) — and a cancelled navigation
+  // once cut every dock shell off from its host.
+  it("keeps the written href aside and gives the anchor an inert one", () => {
+    const { container } = render(<Markdown text="[a](src/foo.ts) [b](https://example.com)" />);
+    const [file, web] = container.querySelectorAll("a");
+    expect(file.getAttribute("href")).toBe("#");
+    expect(file.getAttribute("data-mads-href")).toBe("src/foo.ts");
+    expect(file.getAttribute("title")).toBe("src/foo.ts");
+    expect(web.getAttribute("href")).toBe("#");
+  });
+
+  it("never trusts a data-mads-href the text supplies itself", () => {
+    const { container } = render(
+      <Markdown text={'<a href="https://example.com" data-mads-href="/tmp/x.command">x</a> <code data-mads-href="/y">y</code>'} />,
+    );
+    expect(container.querySelector("a")?.getAttribute("data-mads-href")).toBe("https://example.com");
+    expect(container.querySelector("code")?.hasAttribute("data-mads-href")).toBe(false);
+  });
+
+  it("opens the written href with the session folder, for a click, Cmd-click or middle-click", async () => {
+    const { open } = stubLinks();
+    render(
+      <LinkBaseProvider dir="/work/app">
+        <Markdown text="[foo](src/foo.ts)" />
+      </LinkBaseProvider>,
+    );
+    const link = screen.getByText("foo");
+    expect(fireEvent.click(link)).toBe(false); // default prevented
+    expect(fireEvent.click(link, { metaKey: true })).toBe(false);
+    expect(fireEvent(link, new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }))).toBe(false);
+    await act(async () => {});
+    expect(open).toHaveBeenCalledTimes(3);
+    expect(open).toHaveBeenCalledWith("src/foo.ts", "/work/app");
+  });
+
+  it("leaves a right-click alone", async () => {
+    const { open } = stubLinks();
+    render(<Markdown text="[foo](src/foo.ts)" />);
+    fireEvent(screen.getByText("foo"), new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 2 }));
+    await act(async () => {});
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("marks a file link whose file isn't on this computer, and asks only about non-web links", async () => {
+    const { describe } = stubLinks({ "gone.md": "missing" });
+    render(<Markdown text="[gone](gone.md) [here](here.md) [web](https://example.com) [top](#top)" />);
+    await act(async () => {});
+    expect(describe).toHaveBeenCalledTimes(1);
+    expect(describe.mock.calls[0][0]).toEqual(["gone.md", "here.md"]);
+    expect(screen.getByText("gone").dataset.linkState).toBe("missing");
+    expect(screen.getByText("gone").title).toMatch(/not found on this computer/);
+    expect(screen.getByText("here").dataset.linkState).toBeUndefined();
+  });
+
+  it("clears the mark when a later click finds the file", async () => {
+    const { open } = stubLinks({ "gone.md": "missing" });
+    render(<Markdown text="[gone](gone.md)" />);
+    await act(async () => {});
+    const link = screen.getByText("gone");
+    expect(link.dataset.linkState).toBe("missing");
+    open.mockResolvedValueOnce("opened");
+    fireEvent.click(link);
+    await act(async () => {});
+    expect(link.dataset.linkState).toBeUndefined();
+  });
+
+  it("falls back to a new browser tab for web links outside Electron", async () => {
+    const windowOpen = vi.spyOn(window, "open").mockReturnValue(null);
+    render(<Markdown text="[web](https://example.com) [file](src/foo.ts)" />);
+    fireEvent.click(screen.getByText("web"));
+    fireEvent.click(screen.getByText("file"));
+    await act(async () => {});
+    expect(windowOpen).toHaveBeenCalledTimes(1);
+    expect(windowOpen).toHaveBeenCalledWith("https://example.com", "_blank", "noopener,noreferrer");
+    windowOpen.mockRestore();
   });
 });

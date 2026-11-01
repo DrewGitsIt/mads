@@ -14,6 +14,7 @@ import {
 } from "electron";
 import { join } from "node:path";
 import { classifyNavigation } from "./externalLinks";
+import { registerLinkHandlers } from "./linkOpener";
 import { ShellRegistryCache } from "./pty/shellRegistryCache";
 import type { ShellActivity, ShellInfo } from "./pty/shellHostCore";
 import { HostRequests } from "./pty/hostRequests";
@@ -136,6 +137,7 @@ function registerAppHandlers(): void {
   );
 
   registerShellBroker();
+  registerLinkHandlers({ routerBaseUrl: ROUTER_BASE_URL, userDataDir: app.getPath("userData") });
 }
 
 // The shell host (docs/SHELL-DOCK-DESIGN.md D1) is a utilityProcess that owns
@@ -289,26 +291,32 @@ function createWindow(): void {
 
   // Links that open a new window (target="_blank" — e.g. preflight's
   // vendor install guides) belong in the user's browser, never in a child
-  // BrowserWindow of the app; anything that isn't plain http(s) goes
-  // nowhere.
+  // BrowserWindow of the app. The app's own origin never goes there: a
+  // relative href the browser resolved against it (a file link in agent
+  // text, Cmd-clicked) would only open the Router in a browser tab. Markdown
+  // links don't come through here at all (linkOpener.ts).
+  const appUrl = DEV_SERVER_URL ?? ROUTER_BASE_URL;
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//.test(url)) void shell.openExternal(url);
+    if (classifyNavigation(url, appUrl) === "external") void shell.openExternal(url);
     return { action: "deny" };
   });
 
-  // A plain <a href> (agent markdown strips target) navigates this window
-  // itself, and there is no back button. Off-origin http(s) opens in the
-  // user's browser instead; the window never leaves the app. will-redirect
-  // covers a same-origin URL that bounces elsewhere.
-  const appUrl = DEV_SERVER_URL ?? ROUTER_BASE_URL;
-  const keepInBrowser = (event: { preventDefault(): void }, url: string) => {
+  // The window never navigates: it has no back button, and nothing in the
+  // app moves between pages (a reload doesn't pass through will-navigate).
+  // Markdown links are opened by linkOpener.ts and never get here; this is
+  // the backstop for anything else — off-origin http(s) goes to the browser,
+  // the rest goes nowhere. will-redirect still lets a same-origin redirect
+  // through, since the app's own first load may take one.
+  win.webContents.on("will-navigate", (event, url) => {
+    event.preventDefault();
+    if (classifyNavigation(url, appUrl) === "external") void shell.openExternal(url);
+  });
+  win.webContents.on("will-redirect", (event, url) => {
     const verdict = classifyNavigation(url, appUrl);
     if (verdict === "allow") return;
     event.preventDefault();
     if (verdict === "external") void shell.openExternal(url);
-  };
-  win.webContents.on("will-navigate", (event, url) => keepInBrowser(event, url));
-  win.webContents.on("will-redirect", (event, url) => keepInBrowser(event, url));
+  });
 
   // The Router serves the built UI same-origin (scripts/app.sh guarantees
   // it's already up before Electron launches), so this is always an http(s)

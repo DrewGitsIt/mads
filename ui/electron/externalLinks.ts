@@ -1,9 +1,10 @@
 /**
- * What to do with a navigation of the app window: the app's own origin stays
- * in the window; any other http(s) URL belongs in the user's browser (the
- * window has no back button, so a link that navigated it would strand mads);
- * anything else — mailto:, file:, javascript:, an unparsable string — goes
- * nowhere.
+ * Where a URL the app window was asked to go to belongs: "allow" for the
+ * app's own origin, "external" for any other http(s) URL (the user's
+ * browser), "block" for anything else — mailto:, file:, javascript:, an
+ * unparsable string. main.ts decides what each verdict means per event:
+ * will-navigate keeps the window put even for "allow" (it has no back
+ * button), will-redirect lets a same-origin redirect through.
  */
 export type NavigationVerdict = "allow" | "external" | "block";
 

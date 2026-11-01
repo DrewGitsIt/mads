@@ -25,7 +25,7 @@ describe("EditorSection", () => {
     render(<EditorSection config={config} />);
     const field = screen.getByLabelText("Open files with") as HTMLInputElement;
     expect(field.placeholder).toBe("code -g");
-    expect(screen.getByText("The command mads runs to open a file. Leave empty to use $EDITOR.")).toBeTruthy();
+    expect(screen.getByText("The command mads runs to open a file link, with the file's path added at the end. Leave empty to use each file type's default app.")).toBeTruthy();
     fireEvent.change(field, { target: { value: "zed" } });
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ editor_command: "zed" }));
   });

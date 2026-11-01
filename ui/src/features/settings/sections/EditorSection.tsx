@@ -29,7 +29,7 @@ export function EditorSection({ config }: EditorSectionProps) {
         <SettingRow
           label="Open files with"
           htmlFor="editor-command"
-          help="The command mads runs to open a file. Leave empty to use $EDITOR."
+          help="The command mads runs to open a file link, with the file's path added at the end. Leave empty to use each file type's default app."
         >
           <input
             id="editor-command"

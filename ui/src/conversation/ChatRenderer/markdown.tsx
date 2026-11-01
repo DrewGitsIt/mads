@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { marked, type Links, type Token, type Tokens, type TokensList } from "marked";
 import { Fold, useArrivals } from "../../components/Motion";
 import DOMPurify from "dompurify";
 import { useElectronClipboardBridge } from "../TerminalRenderer/ptyBridge";
+import { getLinkOpener, needsDescribing } from "../../platform/links";
+import { useLinkBase } from "./linkBase";
 import styles from "./markdown.module.css";
 
 marked.setOptions({ gfm: true, breaks: false });
@@ -33,11 +35,62 @@ const ALLOWED_TAGS = [
   "td",
 ];
 
+/** Where a rendered link keeps the href its author wrote; the real href is inert. */
+const LINK_HREF_ATTR = "data-mads-href";
+
+/**
+ * Takes every link out of the browser's hands. The href moves to
+ * LINK_HREF_ATTR, untouched (a relative `src/foo.ts` must reach main as
+ * written, not resolved against the app's origin), and the href itself
+ * becomes "#", so no click, Cmd-click, middle-click or drag can navigate the
+ * window or open the Router in a browser. Markdown's click handler opens the
+ * stored href through main. The destination stays visible as the tooltip.
+ */
+function moveLinkHref(node: Element): void {
+  if (node.tagName !== "A") return;
+  const href = node.getAttribute("href");
+  if (!href) {
+    node.removeAttribute(LINK_HREF_ATTR);
+    return;
+  }
+  node.setAttribute(LINK_HREF_ATTR, href);
+  node.setAttribute("href", "#");
+  if (!node.getAttribute("title")) node.setAttribute("title", href);
+}
+
 function sanitize(parsed: string): string {
-  return DOMPurify.sanitize(parsed, {
-    ALLOWED_TAGS,
-    ALLOWED_ATTR: ["href", "title"],
-  });
+  // Scoped to this call: DOMPurify hooks are global to its instance.
+  DOMPurify.addHook("afterSanitizeAttributes", moveLinkHref);
+  try {
+    return DOMPurify.sanitize(parsed, {
+      ALLOWED_TAGS,
+      ALLOWED_ATTR: ["href", "title"],
+      // No data-* from the source: LINK_HREF_ATTR is only ever ours.
+      ALLOW_DATA_ATTR: false,
+    });
+  } finally {
+    DOMPurify.removeHook("afterSanitizeAttributes");
+  }
+}
+
+/** The rendered link a click landed on, if it is one of ours inside `root`. */
+function clickedLink(event: MouseEvent<HTMLElement>): HTMLAnchorElement | undefined {
+  const link = (event.target as Element | null)?.closest?.(`a[${LINK_HREF_ATTR}]`);
+  return link instanceof HTMLAnchorElement && event.currentTarget.contains(link) ? link : undefined;
+}
+
+/** Marks a link whose file isn't on this machine, or that mads can't open, so it reads that way. */
+function markLink(link: HTMLAnchorElement, state: string): void {
+  const href = link.getAttribute(LINK_HREF_ATTR) ?? "";
+  if (state === "missing") {
+    link.dataset.linkState = "missing";
+    link.title = `${href} — not found on this computer`;
+  } else if (state === "none") {
+    link.dataset.linkState = "none";
+  } else {
+    delete link.dataset.linkState;
+    link.title = href;
+  }
 }
 
 /**
@@ -89,13 +142,56 @@ export function Markdown({
       .filter((t) => t.type !== "space")
       .map((t, i) => ({ key: `${i}:${t.type}`, token: t, links, linksKey }));
   }, [text, breaks]);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const linkBase = useLinkBase();
+
+  // Ask main which file links point nowhere on this machine, once per link
+  // element (a block re-rendered while streaming brings fresh ones). A click
+  // asks again, so a file the agent creates later still opens.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const fresh = [...root.querySelectorAll<HTMLAnchorElement>(`a[${LINK_HREF_ATTR}]:not([data-link-checked])`)];
+    const ask = fresh.filter((a) => needsDescribing(a.getAttribute(LINK_HREF_ATTR) ?? ""));
+    fresh.forEach((a) => (a.dataset.linkChecked = ""));
+    if (ask.length === 0) return;
+    void getLinkOpener()
+      .describe(
+        ask.map((a) => a.getAttribute(LINK_HREF_ATTR) ?? ""),
+        linkBase,
+      )
+      .then((states) => states.forEach((state, i) => ask[i] && markLink(ask[i], state)))
+      .catch(() => undefined);
+  }, [blocks, linkBase]);
+
+  const openLink = (event: MouseEvent<HTMLDivElement>) => {
+    const link = clickedLink(event);
+    // Primary and middle button, any modifier (Cmd-click included): the
+    // inert href must never act on its own. Right-click keeps its menu.
+    if (!link || (event.button !== 0 && event.button !== 1)) return;
+    event.preventDefault();
+    const href = link.getAttribute(LINK_HREF_ATTR) ?? "";
+    void getLinkOpener()
+      .open(href, linkBase)
+      .then((outcome) => {
+        if (outcome === "missing" || outcome === "none") markLink(link, outcome);
+        else if (outcome === "opened" || outcome === "revealed") markLink(link, "ok");
+      })
+      .catch(() => undefined);
+  };
+
   const arrived = useArrivals(
     blocks.map((b) => b.key),
     foldNewCode,
   );
 
   return (
-    <div className={[styles.markdown, className].filter(Boolean).join(" ")}>
+    <div
+      ref={rootRef}
+      className={[styles.markdown, className].filter(Boolean).join(" ")}
+      onClick={openLink}
+      onAuxClick={openLink}
+    >
       {blocks.map(({ key, token, links, linksKey }) =>
         // Every code block sits in a fold, arriving or not, so the element
         // never changes type (and remounts) the render after it lands.
