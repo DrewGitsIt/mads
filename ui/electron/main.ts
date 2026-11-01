@@ -244,11 +244,11 @@ function watchShellWindow(wc: WebContents): void {
   if (watchedForShells.has(wc)) return;
   watchedForShells.add(wc);
   const windowId = wc.id; // not readable once destroyed
-  // A main-frame navigation (including reload) unloads the page that was
-  // attached; same-document ones (hash/pushState) keep it.
-  wc.on("did-start-navigation", (details) => {
-    if (details.isMainFrame && !details.isSameDocument) releaseShellWindow(windowId);
-  });
+  // A reload needs nothing here: the old page's port closes as its document
+  // goes away, and the host drops it (shellHost.ts, port "close"). Don't
+  // release on did-start-navigation — it fires before will-navigate gets to
+  // cancel a link click, which cut the window off from its shells while the
+  // page stayed put.
   wc.on("render-process-gone", () => releaseShellWindow(windowId));
   wc.on("destroyed", () => releaseShellWindow(windowId));
 }
