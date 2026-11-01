@@ -55,6 +55,10 @@ func TestCORSSimpleGet(t *testing.T) {
 	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
 		t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, "http://localhost:5173")
 	}
+	// Without it a cross-origin page can't read /export's filename.
+	if got := resp.Header.Get("Access-Control-Expose-Headers"); !containsAll(got, "Content-Disposition") {
+		t.Fatalf("Access-Control-Expose-Headers = %q, want Content-Disposition", got)
+	}
 }
 
 func TestCORSSimplePost(t *testing.T) {
