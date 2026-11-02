@@ -1,25 +1,30 @@
 <!doctype html>
 <!--
-  Agent Review: the Changes tab side (2026-11-01). Self-contained: open in
-  any browser. Companion to agent-review-conversation.html; same review,
-  same findings.
+  Agent Review: the Changes tab side. Revision 2 (2026-11-02), after Drew's
+  review of revision 1. Self-contained: open in any browser. Companion to
+  agent-review-conversation.html; same review, same finding records.
 
-  Three questions about the Changes tab (ui/src/files/ChangesTab.tsx):
-    1. Where's the Agent Review button, and what shows while it runs?
-    2. Where do findings show: in the file list, and in the diff?
-    3. How do per-file coverage, stale findings and multiple roots read?
+  Chosen: 1A (toolbar button → progress pill), 2A (inline annotation in the
+  diff: the hero), 3A (folder tree, one root per repo, coverage column).
+  Unchosen options are folded under "Not chosen" at the end of each section.
+
+  Revision 2 changes:
+    - 2A annotations carry the full explanation and the same Accept / Reject /
+      Edit controls and states as the conversation checklist (one record,
+      synced). No confidence scores anywhere.
+    - 2A shows Inline vs Side by side placement (the annotation spans the
+      modified side, with an alignment spacer on the original side) and what
+      happens when a finding sits inside a region hideUnchangedRegions has
+      collapsed (badge on the collapsed bar vs auto-reveal).
+    - 3A: every repo the agent touched is its own root (the backend keeps a
+      shadow baseline per repo root); non-repo paths go under "Other files".
+    - Stale: Accept / Edit disabled, Re-check this file offered.
 
   Live surfaces this mocks:
-    ui/src/files/ChangesTab.tsx (+ .module.css)   toolbar, turn strip, list | detail
-    ui/src/files/ChangesList.tsx, ChangeBits.tsx  rows: dot, A/M/D, name, counts, size bar
-    ui/src/files/folderTree.ts                    OUTSIDE_ROOT ("Outside the session folder")
-    ui/src/files/DiffViewer/                      Monaco diff editor
-    ui/src/files/TurnStrip.tsx
-
-  Session: "router job retries + review button", 18 turns; review scope since
-  last review (turns 12–18): 13 files, 12 in the session folder (mads) and
-  one in ~/repo/tao (outside it; today that means no line counts). Partial:
-  the 10m limit hit on bundle 7.
+    ui/src/files/ChangesTab.tsx, ChangesList.tsx, ChangeBits.tsx, TurnStrip.tsx
+    ui/src/files/folderTree.ts            (OUTSIDE_ROOT → per-repo roots)
+    ui/src/files/DiffViewer/DiffViewer.tsx (Monaco diff; Inline / Side by side
+      chips; hideUnchangedRegions { contextLineCount 3, minimumLineCount 5 })
   Tokens: clay / dark (tokens.css via changes-v2.html).
 -->
 <html lang="en" data-theme="dark" data-palette="clay">
@@ -45,6 +50,7 @@
   * { box-sizing:border-box; margin:0; padding:0; }
   body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.5 var(--sans); }
   button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+  button:disabled { cursor:not-allowed; opacity:.45; }
   code { font:var(--fs-sm) var(--mono); background:var(--bg2); border-radius:3px; padding:1px 4px; }
 
   .page { max-width:1440px; margin:0 auto; padding:28px 24px 120px; display:flex; flex-direction:column; gap:28px; }
@@ -60,12 +66,20 @@
   .block > h2 + .opt { border-top:0; }
   .opt > h3 { font-size:var(--fs-body); font-weight:650; display:flex; gap:8px; align-items:baseline; }
   .opt > h3 .letter { font:700 var(--fs-chip) var(--sans); letter-spacing:.06em; color:var(--accent-ink); background:var(--accent); border-radius:999px; padding:1px 8px; }
+  .opt > h3 .chosen { font:700 var(--fs-chip) var(--sans); letter-spacing:.06em; text-transform:uppercase; color:var(--ok-fg); background:var(--ok-soft); border-radius:999px; padding:1px 8px; }
   .opt > h3 small { color:var(--text3); font-weight:400; font-size:var(--fs-sm); }
+  .opt > h4 { font-size:var(--fs-sm); color:var(--text2); font-weight:600; display:flex; gap:8px; align-items:center; margin-top:6px; }
+  details.nc { border-top:1px solid var(--line-soft); }
+  details.nc > summary { cursor:pointer; padding:12px 16px; color:var(--text3); font-size:var(--fs-sm); list-style:none; display:flex; gap:8px; align-items:center; }
+  details.nc > summary::before { content:"▸"; font-size:10px; }
+  details.nc[open] > summary::before { content:"▾"; }
+  details.nc > summary:hover { color:var(--text2); }
+  details.nc .opt { opacity:.85; }
   .trade { display:grid; grid-template-columns:1.4fr 1fr; gap:24px; color:var(--text2); font-size:var(--fs-sm); }
   .trade ul { margin-left:18px; } .trade li { margin-top:3px; } .trade b { color:var(--text); }
   .trade .pro { color:var(--ok-fg); } .trade .con { color:var(--bad-fg); }
-  .trade .q { margin-top:6px; border-left:3px solid var(--warn); background:var(--warn-soft); padding:6px 10px; border-radius:0 var(--r-sm) var(--r-sm) 0; }
-  .trade .q b { color:var(--warn-fg); }
+  .trade .callout { margin-top:6px; border-left:3px solid var(--warn); background:var(--warn-soft); padding:6px 10px; border-radius:0 var(--r-sm) var(--r-sm) 0; }
+  .trade .callout b { color:var(--warn-fg); }
   .states { display:inline-flex; gap:2px; background:var(--bg2); border:1px solid var(--line-soft); border-radius:999px; padding:2px; margin-left:auto; }
   .states button { padding:2px 11px; border-radius:999px; font:600 var(--fs-chip) var(--sans); color:var(--text3); }
   .states button[aria-pressed=true] { background:var(--accent-soft); color:var(--accent); }
@@ -89,13 +103,12 @@
   .btn.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
   .btn.ghost { background:none; border-color:transparent; color:var(--text2); }
   .btn.sm { padding:1px 8px; font-size:11.5px; }
-  .btn[disabled] { opacity:.5; cursor:default; }
   .link { color:var(--accent); cursor:pointer; }
   .strip { display:flex; gap:2px; align-items:flex-end; padding:6px 12px 4px; border-bottom:1px solid var(--line-soft); }
   .strip .col { width:22px; height:30px; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; gap:2px; }
   .strip .bar { width:12px; background:var(--bg4); border-radius:2px 2px 0 0; }
   .strip .col span { font:9.5px var(--mono); color:var(--text3); }
-  .strip .col.in .bar { background:var(--info); opacity:.6; }
+  .strip .col.in .bar { background:var(--text3); }
   .strip .scope { margin-left:10px; align-self:center; font-size:11px; color:var(--text3); }
   .body { display:flex; flex:1; min-height:0; }
   .list { width:380px; border-right:1px solid var(--line-soft); overflow:auto; flex-shrink:0; }
@@ -104,14 +117,13 @@
   .gh { display:flex; align-items:center; gap:8px; width:100%; padding:6px 10px; background:var(--bg1); font-size:var(--fs-sm); border-bottom:1px solid var(--line-soft); }
   .gh .caret { color:var(--text3); font-size:10px; width:10px; }
   .gh .name { font-weight:600; }
-  .gh .n { color:var(--text3); }
-  .gh .gx { color:var(--text3); font-size:11px; }
+  .gh .n, .gh .gx { color:var(--text3); } .gh .gx { font-size:11px; }
   .gdesc { padding:2px 10px 6px 28px; color:var(--text3); font-size:11px; background:var(--bg1); }
   .row { display:grid; grid-template-columns:8px 18px 1fr auto auto; gap:6px; align-items:center; width:100%; padding:4px 10px 4px 12px; text-align:left; }
   .row:hover { background:var(--bg2); }
   .row[data-sel=true] { background:var(--accent-soft); box-shadow:inset 2px 0 var(--accent); }
   .row.dim { opacity:.6; }
-  .row.sub { grid-template-columns:28px auto 1fr auto; padding-left:12px; }
+  .row.sub { grid-template-columns:28px auto 1fr; padding-left:12px; }
   .new { width:6px; height:6px; border-radius:50%; background:var(--info); display:inline-block; }
   .k { font:600 10px var(--mono); border-radius:3px; text-align:center; padding:1px 0; }
   .k.A { background:var(--ok-soft); color:var(--ok); } .k.M { background:var(--info-soft); color:var(--info); }
@@ -123,7 +135,7 @@
   .num { font:10.5px var(--mono); color:var(--text3); min-width:54px; text-align:right; }
   .size { display:flex; height:5px; border-radius:2px; overflow:hidden; background:var(--bg3); }
   .size i { display:block; height:100%; } .size .a { background:var(--ok); } .size .d { background:var(--bad); }
-  .rv { min-width:30px; display:flex; justify-content:flex-end; align-items:center; gap:3px; }
+  .rv { min-width:34px; display:flex; justify-content:flex-end; align-items:center; gap:3px; }
 
   /* tree */
   .dirrow, .trow { display:grid; grid-template-columns:auto 1fr auto auto; gap:6px; align-items:center; width:100%; text-align:left; padding:2px 10px 2px 0; font-size:var(--fs-sm); }
@@ -136,8 +148,8 @@
   .guide { width:14px; align-self:stretch; border-left:1px solid var(--line-soft); margin-left:9px; }
   .ind .caret { width:12px; text-align:center; color:var(--text3); font-size:10px; }
   .trow .k { width:16px; }
-  .rootrow { display:flex; gap:8px; align-items:baseline; padding:6px 10px 4px; background:var(--bg1); border-top:1px solid var(--line-soft); font-size:var(--fs-sm); }
-  .rootrow:first-child { border-top:0; }
+  .rootrow { display:flex; gap:8px; align-items:baseline; padding:6px 10px 4px; background:var(--bg1); border-top:1px solid var(--line-soft); font-size:var(--fs-sm); flex-wrap:wrap; }
+  .rootrow:first-of-type { border-top:0; }
   .rootrow b { font-weight:650; } .rootrow .rp { color:var(--text3); font:11px var(--mono); }
 
   /* review bits */
@@ -147,30 +159,33 @@
   .pri.P2 { background:var(--warn-soft); color:var(--warn-fg); }
   .pri.P3 { background:var(--bg3); color:var(--text2); }
   .pri.stale { background:none; outline:1px dashed var(--warn); outline-offset:-1px; color:var(--warn-fg); }
-  .pri.sent { opacity:.55; }
+  .pri.rej { opacity:.4; text-decoration:line-through; }
+  .smk { font:10px var(--mono); color:var(--text3); }
   .g { font:11px var(--mono); width:14px; text-align:center; flex:none; }
   .g.ok { color:var(--ok-fg); } .g.skip { color:var(--text3); } .g.nr { color:var(--warn-fg); } .g.qd { color:var(--text3); }
-  .spin { width:10px; height:10px; border:1.5px solid var(--accent); border-right-color:transparent; border-radius:50%; display:inline-block; flex:none; animation:spin 1s linear infinite; }
+  .spin { width:10px; height:10px; border:1.5px solid var(--text3); border-right-color:transparent; border-radius:50%; display:inline-block; flex:none; animation:spin 1s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
   .rootchip { font:10px var(--mono); color:var(--info-fg); background:var(--info-soft); border-radius:4px; padding:0 5px; flex:none; }
   .why { font-size:10.5px; color:var(--text3); white-space:nowrap; }
   .stalechip { font:600 var(--fs-chip) var(--sans); color:var(--warn-fg); border:1px dashed var(--warn); border-radius:999px; padding:0 7px; white-space:nowrap; }
   .pill { display:inline-flex; gap:6px; align-items:center; border:1px solid var(--line); border-radius:999px; padding:2px 10px; font-size:var(--fs-sm); color:var(--text2); background:var(--bg2); white-space:nowrap; cursor:pointer; }
-  .pill.run { border-color:var(--info); color:var(--text); }
-  .pill.done { border-color:color-mix(in srgb,var(--warn) 60%,var(--line)); color:var(--text); }
+  .pill.run, .pill.done { color:var(--text); }
+  .spill { display:inline-flex; align-items:center; font:600 var(--fs-chip) var(--sans); border-radius:999px; padding:1px 8px; white-space:nowrap; }
+  .spill.ok { background:var(--ok-soft); color:var(--ok-fg); } .spill.info { background:var(--info-soft); color:var(--info-fg); }
+  .spill.bad { background:var(--bad-soft); color:var(--bad-fg); } .spill.mute { background:var(--bg3); color:var(--text3); }
+  .spill.stalep { border:1px dashed var(--warn); color:var(--warn-fg); }
+  .ricon { display:inline-flex; align-items:center; } .ricon svg { display:block; }
   .mini { width:56px; display:flex; gap:2px; }
   .mini i { flex:1; height:5px; border-radius:1px; background:var(--bg3); }
   .mini i.done { background:var(--ok); opacity:.75; } .mini i.now { background:var(--accent); } .mini i.cut { background:repeating-linear-gradient(45deg,var(--warn) 0 2px,var(--bg3) 2px 4px); }
-  .pop { position:absolute; right:12px; top:38px; width:360px; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--shadow); padding:10px 12px; z-index:5; font-size:var(--fs-sm); color:var(--text2); display:flex; flex-direction:column; gap:7px; }
-  .pop .h { display:flex; gap:8px; align-items:baseline; color:var(--text); font-weight:600; }
+  .pop { position:absolute; right:12px; top:38px; width:370px; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--shadow); padding:10px 12px; z-index:5; font-size:var(--fs-sm); color:var(--text2); display:flex; flex-direction:column; gap:7px; }
+  .pop .h { display:flex; gap:8px; align-items:center; color:var(--text); font-weight:600; }
   .pop .h small { color:var(--text3); font-weight:400; font:11px var(--mono); }
-  .stage { display:flex; gap:5px; align-items:center; font:11.5px var(--mono); color:var(--text3); }
+  .stage { display:flex; gap:5px; align-items:center; font:11.5px var(--mono); color:var(--text3); flex-wrap:wrap; }
   .stage .s.done { color:var(--ok-fg); } .stage .s.now { color:var(--text); background:var(--bg3); border-radius:4px; padding:0 5px; }
   .bundles { display:flex; gap:3px; } .bundles i { flex:1; height:6px; border-radius:2px; background:var(--bg3); }
   .bundles i.done { background:var(--ok); opacity:.75; } .bundles i.now { background:var(--accent); } .bundles i.cut { background:repeating-linear-gradient(45deg,var(--warn) 0 3px,transparent 3px 6px); }
-  .band { display:flex; gap:12px; align-items:center; padding:7px 12px; border-bottom:1px solid var(--line-soft); background:var(--bg1); font-size:var(--fs-sm); color:var(--text2); flex-wrap:wrap; }
-  .band.run { box-shadow:inset 3px 0 var(--info); }
-  .band.done { box-shadow:inset 3px 0 var(--warn); }
+  .band { display:flex; gap:12px; align-items:center; padding:7px 12px; border-bottom:1px solid var(--line-soft); background:var(--bg1); font-size:var(--fs-sm); color:var(--text2); flex-wrap:wrap; box-shadow:inset 3px 0 var(--text3); }
   .band .who { font:11.5px var(--mono); color:var(--text3); }
   .cov { display:flex; height:6px; border-radius:3px; overflow:hidden; background:var(--bg3); width:150px; }
   .cov i { display:block; height:100%; } .cov .r { background:var(--ok); opacity:.8; } .cov .s { background:var(--text3); opacity:.55; } .cov .n { background:repeating-linear-gradient(45deg,var(--warn) 0 3px,var(--bg3) 3px 6px); }
@@ -182,34 +197,60 @@
   .detail { flex:1; min-width:0; display:flex; flex-direction:column; }
   .dh { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--line-soft); flex-wrap:wrap; }
   .dh .path { font:var(--fs-sm) var(--mono); }
-  .chip { font-size:10.5px; border-radius:999px; padding:1px 8px; background:var(--bg3); color:var(--text2); white-space:nowrap; }
+  .chip { font-size:10.5px; border-radius:999px; padding:1px 8px; background:var(--bg3); color:var(--text2); white-space:nowrap; border:1px solid transparent; }
+  .chip[aria-pressed=true] { background:var(--accent-soft); color:var(--text); border-color:var(--accent); }
+  .chip.btnchip { cursor:pointer; }
   .dsplit { flex:1; min-height:0; display:flex; }
   .diff { flex:1; min-width:0; margin:10px 12px 12px; border:1px solid var(--line-soft); border-radius:var(--r-sm); overflow:auto; font:12px/1.6 var(--mono); background:var(--bg1); }
   .ln { display:grid; grid-template-columns:4px 36px 1fr; white-space:pre; }
   .ln .gut { background:transparent; }
   .ln .no { color:var(--text3); text-align:right; padding-right:8px; user-select:none; opacity:.8; }
-  .ln .tx { padding-right:10px; }
+  .ln .tx { padding-right:10px; overflow:hidden; text-overflow:ellipsis; }
   .ln.h .tx { color:var(--text3); } .ln.h { background:var(--bg2); }
   .ln.a { background:color-mix(in srgb,var(--ok) 13%,transparent); }
   .ln.d { background:color-mix(in srgb,var(--bad) 13%,transparent); }
   .ln.mark .gut { background:var(--bad-fg); }
   .ln.mark.p2 .gut { background:var(--warn); }
+  .ln.mark.p3 .gut { background:var(--text3); }
   .ln.mark.stl .gut { background:repeating-linear-gradient(180deg,var(--warn) 0 3px,transparent 3px 6px); }
-  .ln.focus { box-shadow:inset 0 0 0 9999px rgba(192,133,82,.07); }
-  .ann { margin:4px 12px 6px 40px; border:1px solid var(--line); border-left:3px solid var(--bad-fg); border-radius:var(--r-sm); background:var(--bg2); padding:8px 10px; font:var(--fs-sm)/1.5 var(--sans); color:var(--text2); white-space:normal; display:flex; flex-direction:column; gap:5px; }
-  .ann.p2 { border-left-color:var(--warn); }
-  .ann.stl { border-style:dashed; border-left:3px dashed var(--warn); background:var(--bg1); }
-  .ann .t { display:flex; gap:7px; align-items:center; color:var(--text); font-weight:600; }
+  .ln.mark { box-shadow:inset 0 0 0 9999px rgba(192,133,82,.06); }
+  .ln.empty { background:repeating-linear-gradient(135deg,transparent 0 4px,var(--bg2) 4px 6px); }
+  .hid { display:flex; align-items:center; gap:10px; padding:2px 10px 2px 44px; background:var(--bg2); color:var(--text3); font:11px var(--sans); border-top:1px solid var(--line-soft); border-bottom:1px solid var(--line-soft); white-space:normal; }
+  .hid .ar { color:var(--text3); cursor:pointer; font-family:var(--mono); }
+  .hidbadge { display:inline-flex; gap:6px; align-items:center; border:1px solid color-mix(in srgb,var(--warn) 55%,var(--line)); border-radius:999px; padding:0 4px 0 8px; color:var(--text2); background:var(--bg1); }
+  .sbs { display:grid; grid-template-columns:1fr 1fr; }
+  .sbs .side-o { border-right:1px solid var(--line-soft); min-width:0; }
+  .sbs .side-m { min-width:0; }
+  .zone-spacer { background:repeating-linear-gradient(135deg,transparent 0 5px,var(--bg2) 5px 7px); border-top:1px dashed var(--line-soft); border-bottom:1px dashed var(--line-soft); display:flex; align-items:center; justify-content:center; color:var(--text3); font:10.5px var(--sans); white-space:normal; text-align:center; padding:0 10px; }
+
+  /* the inline annotation (same record + controls as the conversation checklist) */
+  .ann { margin:4px 12px 6px 40px; border:1px solid var(--line); border-left:3px solid var(--bad-fg); border-radius:var(--r-sm); background:var(--bg2); padding:8px 10px; font:var(--fs-sm)/1.5 var(--sans); color:var(--text2); white-space:normal; display:flex; flex-direction:column; gap:6px; }
+  .sbs .ann { margin:4px 8px 6px 8px; }
+  .ann.p2 { border-left-color:var(--warn); } .ann.p3 { border-left-color:var(--text3); }
+  .ann[data-st=stale] { border-style:dashed; border-left:3px dashed var(--warn); background:var(--bg1); }
+  .ann[data-st=rejected] { opacity:.7; }
+  .ann .t { display:flex; gap:7px; align-items:center; color:var(--text); font-weight:600; flex-wrap:wrap; }
+  .ann[data-st=rejected] .t .tt { text-decoration:line-through; color:var(--text3); }
   .ann .m { font:11px var(--mono); color:var(--text3); display:flex; gap:8px; flex-wrap:wrap; }
-  .ann .acts { display:flex; gap:6px; align-items:center; }
-  .ann code { font-size:11.5px; }
-  .ann .stalenote { color:var(--warn-fg); font-size:11.5px; }
+  .ann .acts { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .ann textarea { width:100%; min-height:130px; resize:vertical; background:var(--bg0); color:var(--text); border:1px solid var(--accent); border-radius:var(--r-sm); padding:8px 10px; font:12px/1.5 var(--mono); }
+  .ann input.reason { flex:1; min-width:180px; background:var(--bg0); color:var(--text); border:1px solid var(--line); border-radius:var(--r-sm); padding:3px 8px; font:12px var(--sans); }
+  .ann .rnote { font-size:11.5px; color:var(--text3); }
+  .ann .stnote { font-size:11.5px; color:var(--warn-fg); }
+  .ann .orig { border-left:2px solid var(--line); padding-left:10px; opacity:.75; }
+  .ann .sync { font-size:11px; color:var(--text3); display:flex; gap:6px; align-items:center; border-top:1px solid var(--line-soft); padding-top:5px; }
+  .md { font-size:var(--fs-sm); color:var(--text2); line-height:1.55; max-width:90ch; }
+  .md p { margin:0 0 5px; } .md p:last-child { margin-bottom:0; }
+  .md ul { margin:0 0 5px 18px; } .md li { margin:2px 0; }
+  .md b { color:var(--text); font-weight:600; }
+  .md code { font-size:11.5px; padding:0 4px; }
+  .who { display:inline-flex; gap:5px; align-items:center; font-size:11px; color:var(--text3); }
+  .who.you { color:var(--accent); }
   .side { width:300px; border-left:1px solid var(--line-soft); display:flex; flex-direction:column; flex-shrink:0; }
   .side .sh { display:flex; gap:8px; align-items:center; padding:8px 10px; border-bottom:1px solid var(--line-soft); font-size:var(--fs-sm); }
   .side .sl { flex:1; overflow:auto; padding:6px; display:flex; flex-direction:column; gap:6px; }
-  .fc { border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:7px 9px; background:var(--bg1); font-size:var(--fs-sm); color:var(--text2); display:flex; flex-direction:column; gap:4px; cursor:pointer; }
+  .fc { border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:7px 9px; background:var(--bg1); font-size:var(--fs-sm); color:var(--text2); display:flex; flex-direction:column; gap:4px; }
   .fc.on { border-color:var(--accent); background:var(--accent-soft); }
-  .fc.stl { border-style:dashed; }
   .fc .t { color:var(--text); display:flex; gap:6px; align-items:flex-start; font-weight:550; }
   .fc .m { font:10.5px var(--mono); color:var(--text3); }
   .fhead { display:flex; flex-direction:column; gap:4px; margin:10px 12px 0; border:1px solid var(--line-soft); border-left:3px solid var(--bad-fg); border-radius:var(--r-sm); padding:7px 10px; background:var(--bg1); font-size:var(--fs-sm); color:var(--text2); }
@@ -224,402 +265,452 @@
 <body>
 <div class="page">
   <header class="intro">
-    <h1>Agent Review: the Changes tab side</h1>
-    <p>The Changes tab is where findings meet the diff they're about. The button here and <code>/review</code> in the conversation start the same job. Same review as <code>agent-review-conversation.html</code>:</p>
+    <h1>Agent Review: the Changes tab side <small style="font-size:13px;color:var(--text3);font-weight:400">· revision 2</small></h1>
+    <p>The Changes tab is where findings meet the diff they're about. <b>Chosen:</b> 1A, 2A (the hero: the inline annotation), 3A. Each section leads with the chosen direction; the rest are folded under <i>Not chosen</i>. Same review and the same finding records as <code>agent-review-conversation.html</code>; the annotations here are live (Accept, Reject, Edit, Undo, Re-check).</p>
     <ul>
-      <li><b>Scope</b> since last review, turns 12–18 (shaded on the turn strip): <b>13 files</b>, 12 in the session folder <code>~/repo/mads</code>, one in <code>~/repo/tao</code> (outside it).</li>
-      <li><b>Reviewer</b> <code>reviewer · goose · qwen3.8-coder-nothink</code>, 10m limit → <b>partial</b>: 8 reviewed, 3 skipped (lockfile, generated snapshot, scratch <code>debug_dump.go</code>), 2 not reached (<code>review/verify.go</code>, <code>review/merge.go</code>).</li>
-      <li><b>Findings</b> 1 P1 · 3 P2 · 1 P3. The <code>snapshot.go</code> P2 is <b>stale</b>: the agent edited that file in turn 19, after the snapshot.</li>
+      <li><b>Scope</b> since last review, turns 12–18 (shaded on the turn strip): <b>14 files</b> in three roots: <code>mads</code> (the session folder, 12), <code>tao</code> (a second repo, 1), and <i>Other files</i> (<code>/tmp</code>, 1).</li>
+      <li><b>Reviewer</b> <code>reviewer · goose · qwen3.8-coder-nothink</code>, 10m limit → <b>partial</b>: 8 reviewed, 4 skipped (lockfile, generated snapshot, 2 scratch), 2 not reached (<code>review/verify.go</code>, <code>review/merge.go</code>).</li>
+      <li><b>Findings</b> 1 P1 · 3 P2 · 2 P3. The <code>snapshot.go</code> P2 is <b>stale</b>: the agent edited that file in turn 19, after the snapshot.</li>
     </ul>
   </header>
 
   <!-- ───────────────────────── 1 ───────────────────────── -->
   <section class="block">
-    <h2><span class="tag">1</span> Starting it, and while it runs <small>use the state switch on each option</small></h2>
-
+    <h2><span class="tag">1</span> Starting it, and while it runs</h2>
     <div class="opt" data-opt="1A">
-      <h3><span class="letter">A</span> A toolbar button that becomes a progress pill <span class="states"></span></h3>
+      <h3><span class="letter">A</span> A toolbar button that becomes a progress pill <span class="chosen">chosen</span> <span class="states"></span></h3>
       <div class="app"></div>
       <div class="trade">
         <ul>
-          <li><b>Idle:</b> “◎ Agent Review” at the toolbar's right end, with a ▾ for scope (since last review / whole session). The last review's result is a quiet note next to it.</li>
-          <li><b>Running:</b> the button turns into a pill: spinner, a cell per bundle, the clock. Click → popover with stages, the current file and <b>Stop</b>.</li>
-          <li><b>Done:</b> the pill shows the counts and partial flag; click → the same popover with Send / filter actions. Rows get a priority badge.</li>
+          <li><b>Idle:</b> “Agent Review” at the toolbar's right end with the review glyph, and a ▾ for scope (since last review / whole session).</li>
+          <li><b>Running:</b> the button turns into a pill: grey spinner, one cell per bundle, the clock. Click → popover with stages, the current bundle and <b>Stop</b>. No special colour; you started it, you know it's running.</li>
+          <li><b>Done:</b> the pill shows counts by priority and the partial flag; the popover has the verdict, coverage and <b>Send N to agent</b> (accepted + edited, same as the conversation card). Rows get a priority badge.</li>
         </ul>
         <div>
-          <div class="pro">+ Smallest footprint: no new row; the list and diff keep every pixel.</div>
-          <div class="pro">+ One control, one place, through the whole lifecycle.</div>
-          <div class="con">− The toolbar already wraps on narrow widths (Compare to + totals + Full-width); the pill is the first thing to get squeezed.</div>
-          <div class="con">− Coverage and the verdict hide in a popover.</div>
+          <div class="pro">+ No new row; the list and diff keep every pixel.</div>
+          <div class="pro">+ One control through the whole lifecycle.</div>
+          <div class="con">− The toolbar already wraps on narrow widths; the pill is the first thing squeezed.</div>
         </div>
       </div>
     </div>
-
-    <div class="opt" data-opt="1B">
-      <h3><span class="letter">B</span> A review strip above the file list <span class="states"></span></h3>
-      <div class="app"></div>
-      <div class="trade">
-        <ul>
-          <li>The button stays a plain button. Once a review exists, a full-width strip sits <b>between the turn strip and the body</b>.</li>
-          <li><b>Running:</b> reviewer, stage, bundle bar, current file, clock / limit, Stop.</li>
-          <li><b>Done:</b> verdict, counts, coverage bar, partial notice with “Review the rest”, and the bulk actions. ✕ hides the strip but keeps the badges.</li>
-        </ul>
-        <div>
-          <div class="pro">+ Room for the verdict, coverage and bulk send without a popover.</div>
-          <div class="pro">+ Reads as being about the whole change set, which it is.</div>
-          <div class="con">− ~36px of permanent height in a tab that's already toolbar + turn strip + context line.</div>
-          <div class="q"><b>Slot:</b> ChangesTab has no band between TurnStrip and <code>.body</code> today; it's a straightforward insert, but it's new layout.</div>
-        </div>
+    <details class="nc"><summary>Not chosen: B · review strip above the file list, C · per-file glyphs filling in</summary>
+      <div class="opt" data-opt="1B">
+        <h3><span class="letter">B</span> A review strip above the file list <span class="states"></span></h3>
+        <div class="app"></div>
+        <div class="trade"><div><div class="pro">+ Room for verdict, coverage and bulk send.</div></div><div><div class="con">− ~36px of permanent height in an already stacked tab.</div></div></div>
       </div>
-    </div>
-
-    <div class="opt" data-opt="1C">
-      <h3><span class="letter">C</span> Per-file glyphs that fill in as bundles finish <span class="states"></span></h3>
-      <div class="app"></div>
-      <div class="trade">
-        <ul>
-          <li>The progress <i>is</i> the file list: each row gets a review column. <span class="g qd">·</span> queued, <span class="spin"></span> in the current bundle, <span class="g ok">✓</span> clean, a priority badge when it has findings, <span class="g skip">–</span> skipped.</li>
-          <li>The toolbar keeps only a small “Reviewing 3/7” label and Stop. Group headers show their own tally.</li>
-        </ul>
-        <div>
-          <div class="pro">+ You can see exactly what's been looked at, and start reading early findings while the rest run.</div>
-          <div class="pro">+ After it's done, the column simply stays: coverage for free (see section 3).</div>
-          <div class="con">− No overall verdict or bulk action anywhere visible; needs A's popover or B's strip alongside.</div>
-          <div class="con">− Another column in rows that are already tight at 340px.</div>
-        </div>
+      <div class="opt" data-opt="1C">
+        <h3><span class="letter">C</span> Per-file glyphs that fill in as bundles finish <span class="states"></span></h3>
+        <div class="app"></div>
+        <div class="trade"><div><div class="pro">+ Shows exactly what's been looked at. (3A keeps this column after the review.)</div></div><div><div class="con">− No verdict or bulk action visible on its own.</div></div></div>
       </div>
-    </div>
+    </details>
   </section>
 
   <!-- ───────────────────────── 2 ───────────────────────── -->
   <section class="block">
-    <h2><span class="tag">2</span> Findings in the list and the diff <small>done state, job.go selected</small></h2>
-
+    <h2><span class="tag">2</span> Findings in the diff: the inline annotation <small>done state</small></h2>
     <div class="opt" data-opt="2A">
-      <h3><span class="letter">A</span> Inline annotation anchored to the line range</h3>
-      <div class="app"></div>
+      <h3><span class="letter">A</span> Inline annotation anchored to the line range <span class="chosen">chosen · hero</span> <span class="states"></span></h3>
+      <div class="app" style="--h:800px"></div>
       <div class="trade">
         <ul>
-          <li>List rows get one badge for their <b>highest</b> open priority (+n when there are more).</li>
-          <li>In the diff a coloured gutter rule marks the range, and the finding sits right under its last line, GitHub-review style: title, body, confidence, verified, cited rule, actions.</li>
+          <li>A coloured gutter rule marks the range; the annotation sits under the range's last line with the reviewer's <b>full explanation</b>, then the same <b>Accept / Reject / Edit</b> controls and states as the conversation checklist. Try them: the list badge and the toolbar follow.</li>
+          <li><b>One record.</b> The footer line says so: accepting here shows as accepted in the conversation card, and the other way round. Edits keep the reviewer's original one click away.</li>
+          <li><b>Inline vs Side by side</b> (the DiffViewer's existing chips): inline, the annotation spans the full width under the line. Side by side, it spans <b>the modified side only</b>; the original side gets a hatched spacer of the same height so the two sides stay aligned. Monaco forces inline below 900px, which is fine: inline is the readable layout for annotations anyway.</li>
+          <li>Findings on a <b>deleted</b> line (original side only) anchor to the nearest modified line, with "on removed line 215" in the header.</li>
           <li><kbd>n</kbd> / <kbd>N</kbd> step through findings across files, like j/k does for files.</li>
         </ul>
         <div>
           <div class="pro">+ The finding and its code are read together; no eye travel.</div>
-          <div class="pro">+ Familiar from every code-review tool.</div>
-          <div class="con">− A long body pushes the rest of the diff down.</div>
-          <div class="q"><b>Slot:</b> DiffViewer is Monaco; inline cards mean view zones + glyph-margin decorations, re-laid out on resize. Doable, but the most custom option here.</div>
+          <div class="pro">+ Same controls in both places, so there's one thing to learn.</div>
+          <div class="con">− A long body (or an open edit box) pushes the rest of the diff down.</div>
+          <div class="callout"><b>Monaco:</b> annotations are view zones on the modified editor. Side by side needs a matching spacer zone on the original editor (Monaco won't add one), re-measured whenever the annotation changes height (expand, textarea resize). A textarea inside a view zone also has to stop Monaco's keybindings from eating keystrokes.</div>
         </div>
       </div>
-    </div>
 
-    <div class="opt" data-opt="2B">
-      <h3><span class="letter">B</span> A findings panel beside the diff</h3>
-      <div class="app"></div>
+      <h4>Collapsed unchanged regions <span class="states" id="collapseStates" style="margin-left:8px"></span></h4>
+      <div class="app" id="collapseApp" style="--h:470px"></div>
       <div class="trade">
         <ul>
-          <li>A 300px column to the right of the diff: <b>This file</b> / <b>All (5)</b>. Clicking a card scrolls the diff to its range and highlights it; the diff carries only a gutter rule.</li>
-          <li>“All” makes the panel a review queue you can work through without touching the file list.</li>
+          <li>The real DiffViewer has <code>hideUnchangedRegions</code> on (3 context lines, minimum 5 to collapse). Reviewers often point at <b>unchanged</b> code the change made wrong. Here the P2's lines 86–90 (the lock) are untouched; the change is the <code>Sync()</code> at 101.</li>
+          <li><b>Scrolled to it yourself:</b> the collapsed bar carries a badge, “1 finding hidden — Reveal”, with the finding's priority. Nothing else moves.</li>
+          <li><b>Arrived via the finding</b> (n/N, the list badge, <b>Open in diff</b> from the conversation): that region auto-reveals the finding's range plus 3 context lines and scrolls to it; the rest stays collapsed.</li>
         </ul>
         <div>
-          <div class="pro">+ No reflow of the diff; Monaco needs only decorations.</div>
-          <div class="pro">+ Bulk select + send fits naturally at the panel's foot.</div>
-          <div class="con">− Three columns: on a 13" laptop the diff drops to ~470px; the panel needs to collapse.</div>
-          <div class="con">− Eye travels between the line and the card.</div>
+          <div class="pro">+ Collapsing stays on, so the diff stays short, but a finding is never silently hidden.</div>
+          <div class="callout"><b>To check:</b> Monaco's hidden-region API is thin. A partial reveal of a range inside a hidden region may need our own view-zone badge on the collapsed bar and a programmatic reveal; that needs a spike.</div>
         </div>
       </div>
     </div>
-
-    <div class="opt" data-opt="2C">
-      <h3><span class="letter">C</span> Group by: Review, findings as list rows</h3>
-      <div class="app"></div>
-      <div class="trade">
-        <ul>
-          <li>A sixth grouping, <b>Review</b>, nests findings under their file in the list. Selecting a finding opens the file's diff scrolled to the range, with the finding pinned in a header above the diff (where the plug-in summary sits in changes-v2).</li>
-          <li>Other groupings keep just the row badge.</li>
-        </ul>
-        <div>
-          <div class="pro">+ Uses the list as the queue: j/k walks findings, the diff stays clean.</div>
-          <div class="pro">+ The header slot already exists (plug-in summary).</div>
-          <div class="con">− Finding text is truncated in a 340px list; the full body is only in the header.</div>
-          <div class="con">− Only one finding visible at a time in the diff.</div>
-        </div>
-      </div>
-    </div>
+    <details class="nc"><summary>Not chosen: B · findings panel beside the diff, C · Group by: Review with findings as list rows</summary>
+      <div class="opt" data-opt="2B"><h3><span class="letter">B</span> A findings panel beside the diff</h3><div class="app"></div>
+        <div class="trade"><div><div class="pro">+ No reflow of the diff.</div></div><div><div class="con">− Three columns; eye travel between line and card.</div></div></div></div>
+      <div class="opt" data-opt="2C"><h3><span class="letter">C</span> Group by: Review, findings as list rows</h3><div class="app"></div>
+        <div class="trade"><div><div class="pro">+ The list is the queue.</div></div><div><div class="con">− One finding visible at a time; text truncated in the list.</div></div></div></div>
+    </details>
   </section>
 
   <!-- ───────────────────────── 3 ───────────────────────── -->
   <section class="block">
-    <h2><span class="tag">3</span> Coverage per file, stale findings, multiple roots <small>snapshot.go selected (the stale one)</small></h2>
-
-    <div class="opt" data-opt="3A" style="--h:660px">
-      <h3><span class="letter">A</span> Folder tree with named roots and a coverage column</h3>
-      <div class="app"></div>
+    <h2><span class="tag">3</span> Coverage per file, stale findings, one root per repo <small>snapshot.go selected (the stale one)</small></h2>
+    <div class="opt" data-opt="3A">
+      <h3><span class="letter">A</span> Folder tree, one root per repo, a coverage column <span class="chosen">chosen</span></h3>
+      <div class="app" style="--h:760px"></div>
       <div class="trade">
         <ul>
-          <li>Every changed file ends in exactly one state, shown in the right column: badge (findings), <span class="g ok">✓</span> reviewed clean, <span class="g skip">–</span> skipped + reason on hover, <span class="g nr">◌</span> not reached.</li>
-          <li>Roots are <b>named per repo</b> (<code>mads</code>, <code>tao</code>) instead of today's single “Outside the session folder”; non-repo paths like <code>/tmp</code> still go to Outside.</li>
-          <li><b>Stale:</b> dashed badge; in the diff, a dashed annotation that says what changed and offers <b>Re-check</b> (re-review this file only) or <b>Show current diff</b>.</li>
+          <li><b>Roots:</b> every repo the agent touched is its own root, named by the repo, with its path: <code>mads</code> (marked as the session folder), <code>tao</code>. Paths that aren't in any repo (<code>/tmp</code>, <code>~/.config</code>) go under one <b>Other files</b> root. No more single “Outside the session folder” bucket.</li>
+          <li>Because the backend keeps a shadow baseline per repo root, <code>tao</code>'s file has real line counts and a real diff, and its finding opens in the diff like any other.</li>
+          <li><b>Coverage column:</b> every changed file ends in exactly one state: a priority badge (findings; ✓ / ✎ after it when accepted / edited), <span class="g ok">✓</span> reviewed clean, <span class="g skip">–</span> skipped (reason inline), <span class="g nr">◌</span> not reached. Each root header totals its own.</li>
+          <li><b>Stale:</b> dashed badge in the list; in the diff a dashed annotation saying what changed, with <b>Accept</b> and <b>Edit</b> disabled and <b>Re-check this file</b> (re-reviews only that file against the current code). Reject still works.</li>
         </ul>
         <div>
           <div class="pro">+ Coverage is visible without a filter, in the view people already use for “where”.</div>
-          <div class="pro">+ Named roots make the cross-repo finding obvious.</div>
-          <div class="q"><b>Tension:</b> outside files come through as <code>counts_unknown</code> (no line counts, “—”, see demoChangeSet.ts). If there's no baseline for them either, “Open in diff” on the <code>tao</code> finding can only show the file at the snapshot. Named roots imply per-root baselines (tao is its own git repo).</div>
+          <div class="pro">+ The cross-repo finding is obvious, and gets a real diff.</div>
+          <div class="callout"><b>Slot:</b> <code>ChangedFile.outside</code> (a boolean) and <code>folderTree.ts</code>'s <code>OUTSIDE_ROOT</code> become a root id + label per file (<code>root: "tao"</code>, <code>root_path</code>), and the Compare-to baselines are per root: “Base branch” means a different branch in each repo.</div>
         </div>
       </div>
     </div>
-
-    <div class="opt" data-opt="3B">
-      <h3><span class="letter">B</span> Group by: Review, by outcome</h3>
-      <div class="app"></div>
-      <div class="trade">
-        <ul>
-          <li>Groups are the outcomes: <b>Findings</b>, <b>Stale</b>, <b>Not reached</b> (with “Review these 2”), <b>Reviewed, clean</b>, <b>Skipped</b> (reason per row). Clean and Skipped start collapsed and dimmed, like Generated/Scratch tiers.</li>
-          <li>Root is a small chip on the row (<span class="rootchip">tao</span>) rather than a level of grouping.</li>
-        </ul>
-        <div>
-          <div class="pro">+ Coverage is an accounting you can check at a glance: the counts add up to 13.</div>
-          <div class="pro">+ Stale gets its own group, so it's never mistaken for an open finding.</div>
-          <div class="con">− Loses folder/tier context while you're in it.</div>
-          <div class="con">− Collides with 2C if both use the “Review” grouping name; pick one meaning.</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="opt" data-opt="3C">
-      <h3><span class="letter">C</span> Filter chips over the existing tiers + a coverage ledger</h3>
-      <div class="app"></div>
-      <div class="trade">
-        <ul>
-          <li>Keep whatever grouping you're in; the review adds filter chips (Findings · Stale · Not reached · Skipped) above the list, and a small per-root ledger at the list's foot.</li>
-          <li>Rows carry the glyph column from 1C and a root chip when not in the session folder.</li>
-        </ul>
-        <div>
-          <div class="pro">+ Least disruptive: Tier stays the backbone, as changes-v2 decided.</div>
-          <div class="pro">+ The ledger answers “did it look at everything in tao?” directly.</div>
-          <div class="con">− Two new bits of chrome (chips + ledger) in the list column.</div>
-          <div class="con">− Filters are easy to leave on and forget.</div>
-        </div>
-      </div>
-    </div>
+    <details class="nc"><summary>Not chosen: B · Group by: Review, by outcome, C · filter chips + a coverage ledger</summary>
+      <div class="opt" data-opt="3B"><h3><span class="letter">B</span> Group by: Review, by outcome</h3><div class="app"></div>
+        <div class="trade"><div><div class="pro">+ Counts add up to 14 at a glance.</div></div><div><div class="con">− Loses folder/tier context.</div></div></div></div>
+      <div class="opt" data-opt="3C"><h3><span class="letter">C</span> Filter chips over the existing tiers + a coverage ledger</h3><div class="app"></div>
+        <div class="trade"><div><div class="pro">+ Tier stays the backbone.</div></div><div><div class="con">− Two new bits of chrome; filters get left on.</div></div></div></div>
+    </details>
   </section>
 </div>
 
 <script>
-/* ---------------- data ---------------- */
-// cov: r reviewed · s skipped · n not reached. bundle: triage bundle (1..7).
-const F = [
-  { p:"services/router/internal/job/job.go", k:"M", a:142, d:38, tier:"core", cov:"r", bundle:1, f:["P1"], seen:false },
-  { p:"services/router/internal/job/queue.go", k:"M", a:61, d:12, tier:"core", cov:"r", bundle:4, f:["P2"] },
-  { p:"services/router/internal/job/job_test.go", k:"M", a:88, d:4, tier:"tests", cov:"r", bundle:3 },
-  { p:"services/router/internal/review/snapshot.go", k:"A", a:203, d:0, tier:"core", cov:"r", bundle:2, f:["P2"], stale:true },
-  { p:"services/router/internal/review/verify.go", k:"A", a:118, d:0, tier:"core", cov:"n", bundle:7 },
-  { p:"services/router/internal/review/merge.go", k:"A", a:96, d:0, tier:"core", cov:"n", bundle:7 },
-  { p:"services/router/internal/review/debug_dump.go", k:"A", a:34, d:0, tier:"scratch", cov:"s", why:"scratch" },
-  { p:"ui/src/files/ChangesTab.tsx", k:"M", a:74, d:19, tier:"core", cov:"r", bundle:5, f:["P3"] },
-  { p:"ui/src/files/ChangesList.tsx", k:"M", a:22, d:6, tier:"core", cov:"r", bundle:5 },
-  { p:"ui/src/router/types.ts", k:"M", a:41, d:2, tier:"core", cov:"r", bundle:6 },
-  { p:"ui/src/files/__snapshots__/ChangesTab.test.tsx.snap", k:"M", a:58, d:11, tier:"generated", cov:"s", why:"generated" },
-  { p:"ui/package-lock.json", k:"M", a:312, d:40, tier:"generated", cov:"s", why:"lockfile" },
-  { p:"~/repo/tao/pkg/agent/review_prompt.go", k:"M", a:0, d:0, unknown:true, tier:"core", cov:"r", bundle:4, f:["P2"], root:"tao" },
-];
-const FINDINGS = [
-  { pri:"P1", title:"Retry loop keeps sleeping after ctx is cancelled", file:"job.go", path:F[0].p, lines:"215–218", conf:.88, verified:true,
-    body:"<code>runWithRetry</code> calls <code>time.Sleep(delay)</code> between attempts. A cancelled job keeps its worker for up to <code>MaxBackoff</code> (30s) per remaining attempt, and <code>Shutdown</code> waits on it. Use a <code>select</code> on <code>ctx.Done()</code> and a timer." },
-  { pri:"P2", title:"Enqueue holds q.mu across the fsync", file:"queue.go", path:F[1].p, lines:"88–104", conf:.74, verified:true, rule:"AGENTS.md:42", body:"" },
-  { pri:"P2", title:"Mode-only changes are dropped from the snapshot", file:"snapshot.go", path:F[3].p, lines:"57–63", conf:.66, stale:true, body:"" },
-  { pri:"P2", title:"Rule citations dropped when AGENTS.md is missing", file:"review_prompt.go", path:F[12].p, lines:"31–40", conf:.58, root:"tao", body:"" },
-  { pri:"P3", title:"Agent Review button stays enabled while a review runs", file:"ChangesTab.tsx", path:F[7].p, lines:"512–530", conf:.61, body:"" },
-];
-const TIERS = [["core","Source"],["tests","Tests & fixtures"],["generated","Generated"],["scratch","Scratch"]];
-const RUN_BUNDLE = 4; // running state: bundles 1–3 done, 4 in progress
+const RICON = `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-label="review"><path d="M1.8 3.2l1 1 1.7-1.9"/><path d="M6.3 3.3h5.4"/><path d="M1.8 7.6l1 1 1.7-1.9"/><path d="M6.3 7.7h2.2"/><path d="M2.2 12.1h3.6"/><circle cx="11.2" cy="10.6" r="2.7"/><path d="M13.2 12.6l1.9 1.9"/></svg>`;
 
+/* ---------------- files ---------------- */
+// cov: r reviewed · s skipped · n not reached. bundle: triage bundle (1..7). root: repo root id.
+const F = [
+  { p:"services/router/internal/job/job.go", k:"M", a:142, d:38, tier:"core", cov:"r", bundle:1, root:"mads", seen:false },
+  { p:"services/router/internal/job/queue.go", k:"M", a:61, d:12, tier:"core", cov:"r", bundle:4, root:"mads" },
+  { p:"services/router/internal/job/job_test.go", k:"M", a:88, d:4, tier:"tests", cov:"r", bundle:3, root:"mads" },
+  { p:"services/router/internal/review/snapshot.go", k:"A", a:203, d:0, tier:"core", cov:"r", bundle:2, root:"mads" },
+  { p:"services/router/internal/review/verify.go", k:"A", a:118, d:0, tier:"core", cov:"n", bundle:7, root:"mads" },
+  { p:"services/router/internal/review/merge.go", k:"A", a:96, d:0, tier:"core", cov:"n", bundle:7, root:"mads" },
+  { p:"services/router/internal/review/debug_dump.go", k:"A", a:34, d:0, tier:"scratch", cov:"s", why:"scratch", root:"mads" },
+  { p:"ui/src/files/ChangesTab.tsx", k:"M", a:74, d:19, tier:"core", cov:"r", bundle:5, root:"mads" },
+  { p:"ui/src/files/ChangesList.tsx", k:"M", a:22, d:6, tier:"core", cov:"r", bundle:5, root:"mads" },
+  { p:"ui/src/router/types.ts", k:"M", a:41, d:2, tier:"core", cov:"r", bundle:6, root:"mads" },
+  { p:"ui/src/files/__snapshots__/ChangesTab.test.tsx.snap", k:"M", a:58, d:11, tier:"generated", cov:"s", why:"generated", root:"mads" },
+  { p:"ui/package-lock.json", k:"M", a:312, d:40, tier:"generated", cov:"s", why:"lockfile", root:"mads" },
+  { p:"pkg/agent/review_prompt.go", k:"M", a:9, d:3, tier:"core", cov:"r", bundle:4, root:"tao" },
+  { p:"/tmp/review-bundle-4.json", k:"A", a:46, d:0, tier:"scratch", cov:"s", why:"scratch", root:"other" },
+];
+const ROOTS = { mads:["mads","~/repo/mads · session folder"], tao:["tao","~/repo/tao · git repo"], other:["Other files","not in a repo"] };
+
+/* ---------------- one record per finding (same as agent-review-conversation.html) ---------------- */
+const FINDINGS = [
+  { id:1, file:0, pri:"P1", title:"Retry loop keeps sleeping after ctx is cancelled", path:"services/router/internal/job/job.go", lines:"215–218", verified:true, state:"accepted",
+    body:"`runWithRetry` (job.go:207) waits between attempts with `time.Sleep(delay)` at line 218. `time.Sleep` can't be interrupted, so once a job's context is cancelled the worker still sleeps out the full delay, up to `j.Type.MaxBackoff` (30s by default, jobtype.go:41), before the next `r.exec` notices.\n\n**Evidence**\n- `Runner.Shutdown` (runner.go:88) cancels the root context, then `wg.Wait()`s. With 3 retries left, one worker can hold shutdown for ~90s.\n- `TestShutdownDrains` (job_test.go:140) only passes because its job type sets `MaxBackoff: 10ms`.\n\n**Fix:** replace the sleep with a `select` on `ctx.Done()` and `time.After(delay)` (or a reused `time.Timer`), returning `ctx.Err()`." },
+  { id:2, file:1, pri:"P2", title:"Enqueue holds q.mu across the fsync", path:"services/router/internal/job/queue.go", lines:"86–90", verified:true, rule:"AGENTS.md:42", state:"accepted",
+    body:"`Enqueue` takes `q.mu` at queue.go:86 and defers the unlock (line 87), so the lock is held until it returns, including the `q.store.Sync()` call this session added at line 101.\n\n**Rule:** AGENTS.md:42, “Never hold a store lock across disk I/O; copy what you need, unlock, then write.”\n\n**Evidence:** every `Dequeue` and `Len` blocks behind the fsync, ~4–12ms per call on the CI runners (`BenchmarkEnqueue` output, turn 16).\n\n**Fix:** append under the lock, unlock explicitly, then `Sync`." },
+  { id:3, file:3, pri:"P2", title:"Mode-only changes are dropped from the snapshot", path:"services/router/internal/review/snapshot.go", lines:"57–63", stale:true, state:"open", staleWhy:"snapshot.go changed in turn 19, after the snapshot (turn 18)",
+    body:"The `git diff --numstat` parse at snapshot.go:57–63 skips entries whose added and deleted counts are both 0. A chmod-only change (e.g. making `scripts/review.sh` executable) is 0/0, so it never reaches triage and isn't in the coverage ledger at all, which breaks the “every changed file is accounted for” rule.\n\n**Fix:** read `--raw` alongside `--numstat`, or treat 0/0 as a mode change and record it as `skipped (mode only)`." },
+  { id:4, file:12, pri:"P2", title:"Rule citations dropped when AGENTS.md is missing", path:"pkg/agent/review_prompt.go", root:"tao", lines:"31–40", state:"edited",
+    body:"`buildRules` (review_prompt.go:31) returns `nil, nil` on `os.ErrNotExist` for AGENTS.md without looking for CLAUDE.md, so repos that only have CLAUDE.md produce findings with no cited rules.\n\n**Evidence:** `loadProjectDocs` in the same package (docs.go:22) already handles both names; the reviewer run on `~/repo/kiln` (CLAUDE.md only) returned 0 citations.\n\n**Fix:** have `buildRules` call `loadProjectDocs`.",
+    userText:"`buildRules` (review_prompt.go:31) gives up when AGENTS.md is missing and never checks CLAUDE.md. Reuse `loadProjectDocs` (docs.go:22), which already handles both names.\n\nDon't change the prompt format: tao's golden tests pin it." },
+  { id:5, file:7, pri:"P3", title:"Agent Review button stays enabled while a review runs", path:"ui/src/files/ChangesTab.tsx", lines:"512–530", state:"rejected", reason:"Intentional: a second click scrolls to the running review.",
+    body:"The button's `disabled` prop (ChangesTab.tsx:518) only checks `!cs`, not whether a review is running. A second click posts another `POST /sessions/{id}/reviews`; the server dedupes it (review/handler.go:64), but the UI gives no sign one is already in progress." },
+  { id:6, file:9, pri:"P3", title:"ReviewFinding.state is typed as string", path:"ui/src/router/types.ts", lines:"1388–1402", state:"open",
+    body:"`ReviewFinding.state` (types.ts:1394) is `string`, but the server only sends `open | accepted | edited | rejected | sent | resolved` (review/finding.go:19). A typo such as `\"rejcted\"` gets through `FindingRow`'s switch with no compiler error.\n\n**Fix:** a union type, like the neighbouring `ChangeTier`." },
+];
+const STATE = { open:["open","mute"], accepted:["accepted","ok"], edited:["edited by you","info"], rejected:["rejected","bad"], stale:["stale","stalep"] };
+const stOf = f => f.stale && f.state !== "rejected" ? "stale" : f.state;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" })[c]);
+const inl = s => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+function md(s) {
+  return s.split(/\n\n+/).map(blk => { const ls = blk.split("\n");
+    if (ls.every(l => l.startsWith("- "))) return `<ul>${ls.map(l => `<li>${inl(l.slice(2))}</li>`).join("")}</ul>`;
+    if (/^\*\*[^*]+\*\*$/.test(ls[0]) && ls.length > 1 && ls.slice(1).every(l => l.startsWith("- "))) return `<p>${inl(ls[0])}</p><ul>${ls.slice(1).map(l => `<li>${inl(l.slice(2))}</li>`).join("")}</ul>`;
+    return `<p>${ls.map(inl).join("<br>")}</p>`; }).join("");
+}
+const finalText = f => f.state === "edited" ? f.userText : f.body;
+const findingsOf = i => FINDINGS.filter(f => f.file === i);
+const sendable = () => FINDINGS.filter(f => !f.stale && (f.state === "accepted" || f.state === "edited"));
+
+function actions(f) {
+  const st = stOf(f);
+  if (f.ui === "edit") return `<textarea data-draft="${f.id}">${esc(f.draft ?? finalText(f))}</textarea>
+    <div class="acts"><button class="btn sm primary" data-act="saveEdit" data-id="${f.id}">Save edit</button><button class="btn sm ghost" data-act="cancel" data-id="${f.id}">Cancel</button><span class="rnote">Your text replaces the reviewer's in what's sent; the original is kept.</span></div>`;
+  if (f.ui === "reject") return `<div class="acts"><input class="reason" data-reason="${f.id}" placeholder="Reason (optional), e.g. intentional, out of scope"><button class="btn sm" data-act="confirmReject" data-id="${f.id}">Reject</button><button class="btn sm ghost" data-act="cancel" data-id="${f.id}">Cancel</button></div>`;
+  if (f.checking) return `<div class="acts"><span class="spin"></span><span class="rnote">Re-checking ${esc(f.path.split("/").pop())} against the current code…</span></div>`;
+  if (st === "stale") return `<div class="stnote">⚠ ${esc(f.staleWhy)}. Lines ${f.lines} no longer match; it may already be fixed, or may have moved.</div>
+    <div class="acts"><button class="btn sm primary" data-act="recheck" data-id="${f.id}">Re-check this file</button><button class="btn sm" disabled title="Disabled while stale">Accept</button><button class="btn sm" disabled title="Disabled while stale">Edit</button><button class="btn sm ghost" data-act="reject" data-id="${f.id}">Reject</button><span class="spacer"></span><button class="btn sm ghost">Show current diff</button></div>`;
+  if (st === "open") return `<div class="acts"><button class="btn sm primary" data-act="accept" data-id="${f.id}">Accept</button><button class="btn sm" data-act="edit" data-id="${f.id}">Edit</button><button class="btn sm ghost" data-act="reject" data-id="${f.id}">Reject</button></div>`;
+  if (st === "accepted") return `<div class="acts"><span class="who"><span class="ricon"></span>Agent Review's words, accepted</span><span class="spacer"></span><button class="btn sm" data-act="edit" data-id="${f.id}">Edit</button><button class="btn sm ghost" data-act="undo" data-id="${f.id}">Undo</button></div>`;
+  if (st === "edited") return `<div class="acts"><span class="who you">✎ edited by you</span><button class="btn sm ghost" data-act="toggleOrig" data-id="${f.id}">${f.showOrig ? "Hide" : "Show"} reviewer's original</button><span class="spacer"></span><button class="btn sm" data-act="edit" data-id="${f.id}">Edit</button><button class="btn sm ghost" data-act="revert" data-id="${f.id}">Use reviewer's text</button><button class="btn sm ghost" data-act="undo" data-id="${f.id}">Undo</button></div>`;
+  if (st === "rejected") return `<div class="acts"><span class="rnote">Rejected${f.reason ? `: “${esc(f.reason)}”` : ""} · not sent</span><span class="spacer"></span><button class="btn sm ghost" data-act="undo" data-id="${f.id}">Undo</button></div>`;
+  return "";
+}
+function annHTML(f) {
+  const st = stOf(f), [lbl, tone] = STATE[st], idx = FINDINGS.indexOf(f) + 1;
+  const body = f.ui === "edit" ? "" : `<div class="md">${md(finalText(f))}</div>${st === "edited" && f.showOrig ? `<div class="md orig"><div class="who" style="margin-bottom:4px"><span class="ricon"></span>Agent Review's original</div>${md(f.body)}</div>` : ""}`;
+  return `<div class="ann ${f.pri.toLowerCase()}" data-st="${st}">
+    <div class="t"><span class="pri ${f.pri} ${st==="stale"?"stale":""}">${f.pri}</span><span class="tt">${esc(f.title)}</span><span class="spill ${tone}">${lbl}</span><span class="spacer"></span><span class="lbl" style="font-weight:400">${st==="stale"?"snapshot ":""}lines ${f.lines}</span></div>
+    <div class="m">${f.rule ? `<span>cites ${f.rule}</span>` : ""}${f.verified ? `<span style="color:var(--ok-fg)">✓ verified</span>` : `<span>not verified</span>`}<span>reviewer · goose · qwen3.8-coder-nothink</span></div>
+    ${body}${actions(f)}
+    <div class="sync"><span>⇄ Same finding as the conversation's review card; state syncs both ways.</span><span class="spacer"></span><span>${idx} of ${FINDINGS.length} · <kbd>n</kbd> next</span></div></div>`;
+}
+
+/* ---------------- list helpers ---------------- */
+const TIERS = [["core","Source"],["tests","Tests & fixtures"],["generated","Generated"],["scratch","Scratch"]];
+const RUN_BUNDLE = 4;
 const base = p => p.slice(p.lastIndexOf("/")+1);
 const dirOf = p => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
-const nums = x => x.unknown ? `<span class="num" title="Outside the session folder: no line counts">—</span>` : `<span class="num"><span class="add">+${x.a}</span> <span class="del">−${x.d}</span></span>`;
-const sizeBar = x => { const t = x.a + x.d; if (x.unknown) return `<span style="width:20px"></span>`; const w = Math.max(4, Math.min(40, Math.round(Math.sqrt(t)*2.2))); return `<span class="size" style="width:${w}px"><i class="a" style="width:${t?100*x.a/t:0}%"></i><i class="d" style="width:${t?100*x.d/t:0}%"></i></span>`; };
+const nums = x => `<span class="num"><span class="add">+${x.a}</span> <span class="del">−${x.d}</span></span>`;
+const sizeBar = x => { const t = x.a + x.d, w = Math.max(4, Math.min(40, Math.round(Math.sqrt(t)*2.2))); return `<span class="size" style="width:${w}px"><i class="a" style="width:${t?100*x.a/t:0}%"></i><i class="d" style="width:${t?100*x.d/t:0}%"></i></span>`; };
 const low = x => x.tier === "generated" || x.tier === "scratch";
-const pri = (p, stale) => `<span class="pri ${p} ${stale?"stale":""}" ${stale?'title="stale: file changed after the snapshot"':""}>${p}</span>`;
-
-// review column glyph for a file, by state: idle | running | done
-function glyph(x, state) {
+const priRank = { P0:0, P1:1, P2:2, P3:3 };
+function badge(i) {
+  const fs = findingsOf(i); if (!fs.length) return "";
+  const live = fs.filter(f => f.state !== "rejected").sort((a,b) => priRank[a.pri] - priRank[b.pri]);
+  if (!live.length) return `<span class="pri ${fs[0].pri} rej" title="rejected">${fs[0].pri}</span>`;
+  const f = live[0], st = stOf(f), mk = st === "accepted" ? "✓" : st === "edited" ? "✎" : "";
+  return `<span class="pri ${f.pri} ${st==="stale"?"stale":""}" title="${STATE[st][0]}">${f.pri}</span>${mk ? `<span class="smk">${mk}</span>` : ""}`;
+}
+function glyph(i, state) {
+  const x = F[i];
   if (state === "idle") return "";
+  if (x.cov === "s") return `<span class="g skip" title="skipped · ${x.why}">–</span>`;
   if (state === "running") {
-    if (x.cov === "s") return `<span class="g skip" title="skipped · ${x.why}">–</span>`;
-    if (x.bundle < RUN_BUNDLE) return x.f ? pri(x.f[0], x.stale) : `<span class="g ok" title="reviewed, no findings">✓</span>`;
+    if (x.bundle < RUN_BUNDLE) return badge(i) || `<span class="g ok" title="reviewed, no findings">✓</span>`;
     if (x.bundle === RUN_BUNDLE) return `<span class="spin" title="bundle 4 · in progress"></span>`;
     return `<span class="g qd" title="queued">·</span>`;
   }
-  if (x.cov === "s") return `<span class="g skip" title="skipped · ${x.why}">–</span>`;
   if (x.cov === "n") return `<span class="g nr" title="not reached: time limit">◌</span>`;
-  if (x.f) return pri(x.f[0], x.stale);
-  return `<span class="g ok" title="reviewed, no findings">✓</span>`;
+  return badge(i) || `<span class="g ok" title="reviewed, no findings">✓</span>`;
 }
-function badgeOnly(x, state) { return state === "done" && x.f ? pri(x.f[0], x.stale) : ""; }
-
-function row(x, sel, rv, { why = false } = {}) {
-  return `<button class="row ${low(x)?"dim":""}" data-sel="${sel===x.p}">
+const badgeOnly = (i, state) => state === "done" ? badge(i) : "";
+function row(i, sel, rv, { why = false } = {}) {
+  const x = F[i];
+  return `<button class="row ${low(x)?"dim":""}" data-sel="${sel===i}">
     <span>${x.seen===false?'<span class="new"></span>':""}</span><span class="k ${x.k}">${x.k}</span>
-    <span class="p"><span class="fn">${x.root?`<span class="rootchip">${x.root}</span>`:""}${esc(base(x.p))}</span><span class="dir"><bdi>${esc(x.root ? dirOf(x.p).replace(/^~\/repo\/tao\/?/,"") : dirOf(x.p))}</bdi></span></span>
+    <span class="p"><span class="fn">${x.root!=="mads"?`<span class="rootchip">${ROOTS[x.root][0]}</span>`:""}${esc(base(x.p))}</span><span class="dir"><bdi>${esc(dirOf(x.p))}</bdi></span></span>
     <span class="meta">${why && x.why ? `<span class="why">${x.why}</span>` : ""}${nums(x)}${sizeBar(x)}</span><span class="rv">${rv}</span></button>`;
 }
 function tierList(sel, rvFn, { tally = false, filter = null } = {}) {
-  const fs = filter ? F.filter(filter) : F;
-  return TIERS.map(([k,n]) => { const g = fs.filter(x => x.tier === k); if (!g.length) return "";
-    const t = tally ? `<span class="gx">${g.filter(x=>x.cov==="r" && (x.bundle||9) < RUN_BUNDLE).length}/${g.filter(x=>x.cov!=="s").length} reviewed</span>` : "";
+  const idx = F.map((_, i) => i).filter(i => !filter || filter(i));
+  return TIERS.map(([k,n]) => { const g = idx.filter(i => F[i].tier === k); if (!g.length) return "";
     const open = !(k === "generated" || k === "scratch") || tally || filter;
-    return `<div class="gh"><span class="caret">${open?"▾":"▸"}</span><span class="name">${n}</span><span class="n">${g.length}</span><span class="spacer"></span>${t}</div>${open ? g.map(x => row(x, sel, rvFn(x))).join("") : ""}`; }).join("");
+    const t = tally ? `<span class="gx">${g.filter(i => F[i].cov==="r" && F[i].bundle < RUN_BUNDLE).length}/${g.filter(i => F[i].cov!=="s").length} reviewed</span>` : "";
+    return `<div class="gh"><span class="caret">${open?"▾":"▸"}</span><span class="name">${n}</span><span class="n">${g.length}</span><span class="spacer"></span>${t}</div>${open ? g.map(i => row(i, sel, rvFn(i))).join("") : ""}`; }).join("");
 }
 const filterBar = (group = "Tier", extra = "") => `<div class="filter"><span class="inp">Filter files…</span><div class="seg">${["Tier","Folder","Turn","Commit"].concat(extra?[extra]:[]).map(g => `<button aria-pressed="${g===group}">${g}</button>`).join("")}</div></div>`;
 
 /* ---------------- chrome ---------------- */
-const tabs = `<div class="tabs"><span>Conversation</span><span>Tasks</span><span class="on">Changes<span class="count">13</span></span><span>Pipeline</span></div>`;
+const tabs = `<div class="tabs"><span>Conversation</span><span>Tasks</span><span class="on">Changes<span class="count">14</span></span><span>Pipeline</span></div>`;
 const turnStrip = () => { const h = [3,5,2,4,6,1,3,7,2,5,4,8,6,3,9,5,7,4,3]; return `<div class="strip">${h.map((v,i) => `<span class="col ${i+1>=12&&i+1<=18?"in":""}"><span class="bar" style="height:${4+v*2.4}px"></span><span>${i+1}</span></span>`).join("")}<span class="scope">review scope: turns 12–18 · turn 19 is after the snapshot</span></div>`; };
-const toolbarLeft = `<span class="lbl">Compare to</span><div class="seg"><button aria-pressed="true">Session start</button><button>Base branch</button><button>main</button></div><span class="totals">13 files · <span class="add">+1,249</span> <span class="del">−132</span></span><span class="spacer"></span>`;
-const mini = (state) => `<span class="mini">${[1,2,3,4,5,6,7].map(b => `<i class="${state==="running" ? (b<RUN_BUNDLE?"done":b===RUN_BUNDLE?"now":"") : (b<7?"done":"cut")}"></i>`).join("")}</span>`;
-const stages = (state) => state === "running"
+const toolbarLeft = `<span class="lbl">Compare to</span><div class="seg"><button aria-pressed="true">Session start</button><button>Base branch</button><button>main</button></div><span class="totals">14 files · <span class="add">+1,304</span> <span class="del">−135</span></span><span class="spacer"></span>`;
+const mini = st => `<span class="mini">${[1,2,3,4,5,6,7].map(b => `<i class="${st==="running" ? (b<RUN_BUNDLE?"done":b===RUN_BUNDLE?"now":"") : (b<7?"done":"cut")}"></i>`).join("")}</span>`;
+const stages = st => st === "running"
   ? `<div class="stage"><span class="s done">snapshot ✓</span>›<span class="s done">triage ✓</span>›<span class="s now">find 3/7</span>›<span class="s">verify</span>›<span class="s">merge</span></div>`
   : `<div class="stage"><span class="s done">snapshot ✓</span>›<span class="s done">triage ✓</span>›<span class="s done">find 6/7</span>›<span class="s done">verify ✓</span>›<span class="s done">merge ✓</span></div>`;
-const counts = `${pri("P1")} 1 ${pri("P2")} 3 ${pri("P3")} 1`;
-const covBar = `<span class="cov"><i class="r" style="width:61.5%"></i><i class="s" style="width:23%"></i><i class="n" style="width:15.5%"></i></span>`;
+const counts = `<span class="pri P1">P1</span> 1 <span class="pri P2">P2</span> 3 <span class="pri P3">P3</span> 2`;
+const donePill = () => `<span class="pill done"><span class="ricon"></span>${counts} <span style="color:var(--warn-fg)">· partial</span> <span style="color:var(--text3)">· ${sendable().length} to send</span></span>`;
+const covBar = `<span class="cov"><i class="r" style="width:57%"></i><i class="s" style="width:28.6%"></i><i class="n" style="width:14.4%"></i></span>`;
+const dh = (i, extra = "", layout = null) => { const x = F[i]; return `<div class="dh"><span class="k ${x.k}">${x.k}</span>${x.root!=="mads"?`<span class="rootchip">${ROOTS[x.root][0]}</span>`:""}<span class="path">${esc(x.p)}</span>${nums(x)}<span class="chip">uncommitted</span><span class="spacer"></span>${extra}${layout ? `<span class="chip btnchip" data-layout="inline" aria-pressed="${layout==="inline"}">Inline</span><span class="chip btnchip" data-layout="sbs" aria-pressed="${layout==="sbs"}">Side by side</span>` : `<span class="lbl">changed in</span><span class="chip" style="font-family:var(--mono)">turn 13</span><span class="chip" style="font-family:var(--mono)">turn 16</span>`}</div>`; };
 
-/* ---------------- diff bodies ---------------- */
+/* ---------------- diffs ---------------- */
+// [type, oldNo, newNo, text, markForFindingId, annotateAfter]
 const JOB = [
-  ["h",null,"@@ -198,14 +198,21 @@ func (r *Runner) runWithRetry(ctx context.Context, j *Job) error"],
-  ["c",207,"\tfor attempt := 0; attempt <= j.Type.MaxRetries; attempt++ {"],
-  ["c",208,"\t\terr := r.exec(ctx, j)"],
-  ["c",209,"\t\tif err == nil {"],
-  ["c",210,"\t\t\treturn nil"],
-  ["c",211,"\t\t}"],
-  ["d",212,"\t\tif attempt == j.Type.MaxRetries {"],
-  ["a",212,"\t\tif !isRetryable(err) || attempt == j.Type.MaxRetries {"],
-  ["c",213,"\t\t\treturn err"],
-  ["c",214,"\t\t}"],
-  ["d",215,"\t\ttime.Sleep(r.backoff)"],
-  ["a",215,"\t\tdelay := nextDelay(attempt, j.Type.BaseBackoff, j.Type.MaxBackoff)",1],
-  ["a",216,"\t\tr.log.Debug(\"job retry\", \"id\", j.ID, \"attempt\", attempt+1, \"delay\", delay)",1],
-  ["a",217,"\t\tr.metrics.Retries.WithLabelValues(j.Type.Name).Inc()",1],
-  ["a",218,"\t\ttime.Sleep(delay)",1,"ANN"],
-  ["c",219,"\t}"],
-  ["c",220,"\treturn nil"],
-  ["c",221,"}"],
+  ["hid", "206 unchanged lines"],
+  ["c",207,207,"\tfor attempt := 0; attempt <= j.Type.MaxRetries; attempt++ {"],
+  ["c",208,208,"\t\terr := r.exec(ctx, j)"],
+  ["c",209,209,"\t\tif err == nil {"],
+  ["c",210,210,"\t\t\treturn nil"],
+  ["c",211,211,"\t\t}"],
+  ["d",212,null,"\t\tif attempt == j.Type.MaxRetries {"],
+  ["a",null,212,"\t\tif !isRetryable(err) || attempt == j.Type.MaxRetries {"],
+  ["c",213,213,"\t\t\treturn err"],
+  ["c",214,214,"\t\t}"],
+  ["d",215,null,"\t\ttime.Sleep(r.backoff)"],
+  ["a",null,215,"\t\tdelay := nextDelay(attempt, j.Type.BaseBackoff, j.Type.MaxBackoff)",1],
+  ["a",null,216,"\t\tr.log.Debug(\"job retry\", \"id\", j.ID, \"attempt\", attempt+1, \"delay\", delay)",1],
+  ["a",null,217,"\t\tr.metrics.Retries.WithLabelValues(j.Type.Name).Inc()",1],
+  ["a",null,218,"\t\ttime.Sleep(delay)",1,1],
+  ["c",216,219,"\t}"],
+  ["c",217,220,"\treturn nil"],
+  ["c",218,221,"}"],
+  ["hid", "90 unchanged lines"],
+];
+// side-by-side pairs: [left, right] where each is [type, no, text] or null (empty filler)
+const JOB_SBS = [
+  ["hid","206 unchanged lines"],
+  [["c",207,JOB[1][3]],["c",207,JOB[1][3]]],[["c",208,JOB[2][3]],["c",208,JOB[2][3]]],[["c",209,JOB[3][3]],["c",209,JOB[3][3]]],
+  [["c",210,JOB[4][3]],["c",210,JOB[4][3]]],[["c",211,JOB[5][3]],["c",211,JOB[5][3]]],
+  [["d",212,JOB[6][3]],["a",212,JOB[7][3]]],[["c",213,JOB[8][3]],["c",213,JOB[8][3]]],[["c",214,JOB[9][3]],["c",214,JOB[9][3]]],
+  [["d",215,JOB[10][3]],["a",215,JOB[11][3],1]],[null,["a",216,JOB[12][3],1]],[null,["a",217,JOB[13][3],1]],[null,["a",218,JOB[14][3],1,1]],
+  [["c",216,"\t}"],["c",219,"\t}"]],[["c",217,"\treturn nil"],["c",220,"\treturn nil"]],[["c",218,"}"],["c",221,"}"]],
+  ["hid","90 unchanged lines"],
+];
+const QUEUE_TAIL = [
+  ["c",98,98,"\tq.items = append(q.items, it)"],
+  ["c",99,99,"\tq.seq++"],
+  ["c",100,100,""],
+  ["a",null,101,"\tif err := q.store.Sync(); err != nil {"],
+  ["a",null,102,"\t\treturn fmt.Errorf(\"enqueue: sync: %w\", err)"],
+  ["a",null,103,"\t}"],
+  ["c",101,104,"\treturn nil"],
+  ["c",102,105,"}"],
+];
+const QUEUE_COLLAPSED = [["hid","97 unchanged lines", 2], ...QUEUE_TAIL];
+const QUEUE_REVEALED = [
+  ["hid","81 unchanged lines"],
+  ["c",82,82,"// Enqueue appends it to the queue and persists it."],
+  ["c",83,83,"func (q *Queue) Enqueue(ctx context.Context, it Item) error {"],
+  ["c",84,84,"\tif err := it.Validate(); err != nil { return err }"],
+  ["c",85,85,""],
+  ["c",86,86,"\tq.mu.Lock()",2],
+  ["c",87,87,"\tdefer q.mu.Unlock()",2],
+  ["c",88,88,"\tif q.closed {",2],
+  ["c",89,89,"\t\treturn ErrClosed",2],
+  ["c",90,90,"\t}",2,2],
+  ["c",91,91,"\tit.Seq = q.seq"],
+  ["c",92,92,"\tit.EnqueuedAt = q.clock.Now()"],
+  ["c",93,93,"\tif err := q.store.Append(it); err != nil {"],
+  ["hid","4 unchanged lines"],
+  ...QUEUE_TAIL,
 ];
 const SNAP = [
-  ["h",null,"@@ -0,0 +1,203 @@  (new file) · showing the review snapshot, turn 18"],
-  ["a",54,"\tfor _, line := range strings.Split(out, \"\\n\") {"],
-  ["a",55,"\t\tf := strings.Fields(line)"],
-  ["a",56,"\t\tif len(f) < 3 { continue }"],
-  ["a",57,"\t\tadded, _ := strconv.Atoi(f[0])",1],
-  ["a",58,"\t\tdeleted, _ := strconv.Atoi(f[1])",1],
-  ["a",59,"\t\tif added == 0 && deleted == 0 {",1],
-  ["a",60,"\t\t\tcontinue // nothing to review",1],
-  ["a",61,"\t\t}",1],
-  ["a",62,"\t\tfiles = append(files, SnapFile{Path: f[2], Added: added, Deleted: deleted})",1],
-  ["a",63,"\t}",1,"ANN"],
-  ["a",64,"\treturn files, nil"],
+  ["h",null,null,"@@ -0,0 +1,203 @@  (new file) · showing the review snapshot, turn 18"],
+  ["a",null,54,"\tfor _, line := range strings.Split(out, \"\\n\") {"],
+  ["a",null,55,"\t\tf := strings.Fields(line)"],
+  ["a",null,56,"\t\tif len(f) < 3 { continue }"],
+  ["a",null,57,"\t\tadded, _ := strconv.Atoi(f[0])",3],
+  ["a",null,58,"\t\tdeleted, _ := strconv.Atoi(f[1])",3],
+  ["a",null,59,"\t\tif added == 0 && deleted == 0 {",3],
+  ["a",null,60,"\t\t\tcontinue // nothing to review",3],
+  ["a",null,61,"\t\t}",3],
+  ["a",null,62,"\t\tfiles = append(files, SnapFile{Path: f[2], Added: added, Deleted: deleted})",3],
+  ["a",null,63,"\t}",3,3],
+  ["a",null,64,"\treturn files, nil"],
 ];
-function diffHTML(lines, { annotate = null, mark = "", focus = false } = {}) {
-  return `<div class="diff">${lines.map(([t,n,tx,m,ann]) => {
-    const cls = { h:"h", a:"a", d:"d", c:"" }[t] + (m ? ` mark ${mark}` : "") + (m && focus ? " focus" : "");
-    return `<div class="ln ${cls}"><span class="gut"></span><span class="no">${n ?? ""}</span><span class="tx">${t==="a"?"+":t==="d"?"-":t==="h"?"":" "}${esc(tx)}</span></div>${ann && annotate ? annotate : ""}`;
+const markCls = id => { const f = FINDINGS.find(x => x.id === id); return `mark ${f.pri.toLowerCase()} ${stOf(f)==="stale"?"stl":""}`; };
+function hidBar(text, fid) {
+  const f = fid && FINDINGS.find(x => x.id === fid);
+  return `<div class="hid"><span class="ar">↕</span><span>⋯ ${text}</span>${f ? `<span class="hidbadge"><span class="pri ${f.pri}">${f.pri}</span>1 finding hidden in these lines<button class="btn sm" data-reveal="1">Reveal</button></span>` : ""}<span class="spacer"></span><span class="ar">show all</span></div>`;
+}
+function diffInline(lines, { annotate = true } = {}) {
+  return `<div class="diff">${lines.map(l => {
+    if (l[0] === "hid") return hidBar(l[1], l[2]);
+    const [t, o, n, tx, m, ann] = l;
+    const cls = { h:"h", a:"a", d:"d", c:"" }[t] + (m ? " " + markCls(m) : "");
+    return `<div class="ln ${cls}"><span class="gut"></span><span class="no">${n ?? o ?? ""}</span><span class="tx">${t==="a"?"+":t==="d"?"-":t==="h"?"":" "}${esc(tx)}</span></div>${ann && annotate ? annHTML(FINDINGS.find(f => f.id === ann)) : ""}`;
   }).join("")}</div>`;
 }
-const jobAnn = `<div class="ann"><div class="t">${pri("P1")}Retry loop keeps sleeping after ctx is cancelled<span class="spacer"></span><span class="lbl" style="font-weight:400">lines 215–218</span></div>
-  <div>${FINDINGS[0].body}</div>
-  <div class="m"><span>confidence 0.88</span><span style="color:var(--ok-fg)">✓ verified</span><span>reviewer · goose · qwen3.8-coder-nothink</span></div>
-  <div class="acts"><button class="btn sm primary">Send to agent</button><button class="btn sm">Dismiss</button><button class="btn sm ghost">Copy</button><span class="spacer"></span><span class="lbl">1 of 5 · <kbd>n</kbd> next</span></div></div>`;
-const snapAnn = `<div class="ann p2 stl"><div class="t">${pri("P2",true)}Mode-only changes are dropped from the snapshot<span class="stalechip">stale</span><span class="spacer"></span><span class="lbl" style="font-weight:400">snapshot lines 57–63</span></div>
-  <div class="stalenote">snapshot.go changed in turn 19, after this review's snapshot (turn 18). Lines 57–63 no longer match; the finding may already be fixed, or may have moved.</div>
-  <div class="m"><span>confidence 0.66</span><span>not verified</span></div>
-  <div class="acts"><button class="btn sm">Re-check this file</button><button class="btn sm ghost">Show current diff</button><button class="btn sm ghost">Dismiss</button><span class="spacer"></span><span class="lbl">Send is off while stale</span></div></div>`;
-const dh = (x, extra = "") => `<div class="dh"><span class="k ${x.k}">${x.k}</span><span class="path">${esc(x.p)}</span>${nums(x)}<span class="chip">uncommitted</span><span class="spacer"></span>${extra}<span class="lbl">changed in</span><span class="chip" style="font-family:var(--mono)">turn 13</span><span class="chip" style="font-family:var(--mono)">turn 16</span></div>`;
+function diffSbs(pairs) {
+  const cell = c => c ? `<div class="ln ${{a:"a",d:"d",c:""}[c[0]]} ${c[3] ? markCls(c[3]) : ""}"><span class="gut"></span><span class="no">${c[1]}</span><span class="tx">${esc(c[2])}</span></div>` : `<div class="ln empty"><span class="gut"></span><span class="no"></span><span class="tx"> </span></div>`;
+  return `<div class="diff">${pairs.map(p => {
+    if (p[0] === "hid") return hidBar(p[1]);
+    const ann = p[1] && p[1][4];
+    const row = `<div class="sbs"><div class="side-o">${cell(p[0])}</div><div class="side-m">${cell(p[1])}</div></div>`;
+    return row + (ann ? `<div class="sbs"><div class="side-o zone-spacer">alignment spacer: same height as the annotation on the modified side</div><div class="side-m">${annHTML(FINDINGS.find(f => f.id === ann))}</div></div>` : "");
+  }).join("")}</div>`;
+}
 
 /* ---------------- options ---------------- */
-const SEL = F[0].p, SEL_SNAP = F[3].p;
+const SEL = 0, SEL_SNAP = 3;
 const OPTS = {
-  "1A": { states:["idle","running","done"], render(s) {
-    const ctl = s === "idle" ? `<span class="lbl">Last review: none since turn 11</span><span class="btn">◎ Agent Review <span style="color:var(--text3)">▾</span></span>`
-      : s === "running" ? `<span class="pill run" data-pop><span class="spin"></span>Reviewing ${mini(s)} 3/7 · 3m 41s</span>`
-      : `<span class="pill done" data-pop>◎ ${counts} <span style="color:var(--warn-fg)">· partial</span></span>`;
-    const pop = s === "idle" ? "" : `<div class="pop"><div class="h">Agent Review<small>reviewer · goose · qwen3.8-coder-nothink</small></div>${stages(s)}
+  "1A": { states:["idle","running","done"], init:"running", render(s) {
+    const ctl = s === "idle" ? `<span class="btn"><span class="ricon"></span>Agent Review <span style="color:var(--text3)">▾</span></span>`
+      : s === "running" ? `<span class="pill run"><span class="spin"></span>Reviewing ${mini(s)} 3/7 · 3m 41s</span>` : donePill();
+    const pop = s === "idle" ? "" : `<div class="pop"><div class="h"><span class="ricon"></span>Agent Review<small>reviewer · goose · qwen3.8-coder-nothink</small></div>${stages(s)}
       ${s === "running"
-        ? `<div class="bundles">${[1,2,3,4,5,6,7].map(b=>`<i class="${b<4?"done":b===4?"now":""}"></i>`).join("")}</div><div style="font:11.5px var(--mono);color:var(--text3)">bundle 4 · queue.go, review_prompt.go</div><div style="display:flex;gap:8px;align-items:center"><span class="lbl">3m 41s of 10m · 2 findings so far</span><span class="spacer"></span><button class="btn sm">Stop</button></div>`
-        : `<div><b style="color:var(--text)">Changes needed.</b> The retry loop can hold a worker after cancel; the rest are smaller.</div><div style="display:flex;gap:8px;align-items:center">${covBar}<span class="lbl">8 reviewed · 3 skipped · <span style="color:var(--warn-fg)">2 not reached</span></span></div><div style="display:flex;gap:6px"><button class="btn sm primary">Send 4 open to agent</button><button class="btn sm">Only files with findings</button><button class="btn sm ghost">Review the rest</button></div>`}</div>`;
-    return `${tabs}<div class="toolbar">${toolbarLeft}${ctl}${pop}</div>${turnStrip()}<div class="body"><div class="list">${filterBar()}${tierList(SEL, x => badgeOnly(x, s))}</div><div class="detail">${dh(F[0])}${diffHTML(JOB)}</div></div>`;
+        ? `<div class="bundles">${[1,2,3,4,5,6,7].map(b=>`<i class="${b<4?"done":b===4?"now":""}"></i>`).join("")}</div><div style="font:11.5px var(--mono);color:var(--text3)">bundle 4 · queue.go, tao/review_prompt.go</div><div style="display:flex;gap:8px;align-items:center"><span class="lbl">3m 41s of 10m · 2 findings so far</span><span class="spacer"></span><button class="btn sm">Stop</button></div>`
+        : `<div><b style="color:var(--text)">Changes needed.</b> The retry loop can hold a worker after cancel; the rest are smaller.</div><div style="display:flex;gap:8px;align-items:center">${covBar}<span class="lbl">8 reviewed · 4 skipped · <span style="color:var(--warn-fg)">2 not reached</span></span></div><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm primary">Send ${sendable().length} to agent</button><button class="btn sm">Next finding (n)</button><button class="btn sm ghost">Review the rest</button></div>`}</div>`;
+    return `${tabs}<div class="toolbar">${toolbarLeft}${ctl}${pop}</div>${turnStrip()}<div class="body"><div class="list">${filterBar()}${tierList(SEL, i => badgeOnly(i, s))}</div><div class="detail">${dh(SEL)}${diffInline(JOB, { annotate: s === "done" })}</div></div>`;
   } },
-  "1B": { states:["idle","running","done"], render(s) {
-    const btn = s === "running" ? `<span class="btn" disabled>◎ Reviewing…</span>` : `<span class="btn">◎ Agent Review <span style="color:var(--text3)">▾</span></span>`;
-    const band = s === "idle" ? "" : s === "running"
-      ? `<div class="band run"><span class="spin"></span><b style="color:var(--text);font-weight:600">Agent Review</b><span class="who">reviewer · goose · qwen3.8-coder-nothink</span>${stages(s)}<span class="bundles" style="width:120px">${[1,2,3,4,5,6,7].map(b=>`<i class="${b<4?"done":b===4?"now":""}"></i>`).join("")}</span><span class="who">queue.go</span><span class="spacer"></span><span class="lbl">3m 41s / 10m</span><button class="btn sm">Stop</button></div>`
-      : `<div class="band done"><b style="color:var(--text);font-weight:600">Changes needed</b><span>${counts}</span><span class="stalechip">1 stale</span>${covBar}<span class="lbl">8 reviewed · 3 skipped · <span style="color:var(--warn-fg)">2 not reached (time limit)</span> <span class="link">Review the rest</span></span><span class="spacer"></span><button class="btn sm primary">Send 4 open</button><button class="btn sm ghost">✕</button></div>`;
-    return `${tabs}<div class="toolbar">${toolbarLeft}${btn}</div>${turnStrip()}${band}<div class="body"><div class="list">${filterBar()}${tierList(SEL, x => badgeOnly(x, s))}</div><div class="detail">${dh(F[0])}${diffHTML(JOB)}</div></div>`;
+  "1B": { states:["running","done"], init:"running", render(s) {
+    const band = s === "running"
+      ? `<div class="band"><span class="spin"></span><span class="ricon"></span><b style="color:var(--text);font-weight:600">Agent Review</b><span class="who">reviewer · goose · qwen3.8-coder-nothink</span>${stages(s)}<span class="bundles" style="width:120px">${[1,2,3,4,5,6,7].map(b=>`<i class="${b<4?"done":b===4?"now":""}"></i>`).join("")}</span><span class="spacer"></span><span class="lbl">3m 41s / 10m</span><button class="btn sm">Stop</button></div>`
+      : `<div class="band"><span class="ricon"></span><b style="color:var(--text);font-weight:600">Changes needed</b><span>${counts}</span><span class="stalechip">1 stale</span>${covBar}<span class="lbl">8 reviewed · 4 skipped · <span style="color:var(--warn-fg)">2 not reached</span></span><span class="spacer"></span><button class="btn sm primary">Send ${sendable().length}</button></div>`;
+    return `${tabs}<div class="toolbar">${toolbarLeft}<span class="btn"><span class="ricon"></span>Agent Review</span></div>${turnStrip()}${band}<div class="body"><div class="list">${filterBar()}${tierList(SEL, i => badgeOnly(i, s))}</div><div class="detail">${dh(SEL)}${diffInline(JOB, { annotate:false })}</div></div>`;
   } },
-  "1C": { states:["running","done"], render(s) {
-    const ctl = s === "running" ? `<span class="lbl"><span class="spin"></span> Reviewing 3/7 · 3m 41s</span><button class="btn sm">Stop</button>` : `<span class="lbl" style="color:var(--warn-fg)">Review partial · 2 not reached</span><span class="btn">◎ Agent Review <span style="color:var(--text3)">▾</span></span>`;
-    return `${tabs}<div class="toolbar">${toolbarLeft}${ctl}</div>${turnStrip()}<div class="body"><div class="list">${filterBar()}${tierList(SEL, x => glyph(x, s), { tally: s === "running" })}</div><div class="detail">${dh(F[0])}${diffHTML(JOB)}</div></div>`;
+  "1C": { states:["running","done"], init:"running", render(s) {
+    const ctl = s === "running" ? `<span class="lbl"><span class="spin"></span> Reviewing 3/7 · 3m 41s</span><button class="btn sm">Stop</button>` : `<span class="lbl" style="color:var(--warn-fg)">Review partial · 2 not reached</span>`;
+    return `${tabs}<div class="toolbar">${toolbarLeft}${ctl}</div>${turnStrip()}<div class="body"><div class="list">${filterBar()}${tierList(SEL, i => glyph(i, s), { tally: s === "running" })}</div><div class="detail">${dh(SEL)}${diffInline(JOB, { annotate:false })}</div></div>`;
   } },
 
-  "2A": { render() {
-    return `${tabs}<div class="toolbar">${toolbarLeft}<span class="pill done">◎ ${counts} <span style="color:var(--warn-fg)">· partial</span></span></div><div class="body"><div class="list">${filterBar()}${tierList(SEL, x => badgeOnly(x, "done"))}</div><div class="detail">${dh(F[0])}${diffHTML(JOB, { annotate: jobAnn })}</div></div>`;
+  "2A": { states:["inline","side by side"], init:"inline", render(s) {
+    const layout = s === "inline" ? "inline" : "sbs";
+    return `${tabs}<div class="toolbar">${toolbarLeft}${donePill()}</div><div class="body"><div class="list" style="width:${layout==="sbs"?300:360}px">${filterBar()}${tierList(SEL, i => badgeOnly(i, "done"))}</div><div class="detail">${dh(SEL, "", layout)}${layout === "inline" ? diffInline(JOB) : diffSbs(JOB_SBS)}</div></div>`;
+  } },
+  "collapse": { states:["scrolled to it","arrived via the finding"], init:"scrolled to it", render(s) {
+    return `${tabs}<div class="toolbar">${toolbarLeft}${donePill()}</div><div class="body"><div class="list" style="width:300px">${filterBar()}${tierList(1, i => badgeOnly(i, "done"))}</div><div class="detail">${dh(1, "", "inline")}${diffInline(s === "scrolled to it" ? QUEUE_COLLAPSED : QUEUE_REVEALED)}</div></div>`;
   } },
   "2B": { render() {
-    const cards = FINDINGS.map((f,i) => `<div class="fc ${i===0?"on":""} ${f.stale?"stl":""}"><div class="t">${pri(f.pri, f.stale)}<span>${esc(f.title)}</span></div>
-      <div class="m">${f.root?`<span class="rootchip">${f.root}</span> `:""}${esc(f.file)}:${f.lines}${f.rule?" · "+f.rule:""} · ${f.conf.toFixed(2)}${f.verified?' · <span style="color:var(--ok-fg)">✓</span>':""}</div>
-      ${f.stale ? `<div style="font-size:11px;color:var(--warn-fg)">stale: file changed in turn 19 · <span class="link">Re-check</span></div>` : ""}
-      ${i===0 ? `<div style="font-size:11.5px">${f.body}</div><div style="display:flex;gap:5px"><button class="btn sm primary">Send</button><button class="btn sm">Dismiss</button></div>` : ""}</div>`).join("");
-    return `${tabs}<div class="toolbar">${toolbarLeft}<span class="pill done">◎ ${counts} <span style="color:var(--warn-fg)">· partial</span></span></div><div class="body"><div class="list" style="width:330px">${filterBar()}${tierList(SEL, x => badgeOnly(x, "done"))}</div><div class="detail">${dh(F[0])}<div class="dsplit">${diffHTML(JOB, { focus:true })}<div class="side"><div class="sh"><b>Findings</b><div class="seg"><button>This file (1)</button><button aria-pressed="true">All (5)</button></div><span class="spacer"></span></div><div class="sl">${cards}</div><div class="sh" style="border-top:1px solid var(--line-soft);border-bottom:0"><span class="lbl">4 open · 1 stale</span><span class="spacer"></span><button class="btn sm primary">Send 4 to agent</button></div></div></div></div></div>`;
+    const cards = FINDINGS.map((f,i) => `<div class="fc ${i===0?"on":""}"><div class="t"><span class="pri ${f.pri} ${stOf(f)==="stale"?"stale":""}">${f.pri}</span><span>${esc(f.title)}</span></div><div class="m">${f.root?`<span class="rootchip">${f.root}</span> `:""}${esc(base(f.path))}:${f.lines}${f.rule?" · "+f.rule:""} · ${STATE[stOf(f)][0]}</div></div>`).join("");
+    return `${tabs}<div class="toolbar">${toolbarLeft}${donePill()}</div><div class="body"><div class="list" style="width:300px">${filterBar()}${tierList(SEL, i => badgeOnly(i, "done"))}</div><div class="detail">${dh(SEL)}<div class="dsplit">${diffInline(JOB, { annotate:false })}<div class="side"><div class="sh"><b>Findings</b><span class="spacer"></span><span class="lbl">6</span></div><div class="sl">${cards}</div></div></div></div></div>`;
   } },
   "2C": { render() {
-    const withF = F.filter(x => x.f);
-    const list = withF.map(x => { const fs = FINDINGS.filter(f => f.path === x.p);
-      return row(x, null, "") + fs.map((f) => `<button class="row sub" data-sel="${f===FINDINGS[0]}"><span></span>${pri(f.pri, f.stale)}<span class="p"><span class="fn" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block">${esc(f.title)}</span><span class="dir" style="direction:ltr">${f.lines}${f.rule?" · "+f.rule:""}${f.stale?' · <span style="color:var(--warn-fg)">stale</span>':""}</span></span><span class="num">${f.conf.toFixed(2)}</span></button>`).join(""); }).join("");
-    const rest = `<div class="gh"><span class="caret">▸</span><span class="name">No findings</span><span class="n">8</span><span class="spacer"></span><span class="gx">3 clean · 3 skipped · 2 not reached</span></div>`;
-    const head = `<div class="fhead"><div class="t">${pri("P1")}Retry loop keeps sleeping after ctx is cancelled<span class="spacer"></span><span class="lbl" style="font-weight:400">lines 215–218 · 0.88 · <span style="color:var(--ok-fg)">✓ verified</span></span></div><div>${FINDINGS[0].body}</div><div style="display:flex;gap:6px"><button class="btn sm primary">Send to agent</button><button class="btn sm">Dismiss</button><span class="spacer"></span><span class="lbl">1 of 5 · j/k</span></div></div>`;
-    return `${tabs}<div class="toolbar">${toolbarLeft}<span class="pill done">◎ ${counts} <span style="color:var(--warn-fg)">· partial</span></span></div><div class="body"><div class="list">${filterBar("Review","Review")}<div class="gh"><span class="caret">▾</span><span class="name">Findings</span><span class="n">5 in 5 files</span></div>${list}${rest}</div><div class="detail">${dh(F[0])}${head}${diffHTML(JOB, { focus:true })}</div></div>`;
+    const list = F.map((_, i) => i).filter(i => findingsOf(i).length).map(i => row(i, null, "") + findingsOf(i).map(f => `<button class="row sub" data-sel="${f.id===1}"><span></span><span class="pri ${f.pri} ${stOf(f)==="stale"?"stale":""}">${f.pri}</span><span class="p"><span class="fn" style="display:block;overflow:hidden;text-overflow:ellipsis">${esc(f.title)}</span><span class="dir" style="direction:ltr">${f.lines} · ${STATE[stOf(f)][0]}</span></span></button>`).join("")).join("");
+    const head = `<div class="fhead"><div class="t"><span class="pri P1">P1</span>${esc(FINDINGS[0].title)}<span class="spacer"></span><span class="lbl" style="font-weight:400">lines 215–218</span></div><div class="md">${md(FINDINGS[0].body.split("\n\n")[0])}</div></div>`;
+    return `${tabs}<div class="toolbar">${toolbarLeft}${donePill()}</div><div class="body"><div class="list">${filterBar("Review","Review")}<div class="gh"><span class="caret">▾</span><span class="name">Findings</span><span class="n">6 in 6 files</span></div>${list}</div><div class="detail">${dh(SEL)}${head}${diffInline(JOB, { annotate:false })}</div></div>`;
   } },
 
   "3A": { render() {
     const guides = d => Array.from({ length:d }, () => `<span class="guide"></span>`).join("");
-    const t = (x, depth) => `<button class="trow ${low(x)?"dim":""}" data-sel="${x.p===SEL_SNAP}"><span class="ind">${guides(depth)}<span class="caret"></span><span class="k ${x.k}">${x.k}</span></span><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(base(x.p))}${x.why?` <span class="why">· ${x.why}</span>`:""}${x.cov==="n"?` <span class="why" style="color:var(--warn-fg)">· not reached</span>`:""}</span><span class="meta">${nums(x)}${sizeBar(x)}</span><span class="rv">${glyph(x,"done")}</span></button>`;
-    const d = (name, n, depth, open = true, extra = "") => `<button class="dirrow"><span class="ind">${guides(depth)}<span class="caret">${open?"▾":"▸"}</span></span><span class="nm">${name}<span class="cnt">${n}</span></span><span class="meta">${extra}</span><span class="rv"></span></button>`;
-    const by = pre => F.filter(x => x.p.startsWith(pre));
-    const tree = `<div class="rootrow"><b>mads</b><span class="rp">~/repo/mads · session folder</span><span class="spacer"></span><span class="gx lbl">7 reviewed · 3 skipped · <span style="color:var(--warn-fg)">2 not reached</span></span></div>
-      ${d("services/router/internal",7,0)}${d("job",3,1)}${by("services/router/internal/job/").map(x=>t(x,2)).join("")}${d("review",4,1)}${by("services/router/internal/review/").map(x=>t(x,2)).join("")}
-      ${d("ui",5,0)}${t(F[11],1)}${d("src",4,1)}${d("files",3,2)}${t(F[7],3)}${t(F[8],3)}${d("__snapshots__",1,3,false)}${d("router",1,2)}${t(F[9],3)}
-      <div class="rootrow"><b>tao</b><span class="rp">~/repo/tao · outside the session folder</span><span class="spacer"></span><span class="gx lbl">1 reviewed</span></div>
-      ${d("pkg/agent",1,0)}${t(F[12],1)}`;
-    return `${tabs}<div class="toolbar">${toolbarLeft}<span class="pill done">◎ ${counts} <span style="color:var(--warn-fg)">· partial</span></span></div><div class="body"><div class="list">${filterBar("Folder")}${tree}</div><div class="detail">${dh(F[3], `<span class="stalechip">finding stale since turn 19</span>`)}${diffHTML(SNAP, { annotate: snapAnn, mark:"stl" })}</div></div>`;
+    const t = (i, depth) => { const x = F[i]; return `<button class="trow ${low(x)?"dim":""}" data-sel="${i===SEL_SNAP}"><span class="ind">${guides(depth)}<span class="caret"></span><span class="k ${x.k}">${x.k}</span></span><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(base(x.p))}${x.why?` <span class="why">· ${x.why}</span>`:""}${x.cov==="n"?` <span class="why" style="color:var(--warn-fg)">· not reached</span>`:""}</span><span class="meta">${nums(x)}${sizeBar(x)}</span><span class="rv">${glyph(i,"done")}</span></button>`; };
+    const d = (name, n, depth, open = true) => `<button class="dirrow"><span class="ind">${guides(depth)}<span class="caret">${open?"▾":"▸"}</span></span><span class="nm">${name}<span class="cnt">${n}</span></span><span class="meta"></span><span class="rv"></span></button>`;
+    const rh = (id, tally) => `<div class="rootrow"><b>${ROOTS[id][0]}</b><span class="rp">${ROOTS[id][1]}</span><span class="spacer"></span><span class="lbl" style="font-size:11px">${tally}</span></div>`;
+    const tree = rh("mads", `7 reviewed · 3 skipped · <span style="color:var(--warn-fg)">2 not reached</span>`)
+      + d("services/router/internal",7,0) + d("job",3,1) + [0,1,2].map(i=>t(i,2)).join("") + d("review",4,1) + [3,4,5,6].map(i=>t(i,2)).join("")
+      + d("ui",5,0) + t(11,1) + d("src",4,1) + d("files",3,2) + t(7,3) + t(8,3) + d("__snapshots__",1,3,false) + d("router",1,2) + t(9,3)
+      + rh("tao", "1 reviewed") + d("pkg/agent",1,0) + t(12,1)
+      + rh("other", "1 skipped") + d("/tmp",1,0) + t(13,1);
+    return `${tabs}<div class="toolbar">${toolbarLeft}${donePill()}</div><div class="body"><div class="list">${filterBar("Folder")}${tree}</div><div class="detail">${dh(SEL_SNAP, stOf(FINDINGS[2])==="stale" ? `<span class="stalechip">finding stale since turn 19</span>` : "")}${diffInline(SNAP)}</div></div>`;
   } },
   "3B": { render() {
-    const g = (name, fs, { open = true, desc = "", extra = "", dim = false } = {}) => `<div class="gh"><span class="caret">${open?"▾":"▸"}</span><span class="name">${name}</span><span class="n">${fs.length}</span><span class="spacer"></span>${extra}</div>${open && desc ? `<div class="gdesc">${desc}</div>` : ""}${open ? fs.map(x => row(x, SEL_SNAP, glyph(x,"done"), { why:true })).join("") : ""}`;
-    const list = g("Findings", F.filter(x => x.f && !x.stale), { extra:`<button class="btn sm primary">Send 4</button>` })
-      + g("Stale", F.filter(x => x.stale), { desc:"Changed after the snapshot (turn 18). Re-check to re-review just these files." , extra:`<button class="btn sm">Re-check</button>` })
-      + g("Not reached", F.filter(x => x.cov === "n"), { desc:"The 10m limit hit before bundle 7.", extra:`<button class="btn sm">Review these 2</button>` })
-      + g("Reviewed, clean", F.filter(x => x.cov === "r" && !x.f), { open:false })
-      + g("Skipped", F.filter(x => x.cov === "s"), { open:true, desc:"Not sent to the reviewer: lockfile, generated, scratch rules." });
-    return `${tabs}<div class="toolbar">${toolbarLeft}<span class="pill done">◎ ${counts} <span style="color:var(--warn-fg)">· partial</span></span></div><div class="body"><div class="list">${filterBar("Review","Review")}${list}</div><div class="detail">${dh(F[3], `<span class="stalechip">finding stale since turn 19</span>`)}${diffHTML(SNAP, { annotate: snapAnn, mark:"stl" })}</div></div>`;
+    const g = (name, idx, { open = true, desc = "" } = {}) => `<div class="gh"><span class="caret">${open?"▾":"▸"}</span><span class="name">${name}</span><span class="n">${idx.length}</span></div>${open && desc ? `<div class="gdesc">${desc}</div>` : ""}${open ? idx.map(i => row(i, SEL_SNAP, glyph(i,"done"), { why:true })).join("") : ""}`;
+    const all = F.map((_, i) => i);
+    return `${tabs}<div class="toolbar">${toolbarLeft}${donePill()}</div><div class="body"><div class="list">${filterBar("Review","Review")}
+      ${g("Findings", all.filter(i => findingsOf(i).length && !findingsOf(i).some(f => f.stale)))}${g("Stale", [3], { desc:"Changed after the snapshot (turn 18)." })}${g("Not reached", [4,5], { desc:"The 10m limit hit before bundle 7." })}${g("Reviewed, clean", [2,8], { open:false })}${g("Skipped", [6,10,11,13])}</div><div class="detail">${dh(SEL_SNAP)}${diffInline(SNAP, { annotate:false })}</div></div>`;
   } },
   "3C": { render() {
-    const chips = `<div class="filter" style="position:static;border-top:0;padding-top:0"><div class="fchips"><span class="fchip">Findings 5</span><span class="fchip" aria-pressed="true"><span style="color:var(--warn-fg)">⋯</span> Stale 1</span><span class="fchip">◌ Not reached 2</span><span class="fchip">– Skipped 3</span><span class="fchip">✓ Clean 3</span></div></div>`;
+    const chips = `<div class="filter" style="position:static;border-top:0;padding-top:0"><div class="fchips"><span class="fchip">Findings 6</span><span class="fchip" aria-pressed="true">Stale 1</span><span class="fchip">◌ Not reached 2</span><span class="fchip">– Skipped 4</span><span class="fchip">✓ Clean 2</span></div></div>`;
     const ledger = `<div class="ledger"><table><tr><th>Root</th><th>files</th><th>✓</th><th>–</th><th>◌</th><th>findings</th></tr>
-      <tr><td>mads</td><td>12</td><td>7</td><td>3</td><td style="color:var(--warn-fg)">2</td><td>4</td></tr>
-      <tr><td><span class="rootchip">tao</span></td><td>1</td><td>1</td><td>0</td><td>0</td><td>1</td></tr></table></div>`;
-    return `${tabs}<div class="toolbar">${toolbarLeft}<span class="pill done">◎ ${counts} <span style="color:var(--warn-fg)">· partial</span></span></div><div class="body"><div class="list" style="display:flex;flex-direction:column"><div style="flex:1;overflow:auto">${filterBar()}${chips}<div style="padding:6px 10px;font-size:11px;color:var(--text3)">Showing 1 of 13 · <span class="link">clear</span></div>${tierList(SEL_SNAP, x => glyph(x,"done"), { filter: x => x.stale })}</div>${ledger}</div><div class="detail">${dh(F[3], `<span class="stalechip">finding stale since turn 19</span>`)}${diffHTML(SNAP, { annotate: snapAnn, mark:"stl" })}</div></div>`;
+      <tr><td>mads</td><td>12</td><td>7</td><td>3</td><td style="color:var(--warn-fg)">2</td><td>5</td></tr>
+      <tr><td>tao</td><td>1</td><td>1</td><td>0</td><td>0</td><td>1</td></tr><tr><td>Other files</td><td>1</td><td>0</td><td>1</td><td>0</td><td>0</td></tr></table></div>`;
+    return `${tabs}<div class="toolbar">${toolbarLeft}${donePill()}</div><div class="body"><div class="list" style="display:flex;flex-direction:column"><div style="flex:1;overflow:auto">${filterBar()}${chips}${tierList(SEL_SNAP, i => glyph(i,"done"), { filter: i => i === 3 })}</div>${ledger}</div><div class="detail">${dh(SEL_SNAP)}${diffInline(SNAP, { annotate:false })}</div></div>`;
   } },
 };
 
-/* ---------------- mount ---------------- */
-document.querySelectorAll("[data-opt]").forEach(el => {
-  const o = OPTS[el.dataset.opt], app = el.querySelector(".app"), sw = el.querySelector(".states");
-  let st = o.states ? o.states[o.states.length - 2] ?? o.states[0] : null;
-  if (o.states && o.states.includes("running")) st = "running";
-  const draw = () => {
-    app.innerHTML = o.render(st);
-    if (sw) sw.innerHTML = o.states.map(s => `<button aria-pressed="${s===st}" data-s="${s}">${s[0].toUpperCase()+s.slice(1)}</button>`).join("");
-  };
+/* ---------------- mount + one shared state ---------------- */
+const mounts = [];
+function mount(key, app, sw) {
+  const o = OPTS[key]; let st = o.init ?? null;
+  const draw = () => { app.innerHTML = o.render(st); if (sw && o.states) sw.innerHTML = o.states.map(s => `<button aria-pressed="${s===st}" data-s="${s}">${s[0].toUpperCase()+s.slice(1)}</button>`).join(""); paintIcons(); };
   if (sw) sw.addEventListener("click", e => { const b = e.target.closest("button"); if (b) { st = b.dataset.s; draw(); } });
-  draw();
+  app.addEventListener("click", e => {
+    const lay = e.target.closest("[data-layout]"); if (lay && o.states) { st = lay.dataset.layout === "inline" ? "inline" : "side by side"; draw(); }
+    if (e.target.closest("[data-reveal]") && key === "collapse") { st = "arrived via the finding"; draw(); }
+  });
+  mounts.push(draw); draw();
+}
+document.querySelectorAll("[data-opt]").forEach(el => mount(el.dataset.opt, el.querySelector(".app"), el.querySelector(":scope > h3 .states")));
+mount("collapse", document.getElementById("collapseApp"), document.getElementById("collapseStates"));
+function renderAll() { mounts.forEach(d => d()); }
+function paintIcons() { document.querySelectorAll(".ricon:empty").forEach(el => el.innerHTML = RICON); }
+
+document.addEventListener("click", e => {
+  const el = e.target.closest("[data-act]"); if (!el || el.disabled) return;
+  const f = FINDINGS.find(x => x.id === +el.dataset.id), a = el.dataset.act;
+  if (a === "accept") f.state = "accepted";
+  else if (a === "edit") { f.ui = "edit"; f.draft = finalText(f); }
+  else if (a === "saveEdit") { const v = el.closest(".ann").querySelector("textarea").value.trim(); f.ui = null; if (v && v !== f.body) { f.userText = v; f.state = "edited"; } else f.state = "accepted"; }
+  else if (a === "reject") f.ui = "reject";
+  else if (a === "confirmReject") { f.reason = el.closest(".ann").querySelector("input.reason").value.trim(); f.ui = null; f.state = "rejected"; }
+  else if (a === "cancel") f.ui = null;
+  else if (a === "undo") { f.state = "open"; delete f.reason; }
+  else if (a === "revert") f.state = "accepted";
+  else if (a === "toggleOrig") f.showOrig = !f.showOrig;
+  else if (a === "recheck") { f.checking = true; renderAll(); setTimeout(() => { f.checking = false; f.stale = false; f.body = "Re-checked against turn 19: still applies; the lines moved to 61–67 in the current file.\n\n" + f.body; renderAll(); }, 1400); return; }
+  renderAll();
 });
 </script>
 </body>

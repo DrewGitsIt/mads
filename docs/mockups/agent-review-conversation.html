@@ -1,32 +1,27 @@
 <!doctype html>
 <!--
-  Agent Review: the conversation side (2026-11-01). Self-contained: open in
-  any browser.
+  Agent Review: the conversation side. Revision 2 (2026-11-02), after
+  Drew's review of revision 1. Self-contained: open in any browser.
 
-  What's decided (not up for choice here): /review [scope] in the Composer
-  and an "Agent Review" button in the Changes tab start the same backend
-  job. A separate read-only reviewer (persona · provider · model from a
-  Settings default) runs snapshot → triage into bundles → find → (verify) →
-  merge, under a wall-clock limit. Every changed file ends reviewed, skipped
-  (with a reason) or not reached (limit hit → status "partial"). Findings are
-  snapshot-anchored and can go stale. Nothing reaches the agent unless the
-  user presses Send.
+  Chosen: 1A (in-stream card + pinned row), 2B (checklist card), 3B-ish (the
+  human's bubble, each item attributed by who wrote its final text). The
+  unchosen options stay at the bottom of each section under "Not chosen".
 
-  This file asks three questions about the conversation:
-    1. How does a running review show up?  (it's a background process)
-    2. What does the finished review card look like?
-    3. What does "Send to agent" leave in the transcript?
+  Revision 2 changes:
+    - Running items: no special colour. A neutral, monochrome review glyph
+      (magnifier over a checklist) tells a mads-run review apart from
+      subagents (⁂) and processes (❯).
+    - Checklist rows carry the reviewer's full markdown explanation
+      (expandable, first one open) and Accept / Reject (optional reason) /
+      Edit (inline textarea; the edit replaces the reviewer's text).
+      States: open / accepted / edited / rejected / stale. Confidence is gone
+      from the UI. Send sends accepted + edited.
+    - Stale: Accept and Edit disabled; Re-check this file offered.
+    - The sent message is the human's bubble; each item is attributed to
+      Agent Review (unedited) or "edited by you", with its body + file:line.
 
-  Live surfaces this mocks:
-    ui/src/conversation/Composer/commands/*         (/review descriptor)
-    ui/src/conversation/activity/TaskCard.*         (in-stream card idiom)
-    ui/src/conversation/activity/RunningStack.tsx   (pinned running rows)
-    ui/src/conversation/activity/Background.tsx     (process rows)
-    ui/src/conversation/ChatRenderer (.injected, InboundMessage, notices)
-    ui/src/conversation/Composer/QueuedMessages.tsx
-
-  Same review in every frame: scope "since last review" (turns 12–18), 13
-  files in 7 bundles, reviewer hit its 10m limit on bundle 7 → partial.
+  One record per finding: the Changes tab's inline annotations
+  (agent-review-changes.html, 2A) read and write the same state.
   Tokens: clay / dark (ui/src/tokens/tokens.css via session-commands.html).
 -->
 <html lang="en" data-theme="dark" data-palette="clay">
@@ -54,6 +49,7 @@
   * { box-sizing:border-box; margin:0; padding:0; }
   body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.55 var(--sans); }
   button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+  button:disabled { cursor:not-allowed; opacity:.45; }
   code { font:var(--fs-sm) var(--mono); background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:1px 5px; color:var(--text2); }
 
   .page { max-width:1240px; margin:0 auto; padding:var(--space-6) var(--space-5) 140px; display:flex; flex-direction:column; gap:var(--space-6); }
@@ -71,20 +67,28 @@
   .opt:first-of-type { border-top:0; }
   .opt > h3 { font-size:var(--fs-body); font-weight:650; padding:var(--space-3) var(--space-4) 0; display:flex; gap:var(--space-2); align-items:baseline; }
   .opt > h3 .letter { font:700 var(--fs-chip) var(--sans); letter-spacing:.06em; color:var(--accent-ink); background:var(--accent); border-radius:999px; padding:1px 8px; }
+  .opt > h3 .chosen { font:700 var(--fs-chip) var(--sans); letter-spacing:.06em; text-transform:uppercase; color:var(--ok-fg); background:var(--ok-soft); border-radius:999px; padding:1px 8px; }
   .opt > h3 small { color:var(--text3); font-weight:400; font-size:var(--fs-sm); }
+  details.nc { border-top:1px solid var(--line-soft); }
+  details.nc > summary { cursor:pointer; padding:var(--space-3) var(--space-4); color:var(--text3); font-size:var(--fs-sm); list-style:none; display:flex; gap:var(--space-2); align-items:center; }
+  details.nc > summary::before { content:"▸"; font-size:10px; }
+  details.nc[open] > summary::before { content:"▾"; }
+  details.nc > summary:hover { color:var(--text2); }
+  details.nc .opt { opacity:.85; }
   .row { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:var(--space-5); padding:var(--space-3) var(--space-4) var(--space-4); }
   .notes { color:var(--text2); font-size:var(--fs-sm); }
   .notes h4 { color:var(--text); font-size:var(--fs-body); margin:0 0 var(--space-1); }
   .notes ul { padding-left:18px; margin:var(--space-1) 0 var(--space-3); }
-  .notes li { margin:3px 0; }
+  .notes li { margin:3px 0; } .notes b { color:var(--text); }
   .notes .pro { color:var(--ok-fg); margin-top:4px; }
   .notes .con { color:var(--bad-fg); margin-top:4px; }
   .notes .q { margin-top:var(--space-3); border-left:3px solid var(--warn); background:var(--warn-soft); padding:var(--space-2) var(--space-3); border-radius:0 var(--r-sm) var(--r-sm) 0; color:var(--text2); }
   .notes .q b { color:var(--warn-fg); }
-  .toggle { margin-top:var(--space-2); background:var(--bg2); color:var(--text); border:1px solid var(--line); border-radius:var(--r-sm); padding:5px 10px; font:12px var(--sans); cursor:pointer; }
+  .toggle { background:var(--bg2); color:var(--text); border:1px solid var(--line); border-radius:var(--r-sm); padding:4px 10px; font:12px var(--sans); cursor:pointer; }
 
   /* ── conversation pane ─────────────────────────────── */
   .pane { height:560px; display:flex; flex-direction:column; background:var(--bg0); border:1px solid var(--line-soft); border-radius:var(--r); overflow:hidden; position:relative; }
+  .pane.auto { height:auto; }
   .pane.tall { height:640px; }
   .stream { flex:1; min-height:0; overflow:auto; display:flex; flex-direction:column; position:relative; }
   .msgs { padding:var(--space-4) var(--space-5); display:flex; flex-direction:column; gap:var(--space-3); font-size:14px; line-height:1.6; }
@@ -99,10 +103,9 @@
   .composer .typed { color:var(--text); font-size:var(--fs-chat); }
   .composer .slash { color:var(--accent); font-family:var(--mono); }
   .composer .send { margin-left:auto; background:var(--accent); color:var(--accent-ink); border-radius:var(--r-sm); padding:5px 14px; font-weight:600; }
-  .status { border-top:1px solid var(--line-soft); padding:6px var(--space-4); display:flex; gap:var(--space-4); align-items:center; color:var(--text2); font-size:12px; position:relative; }
+  .status { border-top:1px solid var(--line-soft); padding:6px var(--space-4); display:flex; gap:var(--space-4); align-items:center; color:var(--text2); font-size:12px; }
   .status .seg { display:inline-flex; gap:6px; align-items:center; padding:2px 6px; border-radius:5px; white-space:nowrap; }
-  .status .seg.btn { cursor:pointer; border:1px solid var(--line); background:var(--bg2); color:var(--text); }
-  .status .spacer, .spacer { flex:1; }
+  .spacer { flex:1; }
   .dot { width:7px; height:7px; border-radius:50%; display:inline-block; flex:none; }
 
   .spin { width:11px; height:11px; border:1.5px solid var(--accent); border-right-color:transparent; border-radius:50%; display:inline-block; flex:none; animation:spin 1s linear infinite; }
@@ -110,8 +113,11 @@
   @keyframes spin { to { transform:rotate(360deg); } }
   .ki { width:22px; height:22px; border-radius:6px; background:var(--bg3); color:var(--accent); display:inline-flex; align-items:center; justify-content:center; font-size:12px; flex:none; }
   .ki.sm { width:18px; height:18px; font-size:10px; }
+  .ki.review { color:var(--text2); }
+  .ricon { display:inline-flex; align-items:center; justify-content:center; }
+  .ricon svg { display:block; }
 
-  /* slash menu (session-commands.html .menuMock) */
+  /* slash menu */
   .menuMock { position:absolute; bottom:100%; left:var(--space-4); margin-bottom:6px; background:var(--bg1); border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--shadow); padding:var(--space-1); width:480px; z-index:4; }
   .mi { display:flex; gap:var(--space-3); padding:6px var(--space-3); border-radius:var(--r-sm); font-size:var(--fs-sm); align-items:baseline; }
   .mi.on { background:var(--bg3); }
@@ -127,12 +133,12 @@
   .pill.bad { background:var(--bad-soft); color:var(--bad-fg); }
   .pill.info { background:var(--info-soft); color:var(--info-fg); }
   .pill.mute { background:var(--bg3); color:var(--text3); }
+  .pill.stalep { border:1px dashed var(--warn); color:var(--warn-fg); }
   .pri { font:700 10px var(--mono); border-radius:4px; padding:1px 5px; flex:none; }
   .pri.P0 { background:var(--bad); color:#1b0c07; }
   .pri.P1 { background:var(--bad-soft); color:var(--bad-fg); }
   .pri.P2 { background:var(--warn-soft); color:var(--warn-fg); }
   .pri.P3 { background:var(--bg3); color:var(--text2); }
-  .stale { font:600 var(--fs-chip) var(--sans); color:var(--warn-fg); border:1px dashed var(--warn); border-radius:999px; padding:0 7px; white-space:nowrap; }
   .root { font:var(--fs-chip) var(--mono); color:var(--info-fg); background:var(--info-soft); border-radius:4px; padding:0 5px; white-space:nowrap; }
   .btn { border:1px solid var(--line); background:var(--bg2); color:var(--text); border-radius:var(--r-sm); padding:3px 10px; font:600 12px var(--sans); cursor:pointer; white-space:nowrap; }
   .btn.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
@@ -140,9 +146,8 @@
   .btn.sm { padding:1px 8px; font-size:11.5px; }
   .lnk { color:var(--accent); cursor:pointer; }
 
-  /* ── the review card family (TaskCard idiom: left rule, mono head) ── */
-  .rcard { border:1px solid var(--line-soft); border-left:3px solid var(--info); border-radius:10px; background:var(--bg1); }
-  .rcard.done { border-left-color:var(--warn); }
+  /* ── review card (TaskCard idiom; neutral rule, not the subagent accent) ── */
+  .rcard { border:1px solid var(--line-soft); border-left:3px solid var(--text3); border-radius:10px; background:var(--bg1); }
   .rhead { display:flex; align-items:center; gap:11px; padding:10px 14px; font:13px var(--mono); }
   .rhead .title { white-space:nowrap; }
   .rhead .who { color:var(--text3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
@@ -157,13 +162,11 @@
   .bundles i { flex:1; height:6px; border-radius:2px; background:var(--bg3); }
   .bundles i.done { background:var(--ok); opacity:.75; }
   .bundles i.now { background:var(--accent); animation:pulse 1.6s ease-in-out infinite; }
-  .bundles i.cut { background:repeating-linear-gradient(45deg,var(--warn) 0 3px,transparent 3px 6px); opacity:.7; }
   @keyframes pulse { 50% { opacity:.45; } }
   .bline { display:flex; gap:var(--space-3); align-items:baseline; font-size:12px; color:var(--text3); }
   .bline b { color:var(--text2); font-weight:500; }
   .bline .cur { color:var(--text2); font-family:var(--mono); font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
 
-  /* coverage bar */
   .cov { display:flex; height:6px; border-radius:3px; overflow:hidden; background:var(--bg3); }
   .cov i { display:block; height:100%; }
   .cov .r { background:var(--ok); opacity:.8; }
@@ -172,48 +175,69 @@
   .covlegend { display:flex; gap:var(--space-3); font-size:11.5px; color:var(--text3); flex-wrap:wrap; }
   .covlegend span { display:inline-flex; gap:5px; align-items:center; }
   .covlegend .sw { width:9px; height:9px; border-radius:2px; display:inline-block; }
-
-  /* findings list rows */
-  .flist { display:flex; flex-direction:column; border:1px solid var(--line-soft); border-radius:var(--r-sm); overflow:hidden; }
-  .fr { display:grid; grid-template-columns:auto 1fr auto; gap:var(--space-2); align-items:center; padding:6px 10px; border-top:1px solid var(--line-soft); background:var(--bg1); }
-  .fr:first-child { border-top:0; }
-  .fr:hover { background:var(--bg2); }
-  .fr.chk { grid-template-columns:16px auto 1fr auto; }
-  .fr .t { color:var(--text); font-size:var(--fs-sm); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .fr .loc { font:11px var(--mono); color:var(--text3); display:flex; gap:6px; align-items:center; overflow:hidden; white-space:nowrap; }
-  .fr .loc .path { overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:left; min-width:0; }
-  .fr .loc .path bdi { direction:ltr; unicode-bidi:isolate; }
-  .fr .acts { display:flex; gap:4px; opacity:.0; }
-  .fr:hover .acts, .fr.show .acts { opacity:1; }
-  .fr .conf { font:11px var(--mono); color:var(--text3); }
-  .fr.isstale .t { color:var(--text2); }
-  .fr input { accent-color:var(--accent); }
   .verdict { display:flex; gap:var(--space-2); align-items:baseline; color:var(--text); font-size:var(--fs-body); }
   .verdict .why { color:var(--text2); font-size:var(--fs-sm); }
-  .rfoot { display:flex; gap:var(--space-2); align-items:center; padding:8px 14px; border-top:1px solid var(--line-soft); font-size:12px; color:var(--text3); }
+  .rfoot { display:flex; gap:var(--space-2); align-items:center; padding:8px 14px; border-top:1px solid var(--line-soft); font-size:12px; color:var(--text3); flex-wrap:wrap; }
   .counts { display:inline-flex; gap:6px; align-items:center; }
+  .syncnote { display:inline-flex; gap:6px; align-items:center; font-size:11.5px; color:var(--text3); }
 
-  /* sent message variants */
+  /* ── finding rows (shared shape with the Changes tab annotation) ── */
+  .flist { display:flex; flex-direction:column; border:1px solid var(--line-soft); border-radius:var(--r-sm); overflow:hidden; }
+  .fx { border-top:1px solid var(--line-soft); background:var(--bg1); }
+  .fx:first-child { border-top:0; }
+  .fx .top { display:grid; grid-template-columns:14px auto 1fr auto; gap:var(--space-2); align-items:start; padding:7px 10px; cursor:pointer; }
+  .fx .top:hover { background:var(--bg2); }
+  .fx .car { color:var(--text3); font-size:10px; padding-top:3px; }
+  .fx .pri { margin-top:2px; }
+  .fx .t { color:var(--text); font-size:var(--fs-sm); font-weight:550; }
+  .fx .loc { font:11px var(--mono); color:var(--text3); display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-top:1px; }
+  .fx .ex { padding:0 12px 10px 46px; display:flex; flex-direction:column; gap:var(--space-2); }
+  .fx[data-st=rejected] .t { color:var(--text3); text-decoration:line-through; text-decoration-color:var(--line); }
+  .fx[data-st=stale] { box-shadow:inset 3px 0 0 -1px var(--warn); }
+  .fx[data-st=stale] .t { color:var(--text2); }
+  .md { font-size:var(--fs-sm); color:var(--text2); line-height:1.55; max-width:84ch; }
+  .md p { margin:0 0 6px; } .md p:last-child { margin-bottom:0; }
+  .md ul { margin:0 0 6px 18px; } .md li { margin:2px 0; }
+  .md b { color:var(--text); font-weight:600; }
+  .md code { font-size:11.5px; padding:0 4px; }
+  .who { display:inline-flex; gap:5px; align-items:center; font-size:11px; color:var(--text3); }
+  .who.you { color:var(--accent); }
+  .fx .acts { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .fx textarea { width:100%; min-height:120px; resize:vertical; background:var(--bg0); color:var(--text); border:1px solid var(--accent); border-radius:var(--r-sm); padding:8px 10px; font:12px/1.5 var(--mono); }
+  .fx input.reason { flex:1; min-width:200px; background:var(--bg0); color:var(--text); border:1px solid var(--line); border-radius:var(--r-sm); padding:3px 8px; font:12px var(--sans); }
+  .fx .rnote { font-size:11.5px; color:var(--text3); }
+  .fx .stnote { font-size:11.5px; color:var(--warn-fg); }
+  .fx .orig { border-left:2px solid var(--line); padding-left:10px; opacity:.75; }
+
+  /* sent bubble */
+  .sentb { align-self:flex-end; background:var(--accent-soft); border-radius:var(--r); padding:var(--space-2) var(--space-3); max-width:86%; font-size:var(--fs-sm); display:flex; flex-direction:column; gap:var(--space-2); }
+  .sentb .lead { color:var(--text); font-size:14px; }
+  .sitem { background:var(--bg1); border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:7px 10px; display:flex; flex-direction:column; gap:4px; }
+  .sitem .h { display:flex; gap:7px; align-items:center; color:var(--text); font-weight:600; }
+  .sitem .h .who { margin-left:auto; font-weight:400; }
+  .sitem .ref { font:11px var(--mono); color:var(--text3); }
+  .sitem.you { border-left:2px solid var(--accent); }
+  .wire { font:11.5px/1.5 var(--mono); color:var(--text2); background:var(--bg0); border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:var(--space-2) var(--space-3); white-space:pre-wrap; max-height:220px; overflow:auto; }
+
+  /* not-chosen bits */
   .injected { align-self:stretch; display:flex; flex-direction:column; gap:var(--space-2); }
   .injected .head { display:flex; align-items:baseline; gap:var(--space-2); color:var(--text3); font-size:var(--fs-sm); }
   .injected .head b { color:var(--text2); font-weight:600; }
   .injected .prose { background:var(--bg2); border:1px solid var(--line-soft); border-radius:var(--r); padding:var(--space-2) var(--space-3); font-size:var(--fs-sm); color:var(--text2); max-width:78ch; }
-  .chipsrc { display:inline-flex; align-items:center; gap:5px; font:600 var(--fs-chip) var(--sans); color:var(--info-fg); background:var(--info-soft); border-radius:999px; padding:1px 8px; }
-  .prose h5 { font-size:var(--fs-sm); color:var(--text); margin:6px 0 2px; font-weight:650; display:flex; gap:6px; align-items:center; }
-  .prose h5:first-child { margin-top:0; }
-  .prose .ref { font:11.5px var(--mono); color:var(--text3); }
-  .prose p { margin:2px 0; }
-  .fold { max-height:7.5em; overflow:hidden; mask-image:linear-gradient(to bottom,#000 55%,transparent); }
+  .chipsrc { display:inline-flex; align-items:center; gap:5px; font:600 var(--fs-chip) var(--sans); color:var(--text2); background:var(--bg3); border-radius:999px; padding:1px 8px; }
   .disclose { color:var(--text3); font-size:12px; cursor:pointer; align-self:flex-start; }
-  .disclose:hover { color:var(--text2); }
   .queued { display:flex; flex-direction:column; gap:4px; }
   .qi { display:flex; align-items:center; gap:var(--space-2); background:var(--bg1); border:1px solid var(--line); border-radius:var(--r-sm); padding:5px 10px; font-size:var(--fs-sm); color:var(--text2); }
   .qi .qb { font:600 var(--fs-chip) var(--sans); text-transform:uppercase; letter-spacing:.05em; color:var(--text3); }
   .qi .x { margin-left:auto; color:var(--text3); }
   .sentrow { align-self:stretch; display:flex; align-items:center; gap:var(--space-2); border:1px dashed var(--line); border-radius:var(--r); padding:6px var(--space-3); font-size:var(--fs-sm); color:var(--text2); }
   .sentrow b { color:var(--text); font-weight:600; }
+  .mini-f { display:grid; grid-template-columns:auto 1fr auto; gap:var(--space-2); align-items:center; padding:6px 10px; border-top:1px solid var(--line-soft); }
+  .mini-f:first-child { border-top:0; }
+  .mini-f .t { color:var(--text); font-size:var(--fs-sm); }
+  .mini-f .l { font:11px var(--mono); color:var(--text3); }
 
-  /* pinned row (Substrip.module.css) */
+  /* pinned rows (Substrip.module.css) */
   .strip { display:flex; align-items:center; gap:11px; width:100%; background:var(--bg1); border:1px solid var(--accent); border-radius:10px; padding:9px 16px; font:13px var(--mono); color:var(--text); box-shadow:var(--shadow); text-align:left; }
   .strip.passive { border-color:var(--line); }
   .strip .name { flex-shrink:0; white-space:nowrap; }
@@ -222,13 +246,17 @@
   .strip .mini { width:70px; display:flex; gap:2px; }
   .strip .mini i { flex:1; height:5px; border-radius:1px; background:var(--bg3); }
   .strip .mini i.done { background:var(--ok); opacity:.75; } .strip .mini i.now { background:var(--accent); }
+  .stackpanel { background:var(--bg1); border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow); padding:4px; }
+  .grp { font:600 10.5px var(--sans); color:var(--text3); text-transform:uppercase; letter-spacing:.08em; padding:6px 12px 2px; }
+  .li { display:flex; align-items:center; gap:9px; padding:5px 12px; font:12.5px var(--mono); color:var(--text); min-height:30px; border-radius:6px; }
+  .li:hover { background:var(--bg2); }
+  .li .op { color:var(--text2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .li .counters { margin-left:auto; color:var(--text3); font-size:12px; display:inline-flex; gap:10px; align-items:center; white-space:nowrap; }
 
-  /* bottom dock (ActivityDock idiom) */
-  .dock { border-top:1px solid var(--line); background:var(--bg1); height:210px; display:flex; flex-direction:column; }
+  .dock { border-top:1px solid var(--line); background:var(--bg1); height:200px; display:flex; flex-direction:column; }
   .dtabs { display:flex; gap:2px; padding:0 8px; border-bottom:1px solid var(--line-soft); font-size:12px; }
   .dtabs span { padding:6px 10px; color:var(--text3); display:inline-flex; gap:6px; align-items:center; }
   .dtabs span.on { color:var(--text); box-shadow:inset 0 -2px var(--accent); }
-  .dtabs .x { margin-left:auto; }
   .dlog { flex:1; overflow:auto; padding:8px 14px; font:12px/1.6 var(--mono); color:var(--text2); }
   .dlog .t { color:var(--text3); margin-right:8px; }
   .dlog .ok { color:var(--ok-fg); } .dlog .sk { color:var(--text3); } .dlog .f { color:var(--warn-fg); }
@@ -239,12 +267,12 @@
 <body>
 <div class="page">
   <header class="intro">
-    <h1>Agent Review: the conversation side</h1>
-    <p>A review of everything the session's agent changed, by a separate, read-only reviewer. It's started with <code>/review</code> or the Changes tab's <b>Agent Review</b> button (same job), can take several minutes on local inference, and runs while the main agent keeps working. Three questions, each with options drawn from the same review:</p>
+    <h1>Agent Review: the conversation side <small style="font-size:13px;color:var(--text3);font-weight:400">· revision 2</small></h1>
+    <p>A review of everything the session's agent changed, by a separate, read-only reviewer. It's started with <code>/review</code> or the Changes tab's <b>Agent Review</b> button (same job), can take several minutes on local inference, and runs while the main agent keeps working. <b>Chosen:</b> 1A, 2B, 3B (adjusted). Each section leads with the chosen direction; the other options are folded under <i>Not chosen</i> at the bottom of the section.</p>
     <ul>
-      <li><b>Session:</b> <i>router job retries + review button</i>, 18 turns. The review's scope is <b>since the last review</b> (turns 12–18): 13 files in two repos (<code>mads</code>, the session folder, plus <code>~/repo/tao</code>, outside it).</li>
-      <li><b>Reviewer:</b> <code>reviewer · goose · qwen3.8-coder-nothink</code> (Settings › Agent Review default), 10m limit. It ran out of time on bundle 7 of 7, so the review is <b>partial</b>: 8 files reviewed, 3 skipped, 2 not reached.</li>
-      <li><b>Findings:</b> 5 in total, 1 P1 · 3 P2 · 1 P3. One is <b>stale</b>: the agent edited <code>snapshot.go</code> in turn 19, after the snapshot was taken.</li>
+      <li><b>Session:</b> <i>router job retries + review button</i>, 18 turns. Scope is <b>since the last review</b> (turns 12–18): 14 files across two repos (<code>mads</code>, <code>tao</code>) plus one non-repo file in <code>/tmp</code>.</li>
+      <li><b>Reviewer:</b> <code>reviewer · goose · qwen3.8-coder-nothink</code> (Settings › Agent Review default), 10m limit. It ran out of time on bundle 7 of 7, so the review is <b>partial</b>: 8 files reviewed, 4 skipped, 2 not reached.</li>
+      <li><b>Findings:</b> 6 in total, 1 P1 · 3 P2 · 2 P3. One is <b>stale</b>: the agent edited <code>snapshot.go</code> in turn 19, after the snapshot. Starting state in the checklist: 2 accepted, 1 edited, 1 rejected, 1 open, 1 stale.</li>
     </ul>
   </header>
 
@@ -261,8 +289,8 @@
         <div class="composer">
           <div class="menuMock">
             <div class="mi on"><span class="n">/review <i>[scope]</i></span><span class="d">Review the agent's changes with a separate reviewer</span></div>
-            <div class="mi" style="padding-left:28px"><span class="n">since-last</span><span class="d">Turns 12–18 · 13 files <span class="pill mute" style="margin-left:4px">default</span></span></div>
-            <div class="mi" style="padding-left:28px"><span class="n">session</span><span class="d">All 18 turns · 41 files</span></div>
+            <div class="mi" style="padding-left:28px"><span class="n">since-last</span><span class="d">Turns 12–18 · 14 files <span class="pill mute" style="margin-left:4px">default</span></span></div>
+            <div class="mi" style="padding-left:28px"><span class="n">session</span><span class="d">All 18 turns · 42 files</span></div>
             <div class="mi" style="padding-left:28px"><span class="n">turn <i>‹n›</i></span><span class="d">One turn's files</span></div>
             <div class="mhint"><span>reviewer · goose · qwen3.8-coder-nothink</span><span>limit 10m</span><span class="spacer"></span><span class="lnk">Change in Settings</span></div>
           </div>
@@ -273,9 +301,9 @@
         <h4>What every option shares</h4>
         <ul>
           <li><code>/review</code> is a two-level command (like <code>/new*</code>): the second level is the scope, and the rows show <b>what each scope covers</b> before you pick.</li>
-          <li>The footer of the menu names the reviewer and limit, since that is the one thing you can't see anywhere else before it starts.</li>
-          <li>Nothing goes to the main agent. The command itself is UI chrome; what it leaves in the transcript is the background item below.</li>
-          <li>A second <code>/review</code> while one runs doesn't start another: it scrolls to (or flashes) the running one.</li>
+          <li>The menu footer names the reviewer and limit, the one thing you can't see anywhere else before it starts.</li>
+          <li>Nothing goes to the main agent. The command is UI chrome; what it leaves in the transcript is the review card.</li>
+          <li>A second <code>/review</code> while one runs doesn't start another: it scrolls to the running card.</li>
         </ul>
       </div>
     </div>
@@ -283,18 +311,18 @@
 
   <!-- ───────────────────────── 1: RUNNING ───────────────────────── -->
   <section class="block">
-    <h2><span class="tag">1</span> While it runs <small>a background process the main agent doesn't own</small></h2>
+    <h2><span class="tag">1</span> While it runs <small>a background job mads runs, not the agent</small></h2>
     <p class="sub">The main agent is still working (turn 19 is streaming). Snapshot and triage are done; finding is on bundle 4 of 7.</p>
 
     <div class="opt">
-      <h3><span class="letter">A</span> An in-stream card that updates in place <small>the TaskCard idiom</small></h3>
+      <h3><span class="letter">A</span> An in-stream card that updates in place <span class="chosen">chosen</span> <small>the TaskCard idiom, with its own neutral glyph</small></h3>
       <div class="row">
         <div class="pane">
           <div class="stream">
             <div class="msgs">
               <p>Turn 18 is done. <code>Enqueue</code> now retries with full-jitter backoff…</p>
               <div class="rcard">
-                <div class="rhead"><span class="ki">◎</span><span class="title">Agent Review</span><span class="who">since last review · turns 12–18 · 13 files</span><span class="meta"><span>3m 41s / 10m</span><span class="spin"></span></span></div>
+                <div class="rhead"><span class="ki review"><span class="ricon"></span></span><span class="title">Agent Review</span><span class="who">since last review · turns 12–18 · 14 files</span><span class="meta"><span>3m 41s / 10m</span><span class="spin dim"></span></span></div>
                 <div class="rbody">
                   <div class="stage"><span class="s done">snapshot ✓</span><span class="arrow">›</span><span class="s done">triage ✓</span><span class="arrow">›</span><span class="s now">find 3/7</span><span class="arrow">›</span><span class="s">verify</span><span class="arrow">›</span><span class="s">merge</span></div>
                   <div class="bundles"><i class="done"></i><i class="done"></i><i class="done"></i><i class="now"></i><i></i><i></i><i></i></div>
@@ -305,7 +333,15 @@
               <p>Adding a <code>MaxBackoff</code> field to <code>JobType</code> and threading it through <code>nextDelay</code>…</p>
             </div>
             <div class="pinned">
-              <button class="strip"><span class="ki">◎</span><span class="name">Agent Review</span><span class="op">find · bundle 4/7 · queue.go</span><span class="counters"><span class="mini"><i class="done"></i><i class="done"></i><i class="done"></i><i class="now"></i><i></i><i></i><i></i></span><span>3m 41s</span><span class="spin"></span></span></button>
+              <div class="stackpanel">
+                <div class="grp">Subagents</div>
+                <div class="li"><span class="ki sm">⁂</span><span>Wave2: router tests</span><span class="op">Running go test ./services/router/...</span><span class="counters"><span>41.2k tok · 1m 02s</span><span class="spin"></span></span></div>
+                <div class="grp">Review</div>
+                <div class="li"><span class="ki sm review"><span class="ricon"></span></span><span>Agent Review</span><span class="op">find · bundle 4/7 · queue.go</span><span class="counters"><span>3m 41s / 10m</span><span class="spin dim"></span></span></div>
+                <div class="grp">Processes</div>
+                <div class="li"><span class="ki sm" style="color:var(--text2)">❯</span><span class="op">go vet ./services/router/...</span><span class="counters"><span>0m 12s</span><span class="spin dim"></span></span></div>
+              </div>
+              <button class="strip"><span class="spin"></span><span class="name"><b>1 subagent</b> · 1 review · 1 process</span><span class="op">· Wave2: router tests — Running go test…</span><span class="counters"><span>3m 41s</span><span>▴</span></span></button>
             </div>
           </div>
           <div class="composer"><span class="plus">+</span>Message the agent — @ to mention, / for commands<span class="send">Send</span></div>
@@ -314,336 +350,311 @@
         <div class="notes">
           <h4>How it behaves</h4>
           <ul>
-            <li>The card lands where you typed <code>/review</code> and updates in place: stage track, one cell per bundle, the file being read, findings so far.</li>
-            <li>Once it scrolls away, it pins a row like a running subagent does, joining the <b>RunningStack</b> (and folding into its summary row past two items).</li>
-            <li>When it finishes, the same card becomes the result card (section 2), so the review has one home in the transcript.</li>
+            <li>The card lands where you ran <code>/review</code> and updates in place: stage track, one cell per bundle, the file being read, findings so far. When it finishes, the same card becomes the checklist (section 2).</li>
+            <li>Once it scrolls away it joins the pinned <b>RunningStack</b>, shown expanded here with three items, so it folds into the summary row.</li>
+            <li><b>No colour of its own.</b> Subagents are ⁂ with the accent spinner, processes are ❯; the review gets a monochrome glyph <span class="ricon" style="vertical-align:-2px;color:var(--text2)"></span> (a magnifier over a checklist) and a grey spinner, like a process. You started it yourself, so it doesn't need to shout.</li>
+            <li>It sits in its own <i>Review</i> group between subagents and processes, because it's neither: mads runs it, and the agent can't see or wait on it.</li>
           </ul>
-          <p class="pro">+ Reuses two shipped idioms (TaskCard + pinned row); no new surface.</p>
-          <p class="pro">+ The result appears where the request was made.</p>
-          <p class="con">− On a long review the card sits far up the transcript by the time it's done; the pinned row is what you actually watch.</p>
-          <p class="q"><b>Slot:</b> RunningStack only knows subagents and harness <code>BackgroundTask</code>s. A mads-owned job is a third kind of item.</p>
+          <p class="pro">+ Reuses two shipped idioms (TaskCard + RunningStack); the result appears where you asked for it.</p>
+          <p class="con">− On a long review the card is far up the transcript by the time it's done; the pinned row is what you watch.</p>
+          <p class="q"><b>Slot:</b> RunningStack only knows subagents and harness <code>BackgroundTask</code>s. A mads-owned job is a third kind of item, with its own group.</p>
         </div>
       </div>
     </div>
 
-    <div class="opt">
-      <h3><span class="letter">B</span> Only a pinned chip above the composer <small>no card until it's done</small></h3>
-      <div class="row">
-        <div class="pane">
-          <div class="stream">
-            <div class="msgs">
-              <div class="sysline">◎ You started <b>Agent Review</b> · since last review · 13 files · 12:41</div>
-              <div class="ubub">also make the backoff cap configurable per job type</div>
-              <p>Adding a <code>MaxBackoff</code> field to <code>JobType</code> and threading it through <code>nextDelay</code>. I'll keep the default at 30s so existing jobs don't change behaviour.</p>
-              <p>Running the router tests now…</p>
+    <details class="nc"><summary>Not chosen: B · pinned chip only, C · dock tab with the reviewer's log</summary>
+      <div class="opt">
+        <h3><span class="letter">B</span> Only a pinned chip above the composer <small>no card until it's done</small></h3>
+        <div class="row">
+          <div class="pane" style="height:420px">
+            <div class="stream">
+              <div class="msgs">
+                <div class="sysline"><span class="ricon" style="vertical-align:-2px"></span> You started <b>Agent Review</b> · since last review · 14 files · 12:41</div>
+                <div class="ubub">also make the backoff cap configurable per job type</div>
+                <p>Adding a <code>MaxBackoff</code> field to <code>JobType</code> and threading it through <code>nextDelay</code>. I'll keep the default at 30s.</p>
+              </div>
+              <div class="pinned">
+                <button class="strip passive"><span class="ki review"><span class="ricon"></span></span><span class="name">Agent Review</span><span class="op">3/7 bundles · 2 findings so far</span><span class="counters"><span class="mini"><i class="done"></i><i class="done"></i><i class="done"></i><i class="now"></i><i></i><i></i><i></i></span><span>3m 41s / 10m</span><span class="spin dim"></span></span></button>
+              </div>
             </div>
-            <div class="pinned">
-              <button class="strip passive" style="border-color:var(--info)"><span class="ki" style="color:var(--info)">◎</span><span class="name">Agent Review</span><span class="op">3/7 bundles · 2 findings so far</span><span class="counters"><span class="mini"><i class="done"></i><i class="done"></i><i class="done"></i><i class="now"></i><i></i><i></i><i></i></span><span>3m 41s / 10m</span><span class="spin"></span></span></button>
-              <button class="strip passive"><span class="ki" style="color:var(--text2)">❯</span><span class="op">go test ./services/router/... -run TestEnqueue</span><span class="counters"><span>running · 0m 12s</span><span class="spin dim"></span></span></button>
-            </div>
+            <div class="composer"><span class="plus">+</span>Message the agent — @ to mention, / for commands<span class="send">Send</span></div>
           </div>
-          <div class="composer"><span class="plus">+</span>Message the agent — @ to mention, / for commands<span class="send">Send</span></div>
-          <div class="status"><span class="seg">P product-to-code-partner</span><span class="seg"><span class="dot" style="background:var(--info)"></span>Opus 5.5</span><span class="spacer"></span><span class="seg">⎇ mads / review-button</span></div>
-        </div>
-        <div class="notes">
-          <h4>How it behaves</h4>
-          <ul>
-            <li>A one-line system row marks when it started; the progress lives only in a pinned row, always visible while it runs, card or no card.</li>
-            <li>Blue edge (not the accent) because it's mads's, not the agent's: the agent can't see or wait on it.</li>
-            <li>Click: opens the Changes tab with the review strip in view. When done, the row goes away and the result card is posted at the bottom of the transcript.</li>
-          </ul>
-          <p class="pro">+ The result lands at the bottom, next to what the agent is doing now, which is when you'll read it.</p>
-          <p class="pro">+ Only one row tall while running.</p>
-          <p class="con">− Two places to look: the start marker up top and the result at the bottom.</p>
-          <p class="con">− Bundle detail needs the Changes tab (or a dock).</p>
+          <div class="notes">
+            <p>A start marker plus a pinned row; the result card is posted at the bottom when done.</p>
+            <p class="pro">+ The result lands next to what the agent is doing now.</p>
+            <p class="con">− Two places to look: the start marker and the result.</p>
+          </div>
         </div>
       </div>
-    </div>
-
-    <div class="opt">
-      <h3><span class="letter">C</span> A dock tab with the reviewer's log <small>like a subagent's history</small></h3>
-      <div class="row">
-        <div class="pane tall">
-          <div class="stream">
-            <div class="msgs">
-              <div class="sysline">◎ You started <b>Agent Review</b> · since last review · 13 files · 12:41</div>
-              <div class="ubub">also make the backoff cap configurable per job type</div>
-              <p>Adding a <code>MaxBackoff</code> field to <code>JobType</code> and threading it through <code>nextDelay</code>…</p>
+      <div class="opt">
+        <h3><span class="letter">C</span> A dock tab with the reviewer's log <small>like a subagent's history</small></h3>
+        <div class="row">
+          <div class="pane" style="height:460px">
+            <div class="stream">
+              <div class="msgs">
+                <div class="sysline"><span class="ricon" style="vertical-align:-2px"></span> You started <b>Agent Review</b> · since last review · 14 files · 12:41</div>
+                <p>Adding a <code>MaxBackoff</code> field to <code>JobType</code>…</p>
+              </div>
             </div>
-            <div class="pinned">
-              <button class="strip passive" style="border-color:var(--info)"><span class="ki" style="color:var(--info)">◎</span><span class="name">Agent Review</span><span class="op">3/7 bundles</span><span class="counters"><span>3m 41s</span><span class="spin"></span></span></button>
-            </div>
-          </div>
-          <div class="dock">
-            <div class="dtabs"><span>⁂ Wave2: router tests</span><span class="on"><span class="spin"></span>Agent Review</span><span class="x">▾</span></div>
-            <div class="dlog">
-              <div><span class="t">12:41:02</span>snapshot · 13 files · 2 roots (mads, ~/repo/tao)</div>
-              <div><span class="t">12:41:09</span><span class="sk">skip</span> ui/package-lock.json · lockfile</div>
-              <div><span class="t">12:41:09</span><span class="sk">skip</span> ui/src/files/__snapshots__/ChangesTab.test.tsx.snap · generated</div>
-              <div><span class="t">12:41:09</span><span class="sk">skip</span> services/router/internal/review/debug_dump.go · scratch</div>
-              <div><span class="t">12:41:14</span>triage → 7 bundles</div>
-              <div><span class="t">12:42:20</span><span class="ok">✓</span> bundle 1 · job retries · <span class="f">1 finding (P1)</span></div>
-              <div><span class="t">12:43:31</span><span class="ok">✓</span> bundle 2 · review snapshot · <span class="f">1 finding (P2)</span></div>
-              <div><span class="t">12:44:05</span><span class="ok">✓</span> bundle 3 · router tests · clean</div>
-              <div><span class="t">12:44:43</span>bundle 4 · router job queue · reading queue.go…</div>
+            <div class="dock">
+              <div class="dtabs"><span>⁂ Wave2: router tests</span><span class="on"><span class="ricon"></span>Agent Review</span></div>
+              <div class="dlog">
+                <div><span class="t">12:41:02</span>snapshot · 14 files · roots: mads, tao, other</div>
+                <div><span class="t">12:41:09</span><span class="sk">skip</span> ui/package-lock.json · lockfile</div>
+                <div><span class="t">12:41:09</span><span class="sk">skip</span> /tmp/review-bundle-4.json · scratch</div>
+                <div><span class="t">12:41:14</span>triage → 7 bundles</div>
+                <div><span class="t">12:42:20</span><span class="ok">✓</span> bundle 1 · job retries · <span class="f">1 finding (P1)</span></div>
+                <div><span class="t">12:44:43</span>bundle 4 · router job queue · reading queue.go…</div>
+              </div>
             </div>
           </div>
-          <div class="composer"><span class="plus">+</span>Message the agent — @ to mention, / for commands<span class="send">Send</span></div>
-        </div>
-        <div class="notes">
-          <h4>How it behaves</h4>
-          <ul>
-            <li>Same pinned row as B, but clicking it opens a dock tab next to any subagent streams: a log of skips, bundles and findings as they arrive.</li>
-            <li>The log is the coverage ledger being written: you can see <i>why</i> a file was skipped while it happens.</li>
-          </ul>
-          <p class="pro">+ Fully inspectable without leaving the conversation; good for tuning the reviewer and triage rules.</p>
-          <p class="con">− The dock exists for agent histories; a mads job log is a new kind of tab in it.</p>
-          <p class="con">− More than most reviews need: you mostly want "is it done, what did it find".</p>
+          <div class="notes">
+            <p>Pinned row opens a dock tab logging skips, bundles and findings as they arrive.</p>
+            <p class="pro">+ Fully inspectable; good for tuning triage rules.</p>
+            <p class="con">− The dock is for agent histories; more than most reviews need.</p>
+          </div>
         </div>
       </div>
-    </div>
+    </details>
   </section>
 
   <!-- ───────────────────────── 2: RESULT ───────────────────────── -->
   <section class="block">
-    <h2><span class="tag">2</span> The finished review <small>verdict, counts, coverage, top findings, actions</small></h2>
-    <p class="sub">All three show the same partial review. <button class="toggle" id="fullToggle" style="margin:0 0 0 6px">Show as a complete review</button></p>
+    <h2><span class="tag">2</span> The finished review: a checklist you decide on <small>verdict, counts, coverage, every finding in full</small></h2>
+    <p class="sub">This is live: expand rows, Accept, Reject (with an optional reason), Edit (your text replaces the reviewer's), Undo. The send button and section 3's message follow along. Try <b>Re-check this file</b> on the stale row.</p>
 
     <div class="opt">
-      <h3><span class="letter">A</span> Summary card, top 3 findings <small>details live in the Changes tab</small></h3>
+      <h3><span class="letter">B</span> Full checklist in the card <span class="chosen">chosen</span> <small>accept / reject / edit, then send</small></h3>
       <div class="row">
-        <div class="pane" style="height:auto;min-height:420px">
-          <div class="msgs" id="resA"></div>
-        </div>
-        <div class="notes">
-          <h4>How it behaves</h4>
-          <ul>
-            <li>Verdict line first (the reviewer's one-sentence call), then priority counts and the coverage bar, then the top 3 findings by priority × confidence.</li>
-            <li>Hovering a finding shows <b>Send</b>, <b>Dismiss</b>, <b>Open in diff</b>. The footer has <b>Send all open (n)</b> and <b>Open in Changes</b>.</li>
-            <li>Partial is said in words, with the remedy: <b>Review the rest</b> starts a review of only the not-reached files.</li>
-          </ul>
-          <p class="pro">+ Small: never more than ~10 lines in the transcript.</p>
-          <p class="pro">+ Triage happens in the Changes tab, which has the diff.</p>
-          <p class="con">− Findings 4 and 5 are a click away; P3s can go unseen.</p>
-        </div>
-      </div>
-    </div>
-
-    <div class="opt">
-      <h3><span class="letter">B</span> Full checklist in the card <small>pick, then send</small></h3>
-      <div class="row">
-        <div class="pane" style="height:auto;min-height:460px">
+        <div class="pane auto">
           <div class="msgs" id="resB"></div>
         </div>
         <div class="notes">
           <h4>How it behaves</h4>
           <ul>
-            <li>Every finding is a row with a checkbox; open, non-stale ones start checked. The send button counts what's checked.</li>
-            <li>Stale findings start unchecked and say why, with <b>Re-check</b> (re-runs just that file).</li>
-            <li>The coverage line is expandable to the per-file list (reviewed / skipped + reason / not reached).</li>
+            <li>Every finding is a row: priority, title, <code>file:line</code>, cited rule, verified, and its state. Click a row to expand the reviewer's <b>full explanation</b> (why it's a problem, the evidence with file/line/function refs, a suggested fix). The first row starts expanded.</li>
+            <li><b>Accept</b> takes the reviewer's text as is. <b>Edit</b> opens a textarea prefilled with it; your text replaces it, and the original stays one click away. <b>Reject</b> takes an optional short reason, kept with the review (for tuning the reviewer), never sent.</li>
+            <li>States: <span class="pill mute">open</span> <span class="pill ok">accepted</span> <span class="pill info">edited by you</span> <span class="pill bad">rejected</span> <span class="pill stalep">stale</span>. After sending: <span class="pill mute">sent</span>.</li>
+            <li><b>Stale:</b> Accept and Edit are disabled (the lines no longer match the code); <b>Re-check this file</b> re-runs the reviewer on just that file. Reject still works.</li>
+            <li><b>Send N to agent</b> counts accepted + edited. No confidence scores anywhere; priority does the ranking.</li>
+            <li>Each finding is <b>one record</b> shared with the Changes tab's inline annotations. Accepting here shows as accepted there, and the other way round.</li>
           </ul>
-          <p class="pro">+ Everything decidable without leaving the conversation.</p>
-          <p class="pro">+ Bulk send is explicit about exactly what goes.</p>
-          <p class="con">− Grows with the finding count: a 20-finding review is a wall in the transcript (fold past 6?).</p>
-          <p class="con">− Two places to triage (card and Changes tab) that must stay in sync.</p>
+          <p class="pro">+ Everything decidable without leaving the conversation; bulk send is explicit about exactly what goes, in whose words.</p>
+          <p class="con">− Grows with the finding count. Past ~8 findings, fold the P3s behind "+ n more".</p>
+          <p class="q"><b>Record:</b> a finding needs <code>reviewer_text</code> and <code>user_text</code> (not one overwritten body) so attribution and "show original" both work.</p>
         </div>
       </div>
     </div>
 
-    <div class="opt">
-      <h3><span class="letter">C</span> One system line, expands on click <small>quietest</small></h3>
-      <div class="row">
-        <div class="pane" style="height:auto;min-height:180px">
-          <div class="msgs" id="resC"></div>
-        </div>
-        <div class="notes">
-          <h4>How it behaves</h4>
-          <ul>
-            <li>Done reviews are a one-line marker, like the compaction marker: verdict glyph, counts, partial flag. Click to expand into option A's card.</li>
-            <li>The P1 count is the only colour in the line.</li>
-          </ul>
-          <p class="pro">+ Doesn't interrupt the main agent's ongoing thread at all.</p>
-          <p class="con">− Easy to miss; a P1 is worth a bit of space.</p>
-          <p class="con">− Partial is easy to overlook in a single line.</p>
+    <details class="nc"><summary>Not chosen: A · summary card with top 3, C · one system line</summary>
+      <div class="opt">
+        <h3><span class="letter">A</span> Summary card, top 3 findings <small>details live in the Changes tab</small></h3>
+        <div class="row">
+          <div class="pane auto"><div class="msgs" id="resA"></div></div>
+          <div class="notes">
+            <p class="pro">+ Small: never more than ~10 lines in the transcript.</p>
+            <p class="con">− Findings 4–6 are a click away; P3s can go unseen.</p>
+          </div>
         </div>
       </div>
-    </div>
+      <div class="opt">
+        <h3><span class="letter">C</span> One system line, expands on click <small>quietest</small></h3>
+        <div class="row">
+          <div class="pane auto"><div class="msgs">
+            <p style="color:var(--text2)">…threaded through <code>nextDelay</code>. Router tests pass.</p>
+            <div class="sysline" style="display:flex;gap:8px;justify-content:center;align-items:center"><span class="ricon"></span> Agent Review done · <b>changes needed</b> · <span class="pri P1">P1 1</span> 3 P2 · 2 P3 · <span style="color:var(--warn-fg)">partial: 2 of 14 not reached</span> · <span class="lnk">Open</span> ▸</div>
+          </div></div>
+          <div class="notes">
+            <p class="pro">+ Doesn't interrupt the agent's thread at all.</p>
+            <p class="con">− Easy to miss; a P1 is worth a bit of space.</p>
+          </div>
+        </div>
+      </div>
+    </details>
   </section>
 
   <!-- ───────────────────────── 3: SENT ───────────────────────── -->
   <section class="block">
     <h2><span class="tag">3</span> What “Send to agent” leaves in the transcript <small>never automatic; queued if the agent is mid-turn</small></h2>
-    <p class="sub">Drew picked the P1 and the AGENTS.md P2 and pressed <b>Send 2 to agent</b> while turn 19 was still running. The text below is what the agent receives in every option; they differ in how it's drawn.</p>
+    <p class="sub">Built from the checklist above: whatever is accepted or edited there is what this message contains. Rejected, open and stale findings are left out.</p>
 
     <div class="opt">
-      <h3><span class="letter">A</span> A system-styled injected message, attributed <small>the .injected family</small></h3>
+      <h3><span class="letter">B</span> Your bubble, each item attributed by who wrote its final text <span class="chosen">chosen, adjusted</span></h3>
       <div class="row">
-        <div class="pane" style="height:auto;min-height:380px">
+        <div class="pane auto">
           <div class="msgs">
             <p>…and <code>MaxBackoff</code> is threaded through. Router tests pass.</p>
+            <div class="sentb" id="sentBubble"></div>
+            <p>Taking these in order. The retry loop first: switching <code>time.Sleep</code> to a <code>select</code> on <code>ctx.Done()</code> and a timer…</p>
+          </div>
+        </div>
+        <div class="notes">
+          <h4>How it behaves</h4>
+          <ul>
+            <li>It's <b>your message</b>: your bubble, your decision to send. A one-line lead-in you can edit before sending.</li>
+            <li>Inside, each item says who wrote its text: <span class="who"><span class="ricon"></span>Agent Review</span> for findings you accepted as is, <span class="who you">✎ edited by you</span> for ones you rewrote (with an accent edge).</li>
+            <li>Every item carries its justification (the body), not just the title, plus <code>file:line</code> and any cited rule. No confidence.</li>
+            <li>While the agent is mid-turn it waits in the Queued list as <i>“Agent Review: 3 findings”</i> (cancellable), then lands as this bubble.</li>
+          </ul>
+          <p class="pro">+ True to who acted, and still honest about whose words are whose.</p>
+          <p class="con">− A long bubble; items past the first two fold behind "Show all".</p>
+          <p class="q"><b>Slot:</b> user messages are plain text today. Attribution per item needs structured parts in the message (and a readable label for QueuedMessages).</p>
+          <details style="margin-top:8px"><summary style="cursor:pointer;color:var(--text3)">What the agent receives</summary><div class="wire" id="wire" style="margin-top:6px"></div></details>
+        </div>
+      </div>
+    </div>
+
+    <details class="nc"><summary>Not chosen: A · system-styled injected message, C · queued chip then a one-line row</summary>
+      <div class="opt">
+        <h3><span class="letter">A</span> A system-styled injected message <small>the .injected family</small></h3>
+        <div class="row">
+          <div class="pane auto"><div class="msgs">
             <div class="injected">
-              <div class="head"><span class="chipsrc">◎ Agent Review</span><span>2 findings · <b>sent by you</b> · reviewer · goose · qwen3.8-coder-nothink</span><span class="spacer"></span><span>12:53</span></div>
-              <div class="prose" id="sentProse"></div>
+              <div class="head"><span class="chipsrc"><span class="ricon"></span> Agent Review</span><span>3 findings · <b>sent by you</b></span><span class="spacer"></span><span>12:53</span></div>
+              <div class="prose"><b>P1 Retry loop keeps sleeping after ctx is cancelled</b> · job.go:215–218<br><b>P2 Enqueue holds q.mu across the fsync</b> · queue.go:86–90<br><b>P2 Rule citations dropped when AGENTS.md is missing</b> · tao review_prompt.go:31–40</div>
             </div>
-            <p>Looking at the retry loop first: you're right that <code>time.Sleep</code> ignores <code>ctx</code>. Switching it to a <code>select</code> on <code>ctx.Done()</code> and the timer…</p>
-          </div>
-        </div>
-        <div class="notes">
-          <h4>How it behaves</h4>
-          <ul>
-            <li>Not the human's bubble and not the agent's voice: the grey injected box, with a source chip saying where it came from and a note saying who sent it.</li>
-            <li>Each finding is a heading with priority + location; the body is the reviewer's markdown. Long bodies fold (InboundMessage's fold rule).</li>
-            <li>The sent findings flip to <span class="pill info">sent</span> in the review card and the Changes tab.</li>
-          </ul>
-          <p class="pro">+ Matches how link-delivered messages already look; nothing new to learn.</p>
-          <p class="pro">+ The agent's reply reads as a response to <i>the reviewer</i>, which is honest.</p>
-          <p class="con">− Can look like another agent talking, though it was your click.</p>
+          </div></div>
+          <div class="notes"><p class="con">− Reads as another agent talking, though it was your click.</p></div>
         </div>
       </div>
-    </div>
-
-    <div class="opt">
-      <h3><span class="letter">B</span> Your bubble, quoting the reviewer <small>it was your decision to send</small></h3>
-      <div class="row">
-        <div class="pane" style="height:auto;min-height:300px">
-          <div class="msgs">
-            <p>…and <code>MaxBackoff</code> is threaded through. Router tests pass.</p>
-            <div class="ubub" style="max-width:82%">
-              <div style="font-size:var(--fs-sm);color:var(--text2);margin-bottom:4px">Please fix these from the Agent Review:</div>
-              <div style="border-left:2px solid var(--line);padding-left:10px;font-size:var(--fs-sm)">
-                <div style="display:flex;gap:6px;align-items:center"><span class="pri P1">P1</span><b style="font-weight:600">Retry loop keeps sleeping after ctx is cancelled</b></div>
-                <div style="font:11.5px var(--mono);color:var(--text3)">services/router/internal/job/job.go:215–218</div>
-                <div style="display:flex;gap:6px;align-items:center;margin-top:4px"><span class="pri P2">P2</span><b style="font-weight:600">Enqueue holds q.mu across the fsync</b></div>
-                <div style="font:11.5px var(--mono);color:var(--text3)">services/router/internal/job/queue.go:88–104 · AGENTS.md:42</div>
-              </div>
-              <div class="disclose" style="margin-top:4px">Show full text sent ▾</div>
-            </div>
-            <p>Looking at the retry loop first…</p>
-          </div>
-        </div>
-        <div class="notes">
-          <h4>How it behaves</h4>
-          <ul>
-            <li>A normal user message with a short lead-in and the findings as a quote; bodies hidden behind a disclosure.</li>
-          </ul>
-          <p class="pro">+ True to who acted: you sent it, it's in your voice.</p>
-          <p class="pro">+ You could edit the lead-in before sending (in a composer prefill variant).</p>
-          <p class="con">− Your bubble now contains words you didn't write; harder to tell your messages from tool output when skimming.</p>
-          <p class="con">− Loses the "this came from a review" signal for anyone reading later.</p>
+      <div class="opt">
+        <h3><span class="letter">C</span> Queued chip, then a one-line row</h3>
+        <div class="row">
+          <div class="pane auto"><div class="msgs">
+            <div class="queued"><div class="qi"><span class="qb">Queued</span><span class="chipsrc"><span class="ricon"></span> Agent Review</span><span>3 findings: P1 job.go:215, P2 queue.go:86, P2 review_prompt.go:31</span><span class="x">✕</span></div></div>
+            <div class="sentrow"><span class="chipsrc"><span class="ricon"></span> Agent Review</span><span>You sent <b>3 findings</b></span><span class="spacer"></span><span class="disclose">Show text ▾</span></div>
+          </div></div>
+          <div class="notes"><p class="con">− To read what the agent was told you have to expand.</p></div>
         </div>
       </div>
-    </div>
-
-    <div class="opt">
-      <h3><span class="letter">C</span> Queued chip, then a one-line row <small>sent findings stay in the review card</small></h3>
-      <div class="row">
-        <div class="pane" style="height:auto;min-height:340px">
-          <div class="stream" style="overflow:visible">
-            <div class="msgs">
-              <div style="color:var(--text3);font-size:var(--fs-chip);text-transform:uppercase;letter-spacing:.06em">while turn 19 runs</div>
-              <p>Running the router tests now…</p>
-            </div>
-            <div class="pinned" style="position:static">
-              <div class="queued"><div class="qi"><span class="qb">Queued</span><span class="chipsrc">◎ Agent Review</span><span>2 findings: P1 job.go:215, P2 queue.go:88</span><span class="x">✕</span></div></div>
-            </div>
-          </div>
-          <div class="msgs" style="border-top:1px solid var(--line-soft)">
-            <div style="color:var(--text3);font-size:var(--fs-chip);text-transform:uppercase;letter-spacing:.06em">after it lands</div>
-            <p>…and <code>MaxBackoff</code> is threaded through. Router tests pass.</p>
-            <div class="sentrow"><span class="chipsrc">◎ Agent Review</span><span>You sent <b>2 findings</b>: <span class="pri P1">P1</span> Retry loop keeps sleeping… <span class="pri P2">P2</span> Enqueue holds q.mu…</span><span class="spacer"></span><span class="disclose">Show text ▾</span></div>
-            <p>Looking at the retry loop first…</p>
-          </div>
-        </div>
-        <div class="notes">
-          <h4>How it behaves</h4>
-          <ul>
-            <li>While the agent is busy, the send sits in the existing <b>Queued</b> list with a readable label (not the raw markdown payload), cancellable with ✕.</li>
-            <li>When it's delivered, the transcript gets one dashed row (the InboundMessage edge: "not typed by you"); the full text is behind a disclosure.</li>
-          </ul>
-          <p class="pro">+ The transcript stays readable; findings aren't duplicated in full.</p>
-          <p class="pro">+ Makes the queued state explicit, so you can still take it back.</p>
-          <p class="con">− To read what the agent was told you have to expand.</p>
-          <p class="q"><b>Slot:</b> QueuedMessages renders <code>q.text</code> verbatim; a structured send needs a label field (like it already strips attachment paths).</p>
-        </div>
-      </div>
-    </div>
+    </details>
   </section>
 </div>
 
 <script>
+  // Monochrome review glyph: a checklist with a magnifier over its corner.
+  const RICON = `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-label="review"><path d="M1.8 3.2l1 1 1.7-1.9"/><path d="M6.3 3.3h5.4"/><path d="M1.8 7.6l1 1 1.7-1.9"/><path d="M6.3 7.7h2.2"/><path d="M2.2 12.1h3.6"/><circle cx="11.2" cy="10.6" r="2.7"/><path d="M13.2 12.6l1.9 1.9"/></svg>`;
+
+  /* ---------- one record per finding (shared with agent-review-changes.html) ---------- */
   const FINDINGS = [
-    { pri:"P1", title:"Retry loop keeps sleeping after ctx is cancelled", path:"services/router/internal/job/job.go", lines:"215–218", conf:.88, verified:true, root:"mads",
-      body:"`runWithRetry` calls `time.Sleep(delay)` between attempts. A cancelled job keeps its worker for up to `MaxBackoff` (30s) per remaining attempt, and `Shutdown` waits on it. Use a `select` on `ctx.Done()` and a timer." },
-    { pri:"P2", title:"Enqueue holds q.mu across the fsync", path:"services/router/internal/job/queue.go", lines:"88–104", conf:.74, verified:true, root:"mads", rule:"AGENTS.md:42",
-      body:"`Enqueue` takes `q.mu`, appends, then calls `q.store.Sync()` before unlocking. AGENTS.md:42: “never hold a store lock across disk I/O.” Every `Dequeue` stalls behind the fsync." },
-    { pri:"P2", title:"Mode-only changes are dropped from the snapshot", path:"services/router/internal/review/snapshot.go", lines:"57–63", conf:.66, verified:false, root:"mads", stale:"snapshot.go changed in turn 19 (after the snapshot)",
-      body:"The `git diff --numstat` parse skips entries with 0/0 counts, so a chmod-only change never reaches triage and isn't accounted for in coverage." },
-    { pri:"P2", title:"Rule citations dropped when AGENTS.md is missing", path:"~/repo/tao/pkg/agent/review_prompt.go", lines:"31–40", conf:.58, verified:false, root:"tao",
-      body:"`buildRules` returns early on `os.ErrNotExist` for AGENTS.md without checking CLAUDE.md, so repos that only have CLAUDE.md get no cited rules." },
-    { pri:"P3", title:"Agent Review button stays enabled while a review runs", path:"ui/src/files/ChangesTab.tsx", lines:"512–530", conf:.61, verified:false, root:"mads",
-      body:"A second click posts another review; the server dedupes it, but the button should reflect the running state." },
+    { id:1, pri:"P1", title:"Retry loop keeps sleeping after ctx is cancelled", path:"services/router/internal/job/job.go", lines:"215–218", verified:true, state:"accepted", open:true,
+      body:"`runWithRetry` (job.go:207) waits between attempts with `time.Sleep(delay)` at line 218. `time.Sleep` can't be interrupted, so once a job's context is cancelled the worker still sleeps out the full delay, up to `j.Type.MaxBackoff` (30s by default, jobtype.go:41), before the next `r.exec` notices.\n\n**Evidence**\n- `Runner.Shutdown` (runner.go:88) cancels the root context, then `wg.Wait()`s. With 3 retries left, one worker can hold shutdown for ~90s.\n- `TestShutdownDrains` (job_test.go:140) only passes because its job type sets `MaxBackoff: 10ms`.\n\n**Fix:** replace the sleep with a `select` on `ctx.Done()` and `time.After(delay)` (or a reused `time.Timer`), returning `ctx.Err()`." },
+    { id:2, pri:"P2", title:"Enqueue holds q.mu across the fsync", path:"services/router/internal/job/queue.go", lines:"86–90", verified:true, rule:"AGENTS.md:42", state:"accepted",
+      body:"`Enqueue` takes `q.mu` at queue.go:86 and defers the unlock (line 87), so the lock is held until it returns, including the `q.store.Sync()` call this session added at line 101.\n\n**Rule:** AGENTS.md:42, “Never hold a store lock across disk I/O; copy what you need, unlock, then write.”\n\n**Evidence:** every `Dequeue` and `Len` blocks behind the fsync, ~4–12ms per call on the CI runners (`BenchmarkEnqueue` output, turn 16).\n\n**Fix:** append under the lock, unlock explicitly, then `Sync`." },
+    { id:3, pri:"P2", title:"Mode-only changes are dropped from the snapshot", path:"services/router/internal/review/snapshot.go", lines:"57–63", stale:true, state:"open", staleWhy:"snapshot.go changed in turn 19, after the snapshot (turn 18)",
+      body:"The `git diff --numstat` parse at snapshot.go:57–63 skips entries whose added and deleted counts are both 0. A chmod-only change (e.g. making `scripts/review.sh` executable) is 0/0, so it never reaches triage and isn't in the coverage ledger at all, which breaks the “every changed file is accounted for” rule.\n\n**Fix:** read `--raw` alongside `--numstat`, or treat 0/0 as a mode change and record it as `skipped (mode only)`." },
+    { id:4, pri:"P2", title:"Rule citations dropped when AGENTS.md is missing", path:"pkg/agent/review_prompt.go", root:"tao", lines:"31–40", state:"edited",
+      body:"`buildRules` (review_prompt.go:31) returns `nil, nil` on `os.ErrNotExist` for AGENTS.md without looking for CLAUDE.md, so repos that only have CLAUDE.md produce findings with no cited rules.\n\n**Evidence:** `loadProjectDocs` in the same package (docs.go:22) already handles both names; the reviewer run on `~/repo/kiln` (CLAUDE.md only) returned 0 citations.\n\n**Fix:** have `buildRules` call `loadProjectDocs`.",
+      userText:"`buildRules` (review_prompt.go:31) gives up when AGENTS.md is missing and never checks CLAUDE.md. Reuse `loadProjectDocs` (docs.go:22), which already handles both names.\n\nDon't change the prompt format: tao's golden tests pin it." },
+    { id:5, pri:"P3", title:"Agent Review button stays enabled while a review runs", path:"ui/src/files/ChangesTab.tsx", lines:"512–530", state:"rejected", reason:"Intentional: a second click scrolls to the running review.",
+      body:"The button's `disabled` prop (ChangesTab.tsx:518) only checks `!cs`, not whether a review is running. A second click posts another `POST /sessions/{id}/reviews`; the server dedupes it (review/handler.go:64), but the UI gives no sign one is already in progress." },
+    { id:6, pri:"P3", title:"ReviewFinding.state is typed as string", path:"ui/src/router/types.ts", lines:"1388–1402", state:"open",
+      body:"`ReviewFinding.state` (types.ts:1394) is `string`, but the server only sends `open | accepted | edited | rejected | sent | resolved` (review/finding.go:19). A typo such as `\"rejcted\"` gets through `FindingRow`'s switch with no compiler error.\n\n**Fix:** a union type, like the neighbouring `ChangeTier`." },
   ];
+  const STATE = { open:["open","mute"], accepted:["accepted","ok"], edited:["edited by you","info"], rejected:["rejected","bad"], stale:["stale","stalep"], sent:["sent","mute"] };
+  const stOf = f => f.stale && f.state !== "rejected" ? "stale" : f.state;
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" })[c]);
-  const md = s => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
-  const counts = { P0:0, P1:1, P2:3, P3:1 };
-  let full = false;
-
-  const loc = f => `<span class="loc">${f.root !== "mads" ? `<span class="root">${f.root}</span>` : ""}<span class="path"><bdi>${esc(f.path.replace(/^~\/repo\/tao\//,""))}:${f.lines}</bdi></span>${f.rule ? `<span>· ${f.rule}</span>` : ""}${f.verified ? `<span style="color:var(--ok-fg)" title="verified">✓ verified</span>` : ""}</span>`;
-  const frow = (f, { chk = false, show = false } = {}) => `<div class="fr ${chk?"chk":""} ${show?"show":""} ${f.stale?"isstale":""}">
-      ${chk ? `<input type="checkbox" ${f.stale ? "" : "checked"}>` : ""}<span class="pri ${f.pri}">${f.pri}</span>
-      <span style="min-width:0;display:flex;flex-direction:column"><span class="t">${esc(f.title)}</span>${loc(f)}${f.stale ? `<span style="font-size:11px;color:var(--warn-fg)">${esc(f.stale)} · <span class="lnk">Re-check</span></span>` : ""}</span>
-      <span style="display:flex;gap:6px;align-items:center">${f.stale ? `<span class="stale">stale</span>` : ""}<span class="conf">${f.conf.toFixed(2)}</span>${chk ? "" : `<span class="acts"><button class="btn sm">Send</button><button class="btn sm ghost">Dismiss</button><button class="btn sm ghost">Diff</button></span>`}</span></div>`;
-  const pcounts = () => `<span class="counts">${["P0","P1","P2","P3"].map(p => counts[p] ? `<span class="pri ${p}">${p} ${counts[p]}</span>` : `<span class="pri" style="color:var(--text3);background:var(--bg2)">${p} 0</span>`).join("")}</span>`;
-  const cov = () => full
-    ? { r:11, s:3, n:0, bar:`<div class="cov"><i class="r" style="width:78.5%"></i><i class="s" style="width:21.5%"></i></div>` }
-    : { r:8, s:3, n:2, bar:`<div class="cov"><i class="r" style="width:61.5%"></i><i class="s" style="width:23%"></i><i class="n" style="width:15.5%"></i></div>` };
-  const legend = c => `<div class="covlegend"><span><i class="sw" style="background:var(--ok);opacity:.8"></i>${c.r} reviewed</span><span><i class="sw" style="background:var(--text3);opacity:.55"></i>${c.s} skipped · lockfile, generated, scratch</span>${c.n ? `<span><i class="sw" style="background:repeating-linear-gradient(45deg,var(--warn) 0 2px,var(--bg3) 2px 4px)"></i>${c.n} not reached · verify.go, merge.go</span>` : ""}</div>`;
-  const head = (meta) => `<div class="rhead"><span class="ki" style="color:var(--warn)">◎</span><span class="title">Agent Review</span><span class="who">since last review · turns 12–18 · reviewer · goose · qwen3.8-coder-nothink</span><span class="meta">${meta}</span></div>`;
-  const statusPill = () => full ? `<span class="pill ok">complete</span>` : `<span class="pill warn">partial · hit 10m limit</span>`;
-  const verdict = `<div class="verdict"><b style="font-weight:650">Changes needed</b><span class="why">The retry loop can hold a worker after cancel; the rest are smaller. Confidence 0.78.</span></div>`;
-
-  function render() {
-    const c = cov();
-    const partialLine = full ? "" : `<div style="display:flex;gap:8px;align-items:center;color:var(--warn-fg);font-size:12px">◌ 2 files not reached before the time limit.<span class="lnk">Review the rest</span><span style="color:var(--text3)">· or raise the limit in Settings</span></div>`;
-
-    document.getElementById("resA").innerHTML = `<p style="color:var(--text2)">…threaded through <code>nextDelay</code>. Router tests pass.</p>
-      <div class="rcard done">${head(`${statusPill()}<span>${full?"8m 12s":"10m 00s"}</span>`)}
-        <div class="rbody">${verdict}
-          <div style="display:flex;gap:var(--space-3);align-items:center">${pcounts()}<span class="spacer"></span><span style="font-size:11.5px;color:var(--text3)">1 stale</span></div>
-          ${c.bar}${legend(c)}${partialLine}
-          <div class="flist">${FINDINGS.slice(0,3).map((f,i) => frow(f, { show:i===0 })).join("")}</div>
-          <div style="font-size:12px;color:var(--text3)">+ 2 more (1 P2 in <span class="root">tao</span>, 1 P3)</div>
-        </div>
-        <div class="rfoot"><button class="btn primary">Send 4 open to agent</button><button class="btn">Open in Changes</button><span class="spacer"></span><span>stale findings aren't included</span></div>
-      </div>`;
-
-    document.getElementById("resB").innerHTML = `<div class="rcard done">${head(`${statusPill()}<span>${full?"8m 12s":"10m 00s"}</span>`)}
-        <div class="rbody">${verdict}
-          <details style="font-size:12px"><summary style="cursor:pointer;list-style:none;display:flex;flex-direction:column;gap:6px">${c.bar}${legend(c)}</summary>
-            <div style="margin-top:6px;font:11.5px/1.7 var(--mono);color:var(--text3)">
-              <div><span style="color:var(--ok-fg)">✓</span> job.go · queue.go · job_test.go · snapshot.go · ChangesTab.tsx · ChangesList.tsx · types.ts · <span class="root">tao</span> review_prompt.go</div>
-              <div>– package-lock.json (lockfile) · ChangesTab.test.tsx.snap (generated) · debug_dump.go (scratch)</div>
-              ${full ? "" : `<div style="color:var(--warn-fg)">◌ review/verify.go · review/merge.go (time limit)</div>`}
-            </div></details>
-          ${partialLine}
-          <div class="flist">${FINDINGS.map(f => frow(f, { chk:true })).join("")}</div>
-        </div>
-        <div class="rfoot"><button class="btn primary">Send 4 to agent</button><button class="btn ghost">Dismiss unchecked</button><button class="btn">Open in Changes</button><span class="spacer"></span><span>hover a row for Open in diff</span></div>
-      </div>`;
-
-    document.getElementById("resC").innerHTML = `<p style="color:var(--text2)">…threaded through <code>nextDelay</code>. Router tests pass.</p>
-      <div class="sysline" style="display:flex;gap:8px;justify-content:center;align-items:center;cursor:pointer">
-        <span style="color:var(--warn)">◎</span> Agent Review done · <b>changes needed</b> · <span class="pri P1">P1 1</span> 3 P2 · 1 P3 · ${full ? "11 reviewed, 3 skipped" : `<span style="color:var(--warn-fg)">partial: 2 of 13 not reached</span>`} · <span class="lnk">Open</span> ▸</div>
-      <p style="color:var(--text2)">Want me to also add a per-job-type jitter setting?</p>`;
-
-    const sent = FINDINGS.slice(0,2);
-    document.getElementById("sentProse").innerHTML = sent.map(f => `<h5><span class="pri ${f.pri}">${f.pri}</span>${esc(f.title)}</h5>
-      <div class="ref">${esc(f.path)}:${f.lines}${f.rule ? " · " + f.rule : ""} · confidence ${f.conf.toFixed(2)}${f.verified ? " · verified" : ""}</div><p>${md(f.body)}</p>`).join("")
-      + `<p style="color:var(--text3);margin-top:6px;font-size:11.5px">Line numbers are from the review snapshot taken at turn 18.</p>`;
-    document.getElementById("fullToggle").textContent = full ? "Show as a partial review" : "Show as a complete review";
+  const inl = s => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  function md(s) {
+    return s.split(/\n\n+/).map(blk => {
+      const ls = blk.split("\n");
+      if (ls.every(l => l.startsWith("- "))) return `<ul>${ls.map(l => `<li>${inl(l.slice(2))}</li>`).join("")}</ul>`;
+      const head = ls[0].match(/^\*\*[^*]+\*\*$/) && ls.length > 1 && ls.slice(1).every(l => l.startsWith("- "));
+      if (head) return `<p>${inl(ls[0])}</p><ul>${ls.slice(1).map(l => `<li>${inl(l.slice(2))}</li>`).join("")}</ul>`;
+      return `<p>${ls.map(inl).join("<br>")}</p>`;
+    }).join("");
   }
-  document.getElementById("fullToggle").onclick = () => { full = !full; render(); };
-  render();
+  const finalText = f => f.state === "edited" ? f.userText : f.body;
+  const locOf = f => `${f.root ? `<span class="root">${f.root}</span>` : ""}<span>${esc(f.path)}:${f.lines}</span>${f.rule ? `<span>· ${f.rule}</span>` : ""}${f.verified ? `<span style="color:var(--ok-fg)">· ✓ verified</span>` : ""}`;
+
+  function actions(f) {
+    const st = stOf(f);
+    if (f.ui === "edit") return `<textarea data-draft="${f.id}">${esc(f.draft ?? finalText(f))}</textarea>
+      <div class="acts"><button class="btn sm primary" data-act="saveEdit" data-id="${f.id}">Save edit</button><button class="btn sm ghost" data-act="cancel" data-id="${f.id}">Cancel</button><span class="rnote">Your text replaces the reviewer's in what's sent; the original is kept.</span></div>`;
+    if (f.ui === "reject") return `<div class="acts"><input class="reason" data-reason="${f.id}" placeholder="Reason (optional), e.g. intentional, out of scope"><button class="btn sm" data-act="confirmReject" data-id="${f.id}">Reject</button><button class="btn sm ghost" data-act="cancel" data-id="${f.id}">Cancel</button></div>`;
+    if (f.checking) return `<div class="acts"><span class="spin dim"></span><span class="rnote">Re-checking snapshot.go against the current code…</span></div>`;
+    if (st === "stale") return `<div class="stnote">⚠ ${esc(f.staleWhy)}. Lines ${f.lines} no longer match; it may already be fixed, or may have moved.</div>
+      <div class="acts"><button class="btn sm primary" data-act="recheck" data-id="${f.id}">Re-check this file</button><button class="btn sm" disabled title="Disabled while stale">Accept</button><button class="btn sm" disabled title="Disabled while stale">Edit</button><button class="btn sm ghost" data-act="reject" data-id="${f.id}">Reject</button></div>`;
+    if (st === "open") return `<div class="acts"><button class="btn sm primary" data-act="accept" data-id="${f.id}">Accept</button><button class="btn sm" data-act="edit" data-id="${f.id}">Edit</button><button class="btn sm ghost" data-act="reject" data-id="${f.id}">Reject</button><span class="spacer"></span><button class="btn sm ghost">Open in diff</button></div>`;
+    if (st === "accepted") return `<div class="acts"><span class="who"><span class="ricon"></span>Agent Review's words, accepted</span><span class="spacer"></span><button class="btn sm" data-act="edit" data-id="${f.id}">Edit</button><button class="btn sm ghost" data-act="undo" data-id="${f.id}">Undo</button><button class="btn sm ghost">Open in diff</button></div>`;
+    if (st === "edited") return `<div class="acts"><span class="who you">✎ edited by you</span><button class="btn sm ghost" data-act="toggleOrig" data-id="${f.id}">${f.showOrig ? "Hide" : "Show"} reviewer's original</button><span class="spacer"></span><button class="btn sm" data-act="edit" data-id="${f.id}">Edit</button><button class="btn sm ghost" data-act="revert" data-id="${f.id}">Use reviewer's text</button><button class="btn sm ghost" data-act="undo" data-id="${f.id}">Undo</button></div>`;
+    if (st === "rejected") return `<div class="acts"><span class="rnote">Rejected${f.reason ? `: “${esc(f.reason)}”` : ""} · not sent</span><span class="spacer"></span><button class="btn sm ghost" data-act="undo" data-id="${f.id}">Undo</button></div>`;
+    return "";
+  }
+  function findingRow(f) {
+    const st = stOf(f), [lbl, tone] = STATE[st];
+    const body = f.ui === "edit" ? "" : `<div class="md">${md(finalText(f))}</div>${st === "edited" && f.showOrig ? `<div class="md orig"><div class="who" style="margin-bottom:4px"><span class="ricon"></span>Agent Review's original</div>${md(f.body)}</div>` : ""}`;
+    return `<div class="fx" data-st="${st}">
+      <div class="top" data-act="toggle" data-id="${f.id}"><span class="car">${f.open ? "▾" : "▸"}</span><span class="pri ${f.pri}">${f.pri}</span>
+        <span style="min-width:0"><div class="t">${esc(f.title)}</div><div class="loc">${locOf(f)}</div></span>
+        <span class="pill ${tone}">${lbl}</span></div>
+      ${f.open ? `<div class="ex">${body}${actions(f)}</div>` : ""}</div>`;
+  }
+
+  /* ---------- 2B: the checklist card ---------- */
+  const sendable = () => FINDINGS.filter(f => !f.stale && (f.state === "accepted" || f.state === "edited"));
+  const tally = () => { const c = { open:0, accepted:0, edited:0, rejected:0, stale:0 }; FINDINGS.forEach(f => c[stOf(f)]++); return c; };
+  const covBar = `<div class="cov"><i class="r" style="width:57%"></i><i class="s" style="width:28.6%"></i><i class="n" style="width:14.4%"></i></div>`;
+  const legend = `<div class="covlegend"><span><i class="sw" style="background:var(--ok);opacity:.8"></i>8 reviewed</span><span><i class="sw" style="background:var(--text3);opacity:.55"></i>4 skipped · lockfile, generated, 2 scratch</span><span><i class="sw" style="background:repeating-linear-gradient(45deg,var(--warn) 0 2px,var(--bg3) 2px 4px)"></i>2 not reached · verify.go, merge.go</span></div>`;
+  const head = `<div class="rhead"><span class="ki review"><span class="ricon"></span></span><span class="title">Agent Review</span><span class="who">since last review · turns 12–18 · reviewer · goose · qwen3.8-coder-nothink</span><span class="meta"><span class="pill warn">partial · hit 10m limit</span><span>10m 00s</span></span></div>`;
+  const verdict = `<div class="verdict"><b style="font-weight:650">Changes needed</b><span class="why">The retry loop can hold a worker after cancel; the rest are smaller.</span></div>`;
+  const pcounts = `<span class="counts"><span class="pri P1">P1 1</span><span class="pri P2">P2 3</span><span class="pri P3">P3 2</span></span>`;
+
+  function renderB() {
+    const n = sendable().length, t = tally();
+    document.getElementById("resB").innerHTML = `<p style="color:var(--text2)">…threaded through <code>nextDelay</code>. Router tests pass.</p>
+      <div class="rcard">${head}
+        <div class="rbody">${verdict}
+          <div style="display:flex;gap:var(--space-3);align-items:center">${pcounts}<span class="spacer"></span><span style="font-size:11.5px;color:var(--text3)">${t.accepted} accepted · ${t.edited} edited · ${t.rejected} rejected · ${t.open} open${t.stale ? ` · ${t.stale} stale` : ""}</span></div>
+          ${covBar}${legend}
+          <div style="display:flex;gap:8px;align-items:center;color:var(--warn-fg);font-size:12px">◌ 2 files not reached before the time limit.<span class="lnk">Review the rest</span></div>
+          <div class="flist">${FINDINGS.map(findingRow).join("")}</div>
+        </div>
+        <div class="rfoot"><button class="btn primary" ${n ? "" : "disabled"}>Send ${n} to agent</button><button class="btn">Open in Changes</button><span class="spacer"></span><span class="syncnote">⇄ same findings as the Changes tab annotations; state syncs both ways</span></div>
+      </div>`;
+    renderSent();
+  }
+
+  /* ---------- 3B: the sent bubble, built from the same records ---------- */
+  function renderSent() {
+    const items = sendable();
+    document.getElementById("sentBubble").innerHTML = items.length ? `<div class="lead">Please address these from the Agent Review:</div>` + items.map(f => {
+      const you = f.state === "edited";
+      return `<div class="sitem ${you ? "you" : ""}"><div class="h"><span class="pri ${f.pri}">${f.pri}</span>${esc(f.title)}${you ? `<span class="who you">✎ edited by you</span>` : `<span class="who"><span class="ricon"></span>Agent Review</span>`}</div>
+        <div class="ref">${f.root ? `<span class="root">${f.root}</span> ` : ""}${esc(f.path)}:${f.lines}${f.rule ? " · " + f.rule : ""}</div><div class="md">${md(finalText(f))}</div></div>`;
+    }).join("") + `<div style="font-size:11px;color:var(--text3);text-align:right">${items.length} findings · line numbers from the review snapshot (turn 18)</div>`
+      : `<div class="lead" style="color:var(--text3)">Nothing accepted or edited yet.</div>`;
+    document.getElementById("wire").textContent = "Please address these from the Agent Review:\n\n" + items.map((f, i) =>
+      `${i + 1}. [${f.pri}] ${f.title}\n   ${f.root ? "~/repo/tao/" : ""}${f.path}:${f.lines}${f.rule ? " (" + f.rule + ")" : ""}\n   Written by: ${f.state === "edited" ? "the user (edited from the reviewer's text)" : "Agent Review (reviewer · goose · qwen3.8-coder-nothink)"}\n\n${finalText(f).replace(/^/gm, "   ")}`).join("\n\n");
+    paintIcons();
+  }
+
+  /* ---------- 2A (not chosen) ---------- */
+  document.getElementById("resA").innerHTML = `<div class="rcard">${head}<div class="rbody">${verdict}<div>${pcounts}</div>${covBar}${legend}
+    <div class="flist">${FINDINGS.slice(0, 3).map(f => `<div class="mini-f"><span class="pri ${f.pri}">${f.pri}</span><span><div class="t">${esc(f.title)}</div><div class="l">${esc(f.path)}:${f.lines}</div></span><span></span></div>`).join("")}</div>
+    <div style="font-size:12px;color:var(--text3)">+ 3 more</div></div><div class="rfoot"><button class="btn primary">Send open to agent</button><button class="btn">Open in Changes</button></div></div>`;
+
+  /* ---------- interactions ---------- */
+  const byId = id => FINDINGS.find(f => f.id === +id);
+  document.getElementById("resB").addEventListener("click", e => {
+    const el = e.target.closest("[data-act]"); if (!el || el.disabled) return;
+    const f = byId(el.dataset.id), a = el.dataset.act;
+    if (a === "toggle") { if (!f.ui) f.open = !f.open; }
+    else if (a === "accept") f.state = "accepted";
+    else if (a === "edit") { f.ui = "edit"; f.draft = finalText(f); f.open = true; }
+    else if (a === "saveEdit") { const v = document.querySelector(`[data-draft="${f.id}"]`).value.trim(); f.ui = null; if (v && v !== f.body) { f.userText = v; f.state = "edited"; } else f.state = "accepted"; }
+    else if (a === "reject") { f.ui = "reject"; f.open = true; }
+    else if (a === "confirmReject") { f.reason = document.querySelector(`[data-reason="${f.id}"]`).value.trim(); f.ui = null; f.state = "rejected"; }
+    else if (a === "cancel") f.ui = null;
+    else if (a === "undo") { f.state = "open"; delete f.reason; }
+    else if (a === "revert") f.state = "accepted";
+    else if (a === "toggleOrig") f.showOrig = !f.showOrig;
+    else if (a === "recheck") { f.checking = true; renderB(); setTimeout(() => { f.checking = false; f.stale = false; f.lines = "61–67"; f.title = "Mode-only changes are dropped from the snapshot";
+      f.body = "Re-checked against turn 19: still applies, moved to lines 61–67.\n\n" + f.body.replace("57–63", "61–67"); renderB(); }, 1400); return; }
+    renderB();
+  });
+  function paintIcons() { document.querySelectorAll(".ricon:empty").forEach(el => el.innerHTML = RICON); }
+  renderB(); paintIcons();
 </script>
 </body>
 </html>
