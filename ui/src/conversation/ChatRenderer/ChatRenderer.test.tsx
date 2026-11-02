@@ -704,6 +704,16 @@ describe("ChatRenderer — sends the harness failed", () => {
     expect(screen.getByRole("status").textContent).toContain("Not delivered");
   });
 
+  it("offers Sign in only on the latest send: earlier auth failures read not delivered", () => {
+    const authError = { ...failed[1], error_kind: "auth" as const };
+    const rows = keyed([failed[0], authError, { role: "user", text: "and the docs" }, authError]);
+    render(<ChatRenderer rows={rows} signIn={{ provider: "Codex", onSignIn: vi.fn() }} />);
+    const [earlier, latest] = screen.getAllByRole("status").map((el) => el.textContent);
+    expect(earlier).toContain("Not delivered");
+    expect(latest).toContain("Signed out of Codex");
+    expect(screen.getAllByRole("button", { name: "Sign in" })).toHaveLength(1);
+  });
+
   it("shows a send the stream reported unsaved as not delivered, with the send's failure", () => {
     const rows: KeyedRow[] = [{ key: "u1", role: "user", text: "ship it", failed: true }];
     const { rerender } = render(<ChatRenderer rows={rows} sendFailure="HTTP 503: router unavailable" />);

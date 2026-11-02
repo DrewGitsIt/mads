@@ -11,8 +11,8 @@ import styles from "./SendDelivery.module.css";
  * on the latest message only, Retry; then a quiet count of earlier failed
  * attempts that opens to list each one's reason and time.
  *
- * A send the harness refused for auth, while the session's login is still
- * signed out, reads "Signed out of {provider}" instead (the reason moves to
+ * The latest send, refused by the harness for auth while the session's login
+ * is still signed out, reads "Signed out of {provider}" instead (the reason moves to
  * the tooltip) and offers Sign in beside Retry. Once the login is signed in
  * again it reads "Not delivered" like any other failure.
  */

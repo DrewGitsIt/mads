@@ -13,7 +13,8 @@ It worked, but nothing in mads helped.
 - **Account scope.** Login state belongs to the login a session runs on, not to the
   session or to the provider. The key is `provider.AccountStatus.Account`, the same one
   that shares plan limits (claude-code: `claude-code:<config dir>`).
-- **Sign in shows only on a failed message**, in a session whose send failed. Account
+- **Sign in shows only on a failed message**, in a session whose send failed, and only
+  on its latest send (where Retry is): earlier auth failures read "Not delivered". Account
   scope decides when it clears: signing in from any session clears every session on that
   login.
 - **After signing in:** a toast ("Signed in to Claude") and Retry. No automatic resend.
