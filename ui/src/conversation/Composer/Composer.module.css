@@ -381,6 +381,17 @@ kbd.kbd {
   color: var(--warn-fg);
 }
 
+/* a linked session's queued message: who it's from */
+.queuedFrom {
+  flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--info-fg);
+  font: 500 var(--fs-sm) var(--sans);
+}
+
 .queuedText {
   flex: 1;
   min-width: 0;

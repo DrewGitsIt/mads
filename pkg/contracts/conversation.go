@@ -160,12 +160,15 @@ type AgentState struct {
 	Background int `json:"background,omitempty"`
 }
 
-// QueuedMessage is one user message waiting in the Runner's queue behind an
-// in-flight turn.
+// QueuedMessage is one message waiting in the Runner's queue behind an
+// in-flight turn: the user's own, or — with Attribution set — a linked
+// session's injection, shown so the user sees it coming but not theirs to
+// cancel (its sender was already told it was delivered).
 type QueuedMessage struct {
-	ID       string    `json:"id"`
-	Text     string    `json:"text"`
-	QueuedAt time.Time `json:"queued_at"`
+	ID          string       `json:"id"`
+	Text        string       `json:"text"`
+	QueuedAt    time.Time    `json:"queued_at"`
+	Attribution *Attribution `json:"attribution,omitempty"`
 }
 
 // QueueChanged is the payload of SessionQueueChanged. Queued is the whole
