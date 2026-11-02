@@ -394,8 +394,11 @@ type pendingInjection struct {
 	preWire string
 	// userID is set for the user's own message queued by SendOrQueue, empty
 	// for a linked-session injection. A user entry delivers as an ordinary
-	// user turn (no Attribution) and is the only kind the queue API exposes.
-	userID   string
+	// user turn (no Attribution) and is the only kind the queue API cancels.
+	userID string
+	// injectID is a queued injection's id in the queue API, which lists it
+	// (with its Attribution) but won't cancel it.
+	injectID string
 	queuedAt time.Time
 	// msgID is the send's message id, minted when it was accepted into the
 	// queue: its user_message key is "user:"+msgID (chatstream.go).
@@ -1095,14 +1098,17 @@ func (r *Runner) InjectParts(ctx context.Context, parts []contracts.InjectPart) 
 		return ErrNotReady
 	}
 	if r.busy || r.landing {
-		entry := pendingInjection{text: text, attribution: attribution, msgID: newMessageID()}
+		entry := pendingInjection{text: text, attribution: attribution, msgID: newMessageID(),
+			injectID: newQueueID(), queuedAt: time.Now().UTC()}
 		if len(parts) > 1 {
 			// Already a combined turn: delivered as built, never coalesced
 			// further (drainNextLocked).
 			entry.preWire = strings.Join(wires, "\n\n")
 		}
 		r.pending = append(r.pending, entry)
+		snapshot := r.queuedLocked()
 		r.mu.Unlock()
+		r.publishQueue(contracts.QueueChanged{Queued: snapshot})
 		audit()
 		return nil
 	}
@@ -1254,8 +1260,8 @@ func (r *Runner) deliverNextLocked() {
 	} else {
 		r.deliverLocked()
 	}
-	if next.userID != "" {
-		delivered = &contracts.QueuedMessage{ID: next.userID, Text: next.text, QueuedAt: next.queuedAt}
+	if q, ok := next.queued(); ok {
+		delivered = &q
 		remaining = r.queuedLocked()
 	}
 	sess := r.sess

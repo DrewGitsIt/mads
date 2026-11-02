@@ -803,12 +803,14 @@ export interface CompactStatus {
   error?: string;
 }
 
-// mirrors pkg/contracts/conversation.go QueuedMessage: one user message
-// waiting in the session process's queue behind an in-flight turn.
+// mirrors pkg/contracts/conversation.go QueuedMessage: one message waiting
+// in the session process's queue behind an in-flight turn — the user's own,
+// or a linked session's (attribution set), which the user can't cancel.
 export interface QueuedMessage {
   id: string;
   text: string;
   queued_at: string;
+  attribution?: Attribution;
 }
 
 // mirrors pkg/contracts/conversation.go QueueChanged (payload of

@@ -177,3 +177,53 @@ func TestQueuedUserMessageStopsDigestCoalescing(t *testing.T) {
 		t.Fatalf("third drain = %+v, want d2", got)
 	}
 }
+
+// TestQueuedInjectionIsListedNotCancellable: a linked session's message sent
+// mid-turn shows in the queue in order with the user's own, carrying its
+// attribution, is announced queued and delivered like a user message — and
+// the user can't cancel it, since its sender was told it was delivered.
+func TestQueuedInjectionIsListedNotCancellable(t *testing.T) {
+	ctx := context.Background()
+	r, data, id := startFakeRunner(t)
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+
+	if err := r.Send(ctx, "slow"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	from := contracts.Attribution{LinkID: "lnk_a", SourceName: "Leader", Relation: "your leader"}
+	if err := r.Inject(ctx, "echo linked", from); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	mine, _ := r.SendOrQueue(ctx, "echo mine")
+
+	got := r.QueuedMessages()
+	if len(got) != 2 || got[0].Attribution == nil || got[0].Attribution.SourceName != "Leader" ||
+		got[0].Text != "echo linked" || got[0].ID == "" || got[1].ID != mine.ID || got[1].Attribution != nil {
+		t.Fatalf("QueuedMessages = %+v, want the injection then the user's message", got)
+	}
+	injected := got[0].ID
+	if r.CancelQueued(injected) {
+		t.Fatal("CancelQueued(injection) = true, want it refused")
+	}
+
+	if err := r.Interrupt(ctx); err != nil {
+		t.Fatalf("interrupt: %v", err)
+	}
+	awaitTurnEnd(t, ch)
+	if got := drainText(t, ch); got != "you said linked" {
+		t.Fatalf("next turn = %q, want the injection first", got)
+	}
+
+	changes := eventsOfType[contracts.QueueChanged](t, data, id, contracts.SessionQueueChanged)
+	if len(changes) < 3 {
+		t.Fatalf("queue events = %+v, want injection queued, user queued, injection delivered", changes)
+	}
+	if len(changes[0].Queued) != 1 || changes[0].Queued[0].ID != injected {
+		t.Errorf("first event = %+v, want the injection queued", changes[0])
+	}
+	if d := changes[2].Delivered; d == nil || d.ID != injected || d.Attribution == nil ||
+		len(changes[2].Queued) != 1 || changes[2].Queued[0].ID != mine.ID {
+		t.Errorf("third event = %+v, want the injection delivered, the user's message left", changes[2])
+	}
+}

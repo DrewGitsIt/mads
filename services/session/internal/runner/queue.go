@@ -92,17 +92,31 @@ func (r *Runner) CancelQueued(id string) bool {
 	return true
 }
 
-// queuedLocked snapshots the user entries of r.pending; linked-session
-// injections share the slice for ordering but aren't the user's to see or
-// cancel. Must be called with r.mu held.
+// queuedLocked snapshots r.pending in delivery order: the user's own
+// messages and linked-session injections alike, the latter with their
+// Attribution so the UI can label them (and offer no cancel — CancelQueued
+// only matches user entries). Must be called with r.mu held.
 func (r *Runner) queuedLocked() []contracts.QueuedMessage {
 	out := []contracts.QueuedMessage{}
 	for _, p := range r.pending {
-		if p.userID != "" {
-			out = append(out, contracts.QueuedMessage{ID: p.userID, Text: p.text, QueuedAt: p.queuedAt})
+		if q, ok := p.queued(); ok {
+			out = append(out, q)
 		}
 	}
 	return out
+}
+
+// queued is p as the queue API shows it; false for an entry with no id,
+// which only a test builds.
+func (p pendingInjection) queued() (contracts.QueuedMessage, bool) {
+	if p.userID != "" {
+		return contracts.QueuedMessage{ID: p.userID, Text: p.text, QueuedAt: p.queuedAt}, true
+	}
+	if p.injectID == "" {
+		return contracts.QueuedMessage{}, false
+	}
+	a := p.attribution
+	return contracts.QueuedMessage{ID: p.injectID, Text: p.text, QueuedAt: p.queuedAt, Attribution: &a}, true
 }
 
 // publishQueue appends a SessionQueueChanged event. Best-effort, like the

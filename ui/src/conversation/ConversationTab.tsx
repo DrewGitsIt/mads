@@ -941,7 +941,10 @@ export function ConversationTab({
       const change = envelope.payload as Partial<QueueChanged> | undefined;
       if (!change) return;
       convDispatch({ type: "queued", queued: change.queued ?? [] });
-      if (change.failed) {
+      if (change.failed?.attribution) {
+        const from = change.failed.attribution.source_name || "mads";
+        setSendError(`Couldn't deliver the queued message from ${from}: ${change.error ?? "unknown error"}`);
+      } else if (change.failed) {
         setSendError(`Couldn't send your queued message: ${change.error ?? "unknown error"}`);
       }
     });
