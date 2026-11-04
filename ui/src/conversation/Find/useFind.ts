@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { domMatches } from "./domMatches";
-import { findPattern, type EntryMatch, type FindOptions } from "./findText";
+import { findKey, findPattern, groupMatchAt, type EntryMatch, type FindOptions } from "./findText";
+import type { TranscriptMatches } from "./useTranscriptMatches";
 
 /** The find bar's ask: what to look for, and which way to step. */
 export interface FindRequest extends FindOptions {
@@ -49,6 +50,12 @@ interface Source {
   key: string;
 }
 
+/** A source's matches, made one at a time: a group can hold tens of thousands, and find only steps near a few. */
+interface Hits {
+  length: number;
+  at: (n: number) => Hit;
+}
+
 /** A match: its source's index, and its place among that source's matches. */
 type At = { src: number; n: number };
 
@@ -66,7 +73,7 @@ const VIEW_MARGIN = 48;
 /** The pinned strip (working indicator, queue) covers about this much of the bottom. */
 const VIEW_BOTTOM = 120;
 
-const keyOf = (r?: FindRequest) => (r?.query ? `${r.query}\0${r.matchCase}\0${r.skipTools}` : "");
+const keyOf = (r?: FindRequest) => (r ? findKey(r) : "");
 
 /**
  * Find in conversation. The stream's elements opt in by what they hold:
@@ -76,10 +83,10 @@ const keyOf = (r?: FindRequest) => (r?.query ? `${r.query}\0${r.matchCase}\0${r.
  *    markdown renderer and Copy never see them). `data-find-tool` marks one
  *    "no tools" leaves out.
  *  - `data-find-group="<item key>"`: an activity group, whose rows show one
- *    line each — its matches come from the transcript (`groups`), and the
+ *    line each — its matches come from the transcript (`transcript`), and the
  *    group renders the current one as a snippet (`data-find-current`).
  *  - `data-find-summary="<item key>"`: a compaction marker, its summary
- *    behind a disclosure — counted from the transcript (`summaries`) and,
+ *    behind a disclosure — counted from the transcript (`transcript`) and,
  *    when open, painted in its `data-find-summary-body`.
  *
  * Document order is match order. The current match is held by identity, so
@@ -89,19 +96,19 @@ const keyOf = (r?: FindRequest) => (r?.query ? `${r.query}\0${r.matchCase}\0${r.
 export function useFind(
   rootRef: RefObject<HTMLElement | null>,
   request: FindRequest | undefined,
-  groups: ReadonlyMap<string, EntryMatch[]>,
-  summaries: ReadonlyMap<string, number>,
+  transcript: TranscriptMatches,
   onStatus?: (status: FindStatus) => void,
 ): FindTarget | null {
   const [target, setTarget] = useState<FindTarget | null>(null);
-  const latest = useRef({ request, groups, summaries, onStatus });
-  latest.current = { request, groups, summaries, onStatus };
+  const latest = useRef({ request, transcript, onStatus });
+  latest.current = { request, transcript, onStatus };
   const st = useRef({
     queryKey: "",
     step: 0,
     currentId: undefined as string | undefined,
     /** The current match's source key, to find it again without matching the whole stream. */
     currentSource: undefined as string | undefined,
+    currentN: 0,
     /** The current match's top, in stream coordinates — where a new query starts from. */
     anchor: undefined as number | undefined,
     scrollPending: false,
@@ -112,7 +119,11 @@ export function useFind(
   });
 
   const run = useCallback(() => {
-    const { request, groups, summaries, onStatus } = latest.current;
+    const { request, transcript, onStatus } = latest.current;
+    // The transcript's matches for this search are still coming
+    // (useTranscriptMatches): hold what's shown rather than mix searches.
+    if (request?.query && transcript.key !== keyOf(request)) return;
+    const { groups, summaries } = transcript;
     const s = st.current;
     const root = rootRef.current;
     const pattern = request ? findPattern(request) : null;
@@ -131,13 +142,13 @@ export function useFind(
     }
 
     const srcs = sources(root, request.skipTools);
-    const found = new Map<number, Hit[]>();
+    const found = new Map<number, Hits>();
     const hitsOf = (i: number) => {
       let hs = found.get(i);
       if (!hs) found.set(i, (hs = matchesIn(srcs[i], i, pattern, groups, summaries)));
       return hs;
     };
-    const hitAt = ({ src, n }: At) => hitsOf(src)[n];
+    const hitAt = ({ src, n }: At) => hitsOf(src).at(n);
     // Neighbours, wrapping at the ends. Only called with a match in hand, so
     // there is always one to land on.
     const next = ({ src, n }: At): At => {
@@ -171,8 +182,10 @@ export function useFind(
       for (let i = 0; i < srcs.length; i++) {
         const el = srcs[i].el;
         if (spanOf(el, () => el.getBoundingClientRect()).bottom < from) continue;
-        const n = hitsOf(i).findIndex((h) => span(h).bottom >= from);
-        if (n >= 0) return { src: i, n };
+        const hs = hitsOf(i);
+        // A group's or summary's matches all stand at its own box, just checked.
+        if (srcs[i].kind !== "dom" && hs.length > 0) return { src: i, n: 0 };
+        for (let n = 0; n < hs.length; n++) if (span(hs.at(n)).bottom >= from) return { src: i, n };
       }
       for (let i = srcs.length - 1; i >= 0; i--) {
         if (hitsOf(i).length > 0) return { src: i, n: hitsOf(i).length - 1 };
@@ -181,8 +194,12 @@ export function useFind(
     };
     const held = (): At | undefined => {
       const i = srcs.findIndex((x) => x.key === s.currentSource);
-      const n = i < 0 ? -1 : hitsOf(i).findIndex((h) => h.id === s.currentId);
-      return n >= 0 ? { src: i, n } : undefined;
+      if (i < 0) return undefined;
+      const hs = hitsOf(i);
+      // Where it was, most often: earlier matches stay put as output arrives.
+      if (s.currentN < hs.length && hs.at(s.currentN).id === s.currentId) return { src: i, n: s.currentN };
+      for (let n = 0; n < hs.length; n++) if (hs.at(n).id === s.currentId) return { src: i, n };
+      return undefined;
     };
 
     const qk = keyOf(request);
@@ -236,6 +253,7 @@ export function useFind(
     const index = cur ? hits.indexOf(cur) : -1;
     s.currentId = cur?.id;
     s.currentSource = cur && srcs[cur.src].key;
+    s.currentN = cur?.n ?? 0;
     s.anchor = cur ? span(cur).top : undefined;
     setTarget((prev) => (prev?.id === cur?.id ? prev : cur ? toTarget(cur) : null));
 
@@ -351,24 +369,30 @@ function matchesIn(
   { kind, el, key }: Source,
   src: number,
   pattern: RegExp,
-  groups: ReadonlyMap<string, EntryMatch[]>,
-  summaries: ReadonlyMap<string, number>,
-): Hit[] {
+  groups: TranscriptMatches["groups"],
+  summaries: TranscriptMatches["summaries"],
+): Hits {
   if (kind === "dom") {
-    return domMatches(el, pattern).map((range, n) => ({ kind, id: `d:${key}:${n}`, el, range, src, n }));
+    const hits: Hit[] = domMatches(el, pattern).map((range, n) => ({ kind, id: `d:${key}:${n}`, el, range, src, n }));
+    return { length: hits.length, at: (n) => hits[n] };
   }
   if (kind === "entry") {
-    return (groups.get(key) ?? []).map((match, n) => ({
-      kind,
-      id: `e:${key}:${match.entryKey}:${match.part}:${match.start}`,
-      el,
-      itemKey: key,
-      match,
-      src,
-      n,
-    }));
+    const g = groups.get(key);
+    const made = new Map<number, Hit>();
+    return {
+      length: g?.count ?? 0,
+      at: (n) => {
+        let h = made.get(n);
+        if (!h) {
+          const match = groupMatchAt(g!, n);
+          const id = `e:${key}:${match.entryKey}:${match.part}:${match.start}`;
+          made.set(n, (h = { kind, id, el, itemKey: key, match, src, n }));
+        }
+        return h;
+      },
+    };
   }
-  return Array.from({ length: summaries.get(key) ?? 0 }, (_, n) => ({
+  const hits: Hit[] = Array.from({ length: summaries.get(key) ?? 0 }, (_, n) => ({
     kind,
     id: `s:${key}:${n}`,
     el,
@@ -376,6 +400,7 @@ function matchesIn(
     src,
     n,
   }));
+  return { length: hits.length, at: (n) => hits[n] };
 }
 
 function toTarget(h: Hit): FindTarget {

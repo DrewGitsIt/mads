@@ -5,7 +5,7 @@ import { Fold, useArrivals } from "../../components/Motion";
 import type { BackgroundTask, PermissionRequest, ToolKind, ToolStatus, ToolUse } from "../../router/types";
 import type { PermissionReveal } from "../ApprovalJump/permissionReveal";
 import { PermissionCard } from "../ChatRenderer/PermissionCard";
-import { entryKey, snippet, type EntryMatch } from "../Find/findText";
+import { entryKey, entryMatchCount, snippet, type EntryMatch, type GroupMatches } from "../Find/findText";
 import { BackgroundElapsed } from "./Background";
 import type { ActivityEntry, ToolEntry } from "./conversationItems";
 import { DiffView } from "./DiffView";
@@ -53,7 +53,7 @@ export interface ActivityGroupProps {
   /** This group's item key, for find (useFind's `data-find-group`). */
   findKey?: string;
   /** Find's matches in these rows' full text, which the rows don't show. */
-  findMatches?: EntryMatch[];
+  findMatches?: GroupMatches;
   /** Find's current match, when it's in this group: the group opens and shows it in context. */
   findCurrent?: { id: string; match: EntryMatch };
 }
@@ -254,7 +254,7 @@ export function ActivityGroup({
           <span>{label}</span>
           <span className={styles.meta}>
             {!shown && awaiting && <Chip tone="warn">needs your approval</Chip>}
-            {!shown && findMatches && findMatches.length > 0 && <FindHits count={findMatches.length} />}
+            {!shown && findMatches && findMatches.count > 0 && <FindHits count={findMatches.count} />}
             <Diffstat adds={stat.adds} dels={stat.dels} />
             {duration && <span>{duration}</span>}
             {agg === "in_progress" ? <Spinner /> : <StatusGlyph status={agg} />}
@@ -266,7 +266,7 @@ export function ActivityGroup({
               const requests =
                 entry.type === "tool" && entry.tool.id ? permissions?.get(entry.tool.id) : undefined;
               const current = findCurrent?.match.entryKey === keys[i] ? findCurrent : undefined;
-              const hits = findMatches?.filter((m) => m.entryKey === keys[i]).length ?? 0;
+              const hits = entryMatchCount(findMatches, keys[i]);
               return (
                 <Fold key={keys[i]} appear={arrived(keys[i])} fade className={styles.rowFold}>
                   <ActivityRow

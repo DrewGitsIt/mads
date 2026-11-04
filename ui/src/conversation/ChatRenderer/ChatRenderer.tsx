@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { Chip } from "../../components/Chip/Chip";
 import { FOLD_MS, Fold, useArrivals } from "../../components/Motion";
 import { FLAGS } from "../../featureFlags";
@@ -26,7 +26,7 @@ import type { KeyedRow } from "../keyed/conversation";
 import type { RunwayAnchorAttrs } from "../runway";
 import { joinRows } from "../keyed/joinRule";
 import { PlanWidget } from "../activity/PlanWidget";
-import { findAll, findPattern, searchEntries, type EntryMatch, type SearchCache } from "../Find/findText";
+import { NO_MATCHES, useTranscriptMatches, type Searchable } from "../Find/useTranscriptMatches";
 import { useFind, type FindRequest, type FindStatus } from "../Find/useFind";
 import { WorktreeCard, type WorktreeCardActions } from "../Worktree/WorktreeCard";
 import type { WorktreeCardModel } from "../Worktree/worktreeCards";
@@ -444,30 +444,24 @@ export function ChatRenderer({
   }, [easing]);
 
   // Find: activity rows and compaction summaries don't render their text, so
-  // their matches come from the transcript; everything else is searched as
-  // rendered (useFind).
-  const query = find?.query ?? "";
-  const matchCase = Boolean(find?.matchCase);
-  const skipTools = Boolean(find?.skipTools);
-  // The cache is per pattern: matches found for one query are no good for the next.
-  const { pattern, cache } = useMemo(
-    () => ({ pattern: findPattern({ query, matchCase }), cache: new Map() as SearchCache }),
-    [query, matchCase],
-  );
-  const groupMatches = new Map<string, EntryMatch[]>();
-  const summaryMatches = new Map<string, number>();
-  if (pattern) {
+  // their matches come from the transcript (matched between frames, not
+  // here); everything else is searched as rendered (useFind).
+  const searchable: Searchable[] = [];
+  if (find?.query) {
     for (const item of rendered) {
-      if (item.type === "activity") {
-        const found = searchEntries(item.entries, pattern, skipTools, cache);
-        if (found.length > 0) groupMatches.set(item.key, found);
-      } else if (item.type === "message" && item.message.role === "compact" && item.message.text) {
-        const n = findAll(item.message.text, pattern).length;
-        if (n > 0) summaryMatches.set(item.key, n);
+      if (item.type === "activity") searchable.push({ key: item.key, entries: item.entries });
+      else if (item.type === "message" && item.message.role === "compact" && item.message.text) {
+        searchable.push({ key: item.key, summary: item.message.text });
       }
     }
   }
-  const findTarget = useFind(rootRef, find, groupMatches, summaryMatches, onFindStatus);
+  const matched = useTranscriptMatches(searchable, find);
+  // Closed or emptied, the chips go at once; a new search keeps the last
+  // one's until its own are in, as the bar keeps its count.
+  const transcript = find?.query ? matched : NO_MATCHES;
+  const groupMatches = transcript.groups;
+  const summaryMatches = transcript.summaries;
+  const findTarget = useFind(rootRef, find, transcript, onFindStatus);
 
   return (
     <div className={styles.stream} ref={rootRef} data-chat-rows>
