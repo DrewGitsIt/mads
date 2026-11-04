@@ -1,4 +1,5 @@
 import {
+  startTransition,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -51,11 +52,18 @@ export function useFindBar() {
   // (Enter, a seeded selection, an emptied field).
   const [searched, setSearched] = useState("");
   const pending = useRef(0);
-  const searchNow = useCallback((q: string) => {
-    window.clearTimeout(pending.current);
-    pending.current = 0;
-    setSearched(q);
-  }, []);
+  // A search re-renders the whole stream (its chips, its current match):
+  // as a transition React does that in slices, between keystrokes, rather
+  // than in one go.
+  const search = useCallback((q: string) => startTransition(() => setSearched(q)), []);
+  const searchNow = useCallback(
+    (q: string) => {
+      window.clearTimeout(pending.current);
+      pending.current = 0;
+      search(q);
+    },
+    [search],
+  );
   const queryRef = useRef(query);
   queryRef.current = query;
   const onQuery = useCallback(
@@ -69,10 +77,10 @@ export function useFindBar() {
       window.clearTimeout(pending.current);
       pending.current = window.setTimeout(() => {
         pending.current = 0;
-        setSearched(q);
+        search(q);
       }, FIND_DEBOUNCE_MS);
     },
-    [searchNow],
+    [search, searchNow],
   );
   useEffect(() => () => window.clearTimeout(pending.current), []);
   const [matchCase, setMatchCase] = useState(false);

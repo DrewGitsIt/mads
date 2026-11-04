@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { startTransition, useEffect, useMemo, useState } from "react";
 import type { ActivityEntry } from "../activity/conversationItems";
 import {
   entryParts,
@@ -95,7 +95,9 @@ export function useTranscriptMatches(sources: readonly Searchable[], options: Fi
         }
       }
       const next = { key, groups, summaries };
-      setResult((prev) => (same(prev, next) ? prev : next));
+      // The stream re-renders with them (chips, the current match): in
+      // slices, as a transition, not in one go.
+      startTransition(() => setResult((prev) => (same(prev, next) ? prev : next)));
     };
     work();
     return () => {

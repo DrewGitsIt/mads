@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { startTransition, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { domMatches } from "./domMatches";
 import { findKey, findPattern, groupMatchAt, type EntryMatch, type FindOptions } from "./findText";
 import type { TranscriptMatches } from "./useTranscriptMatches";
@@ -255,7 +255,10 @@ export function useFind(
     s.currentSource = cur && srcs[cur.src].key;
     s.currentN = cur?.n ?? 0;
     s.anchor = cur ? span(cur).top : undefined;
-    setTarget((prev) => (prev?.id === cur?.id ? prev : cur ? toTarget(cur) : null));
+    // Showing it re-renders the stream (a group opens, a summary shows): set
+    // from a layout effect, that render would run whole and at once; as a
+    // transition React slices it. The scroll below waits for it either way.
+    startTransition(() => setTarget((prev) => (prev?.id === cur?.id ? prev : cur ? toTarget(cur) : null)));
 
     const summaryRanges = new Map<HTMLElement, AbstractRange[]>();
     const rangeOf = (h: Hit): AbstractRange | undefined => {
