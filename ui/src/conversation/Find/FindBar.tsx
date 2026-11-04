@@ -1,12 +1,43 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { hotkeyLabel } from "../../platform/hotkeys";
 import { FIND_CAP, NO_FIND, type FindRequest, type FindStatus } from "./useFind";
 import styles from "./FindBar.module.css";
+
+/** Typing searches once it pauses this long: a fast "rubric" is one search, not six. */
+export const FIND_DEBOUNCE_MS = 120;
 
 /** The find bar's state, and what ConversationTab hands ChatRenderer. */
 export function useFindBar() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // What's searched: the query once typing pauses, or at once when asked
+  // (Enter, a seeded selection, an emptied field).
+  const [searched, setSearched] = useState("");
+  const pending = useRef(0);
+  const searchNow = useCallback((q: string) => {
+    window.clearTimeout(pending.current);
+    pending.current = 0;
+    setSearched(q);
+  }, []);
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  const onQuery = useCallback(
+    (q: string) => {
+      setQuery(q);
+      queryRef.current = q;
+      if (q === "") {
+        searchNow("");
+        return;
+      }
+      window.clearTimeout(pending.current);
+      pending.current = window.setTimeout(() => {
+        pending.current = 0;
+        setSearched(q);
+      }, FIND_DEBOUNCE_MS);
+    },
+    [searchNow],
+  );
+  useEffect(() => () => window.clearTimeout(pending.current), []);
   const [matchCase, setMatchCase] = useState(false);
   const [skipTools, setSkipTools] = useState(false);
   const [step, setStep] = useState<{ n: number; dir: 1 | -1 }>({ n: 0, dir: 1 });
@@ -16,8 +47,8 @@ export function useFindBar() {
   const returnFocus = useRef<HTMLElement | null>(null);
 
   const request = useMemo<FindRequest | undefined>(
-    () => (open ? { query, matchCase, skipTools, step: step.n, dir: step.dir } : undefined),
-    [open, query, matchCase, skipTools, step],
+    () => (open ? { query: searched, matchCase, skipTools, step: step.n, dir: step.dir } : undefined),
+    [open, searched, matchCase, skipTools, step],
   );
 
   /** Opens the bar (or refocuses it), seeded from `selection` when there is one. */
@@ -25,24 +56,37 @@ export function useFindBar() {
     if (!inputRef.current || document.activeElement !== inputRef.current) {
       returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     }
-    if (selection) setQuery(selection);
+    if (selection) {
+      setQuery(selection);
+      searchNow(selection);
+    }
     setOpen(true);
     // The input mounts with the bar; focus once it has.
     requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
     });
-  }, []);
+  }, [searchNow]);
 
-  const go = useCallback((dir: 1 | -1) => setStep((s) => ({ n: s.n + 1, dir })), []);
+  // A step with a search still pending runs the search instead: it lands on
+  // the first match, as a fresh query does.
+  const go = useCallback(
+    (dir: 1 | -1) => {
+      if (pending.current) searchNow(queryRef.current);
+      else setStep((s) => ({ n: s.n + 1, dir }));
+    },
+    [searchNow],
+  );
 
   const close = useCallback(() => {
+    // Whatever was typed is what reopening shows, and searches.
+    searchNow(queryRef.current);
     setOpen(false);
     setStatus(NO_FIND);
     const back = returnFocus.current;
     returnFocus.current = null;
     if (back?.isConnected) back.focus();
-  }, []);
+  }, [searchNow]);
 
   return {
     open,
@@ -54,10 +98,11 @@ export function useFindBar() {
     bar: {
       inputRef,
       query,
+      searched,
       matchCase,
       skipTools,
       status,
-      onQuery: setQuery,
+      onQuery,
       onMatchCase: () => setMatchCase((v) => !v),
       onSkipTools: () => setSkipTools((v) => !v),
       onStep: go,
@@ -69,6 +114,8 @@ export function useFindBar() {
 export interface FindBarProps {
   inputRef: RefObject<HTMLInputElement>;
   query: string;
+  /** The query the status is for: `query` once typing pauses. */
+  searched: string;
   matchCase: boolean;
   skipTools: boolean;
   status: FindStatus;
@@ -89,6 +136,7 @@ export interface FindBarProps {
 export function FindBar({
   inputRef,
   query,
+  searched,
   matchCase,
   skipTools,
   status,
@@ -100,11 +148,13 @@ export function FindBar({
   streamRef,
 }: FindBarProps) {
   const box = useStreamBox(streamRef);
-  const none = query !== "" && status.count === 0;
+  // From the last search, not the keystroke: until typing pauses the bar
+  // keeps showing what it last found (nothing, for a first query).
+  const none = searched !== "" && status.count === 0;
   // Past the cap the matches in hand are the current one's neighbours, so
   // there's no "n of" to give.
   const count =
-    query === ""
+    searched === ""
       ? ""
       : none
         ? "No results"
