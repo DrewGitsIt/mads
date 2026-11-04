@@ -2,14 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useRef } from "react";
 import { FIND_DEBOUNCE_MS, FindBar, useFindBar } from "./FindBar";
-import type { FindRequest } from "./useFind";
+import { NO_FIND, type FindRequest, type FindStatus } from "./useFind";
 
 let request: FindRequest | undefined;
+let onStatus: (status: FindStatus) => void;
+let hostRenders = 0;
 
 function Harness() {
   const find = useFindBar();
   const stream = useRef<HTMLDivElement>(null);
   request = find.request;
+  onStatus = find.onStatus;
+  hostRenders++;
   return (
     <>
       <button onClick={() => find.show()}>open</button>
@@ -58,5 +62,16 @@ describe("find bar typing", () => {
     wait(FIND_DEBOUNCE_MS);
     type("");
     expect(request?.query).toBe("");
+  });
+
+  it("shows a new status without re-rendering the bar's host", () => {
+    type("rubric");
+    wait(FIND_DEBOUNCE_MS);
+    const before = hostRenders;
+    act(() => onStatus({ ...NO_FIND, count: 12, current: 2 }));
+    expect(screen.getByText("3 of 12")).toBeTruthy();
+    act(() => onStatus({ ...NO_FIND, count: 5000, capped: true }));
+    expect(screen.getByText("More than 1,000")).toBeTruthy();
+    expect(hostRenders).toBe(before);
   });
 });

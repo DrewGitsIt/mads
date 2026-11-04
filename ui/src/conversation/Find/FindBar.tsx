@@ -1,10 +1,47 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type RefObject,
+} from "react";
 import { hotkeyLabel } from "../../platform/hotkeys";
 import { FIND_CAP, NO_FIND, type FindRequest, type FindStatus } from "./useFind";
 import styles from "./FindBar.module.css";
 
 /** Typing searches once it pauses this long: a fast "rubric" is one search, not six. */
 export const FIND_DEBOUNCE_MS = 120;
+
+/**
+ * The latest find status, held outside React state: it changes with every
+ * search and every step, and only the bar shows it — as state of the
+ * hook's host (ConversationTab) each change re-rendered the whole tab.
+ */
+export interface FindStatusStore {
+  get: () => FindStatus;
+  set: (status: FindStatus) => void;
+  subscribe: (onChange: () => void) => () => void;
+}
+
+function statusStore(): FindStatusStore {
+  let status = NO_FIND;
+  const listeners = new Set<() => void>();
+  return {
+    get: () => status,
+    set: (next) => {
+      if (next === status) return;
+      status = next;
+      for (const l of listeners) l();
+    },
+    subscribe: (onChange) => {
+      listeners.add(onChange);
+      return () => listeners.delete(onChange);
+    },
+  };
+}
 
 /** The find bar's state, and what ConversationTab hands ChatRenderer. */
 export function useFindBar() {
@@ -41,7 +78,7 @@ export function useFindBar() {
   const [matchCase, setMatchCase] = useState(false);
   const [skipTools, setSkipTools] = useState(false);
   const [step, setStep] = useState<{ n: number; dir: 1 | -1 }>({ n: 0, dir: 1 });
-  const [status, setStatus] = useState<FindStatus>(NO_FIND);
+  const [status] = useState(statusStore);
   const inputRef = useRef<HTMLInputElement>(null);
   // Where focus was when the bar opened, to hand it back on close.
   const returnFocus = useRef<HTMLElement | null>(null);
@@ -82,11 +119,11 @@ export function useFindBar() {
     // Whatever was typed is what reopening shows, and searches.
     searchNow(queryRef.current);
     setOpen(false);
-    setStatus(NO_FIND);
+    status.set(NO_FIND);
     const back = returnFocus.current;
     returnFocus.current = null;
     if (back?.isConnected) back.focus();
-  }, [searchNow]);
+  }, [searchNow, status]);
 
   return {
     open,
@@ -94,7 +131,7 @@ export function useFindBar() {
     show,
     go,
     close,
-    onStatus: setStatus,
+    onStatus: status.set,
     bar: {
       inputRef,
       query,
@@ -118,7 +155,7 @@ export interface FindBarProps {
   searched: string;
   matchCase: boolean;
   skipTools: boolean;
-  status: FindStatus;
+  status: FindStatusStore;
   onQuery: (query: string) => void;
   onMatchCase: () => void;
   onSkipTools: () => void;
@@ -139,7 +176,7 @@ export function FindBar({
   searched,
   matchCase,
   skipTools,
-  status,
+  status: store,
   onQuery,
   onMatchCase,
   onSkipTools,
@@ -147,6 +184,7 @@ export function FindBar({
   onClose,
   streamRef,
 }: FindBarProps) {
+  const status = useSyncExternalStore(store.subscribe, store.get);
   const box = useStreamBox(streamRef);
   // From the last search, not the keystroke: until typing pauses the bar
   // keeps showing what it last found (nothing, for a first query).
