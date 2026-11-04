@@ -14,7 +14,11 @@ export interface FindStatus {
   count: number;
   /** Index of the current match, -1 when there's none. */
   current: number;
-  /** Each match's position down the whole stream, 0–1, for the edge ticks. */
+  /**
+   * Where the matches sit down the whole stream, 0–1, for the edge ticks:
+   * one per distinct position at the edge's resolution, so a thousand
+   * matches in one tool's output make one tick, not a thousand.
+   */
   ticks: number[];
   currentTick: number;
 }
@@ -106,12 +110,25 @@ export function useFind(
     const scroller = scrollerOf(root);
     const box = scroller.getBoundingClientRect();
     const toStream = (top: number) => top - box.top + scroller.scrollTop;
+    // Each box measured once per run, however many matches it stands for (a
+    // group's every match is its header). Kept in stream coordinates, which
+    // the reveal's scroll below doesn't change; viewport ones it would.
+    const spans = new Map<object, { top: number; bottom: number }>();
+    const span = (h: Hit) => {
+      const key = h.kind === "dom" ? h.range : h.el;
+      let at = spans.get(key);
+      if (!at) {
+        const r = quickRect(h);
+        spans.set(key, (at = { top: toStream(r.top), bottom: toStream(r.bottom) }));
+      }
+      return at;
+    };
 
     const qk = keyOf(request);
     let index: number;
     if (qk !== s.queryKey) {
       const from = s.anchor ?? toStream(box.top);
-      index = hits.findIndex((h) => toStream(quickRect(h).bottom) >= from);
+      index = hits.findIndex((h) => span(h).bottom >= from);
       if (index < 0) index = hits.length - 1;
       s.queryKey = qk;
       s.step = request.step;
@@ -128,7 +145,7 @@ export function useFind(
     const cur = hits[index];
     s.index = index;
     s.currentId = cur?.id;
-    s.anchor = cur ? toStream(quickRect(cur).top) : undefined;
+    s.anchor = cur ? span(cur).top : undefined;
     setTarget((prev) => (prev?.id === cur?.id ? prev : cur ? toTarget(cur) : null));
 
     const summaryRanges = new Map<HTMLElement, Range[]>();
@@ -156,11 +173,11 @@ export function useFind(
     }
 
     const height = Math.max(1, scroller.scrollHeight);
-    const tick = (h: Hit) => Math.round((toStream(quickRect(h).top) / height) * 1000) / 1000;
+    const tick = (h: Hit) => Math.round((span(h).top / height) * 1000) / 1000;
     report({
       count: hits.length,
       current: index,
-      ticks: hits.map(tick),
+      ticks: [...new Set(hits.map(tick))],
       currentTick: cur ? tick(cur) : -1,
     });
   }, [rootRef]);

@@ -177,8 +177,8 @@ export function FindBar({
         </button>
       </div>
       <div className={styles.ticks} aria-hidden="true">
-        {status.ticks.map((t, i) => (
-          <i key={i} style={{ top: `${t * 100}%` }} data-current={i === status.current || undefined} />
+        {status.ticks.map((t) => (
+          <i key={t} style={{ top: `${t * 100}%` }} data-current={t === status.currentTick || undefined} />
         ))}
       </div>
     </div>

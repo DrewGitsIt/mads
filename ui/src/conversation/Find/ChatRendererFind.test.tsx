@@ -127,6 +127,20 @@ describe("find in conversation", () => {
     expect(f2.status()).toMatchObject({ count: 0 });
   });
 
+  it("measures a group once however many matches it holds, and ticks it once", () => {
+    const output = Array.from({ length: 500 }, (_, i) => `line ${i}: worktree`).join("\n");
+    const msgs: TranscriptMessage[] = [
+      { role: "tool", tool: { id: "tu1", name: "Bash", input: { command: "ls" } } },
+      { role: "tool_result", text: output, tool: { id: "tu1", name: "" } },
+    ];
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect");
+    const f = setup(msgs, { query: "worktree" });
+    expect(f.status()).toMatchObject({ count: 500, ticks: [expect.any(Number)] });
+    // A few for the scroller and the reveal; never one (or three) per match.
+    expect(rect.mock.calls.length).toBeLessThan(50);
+    rect.mockRestore();
+  });
+
   it("reports nothing, and paints nothing, with no query", () => {
     const f = setup(messages, { query: "worktree" });
     f.set({ query: "" });
