@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ChatRenderer } from "../ChatRenderer/ChatRenderer";
 import type { TranscriptMessage } from "../../router/types";
-import type { FindRequest, FindStatus } from "./useFind";
+import { FIND_CAP, type FindRequest, type FindStatus } from "./useFind";
 import type { KeyedRow } from "../keyed/conversation";
 
 /** Transcript messages as keyed rows: positional keys, and a tool_result
@@ -141,10 +141,47 @@ describe("find in conversation", () => {
     rect.mockRestore();
   });
 
+  describe("past the cap", () => {
+    const lines = (n: number) => [
+      { role: "tool", tool: { id: "tu1", name: "Bash", input: { command: "ls" } } },
+      {
+        role: "tool_result",
+        text: Array.from({ length: n }, (_, i) => `line ${i}: worktree`).join("\n"),
+        tool: { id: "tu1", name: "" },
+      },
+    ] satisfies TranscriptMessage[];
+    // The line the current match is on, from the snippet shown under its row.
+    const line = () => {
+      const mark = screen.getByTestId("find-snippet").querySelector("mark")!;
+      return mark.previousSibling?.textContent?.match(/line (\d+): $/)?.[1];
+    };
+
+    it("counts up to the cap exactly", () => {
+      const f = setup(lines(FIND_CAP), { query: "worktree" });
+      expect(f.status()).toMatchObject({ count: FIND_CAP, capped: false, current: 0 });
+    });
+
+    it("says there are more, and steps over every match, wrapping at the ends", () => {
+      const f = setup(lines(1500), { query: "worktree" });
+      expect(f.status()).toMatchObject({ count: FIND_CAP, capped: true, current: -1 });
+      f.step();
+      expect(line()).toBe("1");
+      f.step(-1);
+      f.step(-1);
+      expect(line()).toBe("1499");
+      f.step();
+      expect(line()).toBe("0");
+      // Out past the far edge of the first thousand.
+      for (let i = 0; i < 1200; i++) f.step();
+      expect(line()).toBe("1200");
+      expect(f.status()).toMatchObject({ capped: true });
+    });
+  });
+
   it("reports nothing, and paints nothing, with no query", () => {
     const f = setup(messages, { query: "worktree" });
     f.set({ query: "" });
-    expect(f.status()).toEqual({ count: 0, current: -1, ticks: [], currentTick: -1 });
+    expect(f.status()).toEqual({ count: 0, capped: false, current: -1, ticks: [], currentTick: -1 });
     expect(screen.queryByLabelText("2 matches")).toBeNull();
   });
 });

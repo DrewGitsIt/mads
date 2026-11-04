@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { hotkeyLabel } from "../../platform/hotkeys";
-import { NO_FIND, type FindRequest, type FindStatus } from "./useFind";
+import { FIND_CAP, NO_FIND, type FindRequest, type FindStatus } from "./useFind";
 import styles from "./FindBar.module.css";
 
 /** The find bar's state, and what ConversationTab hands ChatRenderer. */
@@ -101,7 +101,16 @@ export function FindBar({
 }: FindBarProps) {
   const box = useStreamBox(streamRef);
   const none = query !== "" && status.count === 0;
-  const count = query === "" ? "" : none ? "No results" : `${status.current + 1} of ${status.count}`;
+  // Past the cap the matches in hand are the current one's neighbours, so
+  // there's no "n of" to give.
+  const count =
+    query === ""
+      ? ""
+      : none
+        ? "No results"
+        : status.capped
+          ? `More than ${FIND_CAP.toLocaleString()}`
+          : `${status.current + 1} of ${status.count}`;
   const next = hotkeyLabel("findNext");
   return (
     <div className={styles.overlay} style={box}>

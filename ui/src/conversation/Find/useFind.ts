@@ -9,10 +9,20 @@ export interface FindRequest extends FindOptions {
   dir: 1 | -1;
 }
 
+/**
+ * Matches past this many aren't counted, painted or ticked: the bar says
+ * "More than" this instead. Nobody reads a thousand matches one by one,
+ * and every match costs a measurement and a highlight.
+ */
+export const FIND_CAP = 1000;
+
 /** What the bar shows: "current+1 of count", plus where each match sits. */
 export interface FindStatus {
+  /** Matches found, up to FIND_CAP. */
   count: number;
-  /** Index of the current match, -1 when there's none. */
+  /** More than FIND_CAP: the matches in hand are the ones nearest the current one. */
+  capped: boolean;
+  /** Index of the current match, -1 when there's none (or when capped, as it has no place in a count). */
   current: number;
   /**
    * Where the matches sit down the whole stream, 0–1, for the edge ticks:
@@ -23,7 +33,7 @@ export interface FindStatus {
   currentTick: number;
 }
 
-export const NO_FIND: FindStatus = { count: 0, current: -1, ticks: [], currentTick: -1 };
+export const NO_FIND: FindStatus = { count: 0, capped: false, current: -1, ticks: [], currentTick: -1 };
 
 /** The current match, for what has to render differently to show it. */
 export type FindTarget =
@@ -31,10 +41,23 @@ export type FindTarget =
   | { kind: "entry"; id: string; itemKey: string; match: EntryMatch }
   | { kind: "summary"; id: string; itemKey: string; n: number };
 
-type Hit =
-  | { kind: "dom"; id: string; el: HTMLElement; range: Range }
-  | { kind: "entry"; id: string; el: HTMLElement; itemKey: string; match: EntryMatch }
-  | { kind: "summary"; id: string; el: HTMLElement; itemKey: string; n: number };
+/** An element of the stream that holds matches (see useFind), in document order. */
+interface Source {
+  kind: "dom" | "entry" | "summary";
+  el: HTMLElement;
+  /** Its item key; for "dom", with the ordinal among elements sharing one. */
+  key: string;
+}
+
+/** A match: its source's index, and its place among that source's matches. */
+type At = { src: number; n: number };
+
+type Hit = At &
+  (
+    | { kind: "dom"; id: string; el: HTMLElement; range: AbstractRange }
+    | { kind: "entry"; id: string; el: HTMLElement; itemKey: string; match: EntryMatch }
+    | { kind: "summary"; id: string; el: HTMLElement; itemKey: string; n: number }
+  );
 
 /** Re-scans driven by content (a streaming turn) run at most this often. */
 const RESCAN_MS = 150;
@@ -77,7 +100,8 @@ export function useFind(
     queryKey: "",
     step: 0,
     currentId: undefined as string | undefined,
-    index: -1,
+    /** The current match's source key, to find it again without matching the whole stream. */
+    currentSource: undefined as string | undefined,
     /** The current match's top, in stream coordinates — where a new query starts from. */
     anchor: undefined as number | undefined,
     scrollPending: false,
@@ -100,13 +124,31 @@ export function useFind(
     };
     if (!root || !request || !pattern) {
       clearHighlights();
-      Object.assign(s, { queryKey: "", currentId: undefined, index: -1, anchor: undefined, scrollPending: false });
+      Object.assign(s, { queryKey: "", currentId: undefined, currentSource: undefined, anchor: undefined, scrollPending: false });
       setTarget(null);
       report(NO_FIND);
       return;
     }
 
-    const hits = collect(root, pattern, request.skipTools, groups, summaries);
+    const srcs = sources(root, request.skipTools);
+    const found = new Map<number, Hit[]>();
+    const hitsOf = (i: number) => {
+      let hs = found.get(i);
+      if (!hs) found.set(i, (hs = matchesIn(srcs[i], i, pattern, groups, summaries)));
+      return hs;
+    };
+    const hitAt = ({ src, n }: At) => hitsOf(src)[n];
+    // Neighbours, wrapping at the ends. Only called with a match in hand, so
+    // there is always one to land on.
+    const next = ({ src, n }: At): At => {
+      for (n++; n >= hitsOf(src).length; n = 0) src = (src + 1) % srcs.length;
+      return { src, n };
+    };
+    const prev = ({ src, n }: At): At => {
+      for (n--; n < 0; n = hitsOf(src).length - 1) src = (src - 1 + srcs.length) % srcs.length;
+      return { src, n };
+    };
+
     const scroller = scrollerOf(root);
     const box = scroller.getBoundingClientRect();
     const toStream = (top: number) => top - box.top + scroller.scrollTop;
@@ -114,42 +156,91 @@ export function useFind(
     // group's every match is its header). Kept in stream coordinates, which
     // the reveal's scroll below doesn't change; viewport ones it would.
     const spans = new Map<object, { top: number; bottom: number }>();
-    const span = (h: Hit) => {
-      const key = h.kind === "dom" ? h.range : h.el;
+    const spanOf = (key: object, rect: () => DOMRect) => {
       let at = spans.get(key);
       if (!at) {
-        const r = quickRect(h);
+        const r = rect();
         spans.set(key, (at = { top: toStream(r.top), bottom: toStream(r.bottom) }));
       }
       return at;
     };
+    const span = (h: Hit) => (h.kind === "dom" ? spanOf(h.range, () => quickRect(h)) : spanOf(h.el, () => quickRect(h)));
+    // The first match whose bottom is at or below `from`, else the last one.
+    // Elements wholly above it are passed by on their own box, unmatched.
+    const atOrAfter = (from: number): At | undefined => {
+      for (let i = 0; i < srcs.length; i++) {
+        const el = srcs[i].el;
+        if (spanOf(el, () => el.getBoundingClientRect()).bottom < from) continue;
+        const n = hitsOf(i).findIndex((h) => span(h).bottom >= from);
+        if (n >= 0) return { src: i, n };
+      }
+      for (let i = srcs.length - 1; i >= 0; i--) {
+        if (hitsOf(i).length > 0) return { src: i, n: hitsOf(i).length - 1 };
+      }
+      return undefined;
+    };
+    const held = (): At | undefined => {
+      const i = srcs.findIndex((x) => x.key === s.currentSource);
+      const n = i < 0 ? -1 : hitsOf(i).findIndex((h) => h.id === s.currentId);
+      return n >= 0 ? { src: i, n } : undefined;
+    };
 
     const qk = keyOf(request);
-    let index: number;
+    let at: At | undefined;
     if (qk !== s.queryKey) {
-      const from = s.anchor ?? toStream(box.top);
-      index = hits.findIndex((h) => span(h).bottom >= from);
-      if (index < 0) index = hits.length - 1;
+      at = atOrAfter(s.anchor ?? toStream(box.top));
       s.queryKey = qk;
       s.step = request.step;
-      s.scrollPending = index >= 0;
+      s.scrollPending = at !== undefined;
     } else if (request.step !== s.step) {
       s.step = request.step;
-      const at = hits.findIndex((h) => h.id === s.currentId);
-      index = hits.length === 0 ? -1 : at < 0 ? 0 : (at + request.dir + hits.length) % hits.length;
-      s.scrollPending = index >= 0;
+      const from = held();
+      if (from) at = request.dir === 1 ? next(from) : prev(from);
+      else {
+        // The current match is gone (its text changed): step from where it was.
+        const near = atOrAfter(s.anchor ?? toStream(box.top));
+        at = near && request.dir === -1 ? prev(near) : near;
+      }
+      s.scrollPending = at !== undefined;
     } else {
-      index = hits.findIndex((h) => h.id === s.currentId);
-      if (index < 0) index = Math.min(s.index, hits.length - 1);
+      at = held() ?? atOrAfter(s.anchor ?? toStream(box.top));
     }
-    const cur = hits[index];
-    s.index = index;
+
+    // The matches in hand: the current one and its neighbours either way,
+    // up to the cap — so stepping always has the next one, and what's on
+    // screen around the current match is painted.
+    const hits: Hit[] = [];
+    let capped = false;
+    if (at) {
+      const taken = new Set<string>();
+      const take = (a: At) => {
+        const h = hitAt(a);
+        if (taken.has(h.id)) return false;
+        taken.add(h.id);
+        hits.push(h);
+        return true;
+      };
+      take(at);
+      let ahead = at;
+      let behind = at;
+      const open = [true, true];
+      while (hits.length < FIND_CAP && (open[0] || open[1])) {
+        if (open[0]) open[0] = take((ahead = next(ahead)));
+        if (open[1] && hits.length < FIND_CAP) open[1] = take((behind = prev(behind)));
+      }
+      // Stopped at the cap with the circle unclosed: there are more.
+      capped = !taken.has(hitAt(next(ahead)).id);
+      hits.sort((a, b) => a.src - b.src || a.n - b.n);
+    }
+    const cur = at && hitAt(at);
+    const index = cur ? hits.indexOf(cur) : -1;
     s.currentId = cur?.id;
+    s.currentSource = cur && srcs[cur.src].key;
     s.anchor = cur ? span(cur).top : undefined;
     setTarget((prev) => (prev?.id === cur?.id ? prev : cur ? toTarget(cur) : null));
 
-    const summaryRanges = new Map<HTMLElement, Range[]>();
-    const rangeOf = (h: Hit): Range | undefined => {
+    const summaryRanges = new Map<HTMLElement, AbstractRange[]>();
+    const rangeOf = (h: Hit): AbstractRange | undefined => {
       if (h.kind === "dom") return h.range;
       if (h.kind !== "summary") return undefined;
       if (!summaryRanges.has(h.el)) {
@@ -176,7 +267,8 @@ export function useFind(
     const tick = (h: Hit) => Math.round((span(h).top / height) * 1000) / 1000;
     report({
       count: hits.length,
-      current: index,
+      capped,
+      current: capped ? -1 : index,
       ticks: [...new Set(hits.map(tick))],
       currentTick: cur ? tick(cur) : -1,
     });
@@ -235,14 +327,8 @@ export function useFind(
   return target;
 }
 
-function collect(
-  root: HTMLElement,
-  pattern: RegExp,
-  skipTools: boolean,
-  groups: ReadonlyMap<string, EntryMatch[]>,
-  summaries: ReadonlyMap<string, number>,
-): Hit[] {
-  const hits: Hit[] = [];
+function sources(root: HTMLElement, skipTools: boolean): Source[] {
+  const out: Source[] = [];
   const seen = new Map<string, number>();
   for (const el of root.querySelectorAll<HTMLElement>("[data-find], [data-find-group], [data-find-summary]")) {
     const { find, findGroup, findSummary } = el.dataset;
@@ -251,20 +337,45 @@ function collect(
       // One item can render several searchable elements (a plan's items).
       const ord = seen.get(find) ?? 0;
       seen.set(find, ord + 1);
-      domMatches(el, pattern).forEach((range, n) => hits.push({ kind: "dom", id: `d:${find}:${ord}:${n}`, el, range }));
+      out.push({ kind: "dom", el, key: `${find}:${ord}` });
     } else if (findGroup !== undefined) {
-      for (const match of groups.get(findGroup) ?? []) {
-        const id = `e:${findGroup}:${match.entryKey}:${match.part}:${match.start}`;
-        hits.push({ kind: "entry", id, el, itemKey: findGroup, match });
-      }
+      out.push({ kind: "entry", el, key: findGroup });
     } else if (findSummary !== undefined) {
-      const count = summaries.get(findSummary) ?? 0;
-      for (let n = 0; n < count; n++) {
-        hits.push({ kind: "summary", id: `s:${findSummary}:${n}`, el, itemKey: findSummary, n });
-      }
+      out.push({ kind: "summary", el, key: findSummary });
     }
   }
-  return hits;
+  return out;
+}
+
+function matchesIn(
+  { kind, el, key }: Source,
+  src: number,
+  pattern: RegExp,
+  groups: ReadonlyMap<string, EntryMatch[]>,
+  summaries: ReadonlyMap<string, number>,
+): Hit[] {
+  if (kind === "dom") {
+    return domMatches(el, pattern).map((range, n) => ({ kind, id: `d:${key}:${n}`, el, range, src, n }));
+  }
+  if (kind === "entry") {
+    return (groups.get(key) ?? []).map((match, n) => ({
+      kind,
+      id: `e:${key}:${match.entryKey}:${match.part}:${match.start}`,
+      el,
+      itemKey: key,
+      match,
+      src,
+      n,
+    }));
+  }
+  return Array.from({ length: summaries.get(key) ?? 0 }, (_, n) => ({
+    kind,
+    id: `s:${key}:${n}`,
+    el,
+    itemKey: key,
+    src,
+    n,
+  }));
 }
 
 function toTarget(h: Hit): FindTarget {
@@ -275,19 +386,19 @@ function toTarget(h: Hit): FindTarget {
 
 /** Where a match is, near enough for ordering and ticks: the text itself, or its group or marker. */
 function quickRect(h: Hit): DOMRect {
-  if (h.kind === "dom" && typeof h.range.getBoundingClientRect === "function") return h.range.getBoundingClientRect();
-  return h.el.getBoundingClientRect();
+  return (h.kind === "dom" && rangeRect(h.range)) || h.el.getBoundingClientRect();
 }
 
 /** Where a match is exactly, once it's rendered: null while its snippet or summary hasn't been. */
-function exactRect(h: Hit, root: HTMLElement, range: Range | undefined): DOMRect | null {
+function exactRect(h: Hit, root: HTMLElement, range: AbstractRange | undefined): DOMRect | null {
   if (h.kind === "entry") {
     const snippet = [...root.querySelectorAll<HTMLElement>("[data-find-current]")].find(
       (el) => el.dataset.findCurrent === h.id,
     );
     return snippet ? snippet.getBoundingClientRect() : null;
   }
-  if (range && typeof range.getBoundingClientRect === "function") return range.getBoundingClientRect();
+  const rect = range && rangeRect(range);
+  if (rect) return rect;
   if (h.kind === "summary") return h.el.querySelector("[data-find-summary-body]") ? h.el.getBoundingClientRect() : null;
   return h.el.getBoundingClientRect();
 }
@@ -307,16 +418,41 @@ function scrollerOf(el: HTMLElement): HTMLElement {
   return (document.scrollingElement as HTMLElement | null) ?? document.documentElement;
 }
 
+/**
+ * One live Range, moved onto each match to measure it. Matches are static
+ * ranges (domMatches): a live one is something every DOM removal anywhere
+ * in the window has to update, and find can hold thousands.
+ */
+let probe: Range | undefined;
+
+/** Where `range` is, or null when it can't be measured (its text has gone, or the DOM has no range layout). */
+function rangeRect(range: AbstractRange): DOMRect | null {
+  let live: Range;
+  if (range instanceof Range) live = range;
+  else {
+    if (!range.startContainer.isConnected || !range.endContainer.isConnected) return null;
+    live = probe ??= document.createRange();
+    try {
+      live.setStart(range.startContainer, range.startOffset);
+      live.setEnd(range.endContainer, range.endOffset);
+    } catch {
+      // The text shrank under it since the scan.
+      return null;
+    }
+  }
+  return typeof live.getBoundingClientRect === "function" ? live.getBoundingClientRect() : null;
+}
+
 function highlights(): HighlightRegistry | undefined {
   return typeof CSS !== "undefined" && "highlights" in CSS && typeof Highlight !== "undefined"
     ? CSS.highlights
     : undefined;
 }
 
-function paint(others: (Range | undefined)[], current: Range | undefined) {
+function paint(others: (AbstractRange | undefined)[], current: AbstractRange | undefined) {
   const registry = highlights();
   if (!registry) return;
-  registry.set("find-match", new Highlight(...others.filter((r): r is Range => r !== undefined)));
+  registry.set("find-match", new Highlight(...others.filter((r): r is AbstractRange => r !== undefined)));
   if (current) registry.set("find-current", new Highlight(current));
   else registry.delete("find-current");
 }
