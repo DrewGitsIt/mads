@@ -10,10 +10,16 @@ export function parseMessageTime(timestamp?: string): Date | undefined {
   return new Date(ms);
 }
 
+// Made once: toLocale*String with options builds a formatter per call, and
+// the stream formats every row's stamp on every render.
+let timeFormat: Intl.DateTimeFormat | undefined;
+let dayFormat: Intl.DateTimeFormat | undefined;
+
 /** "22:59" today, "Sep 28 16:54" otherwise — short enough for a hover stamp. */
 export function formatMessageTime(date: Date, now: Date = new Date()): string {
-  const time = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  timeFormat ??= new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+  const time = timeFormat.format(date);
   if (date.toDateString() === now.toDateString()) return time;
-  const day = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  return `${day} ${time}`;
+  dayFormat ??= new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+  return `${dayFormat.format(date)} ${time}`;
 }
