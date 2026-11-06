@@ -5,7 +5,6 @@ import { FolderPill } from "./FolderPill";
 import { AgentPill } from "./AgentPill";
 import { ModelPill } from "./ModelPill";
 import { TrustPill } from "./TrustPill";
-import { IsolationPill } from "./IsolationPill";
 
 const lock = { reason: "Linked sessions must share one copy of the repo." };
 
@@ -23,7 +22,6 @@ const lockedPills: [string, ReactElement, string][] = [
     "opus · claude-code",
   ],
   ["TrustPill", <TrustPill value="full" onChange={vi.fn()} locked={lock} />, "Full"],
-  ["IsolationPill", <IsolationPill value="worktree" onChange={vi.fn()} locked={lock} />, "New worktree"],
 ];
 
 describe("locked pills", () => {
@@ -47,20 +45,25 @@ describe("locked pills", () => {
     expect(screen.getAllByRole("button")).toHaveLength(1);
   });
 
-  it("shows the lock's label in place of the pill's own value", () => {
-    const onChange = vi.fn();
+  it("keeps the folder choosable when only isolation is locked, with the lock's label in its place", () => {
+    const onIsolationChange = vi.fn();
     render(
-      <IsolationPill
-        value="worktree"
-        onChange={onChange}
-        locked={{ reason: lock.reason, label: "shares dns-tracing's worktree" }}
+      <FolderPill
+        dir="/repo/mads"
+        onPickDir={vi.fn()}
+        onPickWorkspace={vi.fn()}
+        isolation="worktree"
+        onIsolationChange={onIsolationChange}
+        isolationLocked={{ reason: lock.reason, label: "shares dns-tracing's worktree" }}
       />,
     );
-    const pill = screen.getByRole("button");
-    expect(pill.textContent).toContain("shares dns-tracing's worktree");
-    expect(pill.textContent).not.toContain("New worktree");
-    fireEvent.click(pill);
-    expect(screen.queryByText("Current directory")).toBeNull();
-    expect(onChange).not.toHaveBeenCalled();
+    const part = screen.getByTestId("folder-isolation");
+    expect(part.textContent).toBe("shares dns-tracing's worktree");
+    expect(part.getAttribute("title")).toBe(lock.reason);
+    fireEvent.click(screen.getByRole("button", { name: /folder mads/ }));
+    // The menu opens for the folder, but offers no isolation switch.
+    expect(screen.getByLabelText("Folder path")).toBeTruthy();
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(onIsolationChange).not.toHaveBeenCalled();
   });
 });

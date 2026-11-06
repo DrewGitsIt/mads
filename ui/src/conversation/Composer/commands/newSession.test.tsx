@@ -115,10 +115,9 @@ describe("/new prefill", () => {
     const { open } = setup();
     await open(newCommand);
     expect(goal().value).toBe("reproduce DNS error");
-    expect(screen.getByRole("button", { name: /folder\s+tracing/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /folder\s+tracing\s*⎇ worktree/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /persona\s+debugger/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /model\s+sonnet-5.5 · claude-code/ })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /isolation\s+New worktree/ })).toBeTruthy();
     // Plain /new has no relationship row.
     expect(screen.queryByText(/──/)).toBeNull();
   });
@@ -360,7 +359,7 @@ describe("naming and a goalless follower", () => {
 });
 
 describe("validation", () => {
-  it("a joined counterpart worktree locks Isolation and shows the joined folder", async () => {
+  it("a joined counterpart worktree locks isolation on the folder pill and shows the joined folder", async () => {
     const { open } = setup(
       {},
       {
@@ -370,9 +369,9 @@ describe("validation", () => {
       },
     );
     await open(newMonitorCommand);
-    const pill = await screen.findByRole("button", { name: /isolation\s+shares dns-tracing's worktree/ });
-    expect(pill.getAttribute("aria-disabled")).toBe("true");
-    expect(pill.getAttribute("title")).toMatch(/Linked sessions must share one copy of the repo/);
+    const part = await screen.findByTestId("folder-isolation");
+    expect(part.textContent).toBe("shares dns-tracing's worktree");
+    expect(part.getAttribute("title")).toMatch(/Linked sessions must share one copy of the repo/);
     const banner = screen.getByRole("status");
     expect(banner.textContent).toMatch(/dns-tracing has its own worktree/);
     expect(banner.textContent).toContain("/Users/me/.mads/worktrees/s-this");

@@ -1,9 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Caret } from "../../../components/Caret/Caret";
 import { Popover } from "../../../components/Popover/Popover";
 import { PathField } from "../../../components/PathField/PathField";
+import { Switch } from "../../../components/Switch/Switch";
+import { FLAGS } from "../../../featureFlags";
 import { router } from "../../../router/client";
-import type { ResolvedSessionField, Session, Workspace } from "../../../router/types";
+import type {
+  DirStatus,
+  ResolvedSessionField,
+  Session,
+  Workspace,
+  WorkspaceRepo,
+} from "../../../router/types";
 import { LockedPill, type PillLock } from "./LockedPill";
 import pillStyles from "./pills.module.css";
 
@@ -34,10 +42,50 @@ export interface FolderPillProps {
   recent?: string[];
   onPickDir: (dir: string) => void;
   onPickWorkspace: (workspace: Workspace) => void;
+  /** Staged isolation ("worktree" | "current_dir"), if the user flipped the switch. */
+  isolation?: string;
+  /** Isolation with nothing staged (GET /sessions/defaults). */
+  resolvedIsolation?: ResolvedSessionField;
+  /** Omitted: the pill is folder-only — no isolation part, no switch. */
+  onIsolationChange?: (isolation: string) => void;
+  /** What's at the resolved folder: a plain folder can't have a worktree, a missing one has neither. */
+  dirStatus?: DirStatus;
+  /** Isolation fixed by context (a link joining another session's worktree); the folder stays choosable. */
+  isolationLocked?: PillLock;
+  /** A multi-repo workspace's repos — with FLAGS.multiRepo, the worktree switch lists them. */
+  repos?: WorkspaceRepo[];
+  selectedRepoPaths?: string[];
+  onRepoPathsChange?: (paths: string[]) => void;
   /** Fixed by context (e.g. a link): renders the read-only LockedPill with the reason as its tooltip. */
   locked?: PillLock;
-  /** Overrides the "staged override" accent; default: any value is staged. The /new card passes "differs from this session". */
+  /** Overrides the "staged override" accent; default: a staged folder, workspace or isolation. The /new card passes "differs from this session". */
   modified?: boolean;
+}
+
+/**
+ * Where the session works inside the folder, as the pill shows it at rest.
+ * A plain folder forces in place (there's no repo to branch); a missing one
+ * has no answer yet. `forced` carries the reason for the tooltip.
+ */
+function isolationShown(
+  isolation: string | undefined,
+  dirStatus: DirStatus | undefined,
+  folder: string | undefined,
+): { value?: string; forced?: string } {
+  if (dirStatus === "missing") return {};
+  if (dirStatus === "plain") {
+    return {
+      value: "current_dir",
+      forced: `${folder ?? "This folder"} isn't a git repository, so there's no worktree to isolate this session in.`,
+    };
+  }
+  return { value: isolation };
+}
+
+function isolationLabel(value: string | undefined): string {
+  if (value === "worktree") return "⎇ worktree";
+  if (value === "current_dir") return "▭ in place";
+  return "—";
 }
 
 /**
@@ -45,6 +93,12 @@ export interface FolderPillProps {
  * the native dialog — with recent folders and workspaces as shortcuts. A
  * workspace still brings its own defaults; picking it here starts the
  * session in its primary repo.
+ *
+ * With onIsolationChange it also says *how* the session works there: the
+ * pill reads "mads (default) │ ⎇ worktree", so the default folder's
+ * isolation shows without opening anything, and the menu's switch changes
+ * it. A plain folder forces in place (switch disabled, reason on hover) —
+ * the case that used to be a warning under the pills.
  */
 export function FolderPill({
   dir,
@@ -54,11 +108,20 @@ export function FolderPill({
   recent = [],
   onPickDir,
   onPickWorkspace,
+  isolation,
+  resolvedIsolation,
+  onIsolationChange,
+  dirStatus,
+  isolationLocked,
+  repos,
+  selectedRepoPaths,
+  onRepoPathsChange,
   locked,
   modified,
 }: FolderPillProps) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
+  const switchId = useId();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
 
   useEffect(() => {
@@ -95,7 +158,30 @@ export function FolderPill({
 
   const recentShown = recent.filter((r) => r !== dir).slice(0, 5);
 
-  if (locked) return <LockedPill name="folder" label={label} lock={locked} />;
+  const withIsolation = onIsolationChange !== undefined;
+  const iso = isolationShown(isolation ?? resolvedIsolation?.value, dirStatus, folderName(dir ?? resolvedDir?.value ?? "") || undefined);
+  const worktree = iso.value === "worktree";
+  const showRepos = FLAGS.multiRepo && worktree && !!repos && repos.length > 1;
+  const repoCount = showRepos
+    ? repos!.filter((r) => r.primary || (selectedRepoPaths ?? []).includes(r.path)).length
+    : 0;
+  const isoText = isolationLocked?.label ?? `${isolationLabel(iso.value)}${showRepos ? ` · ${repoCount} repos` : ""}`;
+  const isoPart = withIsolation && (
+    <span
+      className={[pillStyles.isolation, iso.forced || isolationLocked ? pillStyles.isolationMuted : ""]
+        .filter(Boolean)
+        .join(" ")}
+      title={isolationLocked?.reason ?? iso.forced}
+      data-testid="folder-isolation"
+    >
+      {isoText}
+    </span>
+  );
+  const staged = Boolean(dir || workspace) || isolation !== undefined;
+
+  if (locked) {
+    return <LockedPill name="folder" label={withIsolation ? `${label} · ${isoText}` : label} lock={locked} />;
+  }
 
   return (
     <Popover
@@ -104,13 +190,14 @@ export function FolderPill({
       anchor={
         <button
           type="button"
-          className={[pillStyles.trigger, (modified ?? Boolean(dir || workspace)) ? pillStyles.modified : ""]
+          className={[pillStyles.trigger, (modified ?? staged) ? pillStyles.modified : ""]
             .filter(Boolean)
             .join(" ")}
           title={title}
           onClick={() => setOpen((o) => !o)}
         >
           <span className={pillStyles.key}>folder</span> {label}
+          {isoPart}
           <Caret />
         </button>
       }
@@ -174,6 +261,43 @@ export function FolderPill({
               );
             })}
           </>
+        )}
+        {withIsolation && !isolationLocked && dirStatus !== "missing" && (
+          <div className={pillStyles.isolationRow}>
+            <Switch
+              id={switchId}
+              checked={worktree}
+              disabled={!!iso.forced}
+              onChange={(on) => onIsolationChange!(on ? "worktree" : "current_dir")}
+            />
+            <label htmlFor={switchId} className={pillStyles.isolationText}>
+              <span className={pillStyles.optionLabel}>Work in a new worktree</span>
+              <span className={pillStyles.optionDescription}>
+                {iso.forced ?? "Its own branch; Land merges it back."}
+              </span>
+            </label>
+          </div>
+        )}
+        {showRepos && (
+          <div className={pillStyles.repoChecklist}>
+            {repos!.map((repo) => (
+              <label key={repo.path} className={pillStyles.repoItem}>
+                <input
+                  type="checkbox"
+                  disabled={repo.primary}
+                  checked={repo.primary || (selectedRepoPaths ?? []).includes(repo.path)}
+                  onChange={(e) => {
+                    const current = new Set(selectedRepoPaths ?? []);
+                    if (e.target.checked) current.add(repo.path);
+                    else current.delete(repo.path);
+                    onRepoPathsChange?.([...current]);
+                  }}
+                />{" "}
+                {repo.path}
+                {repo.primary && " (primary)"}
+              </label>
+            ))}
+          </div>
         )}
       </div>
     </Popover>

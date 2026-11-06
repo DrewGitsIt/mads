@@ -24,7 +24,6 @@ import { AgentPill } from "../pills/AgentPill";
 import { ModelPill } from "../pills/ModelPill";
 import { TrustPill } from "../pills/TrustPill";
 import { fullAccessOnly } from "../pills/trustLevels";
-import { IsolationPill } from "../pills/IsolationPill";
 import type { StagedConfig } from "../pills/stagedConfig";
 import { AttachmentChips } from "../../../components/Attachments/AttachmentChips";
 import {
@@ -282,12 +281,12 @@ export function Launchpad({
 
   const effectiveIsolation = staged.isolation ?? resolved?.isolation?.value;
   const dirShown = resolved?.dir?.value;
-  let dirWarning: string | null = null;
-  if (resolved?.dir_status === "missing") {
-    dirWarning = `${dirShown} doesn't exist on this machine — choose another folder to start in.`;
-  } else if (resolved?.dir_status === "plain" && effectiveIsolation === "worktree") {
-    dirWarning = `${dirShown} isn't a git repository, so there's no worktree to isolate this session — it will work in the folder directly.`;
-  }
+  // A plain folder isn't warned about here: the folder pill shows it forced
+  // to "in place", with the reason on hover.
+  const dirWarning =
+    resolved?.dir_status === "missing"
+      ? `${dirShown} doesn't exist on this machine — choose another folder to start in.`
+      : null;
   const dirOwner = resolved?.dir_status === "git" ? resolved.dir_owner_session : undefined;
   // Never offer to save a folder that isn't there: every later Start would fail.
   const canSaveDefaults =
@@ -443,6 +442,13 @@ export function Launchpad({
               setSelectedWorkspace(ws);
               setStaged((prev) => ({ ...prev, workspace: ws.name, dir: undefined }));
             }}
+            isolation={staged.isolation}
+            resolvedIsolation={resolved?.isolation}
+            onIsolationChange={(isolation) => setStaged((prev) => ({ ...prev, isolation }))}
+            dirStatus={resolved?.dir_status}
+            repos={selectedWorkspace?.repos}
+            selectedRepoPaths={staged.multiRepoPaths}
+            onRepoPathsChange={(paths) => setStaged((prev) => ({ ...prev, multiRepoPaths: paths }))}
           />
           {/* Redesign §4/§6: the persona is an *override*, not a *selection* —
            *  default is Auto (server-side Fast Model pick over the persona
@@ -483,14 +489,6 @@ export function Launchpad({
                 ?.intents
             }
             onChange={(trust) => setStaged((prev) => ({ ...prev, trust }))}
-          />
-          <IsolationPill
-            value={staged.isolation}
-            resolved={resolved?.isolation}
-            onChange={(isolation) => setStaged((prev) => ({ ...prev, isolation }))}
-            repos={selectedWorkspace?.repos}
-            selectedRepoPaths={staged.multiRepoPaths}
-            onRepoPathsChange={(paths) => setStaged((prev) => ({ ...prev, multiRepoPaths: paths }))}
           />
         </div>
 

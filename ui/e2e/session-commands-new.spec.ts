@@ -36,7 +36,7 @@ test.describe("session commands: /new and /new-follower", () => {
     const goalField = card.getByLabel("Goal for the new session");
     await expect(goalField).toHaveValue(goal);
     // Started from this session's values: in place, like the origin.
-    await expect(card.getByRole("button", { name: /isolation\s+Current directory/ })).toBeVisible();
+    await expect(card.getByTestId("folder-isolation")).toHaveText("▭ in place");
 
     const created = page.waitForResponse(
       (res) => res.request().method() === "POST" && new URL(res.url()).pathname === "/sessions",

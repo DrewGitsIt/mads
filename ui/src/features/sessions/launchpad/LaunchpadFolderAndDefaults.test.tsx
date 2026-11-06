@@ -79,6 +79,16 @@ function typeFolder(path: string) {
   fireEvent.keyDown(input, { key: "Enter" });
 }
 
+/** The folder pill's isolation part, as it reads at rest. */
+const isolationShown = () => screen.getByTestId("folder-isolation").textContent;
+
+/** Flips the folder pill's worktree switch off — work in place — and closes its menu. */
+function workInPlace() {
+  fireEvent.click(screen.getByText(/^folder$/).closest("button")!);
+  fireEvent.click(screen.getByRole("switch", { name: /Work in a new worktree/ }));
+  fireEvent.keyDown(document, { key: "Escape" });
+}
+
 describe("Launchpad folder + defaults", () => {
   beforeEach(() => {
     FakeEventSource.instances = [];
@@ -107,7 +117,7 @@ describe("Launchpad folder + defaults", () => {
     );
   });
 
-  it("warns below the pills when a plain folder meets worktree isolation", async () => {
+  it("shows a plain folder as in place on the pill, not as a warning below it", async () => {
     stubRouter(
       (dir) =>
         dir
@@ -119,17 +129,14 @@ describe("Launchpad folder + defaults", () => {
     await waitFor(() => expect(screen.getByText(/mads \(default\)/)).toBeTruthy());
     expect(screen.queryByRole("status")).toBeNull();
 
-    typeFolder("/tmp/notes");
-    await waitFor(() =>
-      expect(screen.getByRole("status").textContent).toMatch(
-        /\/tmp\/notes isn't a git repository/,
-      ),
-    );
+    expect(isolationShown()).toBe("⎇ worktree");
 
-    // Choosing to work in place answers the warning.
-    fireEvent.click(screen.getByText(/New worktree \(default\)/));
-    fireEvent.click(screen.getByText("Current directory"));
-    await waitFor(() => expect(screen.queryByText(/isn't a git repository/)).toBeNull());
+    typeFolder("/tmp/notes");
+    await waitFor(() => expect(isolationShown()).toBe("▭ in place"));
+    expect(screen.getByTestId("folder-isolation").getAttribute("title")).toMatch(
+      /notes isn't a git repository/,
+    );
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("warns about a folder that isn't there, and won't save it as a default", async () => {
@@ -172,8 +179,7 @@ describe("Launchpad folder + defaults", () => {
         "This is Dock redesign’s worktree. A new worktree will branch from its branch, and Land goes back into Dock redesign’s worktree.",
       );
 
-      fireEvent.click(screen.getByText(/New worktree \(default\)/));
-      fireEvent.click(screen.getByText("Current directory"));
+      workInPlace();
       await waitFor(() =>
         expect(screen.getByTestId("dir-owner-note").textContent).toBe(
           "This is Dock redesign’s worktree. You’ll share its branch; changes land from Dock redesign.",
@@ -208,8 +214,7 @@ describe("Launchpad folder + defaults", () => {
     typeFolder("/home/me/repo/site");
     fireEvent.click(screen.getByText(/limited|Limited/));
     fireEvent.click(screen.getByText("Full access"));
-    fireEvent.click(screen.getByText(/New worktree \(default\)/));
-    fireEvent.click(screen.getByText("Current directory"));
+    workInPlace();
 
     await waitFor(() => expect(screen.getByText("Save as my defaults")).toBeTruthy());
     fireEvent.click(screen.getByText("Save as my defaults"));
@@ -227,7 +232,7 @@ describe("Launchpad folder + defaults", () => {
     // Staging cleared: the pills now read the saved values as defaults.
     await waitFor(() => expect(screen.getByText(/site \(default\)/)).toBeTruthy());
     expect(screen.getByText(/Full access \(default\)/)).toBeTruthy();
-    expect(screen.getByText(/Current directory \(default\)/)).toBeTruthy();
+    expect(isolationShown()).toBe("▭ in place");
   });
 });
 
@@ -287,12 +292,11 @@ describe("Launchpad draft", () => {
   });
 
   async function stageDraft() {
-    await waitFor(() => expect(screen.getByText(/New worktree \(default\)/)).toBeTruthy());
+    await waitFor(() => expect(isolationShown()).toBe("⎇ worktree"));
     fireEvent.change(screen.getByLabelText("Describe your goal"), {
       target: { value: "Fix the flaky deploy" },
     });
-    fireEvent.click(screen.getByText(/New worktree \(default\)/));
-    fireEvent.click(screen.getByText("Current directory"));
+    workInPlace();
   }
 
   it("keeps the unsent goal and staged settings across a remount", async () => {
@@ -304,8 +308,7 @@ describe("Launchpad draft", () => {
     expect((screen.getByLabelText("Describe your goal") as HTMLTextAreaElement).value).toBe(
       "Fix the flaky deploy",
     );
-    expect(screen.queryByText(/New worktree \(default\)/)).toBeNull();
-    expect(screen.getByText(/Current directory/)).toBeTruthy();
+    expect(isolationShown()).toBe("▭ in place");
   });
 
   it("starting the session clears the draft back to the defaults", async () => {
@@ -322,7 +325,7 @@ describe("Launchpad draft", () => {
 
     render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
     expect((screen.getByLabelText("Describe your goal") as HTMLTextAreaElement).value).toBe("");
-    await waitFor(() => expect(screen.getByText(/New worktree \(default\)/)).toBeTruthy());
+    await waitFor(() => expect(isolationShown()).toBe("⎇ worktree"));
   });
 
   it("a failed start keeps the draft for a retry", async () => {

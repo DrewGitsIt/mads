@@ -6,7 +6,6 @@ import { SegmentedControl } from "../../../components/SegmentedControl/Segmented
 import { buildCreateSessionPayload, deriveSessionName } from "../../../features/sessions/launchpad/sessionPayload";
 import { AgentPill } from "../../../features/sessions/pills/AgentPill";
 import { FolderPill } from "../../../features/sessions/pills/FolderPill";
-import { IsolationPill } from "../../../features/sessions/pills/IsolationPill";
 import { ModelPill } from "../../../features/sessions/pills/ModelPill";
 import { TrustPill } from "../../../features/sessions/pills/TrustPill";
 import { fullAccessOnly } from "../../../features/sessions/pills/trustLevels";
@@ -293,13 +292,27 @@ export function NewSessionCard({
 
         <div className={styles.pills}>
           <FolderPill
-            modified={staged.dir !== base.dir || staged.workspace !== base.workspace}
+            modified={
+              staged.dir !== base.dir ||
+              staged.workspace !== base.workspace ||
+              staged.isolation !== base.isolation
+            }
             dir={staged.dir}
             workspace={staged.workspace}
             recent={session?.dir ? [session.dir] : []}
             onPickDir={(dir) => setStaged((prev) => ({ ...prev, dir, workspace: undefined }))}
             onPickWorkspace={(ws) =>
               setStaged((prev) => ({ ...prev, workspace: ws.name, dir: undefined }))
+            }
+            isolation={staged.isolation}
+            onIsolationChange={(isolation) => setStaged((prev) => ({ ...prev, isolation }))}
+            isolationLocked={
+              joined
+                ? {
+                    label: `shares ${joined.name}'s worktree`,
+                    reason: `${joined.name} works in its own worktree of this repo. Linked sessions must share one copy of the repo, so the new session works inside ${joined.name}'s worktree.`,
+                  }
+                : undefined
             }
           />
           <AgentPill
@@ -330,19 +343,6 @@ export function NewSessionCard({
             agentPermissions={selectedAgent?.permissions}
             intentMatrix={providerInfo?.intents}
             onChange={(trust) => setStaged((prev) => ({ ...prev, trust }))}
-          />
-          <IsolationPill
-            modified={staged.isolation !== base.isolation}
-            value={staged.isolation}
-            onChange={(isolation) => setStaged((prev) => ({ ...prev, isolation }))}
-            locked={
-              joined
-                ? {
-                    label: `shares ${joined.name}'s worktree`,
-                    reason: `${joined.name} works in its own worktree of this repo. Linked sessions must share one copy of the repo, so the new session works inside ${joined.name}'s worktree.`,
-                  }
-                : undefined
-            }
           />
         </div>
 

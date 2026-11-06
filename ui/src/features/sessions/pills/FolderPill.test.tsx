@@ -106,3 +106,123 @@ describe("FolderPill", () => {
     expect(screen.getByText(/core \(default\)/)).toBeTruthy();
   });
 });
+
+describe("FolderPill isolation", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const base = { onPickDir: vi.fn(), onPickWorkspace: vi.fn() };
+
+  it("shows the default folder's isolation at rest, without opening the menu", () => {
+    stubWorkspaces([]);
+    render(
+      <FolderPill
+        {...base}
+        resolvedDir={{ value: "/repo/mads", source: "config" }}
+        resolvedIsolation={{ value: "worktree", source: "builtin" }}
+        dirStatus="git"
+        onIsolationChange={vi.fn()}
+      />,
+    );
+    const pill = screen.getByRole("button", { name: /folder mads \(default\)/ });
+    expect(screen.getByTestId("folder-isolation").textContent).toBe("⎇ worktree");
+    // Nothing staged: no accent dot.
+    expect(pill.className).not.toMatch(/modified/);
+  });
+
+  it("flips isolation from the menu's switch and marks the pill as changed", () => {
+    stubWorkspaces([]);
+    const onIsolationChange = vi.fn();
+    const { rerender } = render(
+      <FolderPill
+        {...base}
+        resolvedDir={{ value: "/repo/mads", source: "config" }}
+        resolvedIsolation={{ value: "worktree", source: "builtin" }}
+        dirStatus="git"
+        onIsolationChange={onIsolationChange}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /folder mads/ }));
+    const toggle = screen.getByRole("switch", { name: /Work in a new worktree/ });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
+    expect(onIsolationChange).toHaveBeenCalledWith("current_dir");
+    // The menu stays open for a switch flip.
+    expect(screen.getByRole("switch")).toBeTruthy();
+
+    rerender(
+      <FolderPill
+        {...base}
+        resolvedDir={{ value: "/repo/mads", source: "config" }}
+        resolvedIsolation={{ value: "worktree", source: "builtin" }}
+        isolation="current_dir"
+        dirStatus="git"
+        onIsolationChange={onIsolationChange}
+      />,
+    );
+    expect(screen.getByTestId("folder-isolation").textContent).toBe("▭ in place");
+    expect(screen.getByRole("button", { name: /folder mads/ }).className).toMatch(/modified/);
+  });
+
+  it("forces in place for a plain folder, with the reason on hover and the switch disabled", () => {
+    stubWorkspaces([]);
+    render(
+      <FolderPill
+        {...base}
+        resolvedDir={{ value: "/home/me/notes", source: "config" }}
+        resolvedIsolation={{ value: "worktree", source: "config" }}
+        dirStatus="plain"
+        onIsolationChange={vi.fn()}
+      />,
+    );
+    const part = screen.getByTestId("folder-isolation");
+    expect(part.textContent).toBe("▭ in place");
+    expect(part.getAttribute("title")).toBe(
+      "notes isn't a git repository, so there's no worktree to isolate this session in.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: /folder notes/ }));
+    const toggle = screen.getByRole("switch") as HTMLButtonElement;
+    expect(toggle.disabled).toBe(true);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("offers no isolation for a missing folder", () => {
+    stubWorkspaces([]);
+    render(
+      <FolderPill
+        {...base}
+        resolvedDir={{ value: "/gone", source: "config" }}
+        resolvedIsolation={{ value: "worktree", source: "config" }}
+        dirStatus="missing"
+        onIsolationChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("folder-isolation").textContent).toBe("—");
+    fireEvent.click(screen.getByRole("button", { name: /folder gone/ }));
+    expect(screen.queryByRole("switch")).toBeNull();
+  });
+
+  it("is folder-only without onIsolationChange", () => {
+    stubWorkspaces([]);
+    render(<FolderPill {...base} dir="/repo/mads" />);
+    expect(screen.queryByTestId("folder-isolation")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /folder mads/ }));
+    expect(screen.queryByRole("switch")).toBeNull();
+  });
+
+  it("does not list a workspace's repos while the multiRepo flag is off", () => {
+    stubWorkspaces([]);
+    render(
+      <FolderPill
+        {...base}
+        dir="/repo/mads"
+        isolation="worktree"
+        dirStatus="git"
+        onIsolationChange={vi.fn()}
+        repos={[{ path: "mads-core", primary: true }, { path: "mads-ui" }]}
+      />,
+    );
+    expect(screen.getByTestId("folder-isolation").textContent).toBe("⎇ worktree");
+    fireEvent.click(screen.getByRole("button", { name: /folder mads/ }));
+    expect(screen.queryByText("mads-ui")).toBeNull();
+  });
+});
