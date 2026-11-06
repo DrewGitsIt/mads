@@ -164,6 +164,15 @@
   opacity: 0.55;
 }
 
+/* A trust level the provider doesn't natively support; sits right after the
+   label so the selected row's trailing ✓ keeps the far edge. */
+.itemWarn {
+  margin-left: calc(var(--space-1) - 10px);
+  color: var(--warn-fg);
+  font-size: 12px;
+  line-height: 1;
+}
+
 .itemSelected::after {
   content: "✓";
   margin-left: auto;

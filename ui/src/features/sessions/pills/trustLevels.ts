@@ -2,12 +2,21 @@ import type { ProviderBehavior, ProviderSupport, SessionTrust } from "../../../r
 
 export interface TrustLevel {
   value: SessionTrust;
+  /** The plain level name (trustLabel) — pickers mark a warning with ⚠ beside it. */
   label: string;
-  description: string;
+  /** What the level does, the same on every provider. */
+  summary: string;
+  /**
+   * Set when the selected provider doesn't natively support this level: one
+   * line naming the provider and saying what happens instead. Emulated
+   * counts as unsupported here — mads answering the harness's permission
+   * asks is best-effort, not the harness's guarantee.
+   */
+  warning?: string;
   /**
    * Set when the selected provider can't run this level, to the level it
    * runs as instead (today only auto_review → limited, on a harness with no
-   * reviewer). The label already says so; this is for callers that need
+   * reviewer). The warning already says so; this is for callers that need
    * the value.
    */
   fallback?: SessionTrust;
@@ -38,31 +47,6 @@ export function trustLabel(value: SessionTrust | string | undefined): string {
   return TRUST_LABELS[v as SessionTrust] ?? v;
 }
 
-/**
- * BehaviorTrustLimited/BehaviorTrustReadOnly (providers/provider/matrix.go)
- * are how each provider adapter declares whether it actually enforces that
- * trust level. No matrix (provider not yet selected) is treated the same as
- * "unsupported": never claim a restriction applies before the selected
- * provider has said so.
- */
-function trustSupport(
-  matrix: Record<ProviderBehavior, ProviderSupport> | undefined,
-  behavior: ProviderBehavior,
-): ProviderSupport {
-  return matrix?.[behavior] ?? "unsupported";
-}
-
-function enforcementNote(support: ProviderSupport): string {
-  switch (support) {
-    case "native":
-      return "enforced by the selected provider.";
-    case "emulated":
-      return "best-effort with the selected provider — not a hard guarantee.";
-    case "unsupported":
-      return "not enforced by the selected provider — runs as Full access.";
-  }
-}
-
 const RESTRICTED: ProviderBehavior[] = ["trust_limited", "trust_read_only", "trust_auto_review"];
 
 /**
@@ -88,7 +72,7 @@ export function fullAccessReason(label: string): string {
  * The level a session asking for `trust` runs at on a provider declaring
  * `matrix` — the UI twin of provider.EffectiveTrust (providers/provider):
  * auto_review falls back to limited when BehaviorTrustAutoReview isn't
- * working. Unlike the restriction notes above, an unknown provider (no
+ * working. Unlike the warnings below, an unknown provider (no
  * matrix) reports no fallback: falling back is the provider's to declare,
  * and guessing one would put a downgrade on screen that may not happen.
  */
@@ -101,71 +85,57 @@ export function trustFallback(
   return support === "unsupported" ? "limited" : undefined;
 }
 
+const SUMMARIES: Record<SessionTrust, string> = {
+  full: "The agent edits files and runs any command without asking.",
+  auto_review: "A reviewer model approves routine actions and asks you only about risky or uncertain ones.",
+  limited: "The agent asks you before running commands or other risky actions.",
+  read_only: "Blocks edits and commands entirely.",
+};
+
 /**
- * Auto-review's honesty line. Worded apart from enforcementNote on purpose:
- * a missing reviewer doesn't loosen anything — the session asks more, as
- * Limited — so "not enforced … runs as Full access" would be wrong here.
+ * The warning line for a restricted level, or undefined when the provider
+ * runs it natively. `name` is the provider's display name (providerLabel —
+ * passed in, since providerBehaviors imports this module).
  */
-function reviewerNote(
+function levelWarning(
+  value: Exclude<SessionTrust, "full">,
   matrix: Record<ProviderBehavior, ProviderSupport> | undefined,
-  provider: string | undefined,
-): string {
-  if (!matrix) return "runs as Limited on a provider with no reviewer.";
-  switch (matrix.trust_auto_review ?? "unsupported") {
+  name: string,
+): string | undefined {
+  const head = `${name} does not support this trust level.`;
+  // No matrix yet: the provider hasn't said, and a restriction is never
+  // claimed before it does.
+  if (!matrix) return `${name} hasn't said whether it supports this trust level.`;
+  if (fullAccessOnly(matrix)) return `${head} It runs at Full access only.`;
+  const behavior: ProviderBehavior = `trust_${value}`;
+  switch (matrix[behavior] ?? "unsupported") {
     case "native":
-      return "the selected provider's harness runs the reviewer.";
+      return undefined;
     case "emulated":
-      return "the selected provider emulates the reviewer — best-effort.";
+      return `${head} Runs best-effort, with mads answering its permission requests.`;
     case "unsupported":
-      return `${provider ?? "the selected provider"} has no reviewer, so this runs as Limited.`;
+      return `${head} Runs as ${trustLabel(trustFallback(value, matrix) ?? "full")}.`;
   }
 }
 
 /**
- * Builds the trust option list, deriving each restricted level's honesty
+ * Builds the trust option list, deriving each restricted level's warning
  * from the selected provider's capability matrix (§11 GET /providers)
- * instead of a hardcoded disclaimer. `provider` names the provider in
- * Auto-review's fallback annotation — "(runs as Limited on kiro-cli)" —
- * when its matrix says it has no reviewer.
+ * instead of a hardcoded disclaimer. `providerName` is the provider's
+ * display name, e.g. "Goose"; without one the warnings say "This provider".
  */
 export function trustLevels(
   matrix?: Record<ProviderBehavior, ProviderSupport>,
-  provider?: string,
+  providerName?: string,
 ): TrustLevel[] {
-  const autoFallback = trustFallback("auto_review", matrix);
-  const where = provider ?? "this provider";
-  if (fullAccessOnly(matrix)) {
-    const note = `not available on ${where}, which runs at Full access only.`;
-    return [
-      { value: "full", label: TRUST_LABELS.full, description: "Agent edits files and runs any command without asking." },
-      { value: "auto_review", label: TRUST_LABELS.auto_review, description: `A reviewer model approves routine actions — ${note}`, unavailable: true },
-      { value: "limited", label: TRUST_LABELS.limited, description: `Agent asks you before risky actions — ${note}`, unavailable: true },
-      { value: "read_only", label: TRUST_LABELS.read_only, description: `Blocks edits and commands entirely — ${note}`, unavailable: true },
-    ];
-  }
-  return [
-    {
-      value: "full",
-      label: TRUST_LABELS.full,
-      description: "Agent edits files and runs any command without asking.",
-    },
-    {
-      value: "auto_review",
-      label: autoFallback
-        ? `${TRUST_LABELS.auto_review} (runs as ${trustLabel(autoFallback)} on ${where})`
-        : TRUST_LABELS.auto_review,
-      description: `A reviewer model approves routine actions and asks you only about risky or uncertain ones — ${reviewerNote(matrix, provider)}`,
-      fallback: autoFallback,
-    },
-    {
-      value: "limited",
-      label: TRUST_LABELS.limited,
-      description: `Agent asks you before running commands or other risky actions — ${enforcementNote(trustSupport(matrix, "trust_limited"))}`,
-    },
-    {
-      value: "read_only",
-      label: TRUST_LABELS.read_only,
-      description: `Blocks edits and commands entirely — ${enforcementNote(trustSupport(matrix, "trust_read_only"))}`,
-    },
-  ];
+  const name = providerName ?? "This provider";
+  const fullOnly = fullAccessOnly(matrix);
+  return (Object.keys(TRUST_LABELS) as SessionTrust[]).map((value) => {
+    const level: TrustLevel = { value, label: TRUST_LABELS[value], summary: SUMMARIES[value] };
+    if (value === "full") return level;
+    level.warning = levelWarning(value, matrix, name);
+    level.fallback = trustFallback(value, matrix);
+    if (fullOnly) level.unavailable = true;
+    return level;
+  });
 }

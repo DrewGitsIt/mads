@@ -158,9 +158,66 @@
   border-color: var(--accent);
 }
 
-/* TrustPill's one-line reason beside a full-trust-only provider's pill. */
-.trustReason {
-  align-self: center;
-  font-size: var(--fs-chip);
-  color: var(--text3);
+/* TrustPill: label-only rows, ⚠ on a level the provider doesn't natively
+   support, and one footer explaining the hovered/focused (else current) row.
+   Fixed width so the footer wraps instead of resizing the menu as it changes. */
+.trustMenu {
+  width: 250px;
+}
+
+.trustOption {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.trustOption .warnIcon {
+  margin-left: auto;
+}
+
+/* aria-disabled rather than disabled (the footer must explain it), so the
+   :disabled styling above is mirrored here. */
+.optionUnavailable,
+.optionUnavailable:hover:not(:disabled) {
+  opacity: 0.55;
+  cursor: default;
+  background: transparent;
+}
+
+.warnIcon {
+  flex: none;
+  color: var(--warn-fg);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.warnIconSmall {
+  font-size: 10px;
+}
+
+.trustDetail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  /* room for a summary plus a warning line, so hovering doesn't jolt the menu */
+  min-height: 5.5em;
+  margin-top: var(--space-1);
+  padding: var(--space-2);
+  border-top: 1px solid var(--line-soft);
+  color: var(--text2);
+  font: 400 var(--fs-chip) / 1.45 var(--sans);
+}
+
+.trustDetail strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.trustWarning {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--line-soft);
+  color: var(--warn-fg);
 }

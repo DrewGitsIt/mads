@@ -150,7 +150,9 @@ describe("payloads", () => {
     const { open, createSession } = setup({ session: { ...THIS, provider: "hermes", model: "copilot:gpt-4.1", trust: "limited" } });
     await open(newCommand);
     await waitFor(() =>
-      expect(screen.getByTestId("trust-reason").textContent).toBe("Hermes can't enforce approvals; it runs at full trust"),
+      expect(screen.getByRole("button", { name: /trust Full access/ }).getAttribute("title")).toBe(
+        "Hermes can't enforce approvals; it runs at full trust",
+      ),
     );
     fireEvent.click(startBtn());
     await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));

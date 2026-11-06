@@ -155,7 +155,9 @@ describe("Launchpad", () => {
     render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
 
     await waitFor(() =>
-      expect(screen.getByTestId("trust-reason").textContent).toBe("Hermes can't enforce approvals; it runs at full trust"),
+      expect(screen.getByRole("button", { name: /trust Full access/ }).getAttribute("title")).toBe(
+        "Hermes can't enforce approvals; it runs at full trust",
+      ),
     );
     expect(screen.getByText("Full access")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Describe your goal"), { target: { value: "Tidy the README" } });

@@ -3,6 +3,7 @@ import { Caret } from "../../components/Caret/Caret";
 import { Popover } from "../../components/Popover/Popover";
 import { modelDisplayName } from "../../router/modelDisplay";
 import type { Model, ProviderBehavior, ProviderSupport, SessionTrust } from "../../router/types";
+import { providerLabel } from "../../features/settings/providerBehaviors";
 import { trustLabel, trustLevels } from "../../features/sessions/pills/trustLevels";
 import { shortModel, shortPersona, trustTone } from "./dockLabels";
 import styles from "./StatusLine.module.css";
@@ -156,8 +157,9 @@ export function ModelSegment({
  * A level the provider can't run is never shown as if it were running: the
  * Router reports the fallback on the record (effective_trust), and the
  * segment reads "Trust: Auto-review → Limited" with the reason on hover. The
- * menu marks the same option "(runs as Limited on <provider>)" before it's
- * picked, from the provider's own matrix.
+ * menu marks every level the provider doesn't natively support with ⚠ before
+ * it's picked, from the provider's own matrix, with what happens instead on
+ * hover.
  *
  * The value never collapses in a narrow dock; only the "Trust: " prefix
  * drops below ~700px. Without `onSelect` it is a static segment.
@@ -178,7 +180,7 @@ export function TrustSegment({
   matrix?: Record<ProviderBehavior, ProviderSupport>;
   onSelect?: (trust: SessionTrust) => void;
 }) {
-  const levels = trustLevels(matrix, provider);
+  const levels = trustLevels(matrix, provider ? providerLabel(provider) : undefined);
   const current = trust ?? "limited";
   const fallback = effectiveTrust && effectiveTrust !== current ? effectiveTrust : undefined;
   const asked = trustLabel(current);
@@ -245,7 +247,7 @@ export function TrustSegment({
               aria-selected={l.value === current}
               aria-disabled={l.unavailable || undefined}
               disabled={l.unavailable}
-              title={l.description}
+              title={l.warning ? `${l.summary}\n⚠ ${l.warning}` : l.summary}
               className={cx(styles.item, l.value === current && styles.itemSelected)}
               onClick={() => onSelect(l.value)}
             >
@@ -255,6 +257,11 @@ export function TrustSegment({
                 aria-hidden="true"
               />
               {l.label}
+              {l.warning && (
+                <span className={styles.itemWarn} role="img" aria-label="Not supported by this provider">
+                  ⚠
+                </span>
+              )}
             </button>
           ))}
         </div>

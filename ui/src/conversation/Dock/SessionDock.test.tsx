@@ -252,7 +252,8 @@ describe("SessionDock", () => {
         onChangeTrust,
       });
       fireEvent.click(screen.getByRole("button", { name: "Trust: Limited" }));
-      const option = await screen.findByRole("option", { name: "Auto-review (runs as Limited on kiro-cli)" });
+      const option = await screen.findByRole("option", { name: "Auto-review Not supported by this provider" });
+      expect(option.getAttribute("title")).toMatch(/does not support this trust level\. Runs as Limited\.$/);
       fireEvent.click(option);
       expect(onChangeTrust).toHaveBeenCalledWith("auto_review");
     });
@@ -281,11 +282,15 @@ describe("SessionDock", () => {
       const onChangeTrust = vi.fn();
       renderDock({ session: { ...fixtureSessions["session-active"], provider: "hermes", trust: "full" }, onChangeTrust });
       fireEvent.click(screen.getByRole("button", { name: "Trust: Full access" }));
-      await waitFor(() => expect(screen.getByRole("option", { name: "Limited" }).getAttribute("aria-disabled")).toBe("true"));
+      // Each restricted level carries the ⚠, whose label joins the option's name.
+      const warned = (label: string) => `${label} Not supported by this provider`;
+      await waitFor(() =>
+        expect(screen.getByRole("option", { name: warned("Limited") }).getAttribute("aria-disabled")).toBe("true"),
+      );
       for (const name of ["Auto-review", "Read-only"]) {
-        expect(screen.getByRole("option", { name }).getAttribute("aria-disabled")).toBe("true");
+        expect(screen.getByRole("option", { name: warned(name) }).getAttribute("aria-disabled")).toBe("true");
       }
-      fireEvent.click(screen.getByRole("option", { name: "Limited" }));
+      fireEvent.click(screen.getByRole("option", { name: warned("Limited") }));
       expect(onChangeTrust).not.toHaveBeenCalled();
       expect(screen.getByRole("option", { name: "Full access" }).getAttribute("aria-disabled")).toBeNull();
     });
