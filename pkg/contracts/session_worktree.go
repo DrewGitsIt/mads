@@ -70,6 +70,61 @@ type WorktreeTenant struct {
 	Name string `json:"name"`
 }
 
+// CommitPlan is GET /sessions/{id}/commit-plan: everything the Commit
+// dialog lists (docs/COMMIT-LAND-PUSH-DESIGN.md D2) — every uncommitted
+// file in each of the session's repos, whoever changed it, and the
+// session's changed files outside every repo, which can't be committed
+// where they are. Computed on request.
+type CommitPlan struct {
+	// Repos are the session's repos with anything uncommitted, its
+	// folder's repo first. Never null.
+	Repos []CommitPlanRepo `json:"repos"`
+	// Outside are files the session changed outside every repo, absolute.
+	// Never null.
+	Outside []CommitPlanOutside `json:"outside"`
+}
+
+// CommitPlanRepo is one repo's section of the Commit dialog.
+type CommitPlanRepo struct {
+	// Root is the top of the repo's working tree: CommitRequest.Repo.
+	Root     string `json:"root"`
+	Branch   string `json:"branch,omitempty"`
+	Isolated bool   `json:"isolated,omitempty"`
+	// Primary marks the session folder's own repo.
+	Primary bool             `json:"primary,omitempty"`
+	Files   []CommitPlanFile `json:"files"`
+}
+
+// When a file not changed by the session was changed (CommitPlanFile.Since).
+const (
+	// ChangedDuringSession: it differs from the session-start snapshot.
+	ChangedDuringSession = "session"
+	// ChangedBeforeSession: it was already uncommitted when the session
+	// started, and hasn't changed since.
+	ChangedBeforeSession = "before"
+)
+
+// CommitPlanFile is one uncommitted file in a repo.
+type CommitPlanFile struct {
+	// Path is relative to the repo's Root.
+	Path string `json:"path"`
+	Kind string `json:"kind"` // added | modified | deleted
+	// Mine: the session's own tools changed it. The dialog checks these.
+	Mine bool `json:"mine,omitempty"`
+	// For a file that isn't Mine: the other session whose tools last
+	// changed it, when the ledger says; and when it changed, when the
+	// session-start snapshot can tell (ChangedDuringSession or
+	// ChangedBeforeSession; empty when it can't).
+	By    *WorktreeTenant `json:"by,omitempty"`
+	Since string          `json:"since,omitempty"`
+}
+
+// CommitPlanOutside is a file the session changed outside every repo.
+type CommitPlanOutside struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+}
+
 // CommitRequest is POST /sessions/{id}/commit.
 type CommitRequest struct {
 	// Repo is the top of the repo to commit in, one of the session's

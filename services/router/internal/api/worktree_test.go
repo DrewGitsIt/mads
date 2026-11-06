@@ -212,7 +212,7 @@ func TestWorktreeRoutesRunDirectlyWhenInactive(t *testing.T) {
 	}
 }
 
-// Drafting refuses paths the session didn't change, like Commit.
+// Drafting refuses paths outside the repo, like Commit.
 func TestCommitDraftValidatesPaths(t *testing.T) {
 	srv, data := newWorktreeServer(t)
 	sess, _ := isolatedRecord(t, data, "draft")

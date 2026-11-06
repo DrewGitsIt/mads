@@ -224,3 +224,31 @@ func CountsPatch(sum Counts, repos []contracts.SessionRepo) contracts.SessionWor
 		Repos: &repos,
 	}
 }
+
+// Repos is the session's repo set as Commit sees it: its primary target
+// (nil when its folder isn't a repo), every repo, and its change list.
+func (o Ops) Repos(ctx context.Context, sessionID string) (primary *Target, all []Target, rows []contracts.FileChange, err error) {
+	_, primary, all, rows, err = o.targets(ctx, sessionID)
+	return primary, all, rows, err
+}
+
+// ChangedFiles is every file git reports changed in dir's working tree,
+// untracked included, ignored left out: what a Commit there could take.
+// Paths are relative to the top of the tree, in git's order.
+func ChangedFiles(ctx context.Context, dir string) ([]contracts.WorktreeFile, error) {
+	out, err := Git(ctx, dir, "--no-optional-locks", "status", "--porcelain", "-z", "--untracked-files=all")
+	if err != nil {
+		return nil, err
+	}
+	files := []contracts.WorktreeFile{}
+	for _, e := range parseStatusZ(out) {
+		files = append(files, contracts.WorktreeFile{Path: e.path, Kind: e.kind()})
+	}
+	return files, nil
+}
+
+// TopOf is the top of the working tree holding path (or its nearest
+// existing ancestor); "" outside every repo.
+func TopOf(ctx context.Context, path string) string {
+	return toplevelOf(ctx, filepath.Dir(path), map[string]string{})
+}
