@@ -17,6 +17,10 @@ import type {
   CommitPlan,
   CommitRequest,
   CommitResult,
+  MoveError,
+  MoveFolder,
+  MoveRequest,
+  MoveResult,
   Config,
   CostMetrics,
   CreateSessionPayload,
@@ -252,6 +256,10 @@ export interface RouterClient {
   draftCommitMessage(sessionId: string, paths?: string[], repo?: string): Promise<CommitDraft>;
   /** Landed, conflicted and refused all resolve — each is a card. */
   landSession(sessionId: string): Promise<LandResult>;
+  /** Moves a file from the commit plan's `outside` into a repo (COMMIT-LAND-PUSH D4). Throws MoveRefusedError for a refusal (exists, ignored, …). */
+  moveFile(sessionId: string, req: MoveRequest): Promise<MoveResult>;
+  /** Folders in `repo` a file could move into, those already holding `ext` files first. Runs git: fetch once per picker. */
+  getMoveFolders(sessionId: string, repo: string, ext?: string): Promise<MoveFolder[]>;
 
   // Batch (non-streaming) read of GET /events — a plain fetch (no explicit
   // Accept header) takes the Router's JSON branch instead of the SSE branch
@@ -473,6 +481,19 @@ export class SessionWakeError extends Error {
 export class CommitRefusedError extends Error {
   constructor(
     readonly body: CommitError,
+    readonly status: number,
+  ) {
+    super(body.error);
+  }
+}
+
+/**
+ * Thrown by `moveFile` for a structured refusal (pkg/contracts MoveError):
+ * the folder picker shows `body.error` and stays open.
+ */
+export class MoveRefusedError extends Error {
+  constructor(
+    readonly body: MoveError,
     readonly status: number,
   ) {
     super(body.error);
@@ -1013,6 +1034,26 @@ export class FetchRouterClient implements RouterClient {
 
   async landSession(sessionId: string): Promise<LandResult> {
     return routerPost(this.baseUrl, `/sessions/${sessionId}/land`, {});
+  }
+
+  async moveFile(sessionId: string, req: MoveRequest): Promise<MoveResult> {
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/move`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      const body = (await res
+        .clone()
+        .json()
+        .catch(() => null)) as MoveError | null;
+      if (body?.code) throw new MoveRefusedError(body, res.status);
+    }
+    return readJSON<MoveResult>(res);
+  }
+
+  async getMoveFolders(sessionId: string, repo: string, ext?: string): Promise<MoveFolder[]> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/move/folders`, { repo, ext: ext || undefined });
   }
 
   async getEvents(filter: { sessionId: string; since?: number; types?: string[] }): Promise<Envelope[]> {

@@ -1332,6 +1332,49 @@ export interface CommitPlan {
   repos: CommitPlanRepo[];
   /** Never null. */
   outside: CommitPlanOutside[];
+  /**
+   * Repo roots an `outside` file can move into (D4): the repos above, the
+   * repos directly inside a session folder that isn't one, the workspace's
+   * repos. Filled only when `outside` isn't empty; older Routers omit it.
+   */
+  move_targets?: string[];
+}
+
+/** POST /sessions/{id}/move — move a file the session changed outside every repo into one (D4). */
+export interface MoveRequest {
+  /** The file, absolute (CommitPlanOutside.path). */
+  path: string;
+  /** A root from CommitPlan.move_targets. */
+  repo: string;
+  /** A folder inside the repo, relative; empty is the repo's top. */
+  dir?: string;
+}
+
+/** A successful move: where the file is now, absolute. */
+export interface MoveResult {
+  path: string;
+}
+
+export type MoveErrorCode =
+  | "missing"
+  | "not_session_file"
+  | "in_repo"
+  | "unknown_repo"
+  | "outside_repo"
+  | "exists"
+  | "ignored"
+  | "failed";
+
+/** A refused move: `error` is one human sentence, shown as is in the folder picker. */
+export interface MoveError {
+  code: MoveErrorCode | string;
+  error: string;
+}
+
+/** GET /sessions/{id}/move/folders — a folder inside the repo (ends in "/"), and how many files of the asked-for kind it holds. */
+export interface MoveFolder {
+  path: string;
+  matches?: number;
 }
 
 export interface CommitRequest {

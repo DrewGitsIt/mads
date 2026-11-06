@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -111,6 +112,10 @@ func (s *server) commitPlan(ctx context.Context, sess contracts.Session) (contra
 
 	for _, f := range set.Files {
 		if !f.Attributed || sessionwt.TopOf(ctx, f.Path) != "" {
+			continue
+		}
+		// Gone (deleted, or moved into a repo): nothing to move or commit.
+		if _, err := os.Lstat(f.Path); err != nil {
 			continue
 		}
 		plan.Outside = append(plan.Outside, contracts.CommitPlanOutside{Path: f.Path, Kind: f.Change})

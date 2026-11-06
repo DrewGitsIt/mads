@@ -1,6 +1,6 @@
 import type { RouterClient, SessionEventSource } from "./client";
 import { EVENTS_BATCH_LIMIT } from "./eventPages";
-import { CommitRefusedError, RouterValidationError } from "./client";
+import { CommitRefusedError, MoveRefusedError, RouterValidationError } from "./client";
 import type {
   Attachment,
   Delegate,
@@ -20,6 +20,10 @@ import type {
   CommitError,
   CommitPlan,
   CommitRequest,
+  MoveError,
+  MoveFolder,
+  MoveRequest,
+  MoveResult,
   CommitResult,
   Config,
   CostMetrics,
@@ -1548,7 +1552,55 @@ export class FakeRouterClient implements RouterClient {
 
   async getCommitPlan(sessionId: string): Promise<CommitPlan> {
     this.commitPlanCalls.push(sessionId);
-    return structuredClone(this.commitPlan ?? this.planFromStatus());
+    const plan = structuredClone(this.commitPlan ?? this.planFromStatus());
+    // The Router lists move targets only when there's something to move;
+    // unset, a file can move into any of the plan's repos.
+    if (plan.outside.length > 0) plan.move_targets ??= plan.repos.map((r) => r.root);
+    else delete plan.move_targets;
+    return plan;
+  }
+
+  // --- Move into a repo (COMMIT-LAND-PUSH D4) ---
+  /** A MoveError makes moveFile throw it as MoveRefusedError; a function answers per request. Unset, the move happens. */
+  moveOutcome?: MoveError | ((req: MoveRequest) => MoveError | undefined);
+  readonly moveCalls: { sessionId: string; req: MoveRequest }[] = [];
+  /** What getMoveFolders answers, for any repo. */
+  moveFolders: MoveFolder[] = [
+    { path: "docs/mockups/", matches: 3 },
+    { path: "docs/" },
+    { path: "scripts/" },
+    { path: "ui/" },
+    { path: "ui/src/" },
+  ];
+  readonly moveFolderCalls: { sessionId: string; repo: string; ext?: string }[] = [];
+
+  /**
+   * Moves the file the way the Router records it: gone from the plan's
+   * outside, and in the target repo's files as the session's own (the
+   * repo joins the plan if it had nothing uncommitted).
+   */
+  async moveFile(sessionId: string, req: MoveRequest): Promise<MoveResult> {
+    this.moveCalls.push({ sessionId, req });
+    const out = typeof this.moveOutcome === "function" ? this.moveOutcome(req) : this.moveOutcome;
+    if (out) throw new MoveRefusedError(out, out.code === "failed" ? 500 : 409);
+    const plan = (this.commitPlan ??= this.planFromStatus());
+    const entry = plan.outside.find((f) => f.path === req.path);
+    if (!entry) throw new MoveRefusedError({ code: "missing", error: "That file isn't there any more." }, 404);
+    plan.outside = plan.outside.filter((f) => f !== entry);
+    const name = req.path.slice(req.path.lastIndexOf("/") + 1);
+    const rel = `${(req.dir ?? "").replace(/^\/+|\/+$/g, "")}/${name}`.replace(/^\//, "");
+    let repo = plan.repos.find((r) => r.root === req.repo);
+    if (!repo) {
+      repo = { root: req.repo, files: [] };
+      plan.repos.push(repo);
+    }
+    repo.files.push({ path: rel, kind: "added", mine: true });
+    return { path: `${req.repo}/${rel}` };
+  }
+
+  async getMoveFolders(sessionId: string, repo: string, ext?: string): Promise<MoveFolder[]> {
+    this.moveFolderCalls.push(ext ? { sessionId, repo, ext } : { sessionId, repo });
+    return structuredClone(this.moveFolders);
   }
 
   private planFromStatus(): CommitPlan {

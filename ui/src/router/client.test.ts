@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CommitRefusedError, FetchRouterClient, RouterValidationError } from "./client";
+import { CommitRefusedError, FetchRouterClient, MoveRefusedError, RouterValidationError } from "./client";
 import type { Agent } from "./types";
 
 function mockFetchOnce(body: unknown, ok = true, status = 200) {
@@ -282,6 +282,37 @@ describe("FetchRouterClient", () => {
     const client = new FetchRouterClient("http://router.local");
     await client.getWorktreeStatus("s1", "/repo/mads");
     expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/worktree?repo=%2Frepo%2Fmads");
+  });
+
+  it("moveFile POSTs to /sessions/:id/move and resolves the new path", async () => {
+    const fetchMock = mockFetchOnce({ path: "/repo/mads/docs/mockups/x.html" });
+    const client = new FetchRouterClient("http://router.local");
+    const req = { path: "/repo/x.html", repo: "/repo/mads", dir: "docs/mockups/" };
+    expect(await client.moveFile("s1", req)).toEqual({ path: "/repo/mads/docs/mockups/x.html" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/move",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(req) }),
+    );
+  });
+
+  it("moveFile throws MoveRefusedError carrying the refusal", async () => {
+    const body = { code: "exists", error: "docs/x.html already exists: rename it, or pick another folder." };
+    mockFetchOnce(body, false, 409);
+    const client = new FetchRouterClient("http://router.local");
+    const err = await client.moveFile("s1", { path: "/repo/x.html", repo: "/repo/mads" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MoveRefusedError);
+    expect((err as MoveRefusedError).body).toEqual(body);
+    expect((err as MoveRefusedError).status).toBe(409);
+    expect((err as MoveRefusedError).message).toBe(body.error);
+  });
+
+  it("getMoveFolders GETs the repo's folders for an extension", async () => {
+    const fetchMock = mockFetchOnce([{ path: "docs/mockups/", matches: 3 }]);
+    const client = new FetchRouterClient("http://router.local");
+    expect(await client.getMoveFolders("s1", "/repo/mads", ".html")).toEqual([{ path: "docs/mockups/", matches: 3 }]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/move/folders?repo=%2Frepo%2Fmads&ext=.html",
+    );
   });
 
   it("landSession POSTs to /sessions/:id/land and resolves every outcome", async () => {

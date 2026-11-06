@@ -1,6 +1,17 @@
-import { useEffect, useId, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { Button } from "../../components/Button/Button";
-import { CommitRefusedError, type RouterClient } from "../../router/client";
+import {
+  CommitRefusedError,
+  MoveRefusedError,
+  type RouterClient,
+} from "../../router/client";
 import type {
   CommitError,
   CommitPath,
@@ -9,6 +20,7 @@ import type {
   CommitPlanOutside,
   CommitPlanRepo,
   CommitResult,
+  MoveFolder,
 } from "../../router/types";
 import { displayPath } from "../../files/displayPath";
 import {
@@ -50,6 +62,45 @@ function cx(...names: (string | false | undefined)[]): string {
 
 function joinPath(root: string, path: string): string {
   return `${root.replace(/\/+$/, "")}/${path}`;
+}
+
+function baseName(path: string): string {
+  return path.slice(path.lastIndexOf("/") + 1);
+}
+
+function dirName(path: string): string {
+  return path.slice(0, path.lastIndexOf("/")) || "/";
+}
+
+/** ".html" for "plan.html"; none for "Makefile" or ".env". */
+function extOf(path: string): string | undefined {
+  const name = baseName(path);
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot).toLowerCase() : undefined;
+}
+
+/** How many suggestions the folder picker shows at once. */
+const SUGGESTIONS = 6;
+
+/**
+ * A file on its way into a repo (D4): the folder picker at the top of that
+ * repo's pane. Nothing moves until "Move here".
+ */
+interface MoveState {
+  file: CommitPlanOutside;
+  /** The repo root it goes into. */
+  repo: string;
+  /** The folder field: relative to the repo, empty for its top. */
+  dir: string;
+  /** The user typed in the field: a late folder list mustn't overwrite it. */
+  touched: boolean;
+  /** The repo's folders, once fetched. */
+  folders?: MoveFolder[];
+  /** The highlighted suggestion. */
+  hi: number;
+  busy: boolean;
+  /** The Router's refusal, in its own words. */
+  error?: string;
 }
 
 /** One repo's half of the dialog: what's checked, its message, and what its last Commit said. */
@@ -137,6 +188,14 @@ export function CommitDialog({
   const [committing, setCommitting] = useState(false);
   // initialError with no repo to show it in (nothing left to commit).
   const [strayError, setStrayError] = useState<CommitError>();
+  const [move, setMove] = useState<MoveState | null>(null);
+  // Files moved in while the dialog is open, by repo: they carry a "moved" tag.
+  const [moved, setMoved] = useState<Record<string, string[]>>({});
+  // The outside file being dragged, and the repo item it's over.
+  const [dragging, setDragging] = useState<CommitPlanOutside | null>(null);
+  const [dropOver, setDropOver] = useState<string | null>(null);
+  // Each repo's folders, fetched once per repo and extension while open.
+  const folderCache = useRef(new Map<string, MoveFolder[]>());
 
   const patch = (
     root: string,
@@ -162,6 +221,11 @@ export function CommitDialog({
     setDrafts({});
     setStrayError(undefined);
     setCommitting(false);
+    setMove(null);
+    setMoved({});
+    setDragging(null);
+    setDropOver(null);
+    folderCache.current = new Map();
     routerClient
       .getCommitPlan(sessionId)
       .then((p) => {
@@ -218,6 +282,111 @@ export function CommitDialog({
         patch(root, {
           checked: new Set(files.filter((f) => f.mine).map((f) => f.path)),
         });
+      })
+      .catch(() => {});
+  }
+
+  // Opens the folder picker for a file headed into `root`: from a drop on a
+  // repo in the list, or from Move to…. Its folders load once per repo and
+  // extension; the first is filled in when it already holds files like this.
+  function startMove(file: CommitPlanOutside, root: string) {
+    setDragging(null);
+    setDropOver(null);
+    setPane(root);
+    setMove({ file, repo: root, dir: "", touched: false, hi: 0, busy: false });
+    const ext = extOf(file.path);
+    const key = `${root}\n${ext ?? ""}`;
+    const apply = (folders: MoveFolder[]) =>
+      setMove((m) =>
+        m && m.file.path === file.path && m.repo === root
+          ? {
+              ...m,
+              folders,
+              dir:
+                m.touched || !folders[0]?.matches ? m.dir : folders[0].path,
+            }
+          : m,
+      );
+    const cached = folderCache.current.get(key);
+    if (cached) {
+      apply(cached);
+      return;
+    }
+    routerClient
+      .getMoveFolders(sessionId, root, ext)
+      .then((folders) => {
+        folderCache.current.set(key, folders);
+        apply(folders);
+      })
+      .catch(() => apply([]));
+  }
+
+  function cancelMove() {
+    // A repo that isn't in the plan had a pane only for its picker.
+    if (move && !plan?.repos.some((r) => r.root === move.repo))
+      setPane(OUTSIDE);
+    setMove(null);
+  }
+
+  async function confirmMove() {
+    if (!move || move.busy) return;
+    const { file, repo: root } = move;
+    setMove({ ...move, busy: true, error: undefined });
+    try {
+      const res = await routerClient.moveFile(sessionId, {
+        path: file.path,
+        repo: root,
+        dir: move.dir.trim() || undefined,
+      });
+      const rel = res.path.startsWith(`${root}/`)
+        ? res.path.slice(root.length + 1)
+        : baseName(res.path);
+      setMoved((cur) => ({ ...cur, [root]: [...(cur[root] ?? []), rel] }));
+      setMove(null);
+      reloadAfterMove(root, rel);
+    } catch (err) {
+      setMove((m) =>
+        m && {
+          ...m,
+          busy: false,
+          error:
+            err instanceof MoveRefusedError
+              ? err.body.error
+              : err instanceof Error
+                ? err.message
+                : String(err),
+        },
+      );
+    }
+  }
+
+  // The plan again after a move: the target repo's files (joining the list
+  // if it had none) with the moved file checked, the outside files and move
+  // targets as they are now. Every other repo keeps its files, checks and
+  // message, as reloadRepo does.
+  function reloadAfterMove(root: string, rel: string) {
+    routerClient
+      .getCommitPlan(sessionId)
+      .then((p) => {
+        const fresh = p.repos.find((r) => r.root === root);
+        setPlan((cur) => {
+          if (!cur) return p;
+          const had = cur.repos.some((r) => r.root === root);
+          const repos = cur.repos.map((r) =>
+            r.root === root ? { ...r, files: fresh?.files ?? [] } : r,
+          );
+          if (fresh && !had) repos.push(fresh);
+          return { ...p, repos };
+        });
+        setDrafts((cur) => {
+          const d = cur[root];
+          if (d) {
+            const checked = new Set(d.checked).add(rel);
+            return { ...cur, [root]: { ...d, checked } };
+          }
+          return fresh ? { ...cur, [root]: freshDraft(fresh) } : cur;
+        });
+        setPane(root);
       })
       .catch(() => {});
   }
@@ -374,7 +543,28 @@ export function CommitDialog({
     onMessage: (message: string) => patch(repo.root, { message }),
     onDraft: () => void draft(repo),
     onOpenFile,
+    moved: moved[repo.root],
   });
+
+  const moveTargets = plan?.move_targets ?? [];
+  const busy = committing || Boolean(move?.busy);
+  const picker = move && (
+    <MovePicker
+      move={move}
+      onChange={(dir) =>
+        setMove((m) => m && { ...m, dir, touched: true, hi: 0, error: undefined })
+      }
+      onHighlight={(hi) => setMove((m) => m && { ...m, hi })}
+      onCancel={cancelMove}
+      onConfirm={() => void confirmMove()}
+    />
+  );
+  const outsideProps = {
+    files: outside,
+    targets: moveTargets,
+    disabled: busy,
+    onMoveTo: startMove,
+  };
 
   let body;
   if (loadError) {
@@ -386,7 +576,15 @@ export function CommitDialog({
   } else if (!plan) {
     body = <div className={styles.muted}>Reading this session's changes…</div>;
   } else if (outsideOnly) {
-    body = <OutsideList files={outside} />;
+    body = (
+      <>
+        {picker}
+        <OutsideList {...outsideProps} />
+        {moveTargets.length > 0 && (
+          <div className={styles.muted}>Use Move to… to put one in a repo.</div>
+        )}
+      </>
+    );
   } else if (nothing) {
     body = (
       <div className={styles.muted}>
@@ -400,15 +598,30 @@ export function CommitDialog({
     body = (
       <div className={styles.split}>
         <div className={styles.rlist} role="group" aria-label="Repos">
-          {repos.map((r) => (
-            <RepoItem
-              key={r.root}
-              repo={r}
-              draft={drafts[r.root]}
-              on={r.root === pane}
-              onSelect={() => setPane(r.root)}
-            />
-          ))}
+          {repos.map((r) => {
+            const file =
+              dragging && moveTargets.includes(r.root) ? dragging : null;
+            return (
+              <RepoItem
+                key={r.root}
+                repo={r}
+                draft={drafts[r.root]}
+                on={r.root === pane}
+                onSelect={() => setPane(r.root)}
+                drop={
+                  file
+                    ? {
+                        over: dropOver === r.root,
+                        onOver: () => setDropOver(r.root),
+                        onLeave: () =>
+                          setDropOver((o) => (o === r.root ? null : o)),
+                        onDrop: () => startMove(file, r.root),
+                      }
+                    : undefined
+                }
+              />
+            );
+          })}
           {outside.length > 0 && (
             <button
               type="button"
@@ -432,16 +645,38 @@ export function CommitDialog({
         </div>
         <div className={styles.rpane}>
           {current ? (
-            <RepoPane key={current.root} {...paneProps(current)} />
+            <>
+              {move?.repo === current.root && picker}
+              <RepoPane key={current.root} {...paneProps(current)} />
+            </>
+          ) : move && move.repo === pane ? (
+            // A repo with nothing uncommitted yet: just the picker.
+            <>
+              <div className={styles.paneHead}>
+                <span className={styles.paneName}>{repoName(move.repo)}</span>
+                <span className={styles.where} title={move.repo}>
+                  {displayPath(move.repo)}
+                </span>
+              </div>
+              {picker}
+            </>
           ) : (
             <>
               <div className={styles.paneHead}>
                 <span className={styles.paneName}>Not in a repo</span>
               </div>
-              <OutsideList files={outside} />
+              <OutsideList
+                {...outsideProps}
+                onDragStart={setDragging}
+                onDragEnd={() => {
+                  setDragging(null);
+                  setDropOver(null);
+                }}
+              />
               <div className={styles.muted}>
-                These can't be committed where they are. Moving them into a repo
-                comes next.
+                These can't be committed where they are.
+                {moveTargets.length > 0 &&
+                  " Drag one onto a repo on the left, or use Move to…"}
               </div>
             </>
           )}
@@ -532,11 +767,19 @@ function RepoItem({
   draft,
   on,
   onSelect,
+  drop,
 }: {
   repo: CommitPlanRepo;
   draft: RepoDraft | undefined;
   on: boolean;
   onSelect: () => void;
+  /** Set while a file is dragged that can move into this repo. */
+  drop?: {
+    over: boolean;
+    onOver: () => void;
+    onLeave: () => void;
+    onDrop: () => void;
+  };
 }) {
   const status = statusOf(repo, draft);
   const n = selectedPaths(repo, draft).length;
@@ -561,11 +804,33 @@ function RepoItem({
   return (
     <button
       type="button"
-      className={cx(styles.ritem, on && styles.ritemOn)}
+      className={cx(
+        styles.ritem,
+        on && styles.ritemOn,
+        drop && styles.ritemDroppable,
+        drop?.over && styles.ritemDrop,
+      )}
       aria-current={on || undefined}
       title={repo.root}
       data-status={status}
+      data-drop={drop ? (drop.over ? "over" : "target") : undefined}
       onClick={onSelect}
+      onDragOver={
+        drop &&
+        ((e: DragEvent) => {
+          e.preventDefault();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+          if (!drop.over) drop.onOver();
+        })
+      }
+      onDragLeave={drop?.onLeave}
+      onDrop={
+        drop &&
+        ((e: DragEvent) => {
+          e.preventDefault();
+          drop.onDrop();
+        })
+      }
     >
       <span className={styles.rtitle}>
         <span
@@ -591,6 +856,7 @@ function RepoPane({
   onMessage,
   onDraft,
   onOpenFile,
+  moved,
 }: {
   repo: CommitPlanRepo;
   draft: RepoDraft | undefined;
@@ -602,6 +868,8 @@ function RepoPane({
   onMessage: (message: string) => void;
   onDraft: () => void;
   onOpenFile?: (path: string) => void;
+  /** Files moved in from outside every repo while the dialog is open. */
+  moved?: string[];
 }) {
   if (!draft) return null;
   const name = repoName(repo.root);
@@ -658,6 +926,9 @@ function RepoPane({
                 <span className={styles.path}>{f.path}</span>
               )}
               {note && <span className={styles.note}>{note}</span>}
+              {moved?.includes(f.path) && (
+                <span className={styles.tagOk}>moved</span>
+              )}
               {!f.mine && <span className={styles.why}>{notMineNote(f)}</span>}
             </div>
           );
@@ -752,18 +1023,317 @@ function RepoPane({
   );
 }
 
-/** The files the session changed outside every repo: listed, never checkable. */
-function OutsideList({ files }: { files: CommitPlanOutside[] }) {
+/**
+ * The files the session changed outside every repo: never checkable, but
+ * each can move into a repo (D4) — dragged onto one in the repo list, or
+ * through its Move to… menu, the way without a mouse.
+ */
+function OutsideList({
+  files,
+  targets,
+  disabled,
+  onMoveTo,
+  onDragStart,
+  onDragEnd,
+}: {
+  files: CommitPlanOutside[];
+  /** CommitPlan.move_targets: none, and the rows only list. */
+  targets: string[];
+  disabled: boolean;
+  onMoveTo: (file: CommitPlanOutside, root: string) => void;
+  /** Set where there's a repo list to drop on. */
+  onDragStart?: (file: CommitPlanOutside) => void;
+  onDragEnd?: () => void;
+}) {
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const movable = targets.length > 0 && !disabled;
+  const draggable = movable && Boolean(onDragStart);
   return (
     <div className={styles.files} role="group" aria-label="Not in a repo">
       {files.map((f) => (
-        <div key={f.path} className={cx(styles.file, styles.outsideFile)}>
+        <div
+          key={f.path}
+          className={cx(styles.file, styles.outsideFile)}
+          draggable={draggable || undefined}
+          data-path={f.path}
+          onDragStart={
+            draggable
+              ? (e: DragEvent) => {
+                  e.dataTransfer?.setData("text/plain", f.path);
+                  if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+                  onDragStart?.(f);
+                }
+              : undefined
+          }
+          onDragEnd={draggable ? onDragEnd : undefined}
+        >
+          {draggable && (
+            <span
+              className={styles.grip}
+              title="Drag onto a repo on the left"
+              aria-hidden="true"
+            >
+              ⋮⋮
+            </span>
+          )}
           <KindMark kind={f.kind} />
           <span className={styles.path} title={f.path}>
             {displayPath(f.path)}
           </span>
+          {targets.length > 0 && (
+            <MoveToMenu
+              file={f}
+              targets={targets}
+              open={menuFor === f.path}
+              disabled={disabled}
+              onOpen={(o) => setMenuFor(o ? f.path : null)}
+              onPick={(root) => {
+                setMenuFor(null);
+                onMoveTo(f, root);
+              }}
+            />
+          )}
         </div>
       ))}
+    </div>
+  );
+}
+
+/** "Move to…" and its repo menu: arrow keys move, Enter picks, Escape closes. */
+function MoveToMenu({
+  file,
+  targets,
+  open,
+  disabled,
+  onOpen,
+  onPick,
+}: {
+  file: CommitPlanOutside;
+  targets: string[];
+  open: boolean;
+  disabled: boolean;
+  onOpen: (open: boolean) => void;
+  onPick: (root: string) => void;
+}) {
+  const menuId = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    menuRef.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+  }, [open]);
+
+  function close() {
+    onOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  function onMenuKey(e: ReactKeyboardEvent) {
+    const items = [
+      ...(menuRef.current?.querySelectorAll<HTMLElement>("[role=menuitem]") ??
+        []),
+    ];
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const d = e.key === "ArrowDown" ? 1 : -1;
+      items[(i + d + items.length) % items.length]?.focus();
+    } else if (e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      items[e.key === "Home" ? 0 : items.length - 1]?.focus();
+    } else if (e.key === "Escape" || e.key === "Tab") {
+      // The dialog closes on Escape; here it only closes the menu.
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      close();
+    }
+  }
+
+  return (
+    <span className={styles.moveTo}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={styles.linkbtn}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        aria-label={`Move ${baseName(file.path)} to…`}
+        disabled={disabled}
+        onClick={() => onOpen(!open)}
+      >
+        Move to…
+      </button>
+      {open && (
+        <div
+          ref={menuRef}
+          id={menuId}
+          role="menu"
+          aria-label={`Move ${baseName(file.path)} into`}
+          className={styles.menu}
+          onKeyDown={onMenuKey}
+          onBlur={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null))
+              onOpen(false);
+          }}
+        >
+          {targets.map((root) => (
+            <button
+              key={root}
+              type="button"
+              role="menuitem"
+              className={styles.menuItem}
+              onClick={() => onPick(root)}
+            >
+              {repoName(root)}
+              <span className={styles.menuWhere}>{displayPath(root)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+/**
+ * The folder picker at the top of a repo's pane (D4, mockup §1 "after the
+ * drop"): the repo's path, then a field for the folder inside it, with the
+ * repo's folders as suggestions — those already holding files like this one
+ * first. Moving happens on "Move here"; a refusal stays here, in the
+ * Router's words.
+ */
+function MovePicker({
+  move,
+  onChange,
+  onHighlight,
+  onCancel,
+  onConfirm,
+}: {
+  move: MoveState;
+  onChange: (dir: string) => void;
+  onHighlight: (hi: number) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const listId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const name = repoName(move.repo);
+  const ext = extOf(move.file.path);
+  const suggestions = (move.folders ?? [])
+    .filter((f) => f.path.startsWith(move.dir))
+    .slice(0, SUGGESTIONS);
+  const hi = Math.min(move.hi, suggestions.length - 1);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, [move.file.path, move.repo]);
+
+  function onKey(e: ReactKeyboardEvent<HTMLInputElement>) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (suggestions.length === 0) return;
+      const d = e.key === "ArrowDown" ? 1 : -1;
+      onHighlight((hi + d + suggestions.length) % suggestions.length);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      // Enter takes the highlighted folder; once the field holds it, Enter moves.
+      const pick = hi >= 0 ? suggestions[hi] : undefined;
+      if (pick && pick.path !== move.dir) onChange(pick.path);
+      else onConfirm();
+    } else if (e.key === "Escape") {
+      // The dialog closes on Escape; here it only closes the picker.
+      e.preventDefault();
+      e.stopPropagation();
+      onCancel();
+    }
+  }
+
+  return (
+    <div
+      className={cx(styles.moving, move.error && styles.movingBad)}
+      role="group"
+      aria-label={`Move ${baseName(move.file.path)} into ${name}`}
+      data-testid="move-picker"
+    >
+      <div className={styles.moveRow}>
+        <KindMark kind={move.file.kind} />
+        <span className={styles.mono}>{baseName(move.file.path)}</span>
+        <span className={styles.muted}>→ {name}</span>
+      </div>
+      <div className={styles.pathfield}>
+        <span className={styles.pathRoot}>{displayPath(move.repo)}/</span>
+        <input
+          ref={inputRef}
+          value={move.dir}
+          placeholder="the repo's top"
+          aria-label={`Folder in ${name}`}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={suggestions.length > 0}
+          aria-controls={listId}
+          aria-activedescendant={
+            hi >= 0 && suggestions[hi] ? `${listId}-${hi}` : undefined
+          }
+          disabled={move.busy}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={onKey}
+        />
+      </div>
+      {move.folders && suggestions.length > 0 && (
+        <ul id={listId} role="listbox" className={styles.suggest}>
+          {suggestions.map((f, i) => (
+            <li
+              key={f.path}
+              id={`${listId}-${i}`}
+              role="option"
+              aria-selected={i === hi}
+              className={cx(i === hi && styles.suggestHi)}
+              onMouseDown={(e) => e.preventDefault()}
+              onMouseEnter={() => onHighlight(i)}
+              onClick={() => {
+                onChange(f.path);
+                inputRef.current?.focus();
+              }}
+            >
+              {f.path}
+              {f.matches && ext ? (
+                <span className={styles.suggestNote}>
+                  {plural(f.matches, `${ext} file`)}
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+      {move.error && (
+        <div className={styles.moveError} role="alert">
+          {move.error}
+        </div>
+      )}
+      <div className={styles.muted}>
+        Moves it out of {displayPath(dirName(move.file.path))}. The agent is
+        told the new path.
+      </div>
+      <div className={styles.muted}>
+        This happens now, not on Commit — Cancel won't put it back.
+      </div>
+      <div className={styles.moveRow}>
+        <span className={styles.spacer} />
+        <Button variant="ghost" size="sm" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={move.busy}
+          onClick={onConfirm}
+        >
+          {move.busy ? "Moving…" : "Move here"}
+        </Button>
+      </div>
     </div>
   );
 }

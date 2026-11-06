@@ -408,3 +408,165 @@ button.path:hover {
   color: var(--text2);
   white-space: pre-wrap;
 }
+
+/* ---- moving a file into a repo (D4, mockup §1) ---- */
+
+/* A repo in the list that accepts the file being dragged, and the one under it. */
+.ritemDroppable {
+  outline: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: -1px;
+}
+
+.ritemDrop,
+.ritemDrop:hover {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--accent-soft);
+}
+
+.grip {
+  flex: none;
+  color: var(--text3);
+  letter-spacing: -2px;
+  cursor: grab;
+  user-select: none;
+}
+
+.outsideFile[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.moveTo {
+  position: relative;
+  flex: none;
+  font-family: var(--sans);
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg1);
+  box-shadow: var(--shadow);
+}
+
+.menuItem {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  font: var(--fs-sm) var(--mono);
+  text-align: left;
+  cursor: pointer;
+}
+
+.menuItem:hover,
+.menuItem:focus-visible {
+  background: var(--bg3);
+  outline: none;
+}
+
+.menuWhere {
+  color: var(--text3);
+  font: var(--fs-chip) var(--sans);
+}
+
+/* The folder picker at the top of the repo's pane. */
+.moving {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  background: var(--bg2);
+}
+
+.movingBad {
+  border-color: var(--bad);
+}
+
+.moveRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: var(--fs-sm);
+}
+
+.pathfield {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg0);
+  font: var(--fs-sm) var(--mono);
+}
+
+.pathfield:focus-within {
+  border-color: var(--accent);
+}
+
+.pathRoot {
+  flex: none;
+  padding: 3px 0 3px 8px;
+  color: var(--text3);
+}
+
+.pathfield input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 8px 3px 0;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+}
+
+.suggest {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg1);
+  font: var(--fs-sm) var(--mono);
+}
+
+.suggest li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 3px 10px;
+  color: var(--text2);
+  cursor: pointer;
+}
+
+.suggest li.suggestHi {
+  background: var(--bg3);
+  color: var(--text);
+}
+
+.suggestNote {
+  color: var(--text3);
+  font: var(--fs-chip) var(--sans);
+}
+
+.moveError {
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--bad-fg);
+}

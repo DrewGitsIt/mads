@@ -120,6 +120,9 @@ func TestMoveIntoRepo(t *testing.T) {
 		plan.Repos[0].Files[0] != (contracts.CommitPlanFile{Path: "docs/mockups/ux-mockup.html", Kind: "added", Mine: true}) {
 		t.Errorf("plan after the move = %+v, want the file in alpha as the session's", plan.Repos)
 	}
+	if len(plan.Outside) != 1 || filepath.Base(plan.Outside[0].Path) != "run.log" {
+		t.Errorf("outside after the move = %+v, want only run.log", plan.Outside)
+	}
 	rec, err := data.Session(ctx, sess.ID)
 	if err != nil {
 		t.Fatal(err)

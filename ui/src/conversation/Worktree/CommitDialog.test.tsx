@@ -262,7 +262,9 @@ describe("CommitDialog — several repos (D2, mockup §1 B)", () => {
 
     fireEvent.click(repoItem("Not in a repo"));
     expect(screen.getByText("~/repo/mads-ux-mockups-v2.html")).toBeTruthy();
-    expect(screen.getByText("These can't be committed where they are. Moving them into a repo comes next.")).toBeTruthy();
+    expect(
+      screen.getByText("These can't be committed where they are. Drag one onto a repo on the left, or use Move to…"),
+    ).toBeTruthy();
     expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
   });
 
@@ -389,5 +391,216 @@ describe("CommitDialog — nothing to commit", () => {
     open(client);
     expect(await screen.findByText(/Nothing left to commit/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+  });
+});
+
+describe("CommitDialog — moving a file into a repo (D4)", () => {
+  const MOCKUP = "/home/user/repo/mads-ux-mockups-v2.html";
+
+  function movePlan(): CommitPlan {
+    return { ...structuredClone(twoRepos), move_targets: [MADS, LEARN, "/home/user/repo/notes"] };
+  }
+
+  async function openOutside(client: FakeRouterClient) {
+    const utils = open(client);
+    await screen.findByText("ui/src/conversation/useRunway.ts");
+    fireEvent.click(repoItem("Not in a repo"));
+    return utils;
+  }
+
+  const outsideRow = (path: string) => document.querySelector<HTMLElement>(`[data-path="${path}"]`)!;
+  const picker = () => screen.getByTestId("move-picker");
+  const folderField = () => within(picker()).getByRole("combobox") as HTMLInputElement;
+
+  it("drags a file onto a repo in the list, which opens the picker in that repo's pane", async () => {
+    const client = new FakeRouterClient();
+    client.commitPlan = movePlan();
+    await openOutside(client);
+    const row = outsideRow(MOCKUP);
+    expect(row.getAttribute("draggable")).toBe("true");
+    expect(row.textContent).toContain("⋮⋮");
+
+    fireEvent.dragStart(row);
+    // Every repo in the list that takes moves is a drop target while dragging.
+    expect(repoItem("mads").getAttribute("data-drop")).toBe("target");
+    expect(repoItem("learnanywhere").getAttribute("data-drop")).toBe("target");
+    fireEvent.dragOver(repoItem("learnanywhere"));
+    expect(repoItem("learnanywhere").getAttribute("data-drop")).toBe("over");
+    fireEvent.drop(repoItem("learnanywhere"));
+
+    expect(repoItem("learnanywhere").getAttribute("aria-current")).toBe("true");
+    expect(repoItem("learnanywhere").getAttribute("data-drop")).toBeNull();
+    expect(within(picker()).getByText("mads-ux-mockups-v2.html")).toBeTruthy();
+    expect(picker().textContent).toContain("→ learnanywhere");
+    expect(picker().textContent).toContain("~/repo/learnanywhere/");
+    expect(picker().textContent).toContain("Moves it out of ~/repo. The agent is told the new path.");
+    expect(picker().textContent).toContain("This happens now, not on Commit — Cancel won't put it back.");
+    // The repo's own files are still below the picker.
+    expect(screen.getByText("ios/LearnAnywhere/Settings.swift")).toBeTruthy();
+    await waitFor(() => expect(client.moveFolderCalls).toEqual([{ sessionId: "session-isolated", repo: LEARN, ext: ".html" }]));
+  });
+
+  it("only accepts a drop on repos the file can move into", async () => {
+    const client = new FakeRouterClient();
+    client.commitPlan = { ...movePlan(), move_targets: [LEARN] };
+    await openOutside(client);
+    fireEvent.dragStart(outsideRow(MOCKUP));
+    expect(repoItem("mads").getAttribute("data-drop")).toBeNull();
+    fireEvent.drop(repoItem("mads"));
+    expect(screen.queryByTestId("move-picker")).toBeNull();
+    fireEvent.dragEnd(outsideRow(MOCKUP));
+    expect(repoItem("learnanywhere").getAttribute("data-drop")).toBeNull();
+  });
+
+  it("Move to… lists every move target and works from the keyboard, a repo not in the list included", async () => {
+    const client = new FakeRouterClient();
+    client.commitPlan = movePlan();
+    await openOutside(client);
+    const trigger = screen.getByRole("button", { name: "Move mads-ux-mockups-v2.html to…" });
+    fireEvent.click(trigger);
+    const menu = screen.getByRole("menu");
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items.map((i) => i.textContent)).toEqual([
+      "mads~/repo/mads",
+      "learnanywhere~/repo/learnanywhere",
+      "notes~/repo/notes",
+    ]);
+    await waitFor(() => expect(document.activeElement).toBe(items[0]));
+    fireEvent.keyDown(menu, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(items[2]);
+    // Escape closes the menu, not the dialog.
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+
+    fireEvent.click(trigger);
+    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: /^notes/ }));
+    // No uncommitted files there yet: a pane with just the picker.
+    expect(picker().textContent).toContain("→ notes");
+    expect(within(screen.getByRole("group", { name: "Repos" })).queryByRole("button", { name: /^notes/ })).toBeNull();
+    fireEvent.click(within(picker()).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByTestId("move-picker")).toBeNull();
+    expect(repoItem("Not in a repo").getAttribute("aria-current")).toBe("true");
+  });
+
+  it("suggests the repo's folders, fills in one already holding files like it, and filters as you type", async () => {
+    const client = new FakeRouterClient();
+    client.commitPlan = movePlan();
+    await openOutside(client);
+    fireEvent.click(screen.getByRole("button", { name: "Move mads-ux-mockups-v2.html to…" }));
+    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: /^mads/ }));
+    await waitFor(() => expect(folderField().value).toBe("docs/mockups/"));
+    let options = within(picker()).getAllByRole("option");
+    expect(options.map((o) => o.textContent)).toEqual(["docs/mockups/3 .html files"]);
+
+    fireEvent.change(folderField(), { target: { value: "" } });
+    options = within(picker()).getAllByRole("option");
+    expect(options).toHaveLength(5);
+    expect(options[0].getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.change(folderField(), { target: { value: "u" } });
+    expect(within(picker()).getAllByRole("option").map((o) => o.textContent)).toEqual(["ui/", "ui/src/"]);
+    fireEvent.keyDown(folderField(), { key: "ArrowDown" });
+    fireEvent.keyDown(folderField(), { key: "Enter" });
+    expect(folderField().value).toBe("ui/src/");
+    expect(client.moveCalls).toHaveLength(0);
+
+    fireEvent.change(folderField(), { target: { value: "do" } });
+    fireEvent.click(within(picker()).getByRole("option", { name: "docs/" }));
+    expect(folderField().value).toBe("docs/");
+    // Fetched once for the repo and extension.
+    expect(client.moveFolderCalls).toHaveLength(1);
+  });
+
+  it("leaves the field empty when no folder holds files like it", async () => {
+    const client = new FakeRouterClient();
+    client.commitPlan = movePlan();
+    client.moveFolders = [{ path: "docs/" }, { path: "ui/" }];
+    await openOutside(client);
+    fireEvent.click(screen.getByRole("button", { name: "Move mads-ux-mockups-v2.html to…" }));
+    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: /^mads/ }));
+    await waitFor(() => expect(within(picker()).getAllByRole("option")).toHaveLength(2));
+    expect(folderField().value).toBe("");
+  });
+
+  it("shows a refusal in the picker, in the Router's words, and keeps it open", async () => {
+    const client = new FakeRouterClient();
+    client.commitPlan = movePlan();
+    client.moveOutcome = {
+      code: "exists",
+      error: "docs/mockups/mads-ux-mockups-v2.html already exists: rename it, or pick another folder.",
+    };
+    await openOutside(client);
+    fireEvent.click(screen.getByRole("button", { name: "Move mads-ux-mockups-v2.html to…" }));
+    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: /^mads/ }));
+    await waitFor(() => expect(folderField().value).toBe("docs/mockups/"));
+    fireEvent.click(within(picker()).getByRole("button", { name: "Move here" }));
+    expect(
+      await within(picker()).findByText(
+        "docs/mockups/mads-ux-mockups-v2.html already exists: rename it, or pick another folder.",
+      ),
+    ).toBeTruthy();
+    expect(client.moveCalls[0].req).toEqual({ path: MOCKUP, repo: MADS, dir: "docs/mockups/" });
+    expect(folderField().value).toBe("docs/mockups/");
+    expect((within(picker()).getByRole("button", { name: "Move here" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("moves the file, reloads the plan with it checked and tagged, and keeps the other repos as they were", async () => {
+    const client = new FakeRouterClient();
+    client.commitPlan = movePlan();
+    await openOutside(client);
+    // The user's work in learnanywhere, before the move.
+    fireEvent.click(repoItem("learnanywhere"));
+    fireEvent.change(screen.getByLabelText("Commit message for learnanywhere"), { target: { value: "ios: settings" } });
+    fireEvent.click(screen.getByLabelText("Include ios/LearnAnywhere/SettingsTests.swift"));
+    // …and in mads: someone else's file checked.
+    fireEvent.click(repoItem("mads"));
+    fireEvent.click(screen.getByLabelText("Include README.md"));
+
+    fireEvent.click(repoItem("Not in a repo"));
+    fireEvent.click(screen.getByRole("button", { name: "Move mads-ux-mockups-v2.html to…" }));
+    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: /^mads/ }));
+    await waitFor(() => expect(folderField().value).toBe("docs/mockups/"));
+    const plans = client.commitPlanCalls.length;
+    fireEvent.keyDown(folderField(), { key: "Enter" });
+
+    const moved = await screen.findByLabelText("Include docs/mockups/mads-ux-mockups-v2.html");
+    expect(client.commitPlanCalls.length).toBe(plans + 1);
+    expect(screen.queryByTestId("move-picker")).toBeNull();
+    expect((moved as HTMLInputElement).checked).toBe(true);
+    expect(moved.parentElement!.textContent).toContain("moved");
+    expect(within(screen.getByRole("group", { name: "Changed by this session" })).getByText("docs/mockups/mads-ux-mockups-v2.html")).toBeTruthy();
+    expect((screen.getByLabelText("Include README.md") as HTMLInputElement).checked).toBe(true);
+    expect(repoItem("mads").getAttribute("aria-current")).toBe("true");
+    expect(repoItem("Not in a repo").textContent).toContain("1 file · can't commit");
+
+    fireEvent.click(repoItem("learnanywhere"));
+    expect((screen.getByLabelText("Commit message for learnanywhere") as HTMLTextAreaElement).value).toBe("ios: settings");
+    expect((screen.getByLabelText("Include ios/LearnAnywhere/SettingsTests.swift") as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("from the outside-only dialog, Move to… puts a file in a repo and the dialog becomes a Commit", async () => {
+    const client = new FakeRouterClient();
+    client.commitPlan = {
+      repos: [],
+      outside: [{ path: "/home/user/notes/plan.md", kind: "added" }],
+      move_targets: [MADS],
+    };
+    client.moveFolders = [{ path: "docs/", matches: 4 }];
+    const { onClose } = open(client);
+    expect(await screen.findByText("Use Move to… to put one in a repo.")).toBeTruthy();
+    // No repo list to drop on, so no dragging.
+    expect(outsideRow("/home/user/notes/plan.md").getAttribute("draggable")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Move plan.md to…" }));
+    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: /^mads/ }));
+    await waitFor(() => expect(folderField().value).toBe("docs/"));
+    expect(picker().textContent).toContain("Moves it out of ~/notes.");
+    fireEvent.click(within(picker()).getByRole("button", { name: "Move here" }));
+
+    expect(await screen.findByText("mads · as you")).toBeTruthy();
+    expect(screen.getByText("Commit this session's changes")).toBeTruthy();
+    expect((screen.getByLabelText("Include docs/plan.md") as HTMLInputElement).checked).toBe(true);
+    expect(commitButton().textContent).toBe("Commit 1 file");
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
