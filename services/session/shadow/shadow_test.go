@@ -510,3 +510,61 @@ func TestSymlinkedRootSharesOneIdentity(t *testing.T) {
 		t.Errorf("BaselineOriginal = %q, %v; want \"v1\\n\", true", original, ok)
 	}
 }
+
+// TestBaselineTakesPreImages: a first-touch baseline runs in the background
+// while the tool that triggered it writes, so `add -A` can read the edit.
+// The baseline must still be the state before the session touched each
+// file: the captured pre-image for an edited file, nothing for a created
+// one. Holding the root's tree lock makes the baseline run strictly after
+// the edits — the race as it happened in production, made deterministic.
+func TestBaselineTakesPreImages(t *testing.T) {
+	root := newRepo(t, map[string]string{"edited.txt": "before\n", "untouched.txt": "same\n"})
+	writeFile(t, filepath.Join(root, "dirty.txt"), "dirty before the session\n")
+	if err := os.Chmod(filepath.Join(root, "dirty.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := New(t.TempDir(), "ses_test")
+	t.Cleanup(s.Wait)
+
+	rs := s.rootState(root)
+	rs.mu.Lock() // the baseline Capture kicks off waits here
+	s.Capture("toolu_edit", filepath.Join(root, "edited.txt"))
+	writeFile(t, filepath.Join(root, "edited.txt"), "after\n")
+	s.Capture("toolu_dirty", filepath.Join(root, "dirty.txt"))
+	writeFile(t, filepath.Join(root, "dirty.txt"), "edited again\n")
+	s.Capture("toolu_new", filepath.Join(root, "created.txt"))
+	writeFile(t, filepath.Join(root, "created.txt"), "new\n")
+	rs.mu.Unlock()
+	s.Wait()
+
+	ctx := context.Background()
+	for rel, want := range map[string]string{
+		"edited.txt":    "before\n",
+		"dirty.txt":     "dirty before the session\n",
+		"untouched.txt": "same\n",
+		"created.txt":   "", // absent from the baseline
+	} {
+		if got, ok := BaselineOriginal(ctx, s.Dir(), root, rel); !ok || got != want {
+			t.Errorf("BaselineOriginal(%s) = (%q, %v), want (%q, true)", rel, got, ok, want)
+		}
+	}
+	gitDir := filepath.Join(s.Dir(), RootKey(root))
+	out, err := exec.Command("git", "--git-dir="+gitDir, "ls-tree", BaselineTag, "dirty.txt").Output()
+	if err != nil || !strings.HasPrefix(string(out), "100755 ") {
+		t.Errorf("dirty.txt baseline mode = %q (%v), want 100755", out, err)
+	}
+
+	// Sealed: a capture after the baseline changes nothing and holds nothing.
+	s.Capture("toolu_late", filepath.Join(root, "untouched.txt"))
+	writeFile(t, filepath.Join(root, "untouched.txt"), "changed later\n")
+	s.Wait()
+	if got, _ := BaselineOriginal(ctx, s.Dir(), root, "untouched.txt"); got != "same\n" {
+		t.Errorf("after a late capture, BaselineOriginal(untouched.txt) = %q, want unchanged", got)
+	}
+	rs.preMu.Lock()
+	held := len(rs.pre)
+	rs.preMu.Unlock()
+	if held != 0 {
+		t.Errorf("sealed root still holds %d pre-images", held)
+	}
+}

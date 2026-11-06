@@ -183,7 +183,61 @@ type rootState struct {
 	// concurrent-safe and captures must never wait behind a baseline.
 	mu        sync.Mutex
 	baselined bool // baseline commit exists (guarded by mu)
+
+	// pre holds the first captured pre-image of each path, by root-relative
+	// slash path, until the baseline commit is made. A first-touch baseline
+	// runs in the background while the tool that triggered it edits the
+	// file, so `add -A` can read the edited content; the baseline takes
+	// these pre-images instead. sealed stops collecting once the baseline
+	// has read them (or already existed). Guarded by preMu, never mu:
+	// captures must not wait behind a baseline.
+	preMu  sync.Mutex
+	pre    map[string]*preImage
+	sealed bool
 }
+
+// preImage is one path's captured pre-image, as far as the capture got.
+// done closes when the capture has finished, successfully or not.
+type preImage struct {
+	done       chan struct{}
+	blob       string // "" when missing, too large or failed
+	missing    bool   // the path didn't exist: the tool created it
+	executable bool
+}
+
+// notePreImage registers rel's first pre-image before the capture reads
+// it, so a baseline already past `add -A` knows to wait for it. nil when
+// rel already has one, or the baseline has sealed.
+func (rs *rootState) notePreImage(rel string) *preImage {
+	rs.preMu.Lock()
+	defer rs.preMu.Unlock()
+	if rs.sealed {
+		return nil
+	}
+	if _, ok := rs.pre[rel]; ok {
+		return nil
+	}
+	if rs.pre == nil {
+		rs.pre = map[string]*preImage{}
+	}
+	p := &preImage{done: make(chan struct{})}
+	rs.pre[rel] = p
+	return p
+}
+
+// sealPreImages stops collecting and hands back what was collected.
+func (rs *rootState) sealPreImages() map[string]*preImage {
+	rs.preMu.Lock()
+	defer rs.preMu.Unlock()
+	rs.sealed = true
+	out := rs.pre
+	rs.pre = nil
+	return out
+}
+
+// preImageWait bounds how long a baseline waits for a capture still
+// reading its file — a stat and a hash-object, normally a few ms.
+const preImageWait = 5 * time.Second
 
 // New builds the Store for sessionID under shadowRoot (the
 // $XDG_DATA_HOME/mads/shadow base — see DefaultRoot). The dir is made
@@ -272,13 +326,22 @@ func (s *Store) Capture(toolUseID, absPath string) {
 	// First-touch baseline for repo roots other than the provisioning-time
 	// primary — backgrounded, never on the hot path. No-op if already done.
 	// Not for a non-repo root: its "root" is just the file's directory,
-	// which can be ~ itself.
+	// which can be ~ itself. The pre-image is registered first, so a
+	// baseline (this one, or the provisioning one still running) takes it
+	// instead of whatever the tool has written by the time `add -A` looks.
+	var pre *preImage
 	if rs.repo {
+		if rel, err := filepath.Rel(root, abs); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			pre = rs.notePreImage(filepath.ToSlash(rel))
+		}
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
 			s.baselineRoot(rs)
 		}()
+	}
+	if pre != nil {
+		defer close(pre.done)
 	}
 
 	rec := Record{
@@ -293,6 +356,9 @@ func (s *Store) Capture(toolUseID, absPath string) {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		rec.Missing = true
+		if pre != nil {
+			pre.missing = true
+		}
 	case err != nil:
 		logf("shadow: stat %s: %v", abs, err)
 		return
@@ -306,6 +372,9 @@ func (s *Store) Capture(toolUseID, absPath string) {
 			return
 		}
 		rec.Blob = blob
+		if pre != nil {
+			pre.blob, pre.executable = blob, fi.Mode()&0o111 != 0
+		}
 	}
 	if err := s.appendRecord(rec); err != nil {
 		logf("shadow: append capture record: %v", err)
@@ -515,6 +584,7 @@ func (s *Store) baselineRoot(rs *rootState) {
 	}
 	// A previous process (bounce/resume) may have baselined already.
 	if s.git(gitTimeout, rs.gitDir, "", "rev-parse", "--quiet", "--verify", BaselineTag+"^{commit}") == nil {
+		rs.sealPreImages()
 		rs.baselined = true
 		return
 	}
@@ -522,6 +592,7 @@ func (s *Store) baselineRoot(rs *rootState) {
 		logf("shadow: baseline add in %s: %v", rs.path, err)
 		return
 	}
+	s.applyPreImages(rs, rs.sealPreImages())
 	// --allow-empty: an empty (or fully ignored) root still needs a
 	// baseline commit for the Router to diff against.
 	if err := s.git(baselineTimeout, rs.gitDir, rs.path,
@@ -534,6 +605,38 @@ func (s *Store) baselineRoot(rs *rootState) {
 		return
 	}
 	rs.baselined = true
+}
+
+// applyPreImages puts each captured pre-image into the baseline's index in
+// place of what `add -A` read from disk: the tool that triggered the
+// baseline may already have written its edit, and the baseline is the
+// state before the session touched the file. A path the tool created is
+// left out. A pre-image that's too large, failed, or doesn't arrive in
+// time keeps the disk version. Caller holds rs.mu.
+func (s *Store) applyPreImages(rs *rootState, pre map[string]*preImage) {
+	for rel, p := range pre {
+		select {
+		case <-p.done:
+		case <-time.After(preImageWait):
+			logf("shadow: baseline in %s: pre-image of %s didn't arrive; using the file on disk", rs.path, rel)
+			continue
+		}
+		switch {
+		case p.missing:
+			if err := s.git(gitTimeout, rs.gitDir, rs.path, "update-index", "--force-remove", "--", rel); err != nil {
+				logf("shadow: baseline in %s: drop created %s: %v", rs.path, rel, err)
+			}
+		case p.blob != "":
+			mode := "100644"
+			if p.executable {
+				mode = "100755"
+			}
+			if err := s.git(gitTimeout, rs.gitDir, rs.path,
+				"update-index", "--add", "--cacheinfo", mode+","+p.blob+","+rel); err != nil {
+				logf("shadow: baseline in %s: pre-image of %s: %v", rs.path, rel, err)
+			}
+		}
+	}
 }
 
 // commitRoot refreshes the index and commits if anything changed, returning
