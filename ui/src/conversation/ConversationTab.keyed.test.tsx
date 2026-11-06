@@ -50,6 +50,17 @@ function controlEnvelope(type: string, payload: unknown) {
   });
 }
 
+/** Control-plane envelopes delivered together, with no render between them. */
+function controlBatch(events: [type: string, payload: unknown][]) {
+  act(() => {
+    for (const [type, payload] of events) {
+      const source = FakeEventSource.instances.find((s) => s.url.includes(type));
+      expect(source).toBeTruthy();
+      source!.emit(type, JSON.stringify({ seq: nextSeq++, type, actor: "system", session_id: "session-active", payload }));
+    }
+  });
+}
+
 async function mount(client: FakeRouterClient) {
   render(<ConversationTab sessionId="session-active" routerClient={client} />);
   await waitFor(() => expect(client.v2Sources.length).toBeGreaterThan(0));
@@ -207,6 +218,45 @@ describe("ConversationTab — keyed conversation", () => {
     // No more pages: scrolling asks for nothing.
     fireEvent.scroll(stream());
     expect(getPage).toHaveBeenCalledTimes(2);
+  });
+
+  it("a turn the stream already ended stays ended when a stale working arrives with its end", async () => {
+    // A send the harness refuses at once (an expired login): the stream's
+    // turn_end lands before the control plane's working / turn_ended / idle,
+    // which then arrive in one batch.
+    const client = new FakeRouterClient();
+    const getPage = vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
+    const source = await mount(client);
+    act(() => {
+      source.hello();
+      source.replayEnd();
+    });
+    let user = "";
+    act(() => {
+      user = source.user("hello there");
+    });
+    getPage.mockResolvedValue(
+      page([
+        { role: "user", key: user, text: "hello there", timestamp: "2026-11-06T00:05:08Z" },
+        {
+          role: "agent",
+          key: "a1",
+          text: "Failed to authenticate: OAuth session expired",
+          is_error: true,
+          timestamp: "2026-11-06T00:05:08Z",
+        },
+      ]),
+    );
+    act(() => source.turnEnd());
+    const since = new Date().toISOString();
+    controlBatch([
+      ["session.agent_state", { state: "working", since }],
+      ["session.turn_ended", { delta: "…" }],
+      ["session.agent_state", { state: "idle", since }],
+    ]);
+
+    expect(screen.queryByRole("status", { name: "Working…" })).toBeNull();
+    await waitFor(() => expect(within(stream()).getByRole("button", { name: "Retry" })).toBeTruthy());
   });
 
   it("reads transcript pages only in the terminal view, again at each turn's end", async () => {

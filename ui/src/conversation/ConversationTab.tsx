@@ -930,6 +930,11 @@ export function ConversationTab({
           // own next frame is, being ordered.
           if (turnPhaseRef.current === "idle") {
             convDispatch({ type: "turn", turn: { active: true, startedAt: state.since || envelope.timestamp } });
+            // Live now, not at the next render: a stale working (one whose
+            // turn the stream already ended, as a send the harness refuses at
+            // once does) arrives with that turn's turn_ended and idle, often
+            // in the same batch, and they must see this turn to end it.
+            turnPhaseRef.current = "live";
           }
           setAgentSince(state.since || envelope.timestamp);
           // The stream's own tool/thinking frames keep the ticker current;
