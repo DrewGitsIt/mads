@@ -14,6 +14,7 @@ import (
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/data/datatest"
+	"github.com/drewkidwell/mads/services/session/shadow"
 )
 
 // shellScriptProvider plays one turn of shell calls: each step announces a
@@ -186,7 +187,105 @@ func TestNoShellTrackerForAnIsolatedSession(t *testing.T) {
 	if err := h.boot(); err != nil {
 		t.Fatal(err)
 	}
-	if h.runner.shell != nil {
-		t.Error("an isolated session started a shell tracker")
+	if h.runner.shell == nil || len(h.runner.shell.trackers) != 0 || h.runner.shell.exclude == "" {
+		t.Errorf("shell set = %+v, want no tracker and its worktree excluded", h.runner.shell)
+	}
+}
+
+// A session started in a plain folder (as one started in ~/repo by
+// accident) follows the repo its commands cd into: a script's edits there
+// reach the ledger as its own, the header counts them, and the repo's
+// shadow baseline holds the file as HEAD had it, not the script's edit.
+func TestShellFollowsANamedRepo(t *testing.T) {
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(parent, "mads")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initRepo(t, repo)
+	readme := filepath.Join(repo, "README.md")
+	head, err := os.ReadFile(readme)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prov := &shellScriptProvider{steps: []shellStep{
+		{id: "toolu_ls", command: "ls " + parent},
+		{id: "toolu_write", command: "cd " + repo + " && python3 - <<'EOF'\nopen('README.md','w').write('x')\nEOF", effect: func() {
+			if err := os.WriteFile(readme, []byte("rewritten by a script\n"), 0o644); err != nil {
+				t.Error(err)
+			}
+		}},
+		{id: "toolu_tmp", command: "echo hi > /tmp/mads-shell-test-scratch", effect: nil},
+	}}
+	reg := provider.NewRegistry()
+	if err := reg.Register(prov); err != nil {
+		t.Fatal(err)
+	}
+	base := datatest.Start(t)
+	sess := createSession(t, base, contracts.Session{
+		Name: "accidental", Provider: prov.Name(), Dir: parent, Isolation: contracts.IsolationCurrentDir,
+	})
+	data := dataclient.New(base, sess.ID)
+	r := New(sess.ID, data, reg)
+	r.WorktreeRoot = t.TempDir()
+	r.ShadowRoot = t.TempDir()
+	if err := r.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(context.Background()) })
+	if len(r.shell.trackers) != 0 {
+		t.Fatalf("trackers before any command = %d, want none for a plain folder", len(r.shell.trackers))
+	}
+
+	ch, unsub := r.Subscribe()
+	defer unsub()
+	if err := r.Send(context.Background(), "fix the readme"); err != nil {
+		t.Fatal(err)
+	}
+	drainText(t, ch)
+
+	deadline := time.Now().Add(10 * time.Second)
+	var rows []contracts.FileChange
+	for time.Now().Before(deadline) {
+		if rows, err = data.FileChanges(context.Background(), sess.ID); err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(rows) != 1 || rows[0].Path != readme || rows[0].Change != "modified" || !rows[0].Attributed {
+		t.Fatalf("ledger rows %+v, want README.md modified, the session's", rows)
+	}
+	r.shell.mu.Lock()
+	tracked := len(r.shell.trackers)
+	r.shell.mu.Unlock()
+	if tracked != 1 {
+		t.Errorf("trackers = %d, want just the named repo (not /tmp)", tracked)
+	}
+
+	for time.Now().Before(deadline) {
+		rec, err := data.Session(context.Background(), sess.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec.UncommittedCount == 1 && len(rec.Repos) == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if rec, _ := data.Session(context.Background(), sess.ID); rec.UncommittedCount != 1 {
+		t.Errorf("header counts %d, want the script's file", rec.UncommittedCount)
+	}
+
+	r.shadowStore.Wait()
+	got, ok := shadow.BaselineOriginal(context.Background(), r.shadowStore.Dir(), repo, "README.md")
+	if !ok || got != string(head) {
+		t.Errorf("baseline README.md = (%q, %v), want HEAD's %q", got, ok, head)
 	}
 }

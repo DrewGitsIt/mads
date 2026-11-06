@@ -31,6 +31,7 @@
 package shadow
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -303,6 +304,66 @@ func (s *Store) Baseline(root string) {
 		return
 	}
 	s.baselineRoot(rs)
+}
+
+// Before is a file's content before the session touched it, for
+// BaselineBefore: its bytes and mode, or Absent when it didn't exist.
+type Before struct {
+	Content    []byte
+	Executable bool
+	Absent     bool
+}
+
+// BaselineBefore baselines a repo root the session's shell changed before
+// any capture there (D7: the tracker finds the changes after the command
+// ran), taking before — root-relative slash paths, typically each changed
+// file as HEAD has it — in place of what `add -A` reads from disk for
+// those paths. A root already baselined, or not a repo, is left alone.
+// The baseline itself runs in the background, as Capture's does.
+func (s *Store) BaselineBefore(root string, before map[string]Before) {
+	if s == nil || root == "" {
+		return
+	}
+	root = RealPath(root)
+	if _, repo := s.lookupDir(root); !repo {
+		return
+	}
+	rs := s.rootState(root)
+	if rs == nil {
+		return
+	}
+	for rel, b := range before {
+		p := rs.notePreImage(rel)
+		if p == nil {
+			continue
+		}
+		if b.Absent {
+			p.missing = true
+		} else if blob, err := s.hashContent(rs.gitDir, b.Content); err != nil {
+			logf("shadow: hash pre-image of %s in %s: %v", rel, root, err)
+		} else {
+			p.blob, p.executable = blob, b.Executable
+		}
+		close(p.done)
+	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.baselineRoot(rs)
+	}()
+}
+
+// hashContent writes content into gitDir's object store as a blob.
+func (s *Store) hashContent(gitDir string, content []byte) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "--git-dir="+gitDir, "hash-object", "-w", "--stdin")
+	cmd.Stdin = bytes.NewReader(content)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // Capture records the pre-image of one mutating tool call: it reads absPath

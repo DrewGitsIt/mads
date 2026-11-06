@@ -568,3 +568,32 @@ func TestBaselineTakesPreImages(t *testing.T) {
 		t.Errorf("sealed root still holds %d pre-images", held)
 	}
 }
+
+// TestBaselineBefore: a repo first changed by a shell command is baselined
+// with the given before-content for the files that command changed, and
+// the disk for the rest; a root already baselined is left alone.
+func TestBaselineBefore(t *testing.T) {
+	root := newRepo(t, map[string]string{"edited.txt": "head\n", "other.txt": "same\n"})
+	writeFile(t, filepath.Join(root, "edited.txt"), "after shell\n")
+	writeFile(t, filepath.Join(root, "made.txt"), "new\n")
+	s := New(t.TempDir(), "ses_test")
+	t.Cleanup(s.Wait)
+
+	s.BaselineBefore(root, map[string]Before{
+		"edited.txt": {Content: []byte("head\n")},
+		"made.txt":   {Absent: true},
+	})
+	s.Wait()
+	ctx := context.Background()
+	for rel, want := range map[string]string{"edited.txt": "head\n", "made.txt": "", "other.txt": "same\n"} {
+		if got, ok := BaselineOriginal(ctx, s.Dir(), root, rel); !ok || got != want {
+			t.Errorf("BaselineOriginal(%s) = (%q, %v), want (%q, true)", rel, got, ok, want)
+		}
+	}
+
+	s.BaselineBefore(root, map[string]Before{"other.txt": {Absent: true}})
+	s.Wait()
+	if got, _ := BaselineOriginal(ctx, s.Dir(), root, "other.txt"); got != "same\n" {
+		t.Errorf("a second BaselineBefore changed the baseline: other.txt = %q", got)
+	}
+}

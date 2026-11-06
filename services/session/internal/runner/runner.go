@@ -34,7 +34,6 @@ import (
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
-	"github.com/drewkidwell/mads/services/session/internal/shellwatch"
 	"github.com/drewkidwell/mads/services/session/internal/synth"
 	"github.com/drewkidwell/mads/services/session/shadow"
 )
@@ -160,10 +159,11 @@ type Runner struct {
 	// inside is best-effort and can never block or fail the agent's turn.
 	shadowStore *shadow.Store
 
-	// shell finds the files the session's shell commands write, for a
-	// session working in place (shellfiles.go); nil otherwise. Set in Start
-	// before the pump runs and never after.
-	shell *shellwatch.Tracker
+	// shell finds the files the session's shell commands write
+	// (shellfiles.go): in its folder's repo when it works in place there,
+	// and in any other repo its commands name. Set in Start before the pump
+	// runs and never after.
+	shell *shellSet
 
 	synthEngine *synth.Engine // built in Start from sess.SynthesisMode; nil-safe no-op if off
 
