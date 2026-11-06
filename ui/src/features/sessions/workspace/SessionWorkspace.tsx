@@ -46,8 +46,8 @@ export interface SessionWorkspaceProps {
   /**
    * Sleep and wake this session. Not done here: both go through the one
    * controller the surface owns (useSessionSleep), which is what makes the
-   * kebab's "Sleep now" ask about unlanded commits exactly as the rail
-   * card's ⏸ does. Before that, this shell called terminate itself and the
+   * kebab's "Sleep now" ask about unlanded commits exactly as the rail's ✓
+   * (Done + sleep) does. Before that, this shell called terminate itself and the
    * question went unasked from the one place you were most likely to have
    * commits waiting.
    */

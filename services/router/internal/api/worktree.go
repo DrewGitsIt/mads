@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -66,14 +65,13 @@ func (s *server) worktreeRoute(w http.ResponseWriter, r *http.Request, live func
 		live(addr)
 		return
 	}
-	mu, _ := s.wakeLocks.LoadOrStore(id, &sync.Mutex{})
-	mu.(*sync.Mutex).Lock()
+	unlock := s.lockWake(id)
 	if addr, ok := s.sup.SessionAddr(id); ok {
-		mu.(*sync.Mutex).Unlock()
+		unlock()
 		live(addr)
 		return
 	}
-	defer mu.(*sync.Mutex).Unlock()
+	defer unlock()
 	direct()
 }
 

@@ -646,6 +646,13 @@ export interface Attribution {
   relation?: string;
   /** On a digest: the subject's transcript turn it covers, get_session_turns numbering. */
   turn?: number;
+  /**
+   * Rode along with the human's own send rather than arriving as a turn of
+   * its own: a held update attached to the message that woke its recipient
+   * (docs/HELD-UPDATES-DESIGN.md decision 6). The human's own row follows
+   * the last attached one, with no attribution.
+   */
+  attached?: boolean;
 }
 
 export type AttributionKind = "message" | "digest" | "signal" | "notice";
@@ -729,6 +736,31 @@ export type LinkCadence = "per_turn" | "on_signal" | "manual_only";
 // never sent in a LinkRequest. Empty ("" — omitted from Link.orchestrate_status
 // when the link carries no orchestrate grant) reads the same as absent.
 export type OrchestrateStatus = "pending_restart" | "active" | "unsupported" | "failed";
+
+// mirrors pkg/contracts/link.go HeldUpdate — one push deferred for a
+// sleeping session, as the conversation's held list shows it
+// (docs/HELD-UPDATES-DESIGN.md). source_name is the stored attribution's,
+// else the subject session's current name.
+export interface HeldUpdate {
+  id: number;
+  link_id: string;
+  source_session_id: string;
+  source_name: string;
+  /** The stored attribution's kind; absent when the entry carried none. */
+  kind?: AttributionKind;
+  text: string;
+  created_at: string; // RFC3339
+  noop: boolean;
+}
+
+// mirrors pkg/contracts/link.go HeldUpdates: GET /sessions/{id}/held-updates.
+// Both lists oldest first, never null. `discarded` is what the user
+// discarded since the session's last deferred drain (Undo can restore it);
+// the next send clears it.
+export interface HeldUpdates {
+  held: HeldUpdate[];
+  discarded: HeldUpdate[];
+}
 
 // mirrors pkg/contracts/link.go Link
 export interface Link {

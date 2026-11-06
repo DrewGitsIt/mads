@@ -244,6 +244,13 @@ type Attribution struct {
 	// Turn is, on a digest, the subject session's transcript turn the digest
 	// covers up to (get_session_turns' 1-based turn model); 0 when unknown.
 	Turn int `json:"turn,omitempty"`
+	// Attached marks a message that rode along with the human's own send
+	// rather than being delivered as a turn of its own: a held link update
+	// attached to the message that woke its recipient
+	// (docs/HELD-UPDATES-DESIGN.md decision 6). On the wire it is the
+	// wrapper's attached="true"; the human's text follows the last attached
+	// block, unwrapped.
+	Attached bool `json:"attached,omitempty"`
 }
 
 // InjectRequest is the body of POST /inject (session-service) and

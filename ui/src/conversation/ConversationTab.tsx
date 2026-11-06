@@ -95,6 +95,9 @@ import { useOlderPages } from "./useOlderPages";
 import { FindBar, useFindBar } from "./Find/FindBar";
 import { useVisibleCards } from "./useVisibleCards";
 import { useDelegateFile } from "./activity/useDelegateFile";
+import { HeldUpdates } from "./HeldUpdates/HeldUpdates";
+import { useHeldUpdates } from "./HeldUpdates/useHeldUpdates";
+import { sourceNames, updatesNoun } from "./HeldUpdates/heldText";
 import styles from "./ConversationTab.module.css";
 
 // When the user last dismissed this session's compaction banner — lets a
@@ -538,6 +541,44 @@ export function ConversationTab({
   const refetchSession = useCallback(() => {
     void routerClient.getSession(sessionId).then(setSession);
   }, [routerClient, sessionId]);
+
+  // Link updates held while the session slept (docs/HELD-UPDATES-DESIGN.md):
+  // listed at the end of the stream, shown as a chip in the composer, and
+  // carried by the next send (the Router attaches them). Discarding offers
+  // Undo in a toast; "Send updates only" delivers them as a turn of their own.
+  const held = useHeldUpdates(routerClient, sessionId, {
+    waiting: session?.waiting_updates ?? 0,
+  });
+  const [heldToast, setHeldToast] = useState<{ tone: "neutral" | "bad"; title: string; description?: string; undo?: number[] }>();
+  const [deliveringHeld, setDeliveringHeld] = useState(false);
+  const { discard: discardHeldIds, restore: restoreHeldIds } = held;
+  const discardHeld = useCallback(
+    (ids: number[]) => {
+      if (ids.length === 0) return;
+      setHeldToast({ tone: "neutral", title: `Discarded ${updatesNoun(ids.length)}`, undo: ids });
+      discardHeldIds(ids).catch((err: unknown) =>
+        setHeldToast({
+          tone: "bad",
+          title: "Couldn't discard the updates",
+          description: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    },
+    [discardHeldIds],
+  );
+  const restoreHeld = useCallback(
+    (ids: number[]) => {
+      setHeldToast(undefined);
+      restoreHeldIds(ids).catch((err: unknown) =>
+        setHeldToast({
+          tone: "bad",
+          title: "Couldn't restore the updates",
+          description: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    },
+    [restoreHeldIds],
+  );
 
   // Persists a model change and reconfigures the running agent
   // (POST /sessions/{id}/model). Resolves the child's queued flag: true means
@@ -1371,6 +1412,8 @@ export function ConversationTab({
   const noteSent = () => {
     setWaking(false);
     optimisticTurn.current = false;
+    // A send to a sleeping session took whatever was held with it.
+    held.refetch();
   };
   // Resends the transcript's text verbatim: any attachment paths the Router
   // appended the first time are already in it, so the agent gets the same
@@ -1386,6 +1429,53 @@ export function ConversationTab({
       noteSendError(err instanceof Error ? err.message : String(err));
     }
   };
+  // "Send updates only": wakes a sleeping session within the request, as a
+  // send does (the same "Waking the agent…" line, the same wake errors); the
+  // turn then arrives over the stream like any other. The tail follows it.
+  const deliverHeld = async () => {
+    setDeliveringHeld(true);
+    if (session.activity !== "active") setWaking(true);
+    stick.follow();
+    try {
+      await routerClient.deliverHeldUpdates(sessionId);
+    } catch (err) {
+      setHeldToast({
+        tone: "bad",
+        title: "Couldn't send the updates",
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setWaking(false);
+      setDeliveringHeld(false);
+      held.refetch();
+    }
+  };
+  // The rail's "N updates waiting" (heldRevealSignal): the list is the
+  // stream's tail, so a reader scrolled up is taken back down to it; one
+  // too tall to show whole is shown from its top.
+  const revealHeld = (el: HTMLElement) => {
+    const scroller = streamRef.current;
+    if (!scroller) return;
+    if (el.getBoundingClientRect().top < scroller.getBoundingClientRect().top) {
+      stick.release();
+      el.scrollIntoView?.({ block: "start", behavior: "smooth" });
+    } else {
+      stick.follow();
+    }
+  };
+  const heldTail = (
+    <HeldUpdates
+      sessionId={sessionId}
+      held={held.held}
+      discarded={held.discarded}
+      onDiscard={discardHeld}
+      onRestore={restoreHeld}
+      onDeliver={() => void deliverHeld()}
+      delivering={deliveringHeld}
+      onReveal={revealHeld}
+    />
+  );
+
   // The session dock's props, shared by both views (chat mounts the composer
   // inside it; terminal adds the compose segment and sheet).
   const dockProps = {
@@ -1499,6 +1589,7 @@ export function ConversationTab({
                       {livePermissionRequests.map((req) => (
                         <PermissionCard key={req.id} request={req} onResolve={resolvePermission} />
                       ))}
+                      {heldTail}
                     </>
                   ) : (
                     <ChatRenderer
@@ -1540,6 +1631,7 @@ export function ConversationTab({
                       }
                       find={find.request}
                       onFindStatus={find.onStatus}
+                      tail={heldTail}
                     />
                   )}
                   {transport.status !== "idle" && (
@@ -1682,6 +1774,15 @@ export function ConversationTab({
                     onCompactSession={compaction.compacts ? (i) => void handleCompactNow(i) : undefined}
                     onQueued={noteQueued}
                     onSent={noteSent}
+                    held={
+                      held.held.length > 0
+                        ? {
+                            count: held.held.length,
+                            sources: sourceNames(held.held),
+                            onDiscardAll: () => discardHeld(held.held.map((u) => u.id)),
+                          }
+                        : undefined
+                    }
                   />
                 </SessionDock>
               </>
@@ -1790,6 +1891,16 @@ export function ConversationTab({
               title="Couldn't send your message"
               description={sendError}
               onDismiss={() => setSendError(undefined)}
+            />
+          )}
+
+          {heldToast && (
+            <Toast
+              tone={heldToast.tone}
+              title={heldToast.title}
+              description={heldToast.description}
+              action={heldToast.undo ? { label: "Undo", onClick: () => restoreHeld(heldToast.undo!) } : undefined}
+              onDismiss={() => setHeldToast(undefined)}
             />
           )}
 

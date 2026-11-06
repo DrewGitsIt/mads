@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ChatRenderer } from "../ChatRenderer/ChatRenderer";
+import { HeldUpdates } from "../HeldUpdates/HeldUpdates";
 import type { TranscriptMessage } from "../../router/types";
 import type { FindRequest, FindStatus } from "./useFind";
 import type { KeyedRow } from "../keyed/conversation";
@@ -132,5 +133,37 @@ describe("find in conversation", () => {
     f.set({ query: "" });
     expect(f.status()).toEqual({ count: 0, current: -1, ticks: [], currentTick: -1 });
     expect(screen.queryByLabelText("2 matches")).toBeNull();
+  });
+
+  it("searches the held updates list at the stream's tail, but not its times or buttons", () => {
+    const onStatus = vi.fn<(s: FindStatus) => void>();
+    const held = [1, 2].map((id) => ({
+      id,
+      link_id: "lnk_1",
+      source_session_id: "src",
+      source_name: "Pipeline study",
+      text: `arm ${id} worktree done`,
+      created_at: "2026-11-05T13:54:00Z",
+      noop: true,
+    }));
+    render(
+      <ChatRenderer
+        rows={keyed(messages)}
+        find={{ query: "worktree", matchCase: false, skipTools: false, step: 0, dir: 1 }}
+        onFindStatus={onStatus}
+        tail={
+          <HeldUpdates
+            sessionId="s1"
+            held={held}
+            discarded={[]}
+            onDiscard={() => {}}
+            onRestore={() => {}}
+            onDeliver={() => {}}
+          />
+        }
+      />,
+    );
+    // The transcript's 4, then one per held row.
+    expect(onStatus.mock.calls.at(-1)?.[0]).toMatchObject({ count: 6 });
   });
 });

@@ -110,8 +110,8 @@ test("sessions journey: sleep, wake affordance, delete", async ({ page, routerUR
   // instead of being hidden (discovery beats minimalism).
   // Scoped to the open menu's own list: other sessions elsewhere on the page
   // (created by e2e tests running in parallel against the same backend) also
-  // render "Sleep ..." rail affordances, which an unscoped substring/regex
-  // query would also match.
+  // render their own buttons (and, once, a "Sleep ..." rail affordance), which
+  // an unscoped substring/regex query could also match.
   const kebabList = page.getByRole("list");
   await expect(page.getByRole("button", { name: "Sleep now", exact: true })).toBeEnabled();
   // Delete is NOT disabled here any more: the router terminates the session as
@@ -140,11 +140,11 @@ test("sessions journey: sleep, wake affordance, delete", async ({ page, routerUR
   await page.getByRole("button", { name: "Sleep now", exact: true }).click();
 
   // Rail repaints live, no reload, scoped to THIS card, which other e2e tests
-  // running in parallel against the same backend cannot disturb. Asleep and
-  // awake both read "Idle" on the card, so the list's own belief is read off
-  // its data-activity.
+  // running in parallel against the same backend cannot disturb. The list's
+  // own belief is read off its data-activity, and the status line says it:
+  // asleep reads "Sleeping" where awake reads "Idle".
   await expect(sessionCard).toHaveAttribute("data-activity", "inactive");
-  await expect(sessionCard.getByRole("status")).toContainText("Idle");
+  await expect(sessionCard.getByRole("status")).toContainText("Sleeping");
   await page.getByLabel("Workspace actions").click();
   await expect(page.getByRole("button", { name: "Wake now", exact: true })).toBeEnabled();
   // Sleep stays enabled even while inactive ("honest Close", 495afa4): the
@@ -288,8 +288,8 @@ test("sessions journey: sleep survives an out-of-order rail refetch", async ({ p
 
   // Release batch B (later-issued, correct) first...
   for (let i = batchABoundary; i < batchBBoundary; i++) await held[i].fulfill();
-  // "Went inactive" is read off this card's data-activity: its status line
-  // reads "Idle" asleep or awake, so it can't show the stale snapshot winning.
+  // "Went inactive" is read off this card's data-activity, the list's own
+  // belief, rather than its status line text.
   const sessionCard = sessionRow.locator('xpath=ancestor::div[@role="button"][1]');
   await expect(sessionCard).toHaveAttribute("data-activity", "inactive");
 

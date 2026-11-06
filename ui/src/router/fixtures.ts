@@ -3,6 +3,8 @@ import { EVENTS_BATCH_LIMIT } from "./eventPages";
 import { CommitRefusedError, RouterValidationError } from "./client";
 import type {
   Attachment,
+  HeldUpdate,
+  HeldUpdates,
   Delegate,
   DelegateTranscript,
   DelegateState,
@@ -1135,6 +1137,50 @@ export class FakeRouterClient implements RouterClient {
     for (const [id, auth] of this.sessionAuth) {
       if (auth.account === account) this.sessionAuth.set(id, { ...auth, signed_out: false });
     }
+  }
+
+  /**
+   * The link mailbox's held updates, by recipient session id — tests set
+   * entries directly. Discard and restore move entries between the lists
+   * (by id, across every session); deliver empties both, as a deferred
+   * drain does.
+   */
+  readonly heldUpdates = new Map<string, HeldUpdates>();
+  /** Every deliverHeldUpdates call's session id, in call order. */
+  readonly deliveredHeld: string[] = [];
+
+  async getHeldUpdates(sessionId: string): Promise<HeldUpdates> {
+    return structuredClone(this.heldUpdates.get(sessionId) ?? { held: [], discarded: [] });
+  }
+
+  private moveHeld(ids: number[], discard: boolean): number {
+    let changed = 0;
+    for (const [id, h] of this.heldUpdates) {
+      const [from, to] = discard ? [h.held, h.discarded] : [h.discarded, h.held];
+      const moved = from.filter((u) => ids.includes(u.id));
+      if (moved.length === 0) continue;
+      changed += moved.length;
+      const byAge = (a: HeldUpdate, b: HeldUpdate) => a.created_at.localeCompare(b.created_at) || a.id - b.id;
+      const rest = from.filter((u) => !ids.includes(u.id));
+      const next = [...to, ...moved].sort(byAge);
+      this.heldUpdates.set(id, discard ? { held: rest, discarded: next } : { held: next, discarded: rest });
+    }
+    return changed;
+  }
+
+  async discardHeldUpdates(ids: number[]): Promise<number> {
+    return this.moveHeld(ids, true);
+  }
+
+  async restoreHeldUpdates(ids: number[]): Promise<number> {
+    return this.moveHeld(ids, false);
+  }
+
+  async deliverHeldUpdates(sessionId: string): Promise<number> {
+    this.deliveredHeld.push(sessionId);
+    const n = this.heldUpdates.get(sessionId)?.held.length ?? 0;
+    this.heldUpdates.delete(sessionId);
+    return n;
   }
 
   /** Reports getSessionReport serves, by session id — tests set entries directly. */

@@ -81,13 +81,19 @@ func main() {
 	// service's POST /messages "accepted" contract closely enough for
 	// router-level proxy tests (TestSessionMessagesForwarding) without
 	// needing the real runner/provider stack.
+	// X-Testchild-Status makes it answer that status instead, for tests of
+	// a refused send (the Router re-queues held updates it attached).
 	mux.HandleFunc("POST /messages", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		w.WriteHeader(http.StatusAccepted)
+		status := http.StatusAccepted
+		if v, err := strconv.Atoi(r.Header.Get("X-Testchild-Status")); err == nil {
+			status = v
+		}
+		w.WriteHeader(status)
 		_, _ = w.Write(body)
 	})
 	mux.HandleFunc("POST /interrupt", func(w http.ResponseWriter, r *http.Request) {

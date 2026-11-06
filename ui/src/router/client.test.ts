@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CommitRefusedError, FetchRouterClient, RouterValidationError } from "./client";
+import { CommitRefusedError, FetchRouterClient, RouterValidationError, SessionWakeError } from "./client";
 import type { Agent } from "./types";
 
 function mockFetchOnce(body: unknown, ok = true, status = 200) {
@@ -449,5 +449,65 @@ describe("FetchRouterClient — typed methods built on the private transport hel
       expect.objectContaining({ method: "DELETE" }),
     );
     expect(result).toEqual({ status: "deleted" });
+  });
+});
+
+describe("FetchRouterClient — held link updates", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("getHeldUpdates reads /sessions/:id/held-updates, defaulting absent lists to empty", async () => {
+    const update = {
+      id: 7,
+      link_id: "lnk_1",
+      source_session_id: "s2",
+      source_name: "Pipeline study",
+      kind: "digest",
+      text: "arm A done",
+      created_at: "2026-11-05T13:54:00Z",
+      noop: true,
+    };
+    const fetchMock = mockFetchOnce({ held: [update] });
+    const client = new FetchRouterClient("http://router.local");
+    const res = await client.getHeldUpdates("s1");
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/held-updates");
+    expect(res).toEqual({ held: [update], discarded: [] });
+  });
+
+  it("discardHeldUpdates and restoreHeldUpdates POST the ids and resolve how many changed", async () => {
+    const fetchMock = mockFetchOnce({ changed: 2 });
+    const client = new FetchRouterClient("http://router.local");
+    expect(await client.discardHeldUpdates([1, 2])).toBe(2);
+    expect(await client.restoreHeldUpdates([3])).toBe(2);
+    expect(fetchMock.mock.calls.map(([url, init]) => [url, (init as RequestInit).method, (init as RequestInit).body])).toEqual([
+      ["http://router.local/link-digests/discard", "POST", JSON.stringify({ ids: [1, 2] })],
+      ["http://router.local/link-digests/restore", "POST", JSON.stringify({ ids: [3] })],
+    ]);
+  });
+
+  it("deliverHeldUpdates POSTs .../held-updates/deliver and resolves the delivered count", async () => {
+    const fetchMock = mockFetchOnce({ delivered: 5 }, true, 202);
+    const client = new FetchRouterClient("http://router.local");
+    expect(await client.deliverHeldUpdates("s1")).toBe(5);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/held-updates/deliver",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("deliverHeldUpdates throws a failed wake as SessionWakeError, like sendMessage", async () => {
+    mockFetchOnce({ error: "no such provider", code: "provider_missing", retryable: false }, false, 400);
+    const client = new FetchRouterClient("http://router.local");
+    const err = await client.deliverHeldUpdates("s1").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SessionWakeError);
+    expect((err as SessionWakeError).code).toBe("provider_missing");
+    expect((err as Error).message).toBe("no such provider");
+  });
+
+  it("deliverHeldUpdates throws a plain error for any other failure", async () => {
+    mockFetchOnce({ error: "gone" }, false, 404);
+    const client = new FetchRouterClient("http://router.local");
+    await expect(client.deliverHeldUpdates("s1")).rejects.toThrow(/404/);
   });
 });

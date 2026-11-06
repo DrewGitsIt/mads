@@ -339,6 +339,15 @@ const (
 	// the message was delivered into); Actor is stamped "link-<id>", not
 	// the granting session's own actor identity.
 	LinkMessageInjected EventType = "link.message_injected"
+	// LinkDigestDiscarded fires when the user discards held link updates
+	// (docs/HELD-UPDATES-DESIGN.md decision 9) — the long-term audit of a
+	// soft delete the store purges. Payload: {"ids": []int64}. Envelope
+	// SessionID is the recipient (granting) session; one event per session
+	// the ids touched.
+	LinkDigestDiscarded EventType = "link.digest_discarded"
+	// LinkDigestRestored fires when discarded held updates are restored
+	// (Undo). Same payload and SessionID as LinkDigestDiscarded.
+	LinkDigestRestored EventType = "link.digest_restored"
 	// TurnEnded fires when a session's agent completes a turn with non-empty
 	// activity (docs/LINKED-SESSIONS-DESIGN.md decision 4) — the trigger the
 	// Router's digest watcher subscribes to in order to compress and push a
@@ -524,7 +533,7 @@ var EventTypes = []EventType{
 	CapabilityCreated, CapabilityUpdated, CapabilityDeleted, CapabilityHealthChanged,
 	AgentCreated, AgentUpdated, AgentDeleted, AgentSelected, AgentOutcomeRecorded, AgentDraftGenerated,
 	WorkspaceCreated, WorkspaceUpdated, WorkspaceDeleted,
-	LinkCreated, LinkUpdated, LinkDeleted, LinkMessageInjected, TurnEnded,
+	LinkCreated, LinkUpdated, LinkDeleted, LinkMessageInjected, LinkDigestDiscarded, LinkDigestRestored, TurnEnded,
 	TemplateCreated, TemplateUpdated, TemplateDeleted,
 	ProfileCreated, ProfileUpdated, ProfileDeleted, ConfigUpdated,
 	AttachmentAdded, AccountAuthChanged,

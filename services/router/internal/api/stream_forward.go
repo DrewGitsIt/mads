@@ -51,6 +51,13 @@ func (s *server) handlePipelineOutput(w http.ResponseWriter, r *http.Request) {
 // if no child is tracked, it first wakes the session (see ensureSession,
 // sessions.go) rather than 404ing — a composer send should never surface
 // "session not running" to the UI.
+//
+// A send that wakes the session carries the updates held for it while it
+// slept (docs/HELD-UPDATES-DESIGN.md decisions 5-8): sendWaking drains them
+// before the wake, so the start hook's FlushDeferred finds nothing, and
+// forwards them as the body's "attached" parts. A send to an awake session
+// is forwarded unchanged. Either way the Router alone decides what is
+// attached: a client's own "attached" field is dropped.
 func (s *server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	// Before the wake: a send naming a missing attachment fails fast
@@ -58,10 +65,26 @@ func (s *server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	if !s.resolveMessageAttachments(w, r, id) {
 		return
 	}
-	addr, err := s.ensureSession(r.Context(), id)
-	if err != nil {
-		writeWakeError(w, err)
+	body, ok := s.messageBody(w, r)
+	if !ok {
 		return
+	}
+	unlock := s.lockWake(id)
+	addr, tracked := s.sup.SessionAddr(id)
+	if !tracked {
+		// Held across the drain, the wake and the forward, so a concurrent
+		// wake (a signal job) can neither spawn a second child nor slip its
+		// own turn in ahead of this one.
+		defer unlock()
+		s.sendWaking(w, r, id, body)
+		return
+	}
+	unlock()
+	if _, forged := body["attached"]; forged {
+		delete(body, "attached")
+		if !setMessageBody(w, r, body) {
+			return
+		}
 	}
 	s.clearAsideOnSend(r.Context(), id)
 	s.proxyTo(w, r, addr, "/messages")

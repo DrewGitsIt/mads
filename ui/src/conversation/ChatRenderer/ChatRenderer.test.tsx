@@ -397,7 +397,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
         viewedSessionId="leader-id"
       />,
     );
-    expect(screen.getByText(/1 update from your pipeline run · no action needed/)).toBeTruthy();
+    expect(screen.getByText(/1 earlier update from your pipeline run · no action needed/)).toBeTruthy();
     expect(screen.queryByText("NOOP")).toBeNull();
   });
 
@@ -415,7 +415,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
         viewedSessionId="leader-id"
       />,
     );
-    expect(screen.getByText(/2 updates from payments refactor · no action needed/)).toBeTruthy();
+    expect(screen.getByText(/2 earlier updates from payments refactor · no action needed/)).toBeTruthy();
     expect(screen.queryByText("first of the run")).toBeNull();
     expect(screen.queryByText("NOOP")).toBeNull();
   });
@@ -442,6 +442,91 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     expect(screen.queryByText("NOOP")).toBeNull();
   });
 
+  describe("held updates attached to a send", () => {
+    const attached = (key: string, text: string, source = "payments refactor"): TranscriptMessage => ({
+      key,
+      role: "user",
+      text,
+      attribution: { source_name: source, kind: "digest", digest_attributed: true, attached: true },
+    });
+    const sent = (): TranscriptMessage[] => [
+      attached("u1#0", "[turn 3] Arm A complete\n\nArm U at **50%**"),
+      attached("u1#1", "[turn 4] Both arms missed the cap"),
+      { key: "u1#2", role: "user", text: "What's the fallback?" },
+    ];
+
+    it("render as one user bubble with a collapsed strip above the text", () => {
+      FLAGS.linkedSessions = true;
+      render(<ChatRenderer rows={keyed([...sent(), { role: "agent", text: "Distill it." }])} />);
+      // One send, one user message: the hop-between-my-messages anchors count it once.
+      const bubbles = document.querySelectorAll("[data-user-msg]");
+      expect(bubbles).toHaveLength(1);
+      expect(bubbles[0].getAttribute("data-find")).toBe("u1#2");
+      const strip = within(bubbles[0] as HTMLElement).getByRole("button", { name: /2 updates attached/ });
+      expect(strip.textContent).toBe("▸ ⌗ 2 updates attached · payments refactor");
+      expect(strip.getAttribute("aria-expanded")).toBe("false");
+      expect(within(bubbles[0] as HTMLElement).getByText("What's the fallback?")).toBeTruthy();
+      // No digest cards for them, and nothing of theirs shows until opened.
+      expect(screen.queryByText(/⌗ digest/)).toBeNull();
+      expect(screen.queryByText(/Arm A complete/)).toBeNull();
+    });
+
+    it("opens to a line per update, and a line to its full text", () => {
+      render(<ChatRenderer rows={keyed(sent())} />);
+      fireEvent.click(screen.getByRole("button", { name: /2 updates attached/ }));
+      const line = screen.getByRole("button", { name: /Arm A complete/ });
+      expect(line.textContent).toBe("▸Arm A complete");
+      expect(screen.getByRole("button", { name: /Both arms missed the cap/ })).toBeTruthy();
+      // Each line is findable by its own row key; the strip is not part of the bubble's text.
+      expect(document.querySelector("[data-find='u1#0']")?.textContent).toBe("Arm A complete");
+      expect(document.querySelector("[data-attached-updates]")?.hasAttribute("data-find-skip")).toBe(true);
+      fireEvent.click(line);
+      expect(screen.getByText("50%").tagName).toBe("STRONG");
+      expect(document.querySelector("[data-find='u1#0']")?.textContent).not.toContain("[turn 3]");
+    });
+
+    it("names each line's session when they came from more than one", () => {
+      const rows = sent();
+      rows[1] = attached("u1#1", "Both arms missed the cap", "Task synthesis");
+      render(<ChatRenderer rows={keyed(rows)} />);
+      const strip = screen.getByRole("button", { name: /2 updates attached/ });
+      expect(strip.textContent).toBe("▸ ⌗ 2 updates attached · payments refactor, Task synthesis");
+      fireEvent.click(strip);
+      expect(screen.getByRole("button", { name: /Task synthesis · Both arms/ })).toBeTruthy();
+    });
+
+    it("are never folded into a NOOP pill, before or after them", () => {
+      FLAGS.linkedSessions = true;
+      const earlier: TranscriptMessage = {
+        role: "user",
+        text: "an earlier digest",
+        attribution: { source_name: "payments refactor", kind: "digest" },
+      };
+      render(
+        <ChatRenderer
+          rows={keyed([earlier, { role: "agent", text: "NOOP" }, ...sent(), { role: "agent", text: "NOOP" }])}
+        />,
+      );
+      // The earlier digest still folds; the attached send and its NOOP answer stay as they are.
+      expect(screen.getByText(/1 earlier update from payments refactor · no action needed/)).toBeTruthy();
+      expect(screen.getByRole("button", { name: /2 updates attached/ })).toBeTruthy();
+      expect(screen.getByText("What's the fallback?")).toBeTruthy();
+      expect(screen.getByText("NOOP")).toBeTruthy();
+    });
+
+    it("show as the strip alone when no message of the user's follows them", () => {
+      render(<ChatRenderer rows={keyed(sent().slice(0, 2))} />);
+      expect(screen.getByRole("button", { name: /2 updates attached/ })).toBeTruthy();
+      expect(document.querySelectorAll("[data-user-msg]")).toHaveLength(0);
+    });
+  });
+
+  it("renders its tail after the last row, inside the findable root", () => {
+    render(<ChatRenderer rows={keyed([{ role: "agent", text: "hi" }])} tail={<div data-testid="tail" />} />);
+    const root = document.querySelector("[data-chat-rows]")!;
+    expect(root.lastElementChild).toBe(screen.getByTestId("tail"));
+  });
+
   it("collapses a digest answered with exactly NOOP into a quiet-check chip", () => {
     FLAGS.linkedSessions = true;
     const messages: TranscriptMessage[] = [
@@ -459,7 +544,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
         viewedSessionId="leader-id"
       />,
     );
-    expect(screen.getByText(/1 update from payments refactor · no action needed/)).toBeTruthy();
+    expect(screen.getByText(/1 earlier update from payments refactor · no action needed/)).toBeTruthy();
     expect(screen.queryByText("routine progress digest")).toBeNull();
     expect(screen.queryByText("NOOP")).toBeNull();
   });
@@ -486,7 +571,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
         viewedSessionId="leader-id"
       />,
     );
-    expect(screen.getByText(/2 updates from payments refactor · no action needed/)).toBeTruthy();
+    expect(screen.getByText(/2 earlier updates from payments refactor · no action needed/)).toBeTruthy();
     // The third digest got a real reply — both render in full.
     expect(screen.getByText("digest three")).toBeTruthy();
     expect(screen.getByText("I'll step in and unblock the task.")).toBeTruthy();
@@ -520,7 +605,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
         viewedSessionId="leader-id"
       />,
     );
-    expect(screen.getByText(/1 update from payments refactor · no action needed/)).toBeTruthy();
+    expect(screen.getByText(/1 earlier update from payments refactor · no action needed/)).toBeTruthy();
     expect(screen.queryByText("thought then noop")).toBeNull();
     // The thinking went into the chip with its NOOP: no group of its own.
     expect(screen.getAllByTestId("activity-group")).toHaveLength(1);
@@ -549,7 +634,7 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
         viewedSessionId="leader-id"
       />,
     );
-    const chip = screen.getByRole("button", { name: /2 updates from payments refactor/ });
+    const chip = screen.getByRole("button", { name: /2 earlier updates from payments refactor/ });
     expect(chip.getAttribute("aria-pressed")).toBe("false");
     expect(screen.queryByText("digest one")).toBeNull();
     fireEvent.click(chip);
@@ -735,20 +820,20 @@ describe("ChatRenderer — quiet-update pills", () => {
 
   it("names one source, singular and plural", () => {
     renderPill(upd("Pipeline Design Study", "a"));
-    expect(screen.getByText(/^▸ 1 update from Pipeline Design Study · no action needed$/)).toBeTruthy();
+    expect(screen.getByText(/^▸ 1 earlier update from Pipeline Design Study · no action needed$/)).toBeTruthy();
   });
 
   it("names the source for several updates", () => {
     renderPill([...upd("MADS Pipeline Design Study", "a"), ...upd("MADS Pipeline Design Study", "b"), ...upd("MADS Pipeline Design Study", "c"), ...upd("MADS Pipeline Design Study", "d")]);
-    expect(screen.getByText(/4 updates from MADS Pipeline Design Study · no action needed/)).toBeTruthy();
+    expect(screen.getByText(/4 earlier updates from MADS Pipeline Design Study · no action needed/)).toBeTruthy();
   });
 
   it("names two sources, and counts three or more", () => {
     const { unmount } = renderPill([...upd("Pipeline Design Study", "a"), ...upd("Classifier Primer", "b"), ...upd("Pipeline Design Study", "c")]);
-    expect(screen.getByText(/3 updates from Pipeline Design Study and Classifier Primer · no action needed/)).toBeTruthy();
+    expect(screen.getByText(/3 earlier updates from Pipeline Design Study and Classifier Primer · no action needed/)).toBeTruthy();
     unmount();
     renderPill([...upd("A", "a"), ...upd("B", "b"), ...upd("C", "c"), ...upd("A", "d")]);
-    expect(screen.getByText(/4 updates from 3 sessions · no action needed/)).toBeTruthy();
+    expect(screen.getByText(/4 earlier updates from 3 sessions · no action needed/)).toBeTruthy();
   });
 
   it("expands grouped by session, oldest first, with kind and time", () => {
@@ -757,7 +842,7 @@ describe("ChatRenderer — quiet-update pills", () => {
       ...upd("Classifier Primer", "c one", "signal"),
       ...upd("Pipeline Design Study", "p two"),
     ]);
-    fireEvent.click(screen.getByRole("button", { name: /3 updates/ }));
+    fireEvent.click(screen.getByRole("button", { name: /3 earlier updates/ }));
     expect(screen.getByText("Pipeline Design Study ×2 · Classifier Primer ×1")).toBeTruthy();
     const texts = ["p one", "p two", "c one"].map((t) => screen.getByText(t));
     // Document order: both Pipeline updates, then the Classifier one.
@@ -774,7 +859,7 @@ describe("ChatRenderer — quiet-update pills", () => {
       { role: "agent", text: "NOOP" },
       ...upd("Pipeline Design Study", "b"),
     ]);
-    expect(screen.getAllByText(/1 update from Pipeline Design Study/)).toHaveLength(2);
+    expect(screen.getAllByText(/1 earlier update from Pipeline Design Study/)).toHaveLength(2);
     expect(screen.getByText("acknowledged")).toBeTruthy();
   });
 

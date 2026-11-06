@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Chip } from "../../components/Chip/Chip";
 import { FOLD_MS, Fold, useArrivals } from "../../components/Motion";
 import { FLAGS } from "../../featureFlags";
@@ -40,6 +40,7 @@ import { MessageAttachments } from "./MessageAttachments";
 import { PermissionCard } from "./PermissionCard";
 import { SendDelivery } from "./SendDelivery";
 import { splitAttachments } from "../attachmentRefs";
+import { displayText, sourceNames, summaryLine, updatesNoun } from "../HeldUpdates/heldText";
 import styles from "./ChatRenderer.module.css";
 
 export interface ChatRendererProps {
@@ -108,6 +109,12 @@ export interface ChatRendererProps {
   /** Find in conversation (useFind): absent or an empty query is off. */
   find?: FindRequest;
   onFindStatus?: (status: FindStatus) => void;
+  /**
+   * What trails the stream after the last row and its fallback approvals —
+   * the held updates list (HeldUpdates). Inside the stream's root so find
+   * searches it.
+   */
+  tail?: ReactNode;
 }
 
 const noResolve = async () => {};
@@ -131,6 +138,72 @@ type QuietDigest = {
   text: string;
   cadence?: Link["cadence"];
 };
+
+type MessageItem = Extract<ReturnType<typeof buildItems>[number], { type: "message" }>;
+/** Attached updates with no send of the user's after them (a page cut between
+ * them, say): drawn as the strip alone, on the user's side. */
+type AttachedItem = { key: string; type: "attached"; run: MessageItem[] };
+
+/** A held update that rode along with the user's send (docs/HELD-UPDATES-DESIGN.md). */
+function isAttached(message: TranscriptMessage): boolean {
+  return message.role === "user" && Boolean(message.attribution?.attached);
+}
+
+/** The user's own message — not a linked session's, mads's, or an attached update. */
+function isOwnSend(message: TranscriptMessage): boolean {
+  return message.role === "user" && !message.attribution;
+}
+
+/**
+ * "▸ ⌗ 3 updates attached · Pipeline Design Study" above the user's text:
+ * the held updates that went to the agent in the same turn as it. Collapsed
+ * by default; open, one line per update (in the order the agent got them),
+ * and a line opens to the update's full text. The strip is skipped by the
+ * bubble's own find; each line is searched by itself once shown.
+ */
+function AttachedUpdates({ run }: { run: MessageItem[] }) {
+  const [open, setOpen] = useState(false);
+  const names = sourceNames(run.map((r) => r.message.attribution!));
+  return (
+    <div className={styles.attached} data-find-skip="" data-attached-updates="">
+      <button type="button" className={styles.attachedHead} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <b>
+          {open ? "▾" : "▸"} ⌗ {updatesNoun(run.length)} attached
+        </b>{" "}
+        · {names.join(", ")}
+      </button>
+      {open &&
+        run.map((r) => (
+          <AttachedLine
+            key={r.key}
+            findKey={r.key}
+            source={names.length > 1 ? r.message.attribution!.source_name : undefined}
+            text={r.message.text ?? ""}
+          />
+        ))}
+    </div>
+  );
+}
+
+function AttachedLine({ findKey, source, text }: { findKey: string; source?: string; text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={styles.attachedLine}>
+      <button type="button" className={styles.attachedToggle} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+        <span className={styles.attachedSummary} data-find={open ? undefined : findKey}>
+          {source && <b>{source} · </b>}
+          {summaryLine(text)}
+        </span>
+      </button>
+      {open && (
+        <div data-find={findKey}>
+          <Markdown className={styles.attachedProse} text={displayText(text)} breaks />
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** A finished activity group of only thinking rows — what a thinking model
  * (claude-code thinks by default) leaves between a digest and its NOOP. A
@@ -174,14 +247,17 @@ function quietSessions(digests: QuietDigest[]): { name: string; count: number }[
   return [...counts].map(([name, count]) => ({ name, count }));
 }
 
-/** What the pill says it is: "4 updates from Pipeline Design Study · no
- * action needed" — the session names for one or two sources, a count past that. */
+/** What the pill says it is: "4 earlier updates from Pipeline Design Study ·
+ * no action needed" — the session names for one or two sources, a count past
+ * that. "Earlier" because these were delivered and answered already; it keeps
+ * the pill from reading like the rail's "N updates waiting", which are held
+ * for a sleeping session and not delivered yet (docs/HELD-UPDATES-DESIGN.md). */
 export function quietLabel(digests: QuietDigest[]): string {
   const names = quietSessions(digests).map((s) => s.name || "a linked session");
   const n = digests.length;
   const from =
     names.length === 1 ? names[0] : names.length === 2 ? `${names[0]} and ${names[1]}` : `${names.length} sessions`;
-  return `${n} ${n === 1 ? "update" : "updates"} from ${from} · no action needed`;
+  return `${n} earlier ${n === 1 ? "update" : "updates"} from ${from} · no action needed`;
 }
 
 /** The pill for digests and signals the agent answered NOOP; clicking it
@@ -340,6 +416,7 @@ export function ChatRenderer({
   signIn,
   find,
   onFindStatus,
+  tail,
 }: ChatRendererProps) {
   const linksById = new Map(links.map((l) => [l.id, l]));
   // Adjacent text joins into one bubble (§6), then failed sends fold.
@@ -372,10 +449,35 @@ export function ChatRenderer({
   // A notice is not a quiet check (it isn't a digest, and folding it in hid
   // the grant notice): a NOOP answering one is folded into the notice row
   // itself as "acknowledged" instead.
-  const rendered: (ReturnType<typeof buildItems>[number] | QuietItem)[] = [];
+  //
+  // Held updates attached to a send come first, so no pill can fold them:
+  // the run of attached rows and the user's own row after it render as one
+  // bubble (attachedTo, by the user row's key) — one send, one turn, as
+  // linkwrap.SameSend counts it. The rows keep their own keys.
+  const rendered: (ReturnType<typeof buildItems>[number] | QuietItem | AttachedItem)[] = [];
   const acknowledged = new Set<string>();
+  const attachedTo = new Map<string, MessageItem[]>();
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
+    if (item.type === "message" && isAttached(item.message)) {
+      let end = i;
+      while (end < items.length) {
+        const next = items[end];
+        if (next.type !== "message" || !isAttached(next.message)) break;
+        end++;
+      }
+      const run = items.slice(i, end) as MessageItem[];
+      const own = items[end];
+      if (own?.type === "message" && isOwnSend(own.message)) {
+        attachedTo.set(own.key, run);
+        rendered.push(own);
+        i = end;
+      } else {
+        rendered.push({ key: item.key, type: "attached", run });
+        i = end - 1;
+      }
+      continue;
+    }
     const j = item.type === "message" ? noopReplyAt(items, i + 1) : -1;
     if (item.type === "message" && j >= 0 && isNotice(item.message)) {
       acknowledged.add(item.key);
@@ -389,6 +491,7 @@ export function ChatRenderer({
     while (end < items.length) {
       const next = items[end];
       if (next.type !== "message" || next.message.role !== "user" || !isDigestCard(next.message)) break;
+      if (isAttached(next.message)) break;
       end++;
     }
     const runReply = item.type === "message" && isDigestCard(item.message) ? noopReplyAt(items, end) : -1;
@@ -472,6 +575,15 @@ export function ChatRenderer({
   return (
     <div className={styles.stream} ref={rootRef} data-chat-rows>
       {rendered.map((item) => {
+        if (item.type === "attached") {
+          return (
+            <div key={item.key} className={styles.user}>
+              <div className={styles.withAttached}>
+                <AttachedUpdates run={item.run} />
+              </div>
+            </div>
+          );
+        }
         if (item.type === "quiet") {
           return <QuietChecks key={item.key} item={item} ease={easing?.key === item.key ? easing.px : undefined} />;
         }
@@ -643,7 +755,8 @@ export function ChatRenderer({
         const { body, attachments } = isUser
           ? splitAttachments(message.text ?? "")
           : { body: message.text ?? "", attachments: [] };
-        const content =
+        const attached = isUser ? attachedTo.get(item.key) : undefined;
+        const text =
           attachments.length > 0 ? (
             <div className={styles.withAttachments}>
               <MessageAttachments attachments={attachments} attachmentUrl={attachmentUrl} />
@@ -657,6 +770,14 @@ export function ChatRenderer({
               foldNewCode={foldNewCode && Boolean(item.live)}
             />
           );
+        const content = attached ? (
+          <div className={styles.withAttached}>
+            <AttachedUpdates run={attached} />
+            {text}
+          </div>
+        ) : (
+          text
+        );
         const sent = isUser ? delivery.get(item.key) : undefined;
         const retry =
           sent?.error && onRetry && !turnActive && item.key === latestSend?.key
@@ -698,6 +819,7 @@ export function ChatRenderer({
           </Fold>
         );
       })}
+      {tail}
     </div>
   );
 }

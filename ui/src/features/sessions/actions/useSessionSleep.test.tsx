@@ -4,9 +4,9 @@ import { SessionSleepPrompt, useSessionSleep, type DoneRequestNotices, type Slee
 import { FakeRouterClient } from "../../../router/fixtures";
 import type { LandResult, Session } from "../../../router/types";
 
-// The one sleep/wake path, tested once. Both controls that offer them — the
-// rail card's ⏸ and the workspace kebab's "Sleep now" — call straight into
-// this hook, so the unlanded-commits question (docs/SESSION-WORKTREES-
+// The one sleep/wake path, tested once. Every control that sleeps — the
+// workspace kebab's "Sleep now" and the rail's ✓ (Done + sleep) — calls
+// straight into this hook, so the unlanded-commits question (docs/SESSION-WORKTREES-
 // DESIGN.md D6) is asked from either, and these tests are the proof for both.
 // SessionsSurface.test.tsx holds the integration side: that each control is
 // really wired here.

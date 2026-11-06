@@ -76,6 +76,8 @@
   "link.updated",
   "link.deleted",
   "link.message_injected",
+  "link.digest_discarded",
+  "link.digest_restored",
   "session.turn_ended",
   "template.created",
   "template.updated",

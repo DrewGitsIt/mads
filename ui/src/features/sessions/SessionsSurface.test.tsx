@@ -304,7 +304,7 @@ describe("SessionsSurface", () => {
     });
   });
 
-  it("clears a rail action-error toast on navigation so it can't linger over another session", async () => {
+  it("clears an action-error toast on navigation so it can't linger over another session", async () => {
     const sessions = [
       makeSession({ id: "s1", name: "Alpha", activity: "inactive" }),
       makeSession({ id: "s2", name: "Bravo", activity: "active" }),
@@ -334,7 +334,10 @@ describe("SessionsSurface", () => {
     render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
     await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: "Sleep Alpha" }));
+    fireEvent.click(rail().getByText("Alpha"));
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
+    fireEvent.click(screen.getByRole("button", { name: "Sleep now" }));
     await waitFor(() => expect(screen.getByText(/Couldn't sleep/)).toBeTruthy());
 
     // Navigating to another session drops the surface-scoped error.
@@ -342,7 +345,8 @@ describe("SessionsSurface", () => {
     await waitFor(() => expect(screen.queryByText(/Couldn't sleep/)).toBeNull());
   });
 
-  // Both controls that offer sleep go through the surface's one
+  // Both controls that sleep a session (the workspace kebab's "Sleep now"
+  // and the rail's ✓, Done + sleep) go through the surface's one
   // useSessionSleep controller, so both ask the unlanded-commits question
   // (D6). The workspace kebab used to call terminate itself and skip it —
   // from the one place you are most likely to have commits waiting.
@@ -363,10 +367,10 @@ describe("SessionsSurface", () => {
       await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
     }
 
-    it("asks from the rail card's sleep button", async () => {
+    it("asks from the rail's ✓ (Done + sleep)", async () => {
       await renderSurface();
 
-      fireEvent.click(screen.getByRole("button", { name: "Sleep Alpha" }));
+      fireEvent.click(screen.getByRole("button", { name: "Check off Alpha" }));
 
       const dialog = screen.getByRole("alertdialog");
       expect(within(dialog).getByText("Sleep “Alpha”?")).toBeTruthy();

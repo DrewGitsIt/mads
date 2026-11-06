@@ -573,7 +573,8 @@ func (f *Fake) TranscriptSince(ctx context.Context, ref string, cursor provider.
 }
 
 // unwrap is prompt with any MADS wrappers taken off: the block bodies,
-// joined as the runner joins a coalesced run.
+// joined as the runner joins a coalesced run, and the human's text after
+// attached updates.
 func unwrap(prompt string) string {
 	segs, ok := linkwrap.Parse(prompt)
 	if !ok {
@@ -581,8 +582,11 @@ func unwrap(prompt string) string {
 	}
 	parts := make([]string, 0, len(segs))
 	for _, s := range segs {
-		if s.Block != nil {
+		switch {
+		case s.Block != nil:
 			parts = append(parts, s.Block.Body)
+		case s.Human:
+			parts = append(parts, s.Text)
 		}
 	}
 	return strings.Join(parts, "\n\n")

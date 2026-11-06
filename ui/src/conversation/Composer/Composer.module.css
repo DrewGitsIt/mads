@@ -418,3 +418,44 @@ kbd.kbd {
   background: var(--bad-soft);
   color: var(--bad-fg);
 }
+
+/* Held link updates riding on the next send (docs/mockups/held-updates.html
+   section C, .att): amber like the held list in the stream, square-cornered
+   like a staged attachment. */
+.heldStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.held {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  background: var(--warn-soft);
+  color: var(--warn-fg);
+  border-radius: var(--r-sm);
+  padding: 2px 8px;
+  font: 550 var(--fs-chip) var(--sans);
+}
+
+.heldX {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1;
+  color: var(--text3);
+  cursor: pointer;
+}
+
+.heldX:hover {
+  color: var(--bad-fg);
+}
+
+.heldX:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

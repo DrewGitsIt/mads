@@ -42,6 +42,7 @@ import { useStagedAttachments } from "../../components/Attachments/useStagedAtta
 import { useFileDrop } from "../../components/Attachments/useFileDrop";
 import { appendAttachments } from "../attachmentRefs";
 import { QueuedMessages } from "./QueuedMessages";
+import { fromLabel, updatesNoun } from "../HeldUpdates/heldText";
 import { matches } from "../../platform/hotkeys";
 import styles from "./Composer.module.css";
 
@@ -138,6 +139,13 @@ export interface ComposerProps {
   links?: Link[];
   /** The "/" command registry. Default COMMANDS; tests pass their own. */
   commands?: CommandDescriptor[];
+  /**
+   * Link updates held while the session slept (docs/HELD-UPDATES-DESIGN.md):
+   * they go with the next send whatever the composer does — the Router
+   * attaches them — so this only shows them, as a chip beside the staged
+   * files, whose × discards them all. Absent or empty → no chip.
+   */
+  held?: { count: number; sources: string[]; onDiscardAll: () => void };
 }
 
 /**
@@ -199,6 +207,7 @@ export function Composer({
   onCompactSession,
   session,
   links,
+  held,
   commands = COMMANDS,
   queued = EMPTY_QUEUE,
   onQueued,
@@ -692,6 +701,7 @@ export function Composer({
       )}
       <QueuedMessages queued={queued} onCancel={onCancelQueued} />
       <div className={styles.chips}>
+        {held && held.count > 0 && <HeldChip {...held} />}
         <InjectedContentPreview
           items={injected}
           onRemove={(id) =>
@@ -804,6 +814,31 @@ export function Composer({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/** "⌗ 5 updates · 3 sessions ×": the held updates riding on the next send; × discards them all. */
+function HeldChip({ count, sources, onDiscardAll }: NonNullable<ComposerProps["held"]>) {
+  const label = `${updatesNoun(count)}${sources.length > 0 ? ` · ${fromLabel(sources)}` : ""}`;
+  return (
+    <div className={styles.heldStrip}>
+      <span
+        className={styles.held}
+        data-testid="held-chip"
+        title="Held while this session slept; they go with your next message"
+      >
+        <span aria-hidden="true">⌗</span> {label}
+        <button
+          type="button"
+          className={styles.heldX}
+          aria-label={`Discard all ${updatesNoun(count)}`}
+          title={`Discard all ${count}`}
+          onClick={onDiscardAll}
+        >
+          ×
+        </button>
+      </span>
     </div>
   );
 }

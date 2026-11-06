@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -939,9 +940,11 @@ func (l *Links) AppendDigest(ctx context.Context, id string, d *contracts.LinkDi
 		); err != nil {
 			return err
 		}
+		// Discarded rows are outside the cap: they neither count toward it
+		// nor are evicted by it (a deferred drain or the purge removes them).
 		if _, err := tx.Exec(
-			`DELETE FROM link_digests WHERE link_id = ? AND deferred = ? AND id NOT IN
-			 (SELECT id FROM link_digests WHERE link_id = ? AND deferred = ? ORDER BY id DESC LIMIT ?)`,
+			`DELETE FROM link_digests WHERE link_id = ? AND deferred = ? AND discarded_at = '' AND id NOT IN
+			 (SELECT id FROM link_digests WHERE link_id = ? AND deferred = ? AND discarded_at = '' ORDER BY id DESC LIMIT ?)`,
 			id, boolInt(d.Deferred), id, boolInt(d.Deferred), linkDigestCap,
 		); err != nil {
 			return err
@@ -982,7 +985,9 @@ func (l *Links) DrainDigests(ctx context.Context, id string) ([]contracts.LinkDi
 // DrainDeferred atomically returns and clears the pushes deferred on link
 // id because its recipient was asleep, oldest first. The delete rides the
 // same transaction as the read, so two racing flushes can't both get an
-// entry.
+// entry. Discarded entries are never returned, and the drain deletes them
+// too: "discarded" means discarded during the sleep this drain ends
+// (docs/HELD-UPDATES-DESIGN.md).
 func (l *Links) DrainDeferred(ctx context.Context, id string) ([]contracts.LinkDigest, error) {
 	return l.drain(ctx, id, true)
 }
@@ -991,8 +996,8 @@ func (l *Links) drain(ctx context.Context, id string, deferred bool) ([]contract
 	var out []contracts.LinkDigest
 	err := l.log.WithTx(ctx, func(tx *Tx) error {
 		rows, err := tx.Query(
-			`SELECT text, from_turn, to_turn, created_at, deferred, noop, attribution
-			 FROM link_digests WHERE link_id = ? AND deferred = ? ORDER BY id`, id, boolInt(deferred))
+			`SELECT id, text, from_turn, to_turn, created_at, deferred, noop, attribution
+			 FROM link_digests WHERE link_id = ? AND deferred = ? AND discarded_at = '' ORDER BY id`, id, boolInt(deferred))
 		if err != nil {
 			return err
 		}
@@ -1002,7 +1007,7 @@ func (l *Links) drain(ctx context.Context, id string, deferred bool) ([]contract
 				createdAt, attrib string
 				def, noop         int
 			)
-			if err := rows.Scan(&d.Text, &d.FromTurn, &d.ToTurn, &createdAt, &def, &noop, &attrib); err != nil {
+			if err := rows.Scan(&d.ID, &d.Text, &d.FromTurn, &d.ToTurn, &createdAt, &def, &noop, &attrib); err != nil {
 				_ = rows.Close()
 				return err
 			}
@@ -1019,10 +1024,15 @@ func (l *Links) drain(ctx context.Context, id string, deferred bool) ([]contract
 		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(`DELETE FROM link_digests WHERE link_id = ? AND deferred = ?`, id, boolInt(deferred)); err != nil {
+		del := `DELETE FROM link_digests WHERE link_id = ? AND deferred = ? AND discarded_at = ''`
+		if deferred {
+			del = `DELETE FROM link_digests WHERE link_id = ? AND deferred = ?`
+		}
+		res, err := tx.Exec(del, id, boolInt(deferred))
+		if err != nil {
 			return err
 		}
-		if deferred && len(out) > 0 {
+		if n, _ := res.RowsAffected(); deferred && n > 0 {
 			if link, err := getLinkInTx(tx, id); err == nil {
 				return appendWaitingChanged(tx, link.GrantingSessionID)
 			}
@@ -1038,7 +1048,7 @@ func (l *Links) DeferredCounts(ctx context.Context) (map[string]int, error) {
 	out := map[string]int{}
 	rows, err := l.log.db.QueryContext(ctx,
 		`SELECT k.granting_session_id, COUNT(*) FROM link_digests d
-		 JOIN links k ON k.id = d.link_id WHERE d.deferred = 1 GROUP BY k.granting_session_id`)
+		 JOIN links k ON k.id = d.link_id WHERE d.deferred = 1 AND d.discarded_at = '' GROUP BY k.granting_session_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -1054,6 +1064,169 @@ func (l *Links) DeferredCounts(ctx context.Context) (map[string]int, error) {
 		out[id] = n
 	}
 	return out, errors.Join(rows.Err(), rows.Close())
+}
+
+// discardRetention is how long a discarded held update is kept for Undo
+// when its recipient never wakes (a wake's deferred drain removes it
+// sooner). Purged on the next discard.
+const discardRetention = 30 * 24 * time.Hour
+
+// discardedAtFormat is fixed-width, so stored discarded_at values compare
+// as text in time order (the purge's cutoff).
+const discardedAtFormat = "2006-01-02T15:04:05Z"
+
+// HeldUpdates lists the deferred pushes waiting for sessionID — on every
+// link where it is the granting side — oldest first, and separately the
+// ones discarded and not yet removed by a drain (docs/HELD-UPDATES-DESIGN.md).
+// SourceName is the stored Attribution's, else the subject session's name.
+func (l *Links) HeldUpdates(ctx context.Context, sessionID string) (contracts.HeldUpdates, error) {
+	out := contracts.HeldUpdates{Held: []contracts.HeldUpdate{}, Discarded: []contracts.HeldUpdate{}}
+	rows, err := l.log.db.QueryContext(ctx,
+		`SELECT d.id, d.link_id, k.subject_session_id, d.text, d.created_at, d.noop, d.attribution, d.discarded_at
+		 FROM link_digests d JOIN links k ON k.id = d.link_id
+		 WHERE k.granting_session_id = ? AND d.deferred = 1 ORDER BY d.id`, sessionID)
+	if err != nil {
+		return out, err
+	}
+	type row struct {
+		contracts.HeldUpdate
+		discarded bool
+	}
+	var all []row
+	for rows.Next() {
+		var (
+			r                            row
+			createdAt, attrib, discarded string
+			noop                         int
+		)
+		if err := rows.Scan(&r.ID, &r.LinkID, &r.SourceSessionID, &r.Text, &createdAt, &noop, &attrib, &discarded); err != nil {
+			_ = rows.Close()
+			return out, err
+		}
+		r.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+		r.Noop = noop != 0
+		r.discarded = discarded != ""
+		if attrib != "" {
+			var a contracts.Attribution
+			if json.Unmarshal([]byte(attrib), &a) == nil {
+				r.SourceName, r.Kind = a.SourceName, a.Kind
+			}
+		}
+		all = append(all, r)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return out, err
+	}
+	// created_at, not id: a re-queued entry (a failed flush) gets a new id
+	// but keeps when it was pushed. Parsed, since RFC3339Nano text doesn't
+	// sort.
+	sort.SliceStable(all, func(i, j int) bool { return all[i].CreatedAt.Before(all[j].CreatedAt) })
+	names := map[string]string{}
+	for _, r := range all {
+		if r.SourceName == "" {
+			name, ok := names[r.SourceSessionID]
+			if !ok {
+				if sess, err := l.sessions.Get(ctx, r.SourceSessionID); err == nil {
+					name = sess.Name
+				}
+				names[r.SourceSessionID] = name
+			}
+			r.SourceName = name
+		}
+		if r.discarded {
+			out.Discarded = append(out.Discarded, r.HeldUpdate)
+		} else {
+			out.Held = append(out.Held, r.HeldUpdate)
+		}
+	}
+	return out, nil
+}
+
+// DiscardDigests soft-deletes the held (deferred) entries ids: they stay
+// stored for Undo but leave counts, drains and flushes. Entries already
+// discarded, not deferred, or gone are skipped. Each recipient session
+// touched gets a link.digest_discarded audit event and the waiting-count
+// session.updated. Rows discarded more than discardRetention ago are purged
+// in the same transaction. Returns how many entries changed.
+func (l *Links) DiscardDigests(ctx context.Context, ids []int64, actor string) (int, error) {
+	return l.setDiscarded(ctx, ids, true, actor)
+}
+
+// RestoreDigests undoes DiscardDigests for ids still stored: they are held
+// again, in their original place. Emits link.digest_restored and the
+// waiting-count session.updated per recipient session touched.
+func (l *Links) RestoreDigests(ctx context.Context, ids []int64, actor string) (int, error) {
+	return l.setDiscarded(ctx, ids, false, actor)
+}
+
+func (l *Links) setDiscarded(ctx context.Context, ids []int64, discard bool, actor string) (int, error) {
+	changed := 0
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	now := time.Now().UTC()
+	err := l.log.WithTx(ctx, func(tx *Tx) error {
+		// Recipient session -> ids changed, in first-touched order.
+		var order []string
+		bySession := map[string][]int64{}
+		for _, id := range ids {
+			var granting, discardedAt string
+			err := tx.QueryRow(
+				`SELECT k.granting_session_id, d.discarded_at FROM link_digests d JOIN links k ON k.id = d.link_id
+				 WHERE d.id = ? AND d.deferred = 1`, id).Scan(&granting, &discardedAt)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if (discardedAt != "") == discard {
+				continue
+			}
+			value := ""
+			if discard {
+				value = now.Format(discardedAtFormat)
+			}
+			if _, err := tx.Exec(`UPDATE link_digests SET discarded_at = ? WHERE id = ?`, value, id); err != nil {
+				return err
+			}
+			if _, seen := bySession[granting]; !seen {
+				order = append(order, granting)
+			}
+			bySession[granting] = append(bySession[granting], id)
+			changed++
+		}
+		if discard {
+			if _, err := tx.Exec(`DELETE FROM link_digests WHERE discarded_at != '' AND discarded_at < ?`,
+				now.Add(-discardRetention).Format(discardedAtFormat)); err != nil {
+				return err
+			}
+		}
+		typ := contracts.LinkDigestRestored
+		if discard {
+			typ = contracts.LinkDigestDiscarded
+		}
+		for _, sessionID := range order {
+			payload, err := json.Marshal(map[string]any{"ids": bySession[sessionID]})
+			if err != nil {
+				return err
+			}
+			if err := tx.Append(&contracts.Envelope{
+				Type: typ, SessionID: sessionID, Actor: actor,
+				Payload: payload,
+			}); err != nil {
+				return err
+			}
+			if err := appendWaitingChanged(tx, sessionID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return changed, nil
 }
 
 func getLinkInTx(tx *Tx, id string) (*contracts.Link, error) {
