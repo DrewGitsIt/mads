@@ -1,6 +1,6 @@
 # Commit, Land, Push: multi-repo sessions and Commit from Changes
 
-**Status:** Slices 1–3 built on `commit-multirepo` (2026-11-05); see Implementation notes. Next: slice 4 (Push).
+**Status:** Slices 1–4 built on `commit-multirepo` (2026-11-05); see Implementation notes. Next: slice 5 (Land and Push across repos; dirty Land opens Commit).
 **Date:** 2026-11-05. **Driver:** Drew started a session in `~/repo` by accident.
 Its agent did real work in `~/repo/mads`. Changes showed most of it, but Commit
 and Land refused it, and there was no way to recover without re-rooting.
@@ -328,5 +328,26 @@ deeper.
   next turn sent, after any re-root note, and only the delivered ones are
   removed. The Router tells a live child through `POST /notes`. As with the
   re-root note, terminal (PTY) input doesn't carry it; it stays owed.
-- **Not yet:** Push (slice 4); Land and Push across repos, and a dirty Land
-  opening Commit (slice 5).
+
+### Slice 4 (2026-11-05)
+
+- **D5, as built:** `GET /sessions/{id}/push` (fetches, then the preview)
+  and `POST /sessions/{id}/push`, both run by the Router. Targets: `branch`
+  (an isolated session's own branch, setting its upstream; in place, the
+  checked-out branch) and `base` (isolated only, from the user's checkout).
+  `expect` refuses a push whose branch moved since the confirmation.
+- **Counts:** `unpushed_count` (and per repo) is what the next push would
+  publish, against the remote branch as last fetched (or, for a branch the
+  remote lacks, against all of the remote's branches): the base for an
+  isolated session, else the checked-out branch. 0 with no remote.
+- **Rebase gate:** "busy" is any session with a turn in flight whose
+  folder is inside one of this session's repos (paths compared resolved),
+  plus a pipeline run for this session.
+- **Credentials:** `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, ssh
+  in `BatchMode` unless the user set their own ssh command; fetch 60 s,
+  push 2 min. Still unverified against real credential helpers.
+- **UI:** the rail doesn't mark "to push" (every session in a shared
+  checkout would light up). "pushed ✓" shows only after a push from that
+  view, since 0 unpushed can also mean no remote.
+- **Not yet:** Land and Push across repos in one dialog, and a dirty Land
+  opening Commit (slice 5). One push per confirmation, with a repo picker.
