@@ -1,6 +1,6 @@
 # Commit, Land, Push: multi-repo sessions and Commit from Changes
 
-**Status:** Slices 1–4 built on `commit-multirepo` (2026-11-05); see Implementation notes. Next: slice 5 (Land and Push across repos; dirty Land opens Commit).
+**Status:** Slices 1–5 built on `commit-multirepo` (2026-11-05), not merged; see Implementation notes.
 **Date:** 2026-11-05. **Driver:** Drew started a session in `~/repo` by accident.
 Its agent did real work in `~/repo/mads`. Changes showed most of it, but Commit
 and Land refused it, and there was no way to recover without re-rooting.
@@ -349,5 +349,18 @@ deeper.
 - **UI:** the rail doesn't mark "to push" (every session in a shared
   checkout would light up). "pushed ✓" shows only after a push from that
   view, since 0 unpushed can also mean no remote.
-- **Not yet:** Land and Push across repos in one dialog, and a dirty Land
-  opening Commit (slice 5). One push per confirmation, with a repo picker.
+
+### Slice 5 (2026-11-05)
+
+- **Push across repos:** the push confirmation takes the Commit dialog's
+  repo-list layout when more than one repo has commits to push; each
+  repo's preview is fetched at once, and a repo the remote has moved past
+  needs its own "Rebase onto … first" tick. One push per repo, one at a
+  time.
+- **Land across repos isn't built, deliberately:** a session isolates only
+  its folder's repo (one worktree per repo is a non-goal), so at most one
+  repo ever has anything to land.
+- **D6:** a Land refused as dirty opens the Commit dialog, as do the dock's
+  and the Changes chip's "changes outside" controls; the popover offers
+  "Commit them…". In practice the popover already holds Land back while
+  such files exist, so the refusal mostly matters when counts are stale.
