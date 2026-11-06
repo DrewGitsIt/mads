@@ -19,6 +19,8 @@ type Counts struct {
 	Uncommitted int `json:"uncommitted_count"`
 	Unlanded    int `json:"unlanded_count"`
 	Outside     int `json:"outside_count"`
+	// Unpushed is what the next push would publish (D5, unpushedOf).
+	Unpushed int `json:"unpushed_count"`
 }
 
 // CountTarget says where to count. For an isolated session Dir is its

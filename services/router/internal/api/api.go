@@ -263,6 +263,8 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("GET /sessions/{id}/worktree", s.handleSessionWorktree)
 	mux.HandleFunc("GET /sessions/{id}/commit-plan", s.handleSessionCommitPlan)
 	mux.HandleFunc("POST /sessions/{id}/move", s.handleSessionMove)
+	mux.HandleFunc("GET /sessions/{id}/push", s.handleSessionPushPreview)
+	mux.HandleFunc("POST /sessions/{id}/push", s.handleSessionPush)
 	mux.HandleFunc("GET /sessions/{id}/move/folders", s.handleSessionMoveFolders)
 	mux.HandleFunc("POST /sessions/{id}/worktree/refresh", s.handleSessionWorktreeRefresh)
 	mux.HandleFunc("POST /sessions/{id}/commit", s.handleSessionCommit)

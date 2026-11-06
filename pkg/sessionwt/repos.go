@@ -163,12 +163,14 @@ func CountRepos(ctx context.Context, primary *Target, all []Target, rows []contr
 		sum.Uncommitted += c.Uncommitted
 		sum.Unlanded += c.Unlanded
 		sum.Outside += c.Outside
+		sum.Unpushed += c.Unpushed
 		if c == (Counts{}) {
 			continue
 		}
 		repos = append(repos, contracts.SessionRepo{
 			Root: t.Folder, Branch: t.Branch, Isolated: t.Isolated(), Primary: primary != nil && i == 0,
 			UncommittedCount: c.Uncommitted, UnlandedCount: c.Unlanded, OutsideCount: c.Outside,
+			UnpushedCount: c.Unpushed,
 		})
 	}
 	return sum, repos
@@ -193,6 +195,12 @@ func countTarget(ctx context.Context, t Target, rows []contracts.FileChange) (Co
 	if t.Isolated() {
 		var err error
 		if c.Unlanded, err = CountUnlanded(ctx, t.Primary, t.Base, t.Branch); err != nil {
+			return Counts{}, err
+		}
+	}
+	if exists(t.Folder) || t.Isolated() {
+		var err error
+		if c.Unpushed, err = unpushedOf(ctx, t); err != nil {
 			return Counts{}, err
 		}
 	}
@@ -221,7 +229,7 @@ func CountsPatch(sum Counts, repos []contracts.SessionRepo) contracts.SessionWor
 	}
 	return contracts.SessionWorktreePatch{
 		UncommittedCount: &sum.Uncommitted, UnlandedCount: &sum.Unlanded, OutsideCount: &sum.Outside,
-		Repos: &repos,
+		UnpushedCount: &sum.Unpushed, Repos: &repos,
 	}
 }
 

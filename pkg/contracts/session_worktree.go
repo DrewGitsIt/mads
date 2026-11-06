@@ -363,3 +363,113 @@ type MoveFolder struct {
 	Path    string `json:"path"`
 	Matches int    `json:"matches,omitempty"`
 }
+
+// Push targets (PushRequest.Target, docs/COMMIT-LAND-PUSH-DESIGN.md D5).
+const (
+	// PushBranch is the branch the work is on: an isolated session's own
+	// branch (from its worktree, ready for a PR), else the branch checked
+	// out where it works in place.
+	PushBranch = "branch"
+	// PushBase is an isolated session's base, from the user's checkout:
+	// what Land merged into.
+	PushBase = "base"
+)
+
+// PushRequest is POST /sessions/{id}/push.
+type PushRequest struct {
+	Repo   string `json:"repo,omitempty"`   // as CommitRequest.Repo
+	Target string `json:"target,omitempty"` // PushBranch (default) or PushBase
+	// Rebase: the user chose "Rebase onto origin and push" — rebase onto
+	// the remote branch first when it has commits this one doesn't. Never
+	// done otherwise.
+	Rebase bool `json:"rebase,omitempty"`
+	// Expect is the commit the confirmation showed at the branch's tip;
+	// a push refuses if the branch has moved since, so it never publishes
+	// commits the user didn't see listed. Empty skips the check.
+	Expect string `json:"expect,omitempty"`
+}
+
+// PushCommit is one commit a push would publish, or one coming in.
+type PushCommit struct {
+	Hash    string `json:"hash"`
+	Subject string `json:"subject"`
+}
+
+// PushPreview is GET /sessions/{id}/push: what the confirmation shows,
+// after fetching the remote branch.
+type PushPreview struct {
+	Repo   string `json:"repo"`   // the repo's top (the session's folder for an isolated branch push)
+	Target string `json:"target"` // PushBranch or PushBase
+	Dir    string `json:"dir"`    // where the push runs
+	Branch string `json:"branch,omitempty"`
+	Remote string `json:"remote,omitempty"`
+	// RemoteBranch is the branch it goes to on Remote; NewBranch when the
+	// remote has none yet (the push creates it and sets the upstream).
+	RemoteBranch string `json:"remote_branch,omitempty"`
+	NewBranch    bool   `json:"new_branch,omitempty"`
+	Head         string `json:"head,omitempty"`
+	// Commits would be published, newest first (at most 50; Ahead counts
+	// all of them).
+	Commits []PushCommit `json:"commits"`
+	Ahead   int          `json:"ahead"`
+	// Behind counts the remote's commits this branch lacks; Incoming lists
+	// them, newest first (at most 20). A push then needs a rebase first.
+	Behind   int          `json:"behind"`
+	Incoming []PushCommit `json:"incoming"`
+	// FetchError is set when the fetch failed: the counts are as of the
+	// last fetch, and the push will likely fail the same way.
+	FetchError string `json:"fetch_error,omitempty"`
+	// Blocked says why Push can't run at all; RebaseBlocked why "Rebase
+	// onto origin and push" can't, when Behind > 0.
+	Blocked       *PushRefusal `json:"blocked,omitempty"`
+	RebaseBlocked *PushRefusal `json:"rebase_blocked,omitempty"`
+}
+
+// Push refusal reasons (PushRefusal.Reason, PushResult.Reason).
+const (
+	PushNoRemote      = "no_remote"
+	PushDetached      = "detached"
+	PushNothingToPush = "nothing_to_push"
+	PushNotIsolated   = "not_isolated"    // PushBase on a session working in place
+	PushBehind        = "behind"          // the remote moved on and no rebase was asked for
+	PushMoved         = "moved"           // the branch moved since the confirmation (Expect)
+	PushBusy          = "busy"            // an agent is working in that folder: no rebase under it
+	PushPipeline      = "pipeline"        // a pipeline run is active for the session
+	PushNotCheckedOut = "not_checked_out" // a rebase needs the branch checked out there
+	PushMidOperation  = "mid_operation"
+	PushOverlap       = "overlap" // uncommitted files the incoming commits change
+	PushRebaseFailed  = "rebase_failed"
+	PushFailed        = "push_failed" // git push said no: rejected, auth, protected branch
+	PushLocked        = "locked"
+)
+
+// PushRefusal is why a push, or its rebase, won't run.
+type PushRefusal struct {
+	Reason string   `json:"reason"`
+	Detail string   `json:"detail,omitempty"`
+	Files  []string `json:"files,omitempty"`
+}
+
+// Push outcomes (PushResult.Outcome).
+const (
+	PushPushed     = "pushed"
+	PushRefused    = "refused"
+	PushConflicted = "conflicted" // the rebase hit conflicts and was aborted; nothing changed
+)
+
+// PushResult is POST /sessions/{id}/push's answer: HTTP 200 for all three
+// outcomes.
+type PushResult struct {
+	Outcome      string `json:"outcome"`
+	Branch       string `json:"branch,omitempty"`
+	Remote       string `json:"remote,omitempty"`
+	RemoteBranch string `json:"remote_branch,omitempty"`
+	// Rebased: the branch was rebased onto the remote before the push.
+	Rebased bool   `json:"rebased,omitempty"`
+	Head    string `json:"head,omitempty"`
+	Pushed  int    `json:"pushed,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	// Detail is human text, or git's output verbatim.
+	Detail string   `json:"detail,omitempty"`
+	Files  []string `json:"files,omitempty"`
+}

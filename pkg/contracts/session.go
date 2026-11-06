@@ -288,6 +288,12 @@ type Session struct {
 	// but Land refuses over them (sessionwt.CountOutside). Same writers and
 	// moments as the two above; always 0 in place.
 	OutsideCount int `json:"outside_count,omitempty"`
+	// UnpushedCount is how many commits the session's next push would
+	// publish (docs/COMMIT-LAND-PUSH-DESIGN.md D5): the branch it works on
+	// in place, or an isolated session's base in the user's checkout, ahead
+	// of the remote as last fetched. 0 with no remote. Same writers and
+	// moments as the counts above.
+	UnpushedCount int `json:"unpushed_count,omitempty"`
 	// Repos breaks the three counts above down by repo when the session's
 	// work spans more than its folder's repo, or its folder isn't one
 	// (docs/COMMIT-LAND-PUSH-DESIGN.md D1): one entry per repo it has
@@ -418,6 +424,7 @@ type SessionWorktreePatch struct {
 	UncommittedCount *int    `json:"uncommitted_count,omitempty"`
 	UnlandedCount    *int    `json:"unlanded_count,omitempty"`
 	OutsideCount     *int    `json:"outside_count,omitempty"`
+	UnpushedCount    *int    `json:"unpushed_count,omitempty"`
 	// Repos replaces Session.Repos whole; a non-nil empty slice clears it.
 	Repos *[]SessionRepo `json:"repos,omitempty"`
 }
@@ -442,6 +449,7 @@ type SessionRepo struct {
 	UncommittedCount int  `json:"uncommitted_count,omitempty"`
 	UnlandedCount    int  `json:"unlanded_count,omitempty"`
 	OutsideCount     int  `json:"outside_count,omitempty"`
+	UnpushedCount    int  `json:"unpushed_count,omitempty"`
 }
 
 // ChangeOrigin is how a file change was noticed (spec §5).

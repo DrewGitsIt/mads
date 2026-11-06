@@ -282,6 +282,46 @@ func (o Ops) Undo(ctx context.Context, sessionID, repo, hash string) (contracts.
 	return res, nil
 }
 
+// PushPreview is GET /sessions/{id}/push for one repo of the session's
+// set: read-only but for the fetch, so it takes no lock.
+func (o Ops) PushPreview(ctx context.Context, sessionID, repo, target string, g Gates) (contracts.PushPreview, error) {
+	t, _, err := o.loadRepo(ctx, sessionID, repo)
+	if errors.Is(err, ErrNoFolder) || errors.Is(err, ErrUnknownRepo) {
+		return contracts.PushPreview{Commits: []contracts.PushCommit{}, Incoming: []contracts.PushCommit{},
+			Blocked: &contracts.PushRefusal{Reason: contracts.PushNoRemote, Detail: "This session has no repo to push."}}, nil
+	}
+	if err != nil {
+		return contracts.PushPreview{}, err
+	}
+	return PushPreview(ctx, t, target, g)
+}
+
+// Push is POST /sessions/{id}/push: PushSteps under the session lock, then
+// the header counts. Every outcome is a PushResult.
+func (o Ops) Push(ctx context.Context, sessionID string, req contracts.PushRequest, g Gates) (contracts.PushResult, error) {
+	t, _, err := o.loadRepo(ctx, sessionID, req.Repo)
+	if errors.Is(err, ErrNoFolder) || errors.Is(err, ErrUnknownRepo) {
+		return contracts.PushResult{Outcome: contracts.PushRefused, Reason: contracts.PushNoRemote, Detail: "This session has no repo to push."}, nil
+	}
+	if err != nil {
+		return contracts.PushResult{}, err
+	}
+	var res contracts.PushResult
+	err = o.withSessionLock(ctx, t, func() error {
+		var err error
+		res, err = PushSteps(ctx, t, req, g, o.LockWait)
+		return err
+	})
+	if errors.Is(err, ErrLocked) {
+		return contracts.PushResult{Outcome: contracts.PushRefused, Reason: contracts.PushLocked, Detail: LockedDetail}, nil
+	}
+	if err != nil {
+		return contracts.PushResult{}, err
+	}
+	o.refresh(ctx, t)
+	return res, nil
+}
+
 // tipRepo is the folder of the repo in all whose checked-out commit is hash
 // (a full hash or a prefix), "" when none is.
 func tipRepo(ctx context.Context, all []Target, hash string) string {

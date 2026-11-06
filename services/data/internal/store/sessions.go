@@ -114,6 +114,7 @@ func (s *Sessions) Update(ctx context.Context, sess *contracts.Session, actor st
 		sess.UncommittedCount = old.UncommittedCount
 		sess.UnlandedCount = old.UnlandedCount
 		sess.OutsideCount = old.OutsideCount
+		sess.UnpushedCount = old.UnpushedCount
 		sess.Repos = old.Repos
 		sess.PendingNotes = old.PendingNotes
 		// So is the one bit of Tags the user owns. SessionTagAside reaches
@@ -428,6 +429,7 @@ func (s *Sessions) SetWorktree(ctx context.Context, id string, p contracts.Sessi
 		setIf(&sess.UncommittedCount, p.UncommittedCount)
 		setIf(&sess.UnlandedCount, p.UnlandedCount)
 		setIf(&sess.OutsideCount, p.OutsideCount)
+		setIf(&sess.UnpushedCount, p.UnpushedCount)
 		if p.Repos != nil {
 			sess.Repos = *p.Repos
 			if len(sess.Repos) == 0 {
@@ -437,7 +439,7 @@ func (s *Sessions) SetWorktree(ctx context.Context, id string, p contracts.Sessi
 		if sess.WorktreeDir == before.WorktreeDir && sess.WorktreeBranch == before.WorktreeBranch &&
 			sess.WorktreeBase == before.WorktreeBase && sess.UncommittedCount == before.UncommittedCount &&
 			sess.UnlandedCount == before.UnlandedCount && sess.OutsideCount == before.OutsideCount &&
-			slices.Equal(sess.Repos, before.Repos) {
+			sess.UnpushedCount == before.UnpushedCount && slices.Equal(sess.Repos, before.Repos) {
 			return nil
 		}
 		if err := s.write(tx, sess); err != nil {
