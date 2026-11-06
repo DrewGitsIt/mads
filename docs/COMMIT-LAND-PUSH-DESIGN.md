@@ -1,6 +1,6 @@
 # Commit, Land, Push: multi-repo sessions and Commit from Changes
 
-**Status:** Agreed, not built (2026-11-05). Next: slice 1.
+**Status:** Slices 1–2 built on `commit-multirepo` (2026-11-05); see Implementation notes. Next: slice 3 (move into repo).
 **Date:** 2026-11-05. **Driver:** Drew started a session in `~/repo` by accident.
 Its agent did real work in `~/repo/mads`. Changes showed most of it, but Commit
 and Land refused it, and there was no way to recover without re-rooting.
@@ -276,3 +276,43 @@ deeper.
 - 2026-11-05 — The "details I filled in" (per-repo counts, remote resolution,
   Push locks, prompt-free git, D6 grouping, ~8 tracker cap, D9 wording and
   one-level-down repo shortcuts) are accepted. *Drew.*
+
+## Implementation notes
+
+### Slices 1–2 (2026-11-05, branch `commit-multirepo`)
+
+- **D8:** `shadow.Store.Capture` registers each path's first pre-image before
+  reading it; the baseline writes those into its index after `add -A`
+  (`applyPreImages`). Repos found by shell tracking get
+  `Store.BaselineBefore` with the changed files as HEAD had them.
+- **D9:** `GET /sessions/defaults` returns `dir_repos` (one directory read,
+  hidden folders skipped, a worktree's `.git` file counted, at most 8).
+- **D1, as built:** the repo set is the folder's repo plus every repo the
+  session's own ledger rows fall in (`sessionwt.RepoTargets`). Repos nested
+  inside the folder's repo are left out. **Workspace repos aren't added up
+  front:** they join once a tool or a named command touches them, so a
+  workspace session doesn't pay a `git status` per repo for nothing.
+  `Session.Repos` carries the per-repo counts; the old counts are sums.
+- **D2, as built:** `GET /sessions/{id}/commit-plan` (Router, read-only).
+  A file not changed by the session reads `session “Name”` (another
+  session's ledger, `POST /file-changes/touchers` on the Data Service), else
+  "changed while this session ran" or "uncommitted before this session
+  started" (session-start snapshot), else "not by this session". Commit's
+  path check no longer rejects files the session didn't change. Undo finds
+  the repo whose tip the commit is when the card doesn't name one.
+- **D3:** dock popover path is `WorkPath`, shared with the Changes tab's
+  status chip (`WorkChip`); the session record reaches the Changes tab
+  through `WorkspaceTabContext`.
+- **D7, as built:** `shellwatch.Named` scans each write-capable command
+  (heredocs included) for `cd`, `pushd`, `git -C` and absolute or `~/`
+  paths; the runner keeps one tracker per repo (`shellSet`), resolving
+  new repos off the pump. Past 8 repos, trackers look once per turn
+  (`NewPerTurn`). An isolated session's own worktree still has no tracker.
+- **Replay** (`shellwatch.TestReplayTranscriptLoad`, run with
+  `MADS_REPLAY_TRANSCRIPT=<.jsonl>`), on five real transcripts of 96 to
+  1,489 Bash calls: 32–55% of calls skipped as read-only; at most 3 repos
+  followed; scan cost 19–37 µs per call on the pump; one look about 15 ms
+  in mads. Looks (an upper bound on ledger writes and events) were at most
+  about 1.6 per write-capable call before coalescing.
+- **Not yet:** moving files into a repo (slice 3); Push (slice 4); Land and
+  Push across repos, and a dirty Land opening Commit (slice 5).
