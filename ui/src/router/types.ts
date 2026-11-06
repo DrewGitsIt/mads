@@ -55,7 +55,14 @@ export interface Session {
    */
   outside_count?: number;
   /**
-   * The three counts above by repo, when the session's work spans more than
+   * Commits the session's next Push would publish (docs/COMMIT-LAND-PUSH-DESIGN.md
+   * D5): in place, the checked-out branch ahead of its remote branch; isolated,
+   * its base in the user's checkout ahead of origin — what Land moved. 0 with
+   * no remote. As of the last fetch; same writers and moments as the others.
+   */
+  unpushed_count?: number;
+  /**
+   * The counts above by repo, when the session's work spans more than
    * its folder's repo or its folder isn't one (docs/COMMIT-LAND-PUSH-DESIGN.md
    * D1): one entry per repo with uncommitted or unlanded work, the counts
    * above being their sums. Same writers and moments; absent when there's
@@ -1287,6 +1294,7 @@ export interface SessionRepo {
   uncommitted_count?: number;
   unlanded_count?: number;
   outside_count?: number;
+  unpushed_count?: number;
 }
 
 /** When a file the session didn't change was changed: during this session, or already uncommitted before it. */
@@ -1369,6 +1377,81 @@ export type MoveErrorCode =
 export interface MoveError {
   code: MoveErrorCode | string;
   error: string;
+}
+
+/** What a Push sends (D5): the branch the work is on (an isolated session's own, for a PR; else the checked-out one), or an isolated session's base after Land. */
+export type PushTarget = "branch" | "base";
+
+/** One commit a push would publish, or one coming in from the remote. */
+export interface PushCommit {
+  hash: string;
+  subject: string;
+}
+
+/** Why a push, or its rebase, won't run. */
+export interface PushRefusal {
+  /** no_remote, detached, nothing_to_push, not_isolated; for a rebase: busy, pipeline, not_checked_out, mid_operation, overlap. */
+  reason: string;
+  detail?: string;
+  /** overlap: the uncommitted files the incoming commits change. */
+  files?: string[];
+}
+
+/**
+ * GET /sessions/{id}/push — what the confirmation shows. It fetches the
+ * remote first, so it takes a moment: ask when the dialog opens.
+ */
+export interface PushPreview {
+  repo: string;
+  target: PushTarget;
+  /** Where the push runs. */
+  dir: string;
+  branch?: string;
+  remote?: string;
+  remote_branch?: string;
+  /** The remote has no such branch yet: the push creates it and sets the upstream. */
+  new_branch?: boolean;
+  /** The tip the confirmation lists — PushRequest.expect. */
+  head?: string;
+  /** Newest first, at most 50; `ahead` counts them all. */
+  commits: PushCommit[];
+  ahead: number;
+  /** The remote's commits this branch lacks; `incoming` lists them, newest first (at most 20). */
+  behind: number;
+  incoming: PushCommit[];
+  /** The fetch failed: the counts are as of the last one, and the push will likely fail the same way. */
+  fetch_error?: string;
+  /** Push can't run at all. */
+  blocked?: PushRefusal;
+  /** "Rebase onto <remote> and push" can't run (meaningful when behind > 0). */
+  rebase_blocked?: PushRefusal;
+}
+
+export interface PushRequest {
+  /** As CommitRequest.repo. */
+  repo?: string;
+  target?: PushTarget;
+  /** The user chose "Rebase onto <remote> and push". Never done otherwise. */
+  rebase?: boolean;
+  /** PushPreview.head: refused ("moved") if the branch moved since, so nothing unseen is published. */
+  expect?: string;
+}
+
+/** POST /sessions/{id}/push — HTTP 200 for every outcome. Never a force push. */
+export interface PushResult {
+  /** conflicted: the rebase hit conflicts and was undone; nothing changed. */
+  outcome: "pushed" | "refused" | "conflicted";
+  branch?: string;
+  remote?: string;
+  remote_branch?: string;
+  rebased?: boolean;
+  head?: string;
+  pushed?: number;
+  /** Refused: a PushRefusal reason, or behind, moved, push_failed, rebase_failed, locked. */
+  reason?: string;
+  /** Human text, or git's output verbatim (push_failed, rebase_failed). */
+  detail?: string;
+  files?: string[];
 }
 
 /** GET /sessions/{id}/move/folders — a folder inside the repo (ends in "/"), and how many files of the asked-for kind it holds. */

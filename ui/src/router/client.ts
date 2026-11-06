@@ -21,6 +21,10 @@ import type {
   MoveFolder,
   MoveRequest,
   MoveResult,
+  PushPreview,
+  PushRequest,
+  PushResult,
+  PushTarget,
   Config,
   CostMetrics,
   CreateSessionPayload,
@@ -260,6 +264,10 @@ export interface RouterClient {
   moveFile(sessionId: string, req: MoveRequest): Promise<MoveResult>;
   /** Folders in `repo` a file could move into, those already holding `ext` files first. Runs git: fetch once per picker. */
   getMoveFolders(sessionId: string, repo: string, ext?: string): Promise<MoveFolder[]>;
+  /** What a Push would send (COMMIT-LAND-PUSH D5). Fetches the remote first: call when the confirmation opens. */
+  getPushPreview(sessionId: string, opts?: { repo?: string; target?: PushTarget }): Promise<PushPreview>;
+  /** Pushed, refused and conflicted all resolve; only an unexpected failure throws. */
+  pushSession(sessionId: string, req: PushRequest): Promise<PushResult>;
 
   // Batch (non-streaming) read of GET /events — a plain fetch (no explicit
   // Accept header) takes the Router's JSON branch instead of the SSE branch
@@ -1050,6 +1058,17 @@ export class FetchRouterClient implements RouterClient {
       if (body?.code) throw new MoveRefusedError(body, res.status);
     }
     return readJSON<MoveResult>(res);
+  }
+
+  async getPushPreview(sessionId: string, opts: { repo?: string; target?: PushTarget } = {}): Promise<PushPreview> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/push`, {
+      repo: opts.repo || undefined,
+      target: opts.target,
+    });
+  }
+
+  async pushSession(sessionId: string, req: PushRequest): Promise<PushResult> {
+    return routerPost(this.baseUrl, `/sessions/${sessionId}/push`, req);
   }
 
   async getMoveFolders(sessionId: string, repo: string, ext?: string): Promise<MoveFolder[]> {

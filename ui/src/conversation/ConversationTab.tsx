@@ -21,6 +21,7 @@ import type {
   QueuedMessage,
   CompactStatus,
   PermissionRequest,
+  PushTarget,
   Session,
   SessionAuth,
   StreamEvent,
@@ -85,6 +86,8 @@ import { ShellDock } from "./ShellDock/ShellDock";
 import { ShellBridge, type ShellDockBridge } from "./ShellDock/shellBridge";
 import { getShellDockState, setShellDockState, useShellDockState } from "./ShellDock/dockState";
 import { CommitDialog } from "./Worktree/CommitDialog";
+import { PushDialog } from "./Worktree/PushDialog";
+import { pushedCopy } from "./Worktree/worktreeCopy";
 import { useCommitSettings } from "./Worktree/useCommitSettings";
 import { uncommittedRepos } from "./Worktree/workState";
 import { useWorktreeCards } from "./Worktree/useWorktreeCards";
@@ -296,6 +299,11 @@ export function ConversationTab({
   // (no Fast Model after all, a failing hook) so the user can see why and
   // write the message themselves.
   const [commitDialog, setCommitDialog] = useState<{ initialError?: CommitError } | null>(null);
+  // The push confirmation (COMMIT-LAND-PUSH D5), open on a target. `pushed`:
+  // a push from this tab went through, so the path can say "pushed" — the
+  // record's 0 alone can't tell that from a repo with no remote.
+  const [pushDialog, setPushDialog] = useState<{ target: PushTarget } | null>(null);
+  const [pushed, setPushed] = useState(false);
   // Stop asked while subagents or processes run — what it would end. Unset: no dialog.
   const [stopConfirm, setStopConfirm] = useState<{ subagents: number; processes: number }>();
   // "Ask the agent to resolve" drafts into the composer; it never sends.
@@ -418,6 +426,8 @@ export function ConversationTab({
     setSendFailure(undefined);
     setCurrentActivity(undefined);
     setDockTarget(null);
+    setPushDialog(null);
+    setPushed(false);
     // Reset to the chat default up front — the mode lookup below is async,
     // so a stale mode carried over from whatever session was mounted before
     // this one must never leak into this session's initial render.
@@ -1418,6 +1428,8 @@ export function ConversationTab({
       landing: worktree.landing,
       committing: worktree.committing,
       loadStatus: loadWorktreeStatus,
+      onPush: (target: PushTarget) => setPushDialog({ target }),
+      pushed,
     },
     landOutcome: latestLandOutcome(worktree.cards),
   };
@@ -1474,6 +1486,22 @@ export function ConversationTab({
             onCommitted={worktree.noteCommit}
             onOpenFile={onOpenFile}
           />
+          {session && (
+            <PushDialog
+              open={pushDialog !== null}
+              sessionId={sessionId}
+              routerClient={routerClient}
+              session={session}
+              target={pushDialog?.target ?? "branch"}
+              onClose={() => setPushDialog(null)}
+              onPushed={(result) => {
+                setPushed(true);
+                setCommandToast({ tone: "ok", message: pushedCopy(result) });
+                refetchSession();
+              }}
+              onAskAgent={!showHistory && terminalBridge ? askInCompose : worktreeActions.onAskAgent}
+            />
+          )}
 
           <div className={styles.body}>
             {showHistory ? (

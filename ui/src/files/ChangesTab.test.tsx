@@ -707,6 +707,28 @@ describe("ChangesTab status chip (COMMIT-LAND-PUSH D3, G3)", () => {
     expect(within(path).queryByTestId("work-step-land")).toBeNull();
   });
 
+  it("says committed · N to push, and Push confirms then says committed and pushed", async () => {
+    const client = new FakeRouterClient();
+    const session: Session = { ...inPlace, unpushed_count: 2 };
+    const { rerender } = render(<ChangesTab sessionId={SID} routerClient={client} session={session} />);
+    await (await inList()).findByText("Source");
+    expect(chip()!.getAttribute("data-state")).toBe("push");
+    expect(stateText()).toBe("committed · 2 to push");
+    fireEvent.click(within(chip()!).getByRole("button", { name: "Push" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Push mads/session/session-isolated to origin?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Push" }));
+    expect(await screen.findByText("Pushed 2 commits to origin/mads/session/session-isolated")).toBeTruthy();
+    expect(client.pushCalls[0].req.target).toBe("branch");
+    // The record catches up: nothing left to push, and this chip saw it go.
+    rerender(<ChangesTab sessionId={SID} routerClient={client} session={{ ...inPlace, unpushed_count: 0 }} />);
+    expect(stateText()).toBe("committed and pushed");
+  });
+
+  it("says just committed when it can't tell whether anything was pushed", async () => {
+    await renderChip({ ...inPlace, unpushed_count: 0 });
+    expect(stateText()).toBe("committed");
+  });
+
   it("opens the Commit dialog from the path popover too", async () => {
     await renderChip({ ...isolated, uncommitted_count: 4 });
     fireEvent.click(screen.getByRole("button", { name: "Where this session's work goes" }));

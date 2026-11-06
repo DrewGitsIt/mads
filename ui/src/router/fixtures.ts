@@ -24,6 +24,10 @@ import type {
   MoveFolder,
   MoveRequest,
   MoveResult,
+  PushPreview,
+  PushRequest,
+  PushResult,
+  PushTarget,
   CommitResult,
   Config,
   CostMetrics,
@@ -927,6 +931,24 @@ export const fixtureWorktreeStatus: WorktreeStatus = {
   unlanded_count: 3,
 };
 
+/** What the fixture Router's Push would send: two commits on the isolated session's branch, nothing coming in. */
+export const fixturePushPreview: PushPreview = {
+  repo: "/home/user/.mads/session-worktrees/session-isolated",
+  target: "branch",
+  dir: "/home/user/.mads/session-worktrees/session-isolated",
+  branch: "mads/session/session-isolated",
+  remote: "origin",
+  remote_branch: "mads/session/session-isolated",
+  head: "c0ffee1234",
+  commits: [
+    { hash: "c0ffee1234", subject: "deploy: detect Ubuntu 24.04 runners by codename" },
+    { hash: "b0a7ed5678", subject: "deploy: add runner_detect.sh" },
+  ],
+  ahead: 2,
+  behind: 0,
+  incoming: [],
+};
+
 /**
  * The /usage card's three cases (docs/mockups/session-commands.html,
  * section 1; the same sessions pkg/contracts/testdata/session_report_*.json
@@ -1596,6 +1618,44 @@ export class FakeRouterClient implements RouterClient {
     }
     repo.files.push({ path: rel, kind: "added", mine: true });
     return { path: `${req.repo}/${rel}` };
+  }
+
+  // --- Push (COMMIT-LAND-PUSH D5) ---
+  /** What getPushPreview answers; a function answers per request (a second call after "moved"). */
+  pushPreview: PushPreview | ((opts: { repo?: string; target?: PushTarget }) => PushPreview) =
+    structuredClone(fixturePushPreview);
+  readonly pushPreviewCalls: { sessionId: string; repo?: string; target?: PushTarget }[] = [];
+  /** Unset, the push goes through: every commit the preview listed, and the session's unpushed counts drop to 0. */
+  pushOutcome?: PushResult | ((req: PushRequest) => PushResult);
+  readonly pushCalls: { sessionId: string; req: PushRequest }[] = [];
+
+  async getPushPreview(
+    sessionId: string,
+    opts: { repo?: string; target?: PushTarget } = {},
+  ): Promise<PushPreview> {
+    this.pushPreviewCalls.push({ sessionId, ...opts });
+    return structuredClone(typeof this.pushPreview === "function" ? this.pushPreview(opts) : this.pushPreview);
+  }
+
+  async pushSession(sessionId: string, req: PushRequest): Promise<PushResult> {
+    this.pushCalls.push({ sessionId, req });
+    const out = typeof this.pushOutcome === "function" ? this.pushOutcome(req) : this.pushOutcome;
+    if (out) return structuredClone(out);
+    const preview = typeof this.pushPreview === "function" ? this.pushPreview(req) : this.pushPreview;
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.unpushed_count = 0;
+      session.repos = session.repos?.map((r) => ({ ...r, unpushed_count: 0 }));
+    }
+    return {
+      outcome: "pushed",
+      branch: preview.branch,
+      remote: preview.remote,
+      remote_branch: preview.remote_branch,
+      head: preview.head,
+      rebased: req.rebase || undefined,
+      pushed: preview.ahead,
+    };
   }
 
   async getMoveFolders(sessionId: string, repo: string, ext?: string): Promise<MoveFolder[]> {

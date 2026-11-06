@@ -9,7 +9,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
-import { FakeRouterClient, fixtureConfig, fixtureIsolatedSession } from "../router/fixtures";
+import { FakeRouterClient, fixtureConfig, fixtureIsolatedSession, fixturePushPreview } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import type { Envelope, LandResult, TranscriptMessage } from "../router/types";
 import { tidyOutsidePrompt } from "./Worktree/worktreeCopy";
@@ -77,7 +77,7 @@ async function mount(client: FakeRouterClient) {
  * its own "Land into main" button, so the control is found by its
  * data-work-state (the same hook the e2e suite reads), never by name alone.
  */
-function workControl(state: "commit" | "land" | "landing" | "outside"): HTMLButtonElement | null {
+function workControl(state: "commit" | "land" | "landing" | "outside" | "push"): HTMLButtonElement | null {
   return screen.getByTestId("dock-status").querySelector<HTMLButtonElement>(`[data-work-state="${state}"]`);
 }
 
@@ -156,6 +156,38 @@ describe("ConversationTab — Commit and Land", () => {
     fireEvent.click(screen.getByRole("button", { name: /Commit…/ }));
     expect(await screen.findByRole("alertdialog")).toBeTruthy();
     expect(client.commitCalls).toHaveLength(0);
+  });
+
+  it("Push from the dock confirms, pushes, and says so in a toast", async () => {
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0, unpushed_count: 2 });
+    await mount(client);
+    fireEvent.click(workControl("push")!);
+    const dialog = await screen.findByRole("alertdialog", { name: "Push mads/session/session-isolated to origin?" });
+    expect(client.pushPreviewCalls[0]).toEqual({ sessionId: SID, repo: undefined, target: "base" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Push" }));
+    expect(await screen.findByText("Pushed 2 commits to origin/mads/session/session-isolated")).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(client.pushCalls[0].req).toEqual({ target: "base", expect: "c0ffee1234" });
+  });
+
+  it("a conflicted rebase's Ask the agent drafts the rebase in the composer", async () => {
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0, unpushed_count: 1 });
+    client.pushPreview = { ...fixturePushPreview, remote_branch: "main", behind: 1, incoming: [] };
+    client.pushOutcome = { outcome: "conflicted", files: ["scripts/deploy.sh"] };
+    const send = vi.spyOn(client, "sendMessage");
+    await mount(client);
+    fireEvent.click(workControl("push")!);
+    fireEvent.click(await screen.findByRole("button", { name: "Rebase onto origin and push" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Ask the agent to rebase" }));
+    const composer = screen.getByPlaceholderText(/message the agent/i) as HTMLTextAreaElement;
+    await waitFor(() =>
+      expect(composer.value).toBe(
+        "Please rebase mads/session/session-isolated onto origin/main and resolve the conflicts in: scripts/deploy.sh.",
+      ),
+    );
+    expect(send).not.toHaveBeenCalled();
+    // The composer keeps its draft per session; don't hand it to the next test.
+    fireEvent.change(composer, { target: { value: "" } });
   });
 
   it("falls back to the dialog, with the reason, when a one-click Commit is refused", async () => {

@@ -1,4 +1,4 @@
-import type { CommitPlanFile, LandRefusalReason } from "../../router/types";
+import type { CommitPlanFile, LandRefusalReason, PushResult } from "../../router/types";
 
 /**
  * The words Commit and Land speak (docs/mockups/session-worktrees.html).
@@ -301,6 +301,42 @@ export function repoName(root: string): string {
 /** "11 uncommitted", "11 uncommitted in 2 repos" — the session's state in words (Changes' chip, the ⎇ path). */
 export function uncommittedCopy(files: number, repos: number): string {
   return `${files} uncommitted${repos > 1 ? ` in ${repos} repos` : ""}`;
+}
+
+/** "origin/main", or just the remote or the branch when that's all that's known. */
+export function remoteRef(remote: string | undefined, branch: string | undefined): string {
+  return [remote, branch].filter(Boolean).join("/") || "the remote";
+}
+
+/** The toast after a push: "Pushed 3 commits to origin/main". */
+export function pushedCopy(result: PushResult): string {
+  const what = result.pushed ? plural(result.pushed, "commit") : "the branch";
+  return `Pushed ${what} to ${remoteRef(result.remote, result.remote_branch)}${result.rebased ? " after rebasing" : ""}`;
+}
+
+/** A refused push, in words, for the reasons the confirmation doesn't already explain (D5). */
+export function pushRefusalCopy(reason: string | undefined): string {
+  switch (reason) {
+    case "moved":
+      return "The branch moved since this opened, so nothing was pushed. Here's what Push would send now.";
+    case "behind":
+      return "The remote has commits this branch doesn't, so nothing was pushed. Here's what's coming in.";
+    case "push_failed":
+      return "git push said no. Nothing was forced.";
+    case "rebase_failed":
+      return "The rebase didn't finish, so it was undone. Nothing was pushed.";
+    case "locked":
+      return "Another Land or Push is running here. Try again in a moment.";
+    default:
+      return "Push didn't run.";
+  }
+}
+
+/** The message "Ask the agent to rebase" puts in the composer after a rebase hit conflicts. */
+export function rebasePrompt(branch: string | undefined, upstream: string, files: string[] | undefined): string {
+  const b = branch || "this branch";
+  const what = files && files.length > 0 ? ` and resolve the conflicts in: ${files.join(", ")}` : " and resolve its conflicts";
+  return `Please rebase ${b} onto ${upstream}${what}.`;
 }
 
 function taskName(task: string | undefined): string {

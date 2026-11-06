@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { requestOpenSession } from "../../appNavigation";
 import { Popover } from "../../components/Popover/Popover";
-import type { Session, WorktreeTenant } from "../../router/types";
+import type { PushTarget, Session, WorktreeTenant } from "../../router/types";
 import { sessionLocation } from "../../router/sessionLocation";
 import { useElectronClipboardBridge } from "../TerminalRenderer/ptyBridge";
 import type { LandCardModel } from "../Worktree/worktreeCards";
@@ -52,7 +52,7 @@ interface NoLandNote {
  * The status line's right end: the `⎇ {workspace} / {branch} → {base}`
  * segment, then the Commit/Land control, sharing one upward popover that
  * says where the session works and where its work goes (WorkPath: Commit,
- * then Land, each with its button). A Land click
+ * then Land, then Push, each with its button). A Land click
  * opens the popover and its outcome (landed, conflicted, refused — with the
  * refusal's own fix, e.g. "Ask the agent" for changes outside the session)
  * renders there, at the button, as well as in the transcript.
@@ -172,6 +172,7 @@ export function WorkArea({
           onCommit={work.onCommit}
           onLand={land}
           onOutside={toggleFresh}
+          onPush={work.onPush}
         />
       )}
     </>
@@ -224,6 +225,14 @@ export function WorkArea({
                 })
               }
               onLand={work && land}
+              onPush={
+                work?.onPush &&
+                ((target) => {
+                  close();
+                  work.onPush?.(target);
+                })
+              }
+              pushed={work?.pushed}
             />
           )}
           {note && (note.detail || owner) && (
@@ -331,13 +340,14 @@ function PathRow({ path, what, workDir }: { path: string; what: "folder" | "work
 }
 
 /**
- * The status-line Commit/Land control (docs/SESSION-WORKTREES-DESIGN.md D4),
- * driven by workState(): Commit… while files are uncommitted, Land once the
- * folder is clean with commits ahead, a warn-styled "Changes outside · N"
- * when files off the change list hold Land back, hidden otherwise. It never
- * collapses in a narrow dock; only its counts and long words drop.
- * `data-work-state` ("commit" | "land" | "landing" | "outside") is what the
- * e2e suite reads.
+ * The status-line Commit/Land/Push control (docs/SESSION-WORKTREES-DESIGN.md
+ * D4, COMMIT-LAND-PUSH D5), driven by workState(): Commit… while files are
+ * uncommitted, Land once the folder is clean with commits ahead, a
+ * warn-styled "Changes outside · N" when files off the change list hold Land
+ * back, Push ↑N once everything is committed (and landed) with commits the
+ * remote lacks, hidden otherwise. It never collapses in a narrow dock; only
+ * its counts and long words drop. `data-work-state` ("commit" | "land" |
+ * "landing" | "outside" | "push") is what the e2e suite reads.
  */
 function WorkButton({
   state,
@@ -346,6 +356,7 @@ function WorkButton({
   onCommit,
   onLand,
   onOutside,
+  onPush,
 }: {
   state: WorkState;
   landing: boolean;
@@ -353,6 +364,7 @@ function WorkButton({
   onCommit: () => void;
   onLand: () => void;
   onOutside: () => void;
+  onPush?: (target: PushTarget) => void;
 }) {
   if (landing) {
     return (
@@ -375,6 +387,21 @@ function WorkButton({
         <span className={line.vFull}>Changes outside</span>
         <span className={cx(line.vMid, line.vMidKeep)}>Outside</span>
         <span className={styles.count}> · {state.files}</span>
+      </button>
+    );
+  }
+  if (state.kind === "push") {
+    if (!onPush) return null;
+    return (
+      <button
+        type="button"
+        className={styles.work}
+        onClick={() => onPush(state.target)}
+        title={`Push ${plural(state.commits, "commit")}${state.repos > 1 ? ` in ${state.repos} repos` : ""}`}
+        data-work-state="push"
+      >
+        Push
+        <span className={cx(styles.count, line.lblFull)}> ↑{state.commits}</span>
       </button>
     );
   }

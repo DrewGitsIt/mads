@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from "react";
 import { Popover } from "../components/Popover/Popover";
 import type { RouterClient } from "../router/client";
-import type { CommitResult, Session } from "../router/types";
+import type { CommitResult, PushTarget, Session } from "../router/types";
 import { CommitDialog } from "../conversation/Worktree/CommitDialog";
+import { PushDialog } from "../conversation/Worktree/PushDialog";
 import { useCommitSettings } from "../conversation/Worktree/useCommitSettings";
 import { WorkPath } from "../conversation/Worktree/WorkPath";
-import { plural, uncommittedCopy } from "../conversation/Worktree/worktreeCopy";
+import { plural, pushedCopy, uncommittedCopy } from "../conversation/Worktree/worktreeCopy";
 import { workState } from "../conversation/Worktree/workState";
 import styles from "./WorkChip.module.css";
 
@@ -18,6 +19,8 @@ export interface WorkChipProps {
   onCommitted: (result: CommitResult) => void;
   /** Land failed without an outcome (no card is coming). */
   onError: (message: string) => void;
+  /** A push went through: say so ("Pushed 3 commits to origin/main"). */
+  onPushed?: (message: string) => void;
 }
 
 function cx(...names: (string | false | undefined)[]): string {
@@ -31,14 +34,24 @@ function cx(...names: (string | false | undefined)[]): string {
  * come from the session record's counts, never from the Compare to choice —
  * switching baselines changes the totals, not "Commit". Commit opens the
  * same dialog as the dock; Land's outcome is a card in the conversation, so
- * here it only shows that it's running.
+ * here it only shows that it's running. Push opens the same confirmation as
+ * the dock (D5).
  */
-export function WorkChip({ session, routerClient, children, onCommitted, onError }: WorkChipProps) {
+export function WorkChip({ session, routerClient, children, onCommitted, onError, onPushed }: WorkChipProps) {
   const commitSettings = useCommitSettings(routerClient);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [pathOpen, setPathOpen] = useState(false);
   const [landing, setLanding] = useState(false);
+  const [pushTarget, setPushTarget] = useState<PushTarget | null>(null);
+  // A push from here went through: only then is 0 unpushed "pushed" — the
+  // record says 0 for a repo with no remote too.
+  const [pushed, setPushed] = useState(false);
   const state = workState(session);
+
+  function push(target: PushTarget) {
+    setPathOpen(false);
+    setPushTarget(target);
+  }
 
   function commit() {
     setPathOpen(false);
@@ -65,10 +78,14 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
     case "outside":
       text = `${plural(state.files, "file")} changed outside`;
       break;
+    case "push":
+      text = `committed · ${state.commits} to push${state.repos > 1 ? ` in ${state.repos} repos` : ""}`;
+      break;
     default:
-      text = "committed";
+      text = pushed ? "committed and pushed" : "committed";
   }
-  const done = state === null;
+  // Committed: the chip goes quiet, Push or not (mockup G3).
+  const done = state === null || state.kind === "push";
 
   const chip = (
     <span className={cx(styles.chip, done && styles.done)} data-testid="changes-workchip" data-state={state?.kind ?? "done"}>
@@ -95,6 +112,16 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
           {landing ? "Landing…" : "Land"}
         </button>
       )}
+      {state?.kind === "push" && (
+        <button
+          type="button"
+          className={styles.btn}
+          title={`Push ${plural(state.commits, "commit")}`}
+          onClick={() => push(state.target)}
+        >
+          Push
+        </button>
+      )}
       <button
         type="button"
         className={cx(styles.btn, styles.caret)}
@@ -112,7 +139,14 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
     <>
       <Popover open={pathOpen} onClose={() => setPathOpen(false)} anchor={chip} className={styles.pop}>
         <div role="dialog" aria-label="Where this session's work goes">
-          <WorkPath session={session} landing={landing} onCommit={commit} onLand={land} />
+          <WorkPath
+            session={session}
+            landing={landing}
+            onCommit={commit}
+            onLand={land}
+            onPush={push}
+            pushed={pushed}
+          />
         </div>
       </Popover>
       <CommitDialog
@@ -122,6 +156,19 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
         fastModel={commitSettings.fastModel}
         onClose={() => setDialogOpen(false)}
         onCommitted={onCommitted}
+      />
+      {/* No "Ask the agent to rebase" here: this tab has no composer to draft into. */}
+      <PushDialog
+        open={pushTarget !== null}
+        sessionId={session.id}
+        routerClient={routerClient}
+        session={session}
+        target={pushTarget ?? "branch"}
+        onClose={() => setPushTarget(null)}
+        onPushed={(result) => {
+          setPushed(true);
+          onPushed?.(pushedCopy(result));
+        }}
       />
     </>
   );

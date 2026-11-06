@@ -315,6 +315,26 @@ describe("FetchRouterClient", () => {
     );
   });
 
+  it("getPushPreview GETs /sessions/:id/push for a repo and target", async () => {
+    const fetchMock = mockFetchOnce({ repo: "/repo/mads", target: "base", dir: "/repo/mads", commits: [], ahead: 0, behind: 0, incoming: [] });
+    const client = new FetchRouterClient("http://router.local");
+    await client.getPushPreview("s1", { repo: "/repo/mads", target: "base" });
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/push?repo=%2Frepo%2Fmads&target=base");
+    mockFetchOnce({ repo: "/repo/mads", target: "branch", dir: "/repo/mads", commits: [], ahead: 0, behind: 0, incoming: [] });
+    await client.getPushPreview("s1");
+  });
+
+  it("pushSession POSTs the confirmation and resolves a refusal too", async () => {
+    const fetchMock = mockFetchOnce({ outcome: "refused", reason: "moved" });
+    const client = new FetchRouterClient("http://router.local");
+    const req = { repo: "/repo/mads", target: "branch" as const, rebase: true, expect: "abc" };
+    expect(await client.pushSession("s1", req)).toEqual({ outcome: "refused", reason: "moved" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/push",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(req) }),
+    );
+  });
+
   it("landSession POSTs to /sessions/:id/land and resolves every outcome", async () => {
     const fetchMock = mockFetchOnce({ outcome: "refused", reason: "busy", base: "main" });
     const client = new FetchRouterClient("http://router.local");

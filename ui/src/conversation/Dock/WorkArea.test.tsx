@@ -199,6 +199,30 @@ describe("dock Commit / Land control (D4)", () => {
     expect(control()!.textContent).toBe("Commit… 4");
   });
 
+  it("offers Push ↑N once everything is committed, and opens the confirmation on its target", () => {
+    const onPush = vi.fn();
+    renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 0, unpushed_count: 2 }, { onPush });
+    const button = control()!;
+    expect(button.getAttribute("data-work-state")).toBe("push");
+    expect(button.textContent).toBe("Push ↑2");
+    expect(button.getAttribute("title")).toBe("Push 2 commits");
+    fireEvent.click(button);
+    expect(onPush).toHaveBeenCalledWith("branch");
+  });
+
+  it("pushes an isolated session's base after Land", () => {
+    const onPush = vi.fn();
+    renderDock({ ...clean, unlanded_count: 0, unpushed_count: 1 }, { onPush });
+    expect(control()!.getAttribute("title")).toBe("Push 1 commit");
+    fireEvent.click(control()!);
+    expect(onPush).toHaveBeenCalledWith("base");
+  });
+
+  it("has no Push without a push handler", () => {
+    renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 0, unpushed_count: 2 });
+    expect(control()).toBeNull();
+  });
+
   it("re-renders from a live record update", () => {
     const work = { onCommit: vi.fn(), onLand: vi.fn() };
     const { rerender } = render(dock({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0 }, work));
@@ -276,6 +300,16 @@ describe("dock ⎇ popover", () => {
     expect(within(pop).queryByTestId("work-step-land")).toBeNull();
     expect(within(pop).queryByRole("button", { name: /Land/ })).toBeNull();
     expect(pop.textContent).not.toContain("Worktree");
+  });
+
+  it("pushes from the path and closes the popover", () => {
+    const onPush = vi.fn();
+    renderDock({ ...clean, uncommitted_count: 0 }, { onPush });
+    fireEvent.click(screen.getByTestId("dock-location"));
+    const step = screen.getByTestId("work-step-push");
+    fireEvent.click(within(step).getByRole("button", { name: "Push branch" }));
+    expect(onPush).toHaveBeenCalledWith("branch");
+    expect(screen.queryByTestId("work-popover")).toBeNull();
   });
 
   it("sums a session's repos in the path", () => {

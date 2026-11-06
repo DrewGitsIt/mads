@@ -7,6 +7,9 @@ import {
   nameFiles,
   notMineNote,
   outsideControlTitle,
+  pushRefusalCopy,
+  pushedCopy,
+  rebasePrompt,
   refusalCopy,
   repoName,
   resolveConflictPrompt,
@@ -163,3 +166,26 @@ describe("autoResolvedCopy", () => {
   });
 });
 
+describe("push copy (D5)", () => {
+  it("says what was pushed where", () => {
+    expect(pushedCopy({ outcome: "pushed", pushed: 3, remote: "origin", remote_branch: "main" })).toBe(
+      "Pushed 3 commits to origin/main",
+    );
+    expect(pushedCopy({ outcome: "pushed", pushed: 1, remote: "origin", remote_branch: "main", rebased: true })).toBe(
+      "Pushed 1 commit to origin/main after rebasing",
+    );
+  });
+
+  it("words the refusals the confirmation doesn't already explain", () => {
+    expect(pushRefusalCopy("push_failed")).toBe("git push said no. Nothing was forced.");
+    expect(pushRefusalCopy("moved")).toMatch(/^The branch moved since this opened/);
+    expect(pushRefusalCopy("whatever")).toBe("Push didn't run.");
+  });
+
+  it("asks the agent to rebase, naming the conflicts", () => {
+    expect(rebasePrompt("feat", "origin/main", ["a.go", "b.go"])).toBe(
+      "Please rebase feat onto origin/main and resolve the conflicts in: a.go, b.go.",
+    );
+    expect(rebasePrompt(undefined, "origin/main", [])).toBe("Please rebase this branch onto origin/main and resolve its conflicts.");
+  });
+});

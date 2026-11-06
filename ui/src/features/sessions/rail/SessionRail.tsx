@@ -1091,7 +1091,10 @@ function SessionRow({
   // The work marker (mockup docs/mockups/session-worktrees.html §1): hollow
   // for uncommitted files, filled for commits waiting to land. Quiet — read
   // off the record's counts, the same ones the dock's Commit/Land control uses.
-  const work = workState(session);
+  // Push isn't marked: commits ahead of the remote are the checkout's, shared
+  // by every session working in it, so the mark would light up all of them.
+  const next = workState(session);
+  const work = next?.kind === "push" ? null : next;
   // last_turn_at, not updated_at: the stamp says "last reply", and only a turn
   // end writes this field (store.Sessions.RecordTurnEnd), so it cannot be a
   // rename or a summary write wearing a reply's clothes.
@@ -1625,7 +1628,7 @@ function replayAnimation(el: HTMLElement, cls: string) {
 const RESTING = new Set(["done", "idle"]);
 
 /** The work marker's words: what the dock's Commit/Land control would offer next. */
-function workNote(work: NonNullable<WorkState>): string {
+function workNote(work: Exclude<WorkState, null | { kind: "push" }>): string {
   if (work.kind === "commit") return "uncommitted changes";
   if (work.kind === "outside") return "changes outside this session";
   return `${plural(work.commits, "commit")} to land`;

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { AgentIndex } from "../../router/agentRef";
-import type { Session, SessionTrust, Usage, WorktreeStatus } from "../../router/types";
+import type { PushTarget, Session, SessionTrust, Usage, WorktreeStatus } from "../../router/types";
 import type { LandCardModel } from "../Worktree/worktreeCards";
 import { ContextRim } from "./ContextRim";
 import { StatusLine } from "./StatusLine";
@@ -18,6 +18,10 @@ export interface DockWork {
   landing?: boolean;
   /** A one-click Commit is in flight (useWorktreeCards().committing). */
   committing?: boolean;
+  /** Opens the push confirmation for a target (COMMIT-LAND-PUSH D5). Unset: no Push. */
+  onPush?: (target: PushTarget) => void;
+  /** A push from this view went through: 0 unpushed then means pushed, not "no remote". */
+  pushed?: boolean;
   /**
    * GET /sessions/{id}/worktree. Runs git, so the ⎇ popover calls it only on
    * opening, and only for a session working in place — to say why there's no

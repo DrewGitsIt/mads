@@ -1,10 +1,10 @@
-import type { Session } from "../../router/types";
+import type { PushTarget, Session } from "../../router/types";
 
 /**
  * The session's next step with its work (docs/SESSION-WORKTREES-DESIGN.md
  * D4), read straight off the record's counts — never computed here, never
- * per render. Shared by the dock's Commit/Land control and the rail marker so the two
- * can't disagree.
+ * per render. Shared by the dock's Commit/Land/Push control, the Changes
+ * chip and the rail marker so they can't disagree.
  */
 export type WorkState =
   | {
@@ -18,6 +18,11 @@ export type WorkState =
   | { kind: "land"; commits: number; base: string }
   /** Files off the session's change list are changed in its folder: Commit can't take them, Land would refuse. */
   | { kind: "outside"; files: number }
+  /**
+   * Committed (and landed) with commits the remote lacks (COMMIT-LAND-PUSH
+   * D5): an isolated session pushes its base, in place its branch.
+   */
+  | { kind: "push"; commits: number; target: PushTarget; repos: number }
   | null;
 
 /** An isolated session has its own branch and a recorded base to land into. */
@@ -36,6 +41,13 @@ export function uncommittedRepos(session: Session): number {
   return (session.uncommitted_count ?? 0) > 0 ? 1 : 0;
 }
 
+/** How many of the session's repos have commits to push; as uncommittedRepos. */
+export function unpushedRepos(session: Session): number {
+  const listed = (session.repos ?? []).filter((r) => (r.unpushed_count ?? 0) > 0).length;
+  if (listed > 0) return listed;
+  return (session.unpushed_count ?? 0) > 0 ? 1 : 0;
+}
+
 export function workState(session: Session): WorkState {
   const uncommitted = session.uncommitted_count ?? 0;
   const unlanded = isIsolated(session) ? (session.unlanded_count ?? 0) : 0;
@@ -45,5 +57,15 @@ export function workState(session: Session): WorkState {
   // files: offering Land over changes Commit can't take only earns a refusal.
   if (outside > 0) return { kind: "outside", files: outside };
   if (unlanded > 0) return { kind: "land", commits: unlanded, base: session.worktree_base! };
+  // Push is last: what it sends is what Commit and Land made.
+  const unpushed = session.unpushed_count ?? 0;
+  if (unpushed > 0) {
+    return {
+      kind: "push",
+      commits: unpushed,
+      target: isIsolated(session) ? "base" : "branch",
+      repos: unpushedRepos(session),
+    };
+  }
   return null;
 }

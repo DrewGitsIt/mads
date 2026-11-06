@@ -117,3 +117,12 @@
 .btnPrimary:hover:not(:disabled) {
   background: var(--accent-hover);
 }
+
+/* Nothing the record can vouch for: quieter than a step still to come. */
+.idle .icon {
+  border-style: dashed;
+}
+
+.idle .title {
+  color: var(--text2);
+}

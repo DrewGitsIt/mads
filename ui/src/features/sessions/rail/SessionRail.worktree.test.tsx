@@ -48,6 +48,12 @@ describe("SessionRail — work marker", () => {
     expect(screen.getByRole("status").textContent).toContain("· uncommitted changes");
   });
 
+  it("doesn't mark commits waiting to be pushed: they're the checkout's, shared by its sessions", () => {
+    renderRail(isolated({ unlanded_count: 0, unpushed_count: 2 }));
+    expect(document.querySelector("[data-work-mark]")).toBeNull();
+    expect(screen.queryByText(/to push/)).toBeNull();
+  });
+
   it("is absent when there's no work waiting", () => {
     renderRail(isolated({ unlanded_count: 0 }));
     expect(document.querySelector("[data-work-mark]")).toBeNull();

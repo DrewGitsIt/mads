@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import type { Session } from "../../router/types";
+import type { PushTarget, Session } from "../../router/types";
 import { plural, uncommittedCopy } from "./worktreeCopy";
-import { isIsolated, uncommittedRepos, workState, type WorkState } from "./workState";
+import { isIsolated, uncommittedRepos, unpushedRepos, workState, type WorkState } from "./workState";
 import styles from "./WorkPath.module.css";
 
 export interface WorkPathProps {
@@ -12,9 +12,19 @@ export interface WorkPathProps {
   onLand?: () => void;
   committing?: boolean;
   landing?: boolean;
+  /** Opens the push confirmation for a target. Unset: the Push step has no button. */
+  onPush?: (target: PushTarget) => void;
+  pushing?: boolean;
+  /**
+   * A push from here went through, so 0 unpushed means pushed. The record
+   * can't tell that from a repo with no remote (0 either way), so without it
+   * the step stays quiet rather than claim ✓.
+   */
+  pushed?: boolean;
 }
 
-type StepState = "done" | "next" | "wait";
+/** idle: nothing to do that the record can vouch for — no ✓, no number lit. */
+type StepState = "done" | "next" | "wait" | "idle";
 
 export function landHeldTitle(state: WorkState): string {
   switch (state?.kind) {
@@ -30,11 +40,22 @@ export function landHeldTitle(state: WorkState): string {
 /**
  * Where this session's work goes (docs/COMMIT-LAND-PUSH-DESIGN.md D3,
  * mockup commit-land-push.html §3): Commit, then Land for an isolated
- * session, each step with its state in words and its own button. Read off
- * the session record's counts, like the dock's WorkButton, so the dock's ⎇
- * popover and the Changes tab's ▾ say the same thing. Push comes later.
+ * session, then Push, each step with its state in words and its own button.
+ * Read off the session record's counts, like the dock's WorkButton, so the
+ * dock's ⎇ popover and the Changes tab's ▾ say the same thing. Before Land,
+ * an isolated session's Push step offers its own branch (for a PR); after,
+ * the base Land moved.
  */
-export function WorkPath({ session, onCommit, onLand, committing, landing }: WorkPathProps) {
+export function WorkPath({
+  session,
+  onCommit,
+  onLand,
+  committing,
+  landing,
+  onPush,
+  pushing,
+  pushed,
+}: WorkPathProps) {
   const isolated = isIsolated(session);
   const state = workState(session);
   const uncommitted = session.uncommitted_count ?? 0;
@@ -44,6 +65,37 @@ export function WorkPath({ session, onCommit, onLand, committing, landing }: Wor
 
   const commitState: StepState = uncommitted > 0 ? "next" : "done";
   const landState: StepState = unlanded === 0 ? "done" : state?.kind === "land" ? "next" : "wait";
+  const unpushed = session.unpushed_count ?? 0;
+  const beforeLand = isolated && unlanded > 0;
+  const pushState: StepState =
+    beforeLand || unpushed > 0 ? (state?.kind === "push" ? "next" : "wait") : pushed ? "done" : "idle";
+  const pushTarget: PushTarget = isolated ? "base" : "branch";
+  const unpushedIn = unpushedRepos(session);
+
+  let pushDetail: ReactNode;
+  if (beforeLand) {
+    pushDetail = (
+      <>
+        before Land: pushes {session.worktree_branch} (for a PR)
+        <br />
+        after Land: pushes {base}
+      </>
+    );
+  } else if (unpushed > 0) {
+    pushDetail = `${unpushed} to push${unpushedIn > 1 ? ` in ${unpushedIn} repos` : ""}${isolated ? ` · pushes ${base}` : ""}`;
+  } else {
+    pushDetail = pushed ? "pushed" : "nothing to push";
+  }
+  const pushButton = (target: PushTarget, label: string, primary: boolean) => (
+    <button
+      type="button"
+      className={[styles.btn, primary && styles.btnPrimary].filter(Boolean).join(" ")}
+      disabled={pushing}
+      onClick={() => onPush?.(target)}
+    >
+      {pushing ? "Pushing…" : label}
+    </button>
+  );
 
   return (
     <div className={styles.path} data-testid="work-path">
@@ -106,6 +158,19 @@ export function WorkPath({ session, onCommit, onLand, committing, landing }: Wor
             }
           />
         )}
+        <Step
+          n={isolated ? 3 : 2}
+          state={pushState}
+          title="Push"
+          detail={pushDetail}
+          testId="work-step-push"
+          action={
+            onPush &&
+            (beforeLand
+              ? pushButton("branch", "Push branch", false)
+              : unpushed > 0 && pushButton(pushTarget, "Push", pushState === "next"))
+          }
+        />
       </ol>
     </div>
   );
