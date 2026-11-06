@@ -33,6 +33,7 @@ func New(r *runner.Runner) http.Handler {
 	mux.HandleFunc("GET /queue", s.handleQueue)
 	mux.HandleFunc("DELETE /queue/{id}", s.handleCancelQueued)
 	mux.HandleFunc("POST /inject", s.handleInject)
+	mux.HandleFunc("POST /notes", s.handleAddNote)
 	mux.HandleFunc("POST /interrupt", s.handleInterrupt)
 	mux.HandleFunc("POST /compact", s.handleCompact)
 	mux.HandleFunc("GET /worktree", s.handleWorktreeStatus)
@@ -183,6 +184,19 @@ func (s *server) handleWorktreeStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+// handleAddNote owes the agent a note on its next turn (the Router has
+// already put it on the record, Session.PendingNotes).
+func (s *server) handleAddNote(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Note string `json:"note"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	s.runner.AddNote(body.Note)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) handleCommit(w http.ResponseWriter, r *http.Request) {

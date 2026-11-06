@@ -359,6 +359,13 @@ type Session struct {
 	// process died before the clear landed, or only terminal input arrived)
 	// sends the note again — at least once, never zero.
 	RerootNotePending bool `json:"reroot_note_pending,omitempty"`
+	// PendingNotes are short "[mads] …" notes owed to the agent about
+	// something done to its files outside its tools — a file the user moved
+	// into a repo (docs/COMMIT-LAND-PUSH-DESIGN.md D4). The Runner prepends
+	// them to the next turn it sends, like the re-root note, and removes the
+	// ones it sent. Written only through PATCH /sessions/{id}/notes
+	// (SessionNotesPatch), so a full-record PUT can't drop one.
+	PendingNotes []string `json:"pending_notes,omitempty"`
 	// LastUsage is the most recent turn's token accounting (provider.Usage,
 	// mirrored as Usage above), persisted by the Runner on every turn end —
 	// the context meter's data source at wake time, before this process has
@@ -413,6 +420,13 @@ type SessionWorktreePatch struct {
 	OutsideCount     *int    `json:"outside_count,omitempty"`
 	// Repos replaces Session.Repos whole; a non-nil empty slice clears it.
 	Repos *[]SessionRepo `json:"repos,omitempty"`
+}
+
+// SessionNotesPatch is a scoped write of Session.PendingNotes: Add appends
+// notes not already owed; Remove drops one owed copy of each.
+type SessionNotesPatch struct {
+	Add    []string `json:"add,omitempty"`
+	Remove []string `json:"remove,omitempty"`
 }
 
 // SessionRepo is one repo's share of a session's header counts.

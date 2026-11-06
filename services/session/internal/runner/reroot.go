@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"strings"
 )
 
 // rerootedTag marks a session whose folder was gone when it started.
@@ -124,24 +125,64 @@ func rerootNote(from, to string) string {
 // terminal reach the provider without passing through Send, so there is no
 // message to prepend to. The note stays owed (in memory and on the record)
 // until the next Send, Inject or queued message.
-func (r *Runner) claimRerootNoteLocked(text string) (wire, note string) {
-	if r.rerootNote == "" {
-		return text, ""
+//
+// The notes owed for other reasons (Session.PendingNotes: a file the user
+// moved into a repo) ride the same turn, after the re-root note.
+func (r *Runner) claimRerootNoteLocked(text string) (wire string, owed owedNotes) {
+	owed = owedNotes{reroot: r.rerootNote, notes: r.notes}
+	r.rerootNote, r.notes = "", nil
+	if owed.empty() {
+		return text, owed
 	}
-	note = r.rerootNote
-	r.rerootNote = ""
-	return note + "\n\n" + text, note
+	return owed.text() + "\n\n" + text, owed
 }
 
-// restoreRerootNote re-arms a note claimed by a send that then failed.
-func (r *Runner) restoreRerootNote(note string) {
-	if note == "" {
+// owedNotes is what one turn claimed: the re-root note and the other owed
+// notes, so a failed send can re-arm exactly those and a delivered one can
+// clear exactly those.
+type owedNotes struct {
+	reroot string
+	notes  []string
+}
+
+func (o owedNotes) empty() bool { return o.reroot == "" && len(o.notes) == 0 }
+
+func (o owedNotes) text() string {
+	parts := o.notes
+	if o.reroot != "" {
+		parts = append([]string{o.reroot}, o.notes...)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// restoreRerootNote re-arms notes claimed by a send that then failed.
+func (r *Runner) restoreRerootNote(owed owedNotes) {
+	if owed.empty() {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.rerootNote == "" {
-		r.rerootNote = note
+		r.rerootNote = owed.reroot
+	}
+	for _, n := range slices.Backward(owed.notes) {
+		if !slices.Contains(r.notes, n) {
+			r.notes = slices.Insert(r.notes, 0, n)
+		}
+	}
+}
+
+// AddNote owes the agent note on its next turn (docs/COMMIT-LAND-PUSH-
+// DESIGN.md D4) — the live half of Session.PendingNotes, which the Router
+// has already written. A note already owed isn't owed twice.
+func (r *Runner) AddNote(note string) {
+	if note == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !slices.Contains(r.notes, note) {
+		r.notes = append(r.notes, note)
 	}
 }
 
@@ -150,7 +191,15 @@ func (r *Runner) restoreRerootNote(note string) {
 // send and this write repeats the note on the next wake — the agent hears it
 // twice rather than never. Best effort, like the other record writes made
 // after a turn is already underway.
-func (r *Runner) noteDelivered(ctx context.Context) {
+func (r *Runner) noteDelivered(ctx context.Context, owed owedNotes) {
+	if len(owed.notes) > 0 {
+		if err := r.data.SetSessionNotes(ctx, r.sessionID, contracts.SessionNotesPatch{Remove: owed.notes}); err != nil {
+			log.Printf("runner: clear delivered notes: %v", err)
+		}
+	}
+	if owed.reroot == "" {
+		return
+	}
 	r.recordMu.Lock()
 	defer r.recordMu.Unlock()
 	cur, err := r.data.Session(ctx, r.sessionID)

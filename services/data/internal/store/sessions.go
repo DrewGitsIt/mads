@@ -115,6 +115,7 @@ func (s *Sessions) Update(ctx context.Context, sess *contracts.Session, actor st
 		sess.UnlandedCount = old.UnlandedCount
 		sess.OutsideCount = old.OutsideCount
 		sess.Repos = old.Repos
+		sess.PendingNotes = old.PendingNotes
 		// So is the one bit of Tags the user owns. SessionTagAside reaches
 		// the record only through SetAside, and the runner full-PUTs this
 		// record at times it chooses — persistProviderRef and the shutdown
@@ -445,6 +446,37 @@ func (s *Sessions) SetWorktree(ctx context.Context, id string, p contracts.Sessi
 		return tx.Append(&contracts.Envelope{
 			Type: contracts.SessionUpdated, SessionID: id, Actor: actor,
 		})
+	})
+}
+
+// SetNotes applies a scoped write of a session's owed agent notes, inside
+// one transaction: Add appends each note not already owed, Remove drops
+// one owed copy of each. No event: nothing shows these but the next turn.
+func (s *Sessions) SetNotes(ctx context.Context, id string, p contracts.SessionNotesPatch) error {
+	return s.log.WithTx(ctx, func(tx *Tx) error {
+		sess, err := s.getInTx(tx, id)
+		if err != nil {
+			return err
+		}
+		notes := slices.Clone(sess.PendingNotes)
+		for _, n := range p.Remove {
+			if i := slices.Index(notes, n); i >= 0 {
+				notes = slices.Delete(notes, i, i+1)
+			}
+		}
+		for _, n := range p.Add {
+			if n != "" && !slices.Contains(notes, n) {
+				notes = append(notes, n)
+			}
+		}
+		if len(notes) == 0 {
+			notes = nil
+		}
+		if slices.Equal(notes, sess.PendingNotes) {
+			return nil
+		}
+		sess.PendingNotes = notes
+		return s.write(tx, sess)
 	})
 }
 

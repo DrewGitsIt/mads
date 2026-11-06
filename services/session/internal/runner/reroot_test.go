@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -341,5 +342,48 @@ func TestRerootSkippedWhileTheWorktreeExists(t *testing.T) {
 	}
 	if got.RerootedFrom != "" || got.WorktreeDir != wtDir {
 		t.Errorf("record rerooted_from %q worktree %q, want no re-root and the worktree kept", got.RerootedFrom, got.WorktreeDir)
+	}
+}
+
+// Notes owed for other reasons (a file the user moved into a repo) ride the
+// next turn after the re-root note — one already on the record at wake and
+// one added live — and leave the record once sent.
+func TestOwedNotesRideTheNextTurnOnce(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	f := fake.New()
+	sess := createSession(t, base, contracts.Session{
+		Name: "moved", Provider: "fake", Dir: t.TempDir(), Isolation: contracts.IsolationCurrentDir,
+		RerootedFrom: "old-place", RerootNotePending: true, Tags: []string{"rerooted"},
+	})
+	r, data := newRerootRunner(t, base, f, sess)
+	if err := data.SetSessionNotes(ctx, sess.ID, contracts.SessionNotesPatch{Add: []string{"[mads] moved a"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+	if err := data.SetSessionNotes(ctx, sess.ID, contracts.SessionNotesPatch{Add: []string{"[mads] moved b"}}); err != nil {
+		t.Fatal(err)
+	}
+	r.AddNote("[mads] moved b")
+	r.AddNote("[mads] moved b")
+	sendAndWait(t, r, "echo one")
+	sendAndWait(t, r, "echo two")
+
+	got := waitForRecord(t, data, sess.ID, func(s contracts.Session) bool {
+		return s.ProviderRef != "" && !s.RerootNotePending && len(s.PendingNotes) == 0
+	})
+	texts := userTexts(t, f, got.ProviderRef)
+	if len(texts) != 2 {
+		t.Fatalf("user turns = %q, want 2", texts)
+	}
+	want := regexp.MustCompile(`(?s)^.*old-place.*\n\[mads\] moved a\n\[mads\] moved b\n\necho one$`)
+	if !want.MatchString(texts[0]) {
+		t.Errorf("first turn = %q, want the re-root note, then each owed note once, then the text", texts[0])
+	}
+	if texts[1] != "echo two" {
+		t.Errorf("second turn = %q, want it untouched", texts[1])
 	}
 }

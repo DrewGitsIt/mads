@@ -179,6 +179,18 @@ func sessionRoutes(mux *http.ServeMux, log *store.Log) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	mux.HandleFunc("PATCH /sessions/{id}/notes", func(w http.ResponseWriter, r *http.Request) {
+		var patch contracts.SessionNotesPatch
+		if !decode(w, r, &patch) {
+			return
+		}
+		if err := s.SetNotes(r.Context(), r.PathValue("id"), patch); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
 	mux.HandleFunc("DELETE /sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.Delete(r.Context(), r.PathValue("id"), actor(r)); err != nil {
 			writeStoreError(w, err)

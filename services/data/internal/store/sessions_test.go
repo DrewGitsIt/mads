@@ -837,3 +837,35 @@ func TestBringingBackFromAsideRanksOnTop(t *testing.T) {
 		t.Fatalf("rail_rank after bring-back = %v, want >= %v", got.RailRank, start)
 	}
 }
+
+// Owed notes: added once, removed one copy at a time, and kept through a
+// full-record PUT that doesn't carry them.
+func TestSetNotes(t *testing.T) {
+	s, _, _ := newSessionStore(t)
+	ctx := context.Background()
+	sess := mkSession(t, s, contracts.Session{Name: "Notes"})
+	if err := s.SetNotes(ctx, sess.ID, contracts.SessionNotesPatch{Add: []string{"a", "b", "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	stale, _ := s.Get(ctx, sess.ID)
+	stale.PendingNotes = nil
+	stale.Name = "Renamed"
+	if err := s.Update(ctx, stale, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get(ctx, sess.ID); !slices.Equal(got.PendingNotes, []string{"a", "b"}) || got.Name != "Renamed" {
+		t.Errorf("after add and a stale PUT: %q %q, want [a b] and the rename", got.PendingNotes, got.Name)
+	}
+	if err := s.SetNotes(ctx, sess.ID, contracts.SessionNotesPatch{Remove: []string{"a", "zzz"}, Add: []string{"c"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get(ctx, sess.ID); !slices.Equal(got.PendingNotes, []string{"b", "c"}) {
+		t.Errorf("after remove a, add c: %q, want [b c]", got.PendingNotes)
+	}
+	if err := s.SetNotes(ctx, sess.ID, contracts.SessionNotesPatch{Remove: []string{"b", "c"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get(ctx, sess.ID); got.PendingNotes != nil {
+		t.Errorf("after removing all: %q, want nil", got.PendingNotes)
+	}
+}

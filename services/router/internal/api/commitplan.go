@@ -36,7 +36,7 @@ func (s *server) handleSessionCommitPlan(w http.ResponseWriter, r *http.Request)
 // uncommitted before it, in a repo with a session-start snapshot. Files
 // the session changed outside every repo come from the change set too.
 func (s *server) commitPlan(ctx context.Context, sess contracts.Session) (contracts.CommitPlan, error) {
-	plan := contracts.CommitPlan{Repos: []contracts.CommitPlanRepo{}, Outside: []contracts.CommitPlanOutside{}}
+	plan := contracts.CommitPlan{Repos: []contracts.CommitPlanRepo{}, Outside: []contracts.CommitPlanOutside{}, MoveTargets: []string{}}
 	primary, all, rows, err := s.worktreeOps().Repos(ctx, sess.ID)
 	if err != nil {
 		return plan, err
@@ -114,6 +114,9 @@ func (s *server) commitPlan(ctx context.Context, sess contracts.Session) (contra
 			continue
 		}
 		plan.Outside = append(plan.Outside, contracts.CommitPlanOutside{Path: f.Path, Kind: f.Change})
+	}
+	if len(plan.Outside) > 0 {
+		plan.MoveTargets = s.moveTargets(ctx, sess, plan)
 	}
 	return plan, nil
 }

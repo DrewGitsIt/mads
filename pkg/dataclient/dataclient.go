@@ -495,6 +495,12 @@ func (c *Client) SetSessionWorktree(ctx context.Context, id string, patch contra
 	return c.do(ctx, http.MethodPatch, "/sessions/"+url.PathEscape(id)+"/worktree", patch, nil)
 }
 
+// SetSessionNotes adds and removes notes owed to the session's agent
+// (Session.PendingNotes).
+func (c *Client) SetSessionNotes(ctx context.Context, id string, patch contracts.SessionNotesPatch) error {
+	return c.do(ctx, http.MethodPatch, "/sessions/"+url.PathEscape(id)+"/notes", patch, nil)
+}
+
 func (c *Client) DeleteSession(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodDelete, "/sessions/"+url.PathEscape(id), nil, nil)
 }

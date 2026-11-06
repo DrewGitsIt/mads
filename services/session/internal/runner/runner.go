@@ -337,6 +337,9 @@ type Runner struct {
 	// (rerootMissingDir), "" once claimed by the first turn sent. Guarded by
 	// mu. Session.RerootNotePending is its durable twin.
 	rerootNote string
+	// notes are the other notes owed to the agent's next turn
+	// (Session.PendingNotes, AddNote), claimed with rerootNote. Guarded by mu.
+	notes []string
 
 	// prov and baseOpts are captured once at the end of Start and reused by
 	// SwitchTransport, which only overrides Mode/Resume — switching
@@ -644,6 +647,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	if sess.RerootNotePending {
 		r.rerootNote = rerootNote(sess.RerootedFrom, cwd)
 	}
+	r.notes = slices.Clone(sess.PendingNotes)
 	r.spawnedAt = spawnedAt
 	r.providerCwd = cwd
 	if resumeCompact != nil {
@@ -956,7 +960,7 @@ func (r *Runner) terminalLocked() bool {
 // would ever clear busy, and every later message would queue behind it for
 // good while SwitchTransport and SetModel refused. note is the re-root note
 // claimed into wire, owed again if the typing fails.
-func (r *Runner) typeInto(ctx context.Context, sess provider.Session, wire, note string) error {
+func (r *Runner) typeInto(ctx context.Context, sess provider.Session, wire string, note owedNotes) error {
 	r.typeMu.Lock()
 	err := sess.Send(ctx, wire)
 	r.typeMu.Unlock()
@@ -964,8 +968,8 @@ func (r *Runner) typeInto(ctx context.Context, sess provider.Session, wire, note
 		r.restoreRerootNote(note)
 		return err
 	}
-	if note != "" {
-		r.noteDelivered(ctx)
+	if !note.empty() {
+		r.noteDelivered(ctx, note)
 	}
 	return nil
 }
@@ -1036,8 +1040,8 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 		}
 		return err
 	}
-	if note != "" {
-		r.noteDelivered(ctx)
+	if !note.empty() {
+		r.noteDelivered(ctx, note)
 	}
 	return nil
 }
@@ -1128,8 +1132,8 @@ func (r *Runner) InjectParts(ctx context.Context, parts []contracts.InjectPart) 
 		r.markAgentIdle()
 		return err
 	}
-	if note != "" {
-		r.noteDelivered(ctx)
+	if !note.empty() {
+		r.noteDelivered(ctx, note)
 	}
 	return nil
 }
@@ -1294,8 +1298,8 @@ func (r *Runner) deliverNextLocked() {
 		if delivered != nil {
 			r.publishQueue(contracts.QueueChanged{Queued: r.QueuedMessages(), Failed: delivered, Error: err.Error()})
 		}
-	} else if note != "" {
-		r.noteDelivered(context.Background())
+	} else if !note.empty() {
+		r.noteDelivered(context.Background(), note)
 	}
 	// orchestrateRefreshPending and pendingModel, if set, are left
 	// untouched here — both are only drained once the queue is truly

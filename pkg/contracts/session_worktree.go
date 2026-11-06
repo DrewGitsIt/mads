@@ -82,6 +82,10 @@ type CommitPlan struct {
 	// Outside are files the session changed outside every repo, absolute.
 	// Never null.
 	Outside []CommitPlanOutside `json:"outside"`
+	// MoveTargets are the repos an Outside file can be moved into (D4):
+	// the repos above, the repos directly inside a session folder that
+	// isn't one, and its workspace's repos. Never null.
+	MoveTargets []string `json:"move_targets"`
 }
 
 // CommitPlanRepo is one repo's section of the Commit dialog.
@@ -317,4 +321,45 @@ type LandResult struct {
 	Outside []string `json:"outside,omitempty"`
 	Reason  string   `json:"reason,omitempty"`
 	Detail  string   `json:"detail,omitempty"`
+}
+
+// MoveRequest is POST /sessions/{id}/move: move a file the session changed
+// outside every repo into one (docs/COMMIT-LAND-PUSH-DESIGN.md D4).
+type MoveRequest struct {
+	// Path is the file, absolute (CommitPlanOutside.Path).
+	Path string `json:"path"`
+	// Repo is the top of the repo to move it into.
+	Repo string `json:"repo"`
+	// Dir is the folder inside Repo, relative; empty is the repo's top.
+	Dir string `json:"dir,omitempty"`
+}
+
+// MoveResult is a successful move: where the file is now, absolute.
+type MoveResult struct {
+	Path string `json:"path"`
+}
+
+// Move refusal codes (MoveError.Code).
+const (
+	MoveMissing        = "missing"          // the file isn't there any more
+	MoveNotSessionFile = "not_session_file" // not a file this session changed
+	MoveInRepo         = "in_repo"          // already in a repo: Commit can take it
+	MoveUnknownRepo    = "unknown_repo"     // Repo isn't the top of a git repo
+	MoveOutsideRepo    = "outside_repo"     // Dir leads out of Repo
+	MoveExists         = "exists"           // something is already at the destination
+	MoveIgnored        = "ignored"          // the repo ignores the destination
+	MoveFailed         = "failed"           // the filesystem said no
+)
+
+// MoveError is a refused move, rendered in the dialog's folder picker.
+type MoveError struct {
+	Code  string `json:"code"`
+	Error string `json:"error"`
+}
+
+// MoveFolder is a folder a file could move into, relative to its repo's
+// top, with how many files of the same kind it already holds.
+type MoveFolder struct {
+	Path    string `json:"path"`
+	Matches int    `json:"matches,omitempty"`
 }
