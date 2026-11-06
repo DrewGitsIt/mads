@@ -729,6 +729,33 @@ describe("ChangesTab status chip (COMMIT-LAND-PUSH D3, G3)", () => {
     expect(stateText()).toBe("committed");
   });
 
+  it("opens the Commit dialog when Land is refused over uncommitted files (D6)", async () => {
+    const client = new FakeRouterClient();
+    client.landOutcome = { outcome: "refused", reason: "dirty", base: "main", files: ["scratch.txt"], outside: ["scratch.txt"] };
+    await renderChip({ ...isolated, uncommitted_count: 0 }, client);
+    fireEvent.click(within(chip()!).getByRole("button", { name: "Land" }));
+    expect(await screen.findByRole("alertdialog", { name: "Commit this session's changes" })).toBeTruthy();
+    expect(client.commitPlanCalls).toEqual([SID]);
+  });
+
+  it("doesn't open Commit for any other Land refusal", async () => {
+    const client = new FakeRouterClient();
+    client.landOutcome = { outcome: "refused", reason: "busy", base: "main" };
+    await renderChip({ ...isolated, uncommitted_count: 0 }, client);
+    fireEvent.click(within(chip()!).getByRole("button", { name: "Land" }));
+    await waitFor(() => expect(client.landCalls).toHaveLength(1));
+    await waitFor(() => expect(within(chip()!).getByRole("button", { name: "Land" })).toBeTruthy());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("offers Commit… for files changed outside the session", async () => {
+    await renderChip({ ...isolated, uncommitted_count: 0, outside_count: 2 });
+    expect(chip()!.getAttribute("data-state")).toBe("outside");
+    expect(stateText()).toBe("2 files changed outside");
+    fireEvent.click(within(chip()!).getByRole("button", { name: "Commit…" }));
+    expect(await screen.findByRole("alertdialog", { name: "Commit this session's changes" })).toBeTruthy();
+  });
+
   it("opens the Commit dialog from the path popover too", async () => {
     await renderChip({ ...isolated, uncommitted_count: 4 });
     fireEvent.click(screen.getByRole("button", { name: "Where this session's work goes" }));

@@ -153,6 +153,24 @@ describe("dock Commit / Land control (D4)", () => {
     expect(screen.queryByTestId("work-popover")).toBeNull();
   });
 
+  it("opens the Commit dialog from Changes outside when it can, with Commit them… in the explainer (D6)", () => {
+    const onCommitDialog = vi.fn();
+    const onAskAgent = vi.fn();
+    renderDock({ ...clean, unlanded_count: 3, outside_count: 5 }, { onCommitDialog, onAskAgent });
+    const button = control()!;
+    expect(button.getAttribute("title")).toMatch(/Commit can take them as changes by someone else\. Click to choose what to commit\.$/);
+    fireEvent.click(button);
+    expect(onCommitDialog).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("work-popover")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("dock-location"));
+    const explainer = screen.getByTestId("outside-explainer");
+    expect(within(explainer).getByRole("button", { name: "Ask the agent" })).toBeTruthy();
+    fireEvent.click(within(explainer).getByRole("button", { name: "Commit them…" }));
+    expect(onCommitDialog).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId("work-popover")).toBeNull();
+  });
+
   it("still offers Commit… first when the session's own files are uncommitted too", () => {
     renderDock({ ...fixtureIsolatedSession, outside_count: 2 });
     expect(control()!.getAttribute("data-work-state")).toBe("commit");
@@ -392,6 +410,18 @@ describe("dock ⎇ popover", () => {
     expect(onAskAgent).toHaveBeenCalledWith(
       expect.stringContaining("These files changed outside this session's change list: ui/e2e/sessions.spec.ts, setup_dock.sh."),
     );
+  });
+
+  it("offers Commit them… on a dirty refusal when it can open the Commit dialog", () => {
+    const onCommitDialog = vi.fn();
+    const work = { onCommit: vi.fn(), onLand: vi.fn(), onCommitDialog };
+    const { rerender } = render(dock(clean, work));
+    fireEvent.click(screen.getByRole("button", { name: /Land into main/ }));
+    rerender(dock(clean, work, refusedOutside));
+    const outcome = screen.getByTestId("land-outcome");
+    fireEvent.click(within(outcome).getByRole("button", { name: "Commit them…" }));
+    expect(onCommitDialog).toHaveBeenCalled();
+    expect(screen.queryByTestId("work-popover")).toBeNull();
   });
 
   it("doesn't pass off the previous Land's outcome as this one's, but counts an identical repeat", () => {

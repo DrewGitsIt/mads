@@ -10,6 +10,12 @@ import styles from "./SessionDock.module.css";
 export interface DockWork {
   /** Opens the commit flow (one-click Commit or the Commit dialog — the caller decides). */
   onCommit: () => void;
+  /**
+   * Opens the Commit dialog itself, never a one-click Commit: for files off
+   * the change list, which the dialog lists under "Changed by someone else"
+   * (COMMIT-LAND-PUSH D6). Unset: those fixes fall back to the ⎇ popover.
+   */
+  onCommitDialog?: () => void;
   /** Runs Land. Fire and forget: the outcome comes back through `landOutcome`. */
   onLand: () => void;
   /** Puts an editable message in the composer (tidy up / resolve / check). Never sends on its own. */

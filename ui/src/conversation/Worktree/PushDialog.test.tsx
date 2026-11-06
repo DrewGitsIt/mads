@@ -195,37 +195,207 @@ describe("PushDialog (D5, mockup §3)", () => {
     await screen.findByText("a.go");
     expect(screen.queryByRole("button", { name: "Ask the agent to rebase" })).toBeNull();
   });
+});
 
-  it("picks one repo when several have commits to push; another repo pushes its branch", async () => {
+describe("PushDialog — one repo listed", () => {
+  it("keeps the single layout and its own rebase button when only one repo has commits to push", async () => {
     const client = new FakeRouterClient();
-    const session: Session = {
+    client.pushPreview = preview({ behind: 1, incoming: [{ hash: "aaaaaaa111", subject: "fix" }] });
+    open(client, {}, {
       ...fixtureIsolatedSession,
       uncommitted_count: 0,
-      unlanded_count: 0,
-      unpushed_count: 4,
-      repos: [
-        { root: "/home/user/.mads/session-worktrees/session-isolated", primary: true, isolated: true, unpushed_count: 3 },
-        { root: "/home/user/repo/learnanywhere", unpushed_count: 1 },
-      ],
-    };
+      repos: [{ root: "/home/user/.mads/session-worktrees/session-isolated", primary: true, unpushed_count: 2 }],
+    });
+    expect(await screen.findByText("Push mads/session/session-isolated to origin?")).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "Repos" })).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.getByRole("button", { name: "Rebase onto origin and push" })).toBeTruthy();
+    expect(client.pushPreviewCalls).toEqual([{ sessionId: SID, repo: undefined, target: "branch" }]);
+  });
+});
+
+describe("PushDialog — several repos (D5 \"Several repos\", layout B)", () => {
+  const WT = "/home/user/.mads/session-worktrees/session-isolated";
+  const LEARN = "/home/user/repo/learnanywhere";
+  const NOTES = "/home/user/repo/notes";
+  const session: Session = {
+    ...fixtureIsolatedSession,
+    uncommitted_count: 0,
+    unlanded_count: 0,
+    unpushed_count: 6,
+    repos: [
+      { root: WT, primary: true, isolated: true, unpushed_count: 3 },
+      { root: LEARN, unpushed_count: 1 },
+      { root: NOTES, unpushed_count: 2 },
+    ],
+  };
+  const previews: Record<string, PushPreview> = {
+    [WT]: preview({ repo: WT, target: "base", branch: "main", remote_branch: "main", head: "aaa0000001", ahead: 3 }),
+    [LEARN]: preview({
+      repo: LEARN,
+      branch: "ios-port",
+      remote_branch: "ios-port",
+      head: "bbb0000002",
+      ahead: 1,
+      commits: [{ hash: "bbb0000002", subject: "ios: settings" }],
+      behind: 2,
+      incoming: [{ hash: "ccc0000003", subject: "theirs" }],
+    }),
+    [NOTES]: preview({ repo: NOTES, branch: "main", remote_branch: "main", head: "ddd0000004", ahead: 2 }),
+  };
+
+  function multiClient() {
+    const client = new FakeRouterClient();
+    client.pushPreview = (opts) => structuredClone(previews[opts.repo!]);
+    return client;
+  }
+  const item = (name: string) =>
+    within(screen.getByRole("group", { name: "Repos" })).getByRole("button", { name: new RegExp(`^${name}`) });
+  const pushButton = () => screen.getByRole("button", { name: /^Push \d+ repos?$|^Pushing…$/ }) as HTMLButtonElement;
+
+  it("fetches every repo's preview at once, each item saying so until its own arrives", async () => {
+    const client = multiClient();
+    const answers = new Map<string, (p: PushPreview) => void>();
+    vi.spyOn(client, "getPushPreview").mockImplementation(
+      (_sid, opts) => new Promise((r) => answers.set(opts!.repo!, r)),
+    );
     open(client, { target: "base" }, session);
-    const picker = await screen.findByRole("radiogroup", { name: "Repo to push" });
-    const radios = within(picker).getAllByRole("radio") as HTMLInputElement[];
-    expect(picker.textContent).toBe("session-isolated↑3learnanywhere↑1");
-    expect(radios[0].checked).toBe(true);
-    await waitFor(() =>
-      expect(client.pushPreviewCalls.at(-1)).toEqual({
-        sessionId: SID,
-        repo: "/home/user/.mads/session-worktrees/session-isolated",
-        target: "base",
-      }),
+    expect(screen.getByText("Push this session's repos?")).toBeTruthy();
+    expect(answers.size).toBe(3);
+    expect(item("learnanywhere").textContent).toContain("Fetching…");
+    expect(pushButton().disabled).toBe(true);
+
+    await act(async () => answers.get(LEARN)!(previews[LEARN]));
+    expect(item("learnanywhere").textContent).toBe("learnanywhere↑1 · ↓2 · ios-port");
+    expect(item("session-isolated").textContent).toContain("Fetching…");
+    await act(async () => {
+      answers.get(WT)!(previews[WT]);
+      answers.get(NOTES)!(previews[NOTES]);
+    });
+    expect(item("session-isolated").textContent).toBe("session-isolated↑3 · main");
+    expect(item("session-isolated").getAttribute("title")).toBe(WT);
+  });
+
+  it("asks each repo for its own target: the session's isolated repo its base, the others their branch", async () => {
+    const client = multiClient();
+    open(client, { target: "branch" }, session);
+    await waitFor(() => expect(client.pushPreviewCalls).toHaveLength(3));
+    expect(client.pushPreviewCalls).toEqual([
+      { sessionId: SID, repo: WT, target: "base" },
+      { sessionId: SID, repo: LEARN, target: "branch" },
+      { sessionId: SID, repo: NOTES, target: "branch" },
+    ]);
+  });
+
+  it("leaves a repo that's behind out until its own rebase box is ticked", async () => {
+    const client = multiClient();
+    open(client, { target: "base" }, session);
+    await waitFor(() => expect(item("learnanywhere").getAttribute("data-status")).toBe("need"));
+    expect(item("session-isolated").getAttribute("data-status")).toBe("ready");
+    expect(pushButton().textContent).toBe("Push 2 repos");
+
+    fireEvent.click(item("learnanywhere"));
+    expect(screen.getByText("origin/ios-port has 2 commits you don't have")).toBeTruthy();
+    expect(screen.getByText("Left out of this push until you tick it.")).toBeTruthy();
+    // The single pane's rebase button isn't here: the box is the opt-in.
+    expect(screen.queryByRole("button", { name: /Rebase onto/ })).toBeNull();
+    fireEvent.click(screen.getByLabelText("Rebase onto origin/ios-port first"));
+    expect(item("learnanywhere").getAttribute("data-status")).toBe("ready");
+    expect(pushButton().textContent).toBe("Push 3 repos");
+  });
+
+  it("holds a repo whose rebase can't run, saying why and naming the files", async () => {
+    const client = multiClient();
+    const blocked = {
+      ...previews[LEARN],
+      rebase_blocked: { reason: "overlap", detail: "Incoming commits change files you haven't committed.", files: ["Settings.swift"] },
+    };
+    client.pushPreview = (opts) => structuredClone(opts.repo === LEARN ? blocked : previews[opts.repo!]);
+    open(client, { target: "base" }, session);
+    await waitFor(() => expect(item("learnanywhere").getAttribute("data-status")).toBe("blocked"));
+    expect(item("learnanywhere").textContent).toContain("can't push");
+    fireEvent.click(item("learnanywhere"));
+    expect((screen.getByLabelText("Rebase onto origin/ios-port first") as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByText("Incoming commits change files you haven't committed.")).toBeTruthy();
+    expect(screen.getByText("Settings.swift")).toBeTruthy();
+    expect(pushButton().textContent).toBe("Push 2 repos");
+  });
+
+  it("pushes one repo at a time; a refusal stays in its pane, the others push, and the first failure is selected", async () => {
+    const client = multiClient();
+    client.pushOutcome = (req) =>
+      req.repo === NOTES
+        ? { outcome: "refused", reason: "push_failed", detail: "remote: Permission to notes denied." }
+        : {
+            outcome: "pushed",
+            remote: "origin",
+            remote_branch: previews[req.repo!].remote_branch,
+            pushed: previews[req.repo!].ahead,
+            rebased: req.rebase,
+          };
+    const { onClose, onPushed } = open(client, { target: "base" }, session);
+    await waitFor(() => expect(item("learnanywhere").getAttribute("data-status")).toBe("need"));
+    fireEvent.click(item("learnanywhere"));
+    fireEvent.click(screen.getByLabelText("Rebase onto origin/ios-port first"));
+    fireEvent.click(pushButton());
+
+    await waitFor(() => expect(client.pushCalls).toHaveLength(3));
+    expect(client.pushCalls.map((c) => c.req)).toEqual([
+      { repo: WT, target: "base", expect: "aaa0000001" },
+      { repo: LEARN, target: "branch", rebase: true, expect: "bbb0000002" },
+      { repo: NOTES, target: "branch", expect: "ddd0000004" },
+    ]);
+    await waitFor(() => expect(item("notes").getAttribute("aria-current")).toBe("true"));
+    expect(onPushed).toHaveBeenCalledTimes(2);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(item("session-isolated").textContent).toContain("✓ pushed");
+    expect(item("learnanywhere").getAttribute("data-status")).toBe("pushed");
+    expect(item("notes").getAttribute("data-status")).toBe("failed");
+    const pre = screen.getByText("remote: Permission to notes denied.");
+    expect(pre.tagName).toBe("PRE");
+    expect(pushButton().textContent).toBe("Push 1 repo");
+    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+
+    fireEvent.click(item("session-isolated"));
+    expect(screen.getByText("Pushed 3 commits to origin/main.")).toBeTruthy();
+  });
+
+  it("fetches a repo's preview again when its branch moved, and closes once everything has pushed", async () => {
+    const client = multiClient();
+    const twoRepos: Session = { ...session, repos: session.repos!.slice(0, 2) };
+    let moved = true;
+    client.pushOutcome = (req) => {
+      if (req.repo === WT && moved) {
+        moved = false;
+        return { outcome: "refused", reason: "moved" };
+      }
+      return { outcome: "pushed", remote: "origin", pushed: 1 };
+    };
+    const { onClose } = open(client, { target: "base" }, twoRepos);
+    await waitFor(() => expect(item("learnanywhere").getAttribute("data-status")).toBe("need"));
+    fireEvent.click(item("learnanywhere"));
+    fireEvent.click(screen.getByLabelText("Rebase onto origin/ios-port first"));
+    fireEvent.click(pushButton());
+    expect(await screen.findByText(/The branch moved since this opened/)).toBeTruthy();
+    expect(item("session-isolated").getAttribute("aria-current")).toBe("true");
+    expect(client.pushPreviewCalls.filter((c) => c.repo === WT)).toHaveLength(2);
+    await waitFor(() => expect(pushButton().textContent).toBe("Push 1 repo"));
+    fireEvent.click(pushButton());
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("asks the agent to rebase a repo whose rebase conflicted", async () => {
+    const client = multiClient();
+    client.pushOutcome = (req) =>
+      req.repo === LEARN ? { outcome: "conflicted", files: ["Settings.swift"] } : { outcome: "pushed", pushed: 1 };
+    const { onAskAgent } = open(client, { target: "base" }, session);
+    await waitFor(() => expect(item("learnanywhere").getAttribute("data-status")).toBe("need"));
+    fireEvent.click(item("learnanywhere"));
+    fireEvent.click(screen.getByLabelText("Rebase onto origin/ios-port first"));
+    fireEvent.click(pushButton());
+    fireEvent.click(await screen.findByRole("button", { name: "Ask the agent to rebase" }));
+    expect(onAskAgent).toHaveBeenCalledWith(
+      "Please rebase ios-port onto origin/ios-port and resolve the conflicts in: Settings.swift.",
     );
-    fireEvent.click(radios[1]);
-    await waitFor(() =>
-      expect(client.pushPreviewCalls.at(-1)).toEqual({ sessionId: SID, repo: "/home/user/repo/learnanywhere", target: "branch" }),
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Push" }));
-    await waitFor(() => expect(client.pushCalls).toHaveLength(1));
-    expect(client.pushCalls[0].req).toEqual({ repo: "/home/user/repo/learnanywhere", target: "branch", expect: "c0ffee1234" });
   });
 });

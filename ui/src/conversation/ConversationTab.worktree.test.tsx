@@ -297,8 +297,8 @@ describe("ConversationTab — Commit and Land", () => {
     const send = vi.spyOn(client, "sendMessage");
     await mount(client);
 
-    // The control opens the popover rather than drafting straight away.
-    fireEvent.click(workControl("outside")!);
+    // The ⎇ popover explains, rather than drafting straight away.
+    fireEvent.click(screen.getByTestId("dock-location"));
     const composer = screen.getByPlaceholderText(/message the agent/i) as HTMLTextAreaElement;
     expect(composer.value).toBe("");
     const explainer = within(screen.getByTestId("work-popover")).getByTestId("outside-explainer");
@@ -307,6 +307,41 @@ describe("ConversationTab — Commit and Land", () => {
     await waitFor(() => expect(composer.value).toBe(tidyOutsidePrompt()));
     expect(screen.queryByTestId("work-popover")).toBeNull();
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("the dock's Changes outside control opens the Commit dialog: Commit takes those files now (D6)", async () => {
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 1, outside_count: 2 });
+    await mount(client);
+    const control = workControl("outside")!;
+    expect(control.getAttribute("title")).toMatch(/Commit can take them as changes by someone else\. Click to choose what to commit\.$/);
+    fireEvent.click(control);
+    expect(await screen.findByRole("alertdialog", { name: "Commit this session's changes" })).toBeTruthy();
+    expect(client.commitPlanCalls).toHaveLength(1);
+    expect(screen.queryByTestId("work-popover")).toBeNull();
+  });
+
+  it("a Land refused over uncommitted files opens the Commit dialog, keeps its card, and offers Commit them… at the button", async () => {
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0 });
+    client.landOutcome = {
+      outcome: "refused",
+      reason: "dirty",
+      base: "main",
+      files: ["scripts/deploy.sh", "scratch.txt"],
+      outside: ["scratch.txt"],
+    };
+    await mount(client);
+    fireEvent.click(workControl("land")!);
+    expect(await screen.findByRole("alertdialog", { name: "Commit this session's changes" })).toBeTruthy();
+    expect(await screen.findByText("Changes outside this session are holding Land back")).toBeTruthy();
+
+    // The popover at the button offers it too, beside Ask the agent.
+    const outcome = within(screen.getByTestId("work-popover")).getByTestId("land-outcome");
+    expect(outcome.getAttribute("data-reason")).toBe("dirty");
+    expect(within(outcome).getByRole("button", { name: "Ask the agent" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    fireEvent.click(within(outcome).getByRole("button", { name: "Commit them…" }));
+    expect(await screen.findByRole("alertdialog", { name: "Commit this session's changes" })).toBeTruthy();
   });
 
   it("in terminal view, Ask the agent opens the compose sheet on the prompt and pastes only when asked", async () => {
@@ -323,7 +358,7 @@ describe("ConversationTab — Commit and Land", () => {
     await waitFor(() => expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy());
     expect(screen.queryByTestId("dock-sheet")).toBeNull();
 
-    fireEvent.click(workControl("outside")!);
+    fireEvent.click(screen.getByTestId("dock-location"));
     const explainer = within(screen.getByTestId("work-popover")).getByTestId("outside-explainer");
     fireEvent.click(within(explainer).getByRole("button", { name: "Ask the agent" }));
 

@@ -34,8 +34,9 @@ function cx(...names: (string | false | undefined)[]): string {
  * come from the session record's counts, never from the Compare to choice —
  * switching baselines changes the totals, not "Commit". Commit opens the
  * same dialog as the dock; Land's outcome is a card in the conversation, so
- * here it only shows that it's running. Push opens the same confirmation as
- * the dock (D5).
+ * here it only shows that it's running — and a Land refused over
+ * uncommitted files opens Commit, as does the "changed outside" state (D6).
+ * Push opens the same confirmation as the dock (D5).
  */
 export function WorkChip({ session, routerClient, children, onCommitted, onError, onPushed }: WorkChipProps) {
   const commitSettings = useCommitSettings(routerClient);
@@ -63,6 +64,10 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
     setLanding(true);
     routerClient
       .landSession(session.id)
+      .then((result) => {
+        // Refused over uncommitted files: they're Commit's to take (D6).
+        if (result.outcome === "refused" && result.reason === "dirty") commit();
+      })
       .catch((err: unknown) => onError(err instanceof Error ? err.message : "Couldn't land."))
       .finally(() => setLanding(false));
   }
@@ -110,6 +115,16 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
           onClick={land}
         >
           {landing ? "Landing…" : "Land"}
+        </button>
+      )}
+      {state?.kind === "outside" && (
+        <button
+          type="button"
+          className={styles.btn}
+          title="Commit can take them as changes by someone else, so Land can run"
+          onClick={commit}
+        >
+          Commit…
         </button>
       )}
       {state?.kind === "push" && (

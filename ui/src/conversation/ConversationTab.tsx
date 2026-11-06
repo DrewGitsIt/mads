@@ -678,14 +678,21 @@ export function ConversationTab({
   // way (and the dock's ⎇ popover shows it at the button); only an unexpected
   // failure (no card coming) is a toast. The user asked for this outcome, so
   // the tail follows it into view even if they had scrolled up.
+  // A Land refused over uncommitted files also opens the Commit dialog
+  // (COMMIT-LAND-PUSH D6): it lists the session's files checked and the
+  // refusal's others under "Changed by someone else". The card stays.
   const handleLand = useCallback(() => {
     stick.follow();
-    land().catch((err: unknown) => {
-      setCommandToast({
-        tone: "bad",
-        message: err instanceof Error ? err.message : "Couldn't land.",
+    land()
+      .then((result) => {
+        if (result?.outcome === "refused" && result.reason === "dirty") setCommitDialog({});
+      })
+      .catch((err: unknown) => {
+        setCommandToast({
+          tone: "bad",
+          message: err instanceof Error ? err.message : "Couldn't land.",
+        });
       });
-    });
   }, [land, stick]);
 
   const worktreeActions = useMemo(
@@ -1420,6 +1427,7 @@ export function ConversationTab({
     onChangeTrust: handleChangeTrust,
     work: {
       onCommit: handleCommit,
+      onCommitDialog: () => setCommitDialog({}),
       onLand: handleLand,
       // Chat drafts into the composer. Terminal has no composer mounted, so
       // the draft opens the compose sheet instead: the user reviews it there

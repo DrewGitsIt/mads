@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "../../components/Button/Button";
 import type { RouterClient } from "../../router/client";
 import type {
@@ -7,9 +7,12 @@ import type {
   PushResult,
   PushTarget,
   Session,
+  SessionRepo,
 } from "../../router/types";
+import { displayPath } from "../../files/displayPath";
 import {
   plural,
+  pushedCopy,
   pushRefusalCopy,
   rebasePrompt,
   remoteRef,
@@ -23,7 +26,7 @@ export interface PushDialogProps {
   open: boolean;
   sessionId: string;
   routerClient: RouterClient;
-  /** Its repos say which have commits to push (the picker, when more than one does). */
+  /** Its repos say which have commits to push (a repo list, when more than one does). */
   session: Session;
   /** What to push in the session's own repo; any other repo pushes its branch. */
   target: PushTarget;
@@ -38,75 +41,29 @@ function cx(...names: (string | false | undefined)[]): string {
   return names.filter(Boolean).join(" ");
 }
 
+/** The push confirmation's repos: those the record says have commits to push. */
+function pushableRepos(session: Session): SessionRepo[] {
+  return (session.repos ?? []).filter((r) => (r.unpushed_count ?? 0) > 0);
+}
+
 /**
  * Confirm a push (docs/COMMIT-LAND-PUSH-DESIGN.md D5, mockup
  * commit-land-push.html §3 "Push main to origin?"). Every push asks: the
  * dialog fetches the remote, lists what would go and what's coming in, and
  * pushes exactly the tip it showed (`expect`). Never a force push. When the
- * remote is ahead, the main button becomes "Rebase onto <remote> and push" —
- * the only way a rebase ever happens; if it conflicts, it's undone and the
- * agent can be asked to do it. One repo per confirmation: with several to
- * push, a picker at the top chooses which.
+ * remote is ahead, a rebase happens only when the user asks for it there;
+ * if it conflicts, it's undone and the agent can be asked to do it. One repo
+ * gets a single pane whose main button becomes "Rebase onto <remote> and
+ * push"; several get a repo list, each repo with its own opt-in, pushed one
+ * at a time (D5 "Several repos").
  */
-export function PushDialog({
-  open,
-  sessionId,
-  routerClient,
-  session,
-  target,
-  onClose,
-  onPushed,
-  onAskAgent,
-}: PushDialogProps) {
-  const titleId = useId();
-  const choices = (session.repos ?? []).filter(
-    (r) => (r.unpushed_count ?? 0) > 0,
-  );
-  const [repo, setRepo] = useState<string | undefined>();
-  const [preview, setPreview] = useState<PushPreview | null>(null);
-  const [loadError, setLoadError] = useState<string>();
-  // Bumped to fetch the preview again (the branch moved under it).
-  const [reload, setReload] = useState(0);
-  const [pushing, setPushing] = useState(false);
-  const [result, setResult] = useState<PushResult>();
-  const [notice, setNotice] = useState<string>();
-
-  // The picker starts on the session's own repo.
-  const firstChoice = (choices.find((r) => r.primary) ?? choices[0])?.root;
-  useEffect(() => {
-    if (!open) return;
-    setRepo(choices.length > 1 ? firstChoice : undefined);
-    setResult(undefined);
-    setNotice(undefined);
-    setPushing(false);
-    // Only on opening: a record refetch mustn't move the picker.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
-  // The session's own (or only) repo takes the asked-for target; another
-  // repo in the picker works in place, so it pushes its branch.
-  const chosen = choices.find((r) => r.root === repo);
-  const pushTarget: PushTarget =
-    !chosen || chosen.primary || chosen.isolated ? target : "branch";
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    setPreview(null);
-    setLoadError(undefined);
-    routerClient
-      .getPushPreview(sessionId, { repo, target: pushTarget })
-      .then((p) => {
-        if (!cancelled) setPreview(p);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled)
-          setLoadError(err instanceof Error ? err.message : String(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, sessionId, routerClient, repo, pushTarget, reload]);
+export function PushDialog(props: PushDialogProps) {
+  const { open, session, onClose } = props;
+  // The layout is chosen as the dialog opens: a record refetch after the
+  // first push mustn't fold a repo list into a single pane mid-run.
+  const [openedWith, setOpenedWith] = useState<SessionRepo[] | null>(null);
+  if (open && openedWith === null) setOpenedWith(pushableRepos(session));
+  if (!open && openedWith !== null) setOpenedWith(null);
 
   useEffect(() => {
     if (!open) return;
@@ -117,10 +74,51 @@ export function PushDialog({
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!open || openedWith === null) return null;
+  return openedWith.length > 1 ? (
+    <MultiPush {...props} repos={openedWith} />
+  ) : (
+    <SinglePush {...props} />
+  );
+}
+
+/** One repo: today's confirmation, its main button the push (or the rebase and push). */
+function SinglePush({
+  sessionId,
+  routerClient,
+  target,
+  onClose,
+  onPushed,
+  onAskAgent,
+}: PushDialogProps) {
+  const titleId = useId();
+  const [preview, setPreview] = useState<PushPreview | null>(null);
+  const [loadError, setLoadError] = useState<string>();
+  // Bumped to fetch the preview again (the branch moved under it).
+  const [reload, setReload] = useState(0);
+  const [pushing, setPushing] = useState(false);
+  const [result, setResult] = useState<PushResult>();
+  const [notice, setNotice] = useState<string>();
+
+  useEffect(() => {
+    let cancelled = false;
+    setPreview(null);
+    setLoadError(undefined);
+    routerClient
+      .getPushPreview(sessionId, { repo: undefined, target })
+      .then((p) => {
+        if (!cancelled) setPreview(p);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled)
+          setLoadError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, routerClient, target, reload]);
 
   const remote = preview?.remote;
-  const upstream = remoteRef(remote, preview?.remote_branch);
   const behind = preview ? preview.behind > 0 : false;
 
   async function push() {
@@ -130,8 +128,7 @@ export function PushDialog({
     setNotice(undefined);
     try {
       const res = await routerClient.pushSession(sessionId, {
-        repo,
-        target: pushTarget,
+        target,
         rebase: behind || undefined,
         expect: preview.head,
       });
@@ -160,9 +157,7 @@ export function PushDialog({
     }
   }
 
-  const title = preview
-    ? `Push ${preview.branch ?? "this branch"}${remote ? ` to ${remote}` : ""}${preview.new_branch ? " as a new branch" : ""}?`
-    : "Push this session's work?";
+  const title = preview ? pushTitle(preview) : "Push this session's work?";
   const blocked = preview?.blocked;
   const rebaseBlocked = behind ? preview?.rebase_blocked : undefined;
   const confirmLabel = pushing
@@ -187,116 +182,29 @@ export function PushDialog({
             {title}
           </h2>
           {preview?.new_branch && (
-            <p className={shell.subtitle}>
-              {remote} has no {preview.branch} yet: the push creates it and
-              tracks it.
-            </p>
+            <p className={shell.subtitle}>{newBranchNote(preview)}</p>
           )}
         </div>
         <div className={shell.main}>
-          {choices.length > 1 && (
-            <div
-              className={styles.repos}
-              role="radiogroup"
-              aria-label="Repo to push"
-            >
-              {choices.map((r) => (
-                <label key={r.root} className={styles.repo} title={r.root}>
-                  <input
-                    type="radio"
-                    name={`${titleId}-repo`}
-                    checked={r.root === repo}
-                    disabled={pushing}
-                    onChange={() => setRepo(r.root)}
-                  />
-                  {repoName(r.root)}
-                  <span className={styles.ahead}>↑{r.unpushed_count}</span>
-                </label>
-              ))}
-            </div>
-          )}
           {loadError ? (
             <div className={shell.error}>
               Couldn't check the remote: {loadError}
             </div>
           ) : !preview ? (
-            <div className={styles.loading} role="status">
-              <span className={styles.spinner} aria-hidden="true" />
-              Fetching {remote ?? "the remote"}…
-            </div>
+            <Fetching remote={remote} />
           ) : (
-            <>
-              {notice && <div className={styles.notice}>{notice}</div>}
-              {preview.commits.length > 0 && (
-                <div>
-                  <div className={styles.listHead}>
-                    {plural(preview.ahead, "commit")}:
-                  </div>
-                  <CommitList
-                    commits={preview.commits}
-                    total={preview.ahead}
-                    label="Commits to push"
-                  />
-                </div>
-              )}
-              {preview.fetch_error ? (
-                <div className={shell.error}>
-                  Couldn't fetch {remote ?? "the remote"}: {preview.fetch_error}
-                </div>
-              ) : (
-                <div className={shell.muted}>
-                  {remote ? `${upstream} fetched just now` : "fetched just now"}
-                  {behind ? "" : " · fast-forward"} · never forced
-                </div>
-              )}
-              {blocked && (
-                <div className={styles.blocked} data-reason={blocked.reason}>
-                  {blocked.detail ?? "Push can't run here."}
-                </div>
-              )}
-              {!blocked && behind && (
-                <div>
-                  <div className={styles.listHead}>
-                    {upstream} has {plural(preview.behind, "commit")} you don't
-                    have
-                  </div>
-                  <CommitList
-                    commits={preview.incoming}
-                    total={preview.behind}
-                    label="Incoming commits"
-                  />
-                  {rebaseBlocked && (
-                    <div
-                      className={styles.blocked}
-                      data-reason={rebaseBlocked.reason}
-                    >
-                      {rebaseBlocked.detail ?? "It can't be rebased here."}
-                      {rebaseBlocked.files && rebaseBlocked.files.length > 0 && (
-                        <ul className={styles.files}>
-                          {rebaseBlocked.files.map((f) => (
-                            <li key={f}>{f}</li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-              {result && (
-                <Outcome
-                  result={result}
-                  branch={preview.branch}
-                  upstream={upstream}
-                  onAskAgent={
-                    onAskAgent &&
-                    ((text) => {
-                      onAskAgent(text);
-                      onClose();
-                    })
-                  }
-                />
-              )}
-            </>
+            <PreviewBody
+              preview={preview}
+              notice={notice}
+              result={result}
+              onAskAgent={
+                onAskAgent &&
+                ((text) => {
+                  onAskAgent(text);
+                  onClose();
+                })
+              }
+            />
           )}
         </div>
         <div className={shell.foot}>
@@ -317,6 +225,460 @@ export function PushDialog({
         </div>
       </div>
     </div>
+  );
+}
+
+/** One repo's half of the multi-repo dialog: its preview, its rebase opt-in, and how its push went. */
+interface RepoPush {
+  target: PushTarget;
+  preview?: PushPreview;
+  loadError?: string;
+  /** The user ticked "Rebase onto … first" (behind only). */
+  rebase: boolean;
+  pushing: boolean;
+  /** The last push that didn't go: refused or conflicted. */
+  result?: PushResult;
+  /** It went. */
+  pushed?: PushResult;
+  /** Why the preview was fetched again (the branch moved, the remote moved on). */
+  notice?: string;
+}
+
+/** The repo list's dot: ready (green), behind without the opt-in (amber), can't push (grey), pushed (green ✓), failed (red). */
+type PushStatus = "loading" | "ready" | "need" | "blocked" | "pushed" | "failed";
+
+function pushStatus(r: RepoPush | undefined): PushStatus {
+  if (!r) return "loading";
+  if (r.pushed) return "pushed";
+  if (r.loadError || r.result) return "failed";
+  if (!r.preview) return "loading";
+  if (r.preview.blocked) return "blocked";
+  if (r.preview.behind > 0) {
+    if (r.preview.rebase_blocked) return "blocked";
+    return r.rebase ? "ready" : "need";
+  }
+  return "ready";
+}
+
+/** Goes in "Push N repos": not pushed yet, nothing blocking it, opted in to the rebase when behind. A failed one may be tried again. */
+function canPush(r: RepoPush | undefined): boolean {
+  const p = r?.preview;
+  if (!r || r.pushed || !p || p.blocked) return false;
+  return p.behind === 0 || (r.rebase && !p.rebase_blocked);
+}
+
+const DOT: Record<PushStatus, string> = {
+  loading: shell.dot_skip,
+  ready: shell.dot_ready,
+  need: shell.dot_need,
+  blocked: shell.dot_skip,
+  pushed: shell.dot_committed,
+  failed: shell.dot_failed,
+};
+
+/**
+ * The session's own repo pushes its base once nothing is left to land
+ * (isolated), else what the opener asked; any other repo works in place and
+ * pushes its branch.
+ */
+function targetFor(repo: SessionRepo, asked: PushTarget): PushTarget {
+  if (!repo.primary && !repo.isolated) return "branch";
+  if (repo.isolated && (repo.unlanded_count ?? 0) === 0) return "base";
+  return asked;
+}
+
+/** Several repos (layout B, as CommitDialog's): a list on the left, the selected repo's push on the right. */
+function MultiPush({
+  sessionId,
+  routerClient,
+  target,
+  onClose,
+  onPushed,
+  onAskAgent,
+  repos,
+}: PushDialogProps & { repos: SessionRepo[] }) {
+  const titleId = useId();
+  const [pushes, setPushes] = useState<Record<string, RepoPush>>(() =>
+    Object.fromEntries(
+      repos.map((r) => [
+        r.root,
+        { target: targetFor(r, target), rebase: false, pushing: false },
+      ]),
+    ),
+  );
+  const [pane, setPane] = useState(
+    (repos.find((r) => r.primary) ?? repos[0]).root,
+  );
+  const [running, setRunning] = useState(false);
+
+  const patch = (root: string, change: Partial<RepoPush>) =>
+    setPushes((cur) =>
+      cur[root] ? { ...cur, [root]: { ...cur[root], ...change } } : cur,
+    );
+
+  // A preview fetches, so each repo's arrives on its own; a later fetch of
+  // the same repo wins over an earlier one still on its way.
+  const loads = useRef(new Map<string, number>());
+  function load(root: string, repoTarget: PushTarget, notice?: string) {
+    const n = (loads.current.get(root) ?? 0) + 1;
+    loads.current.set(root, n);
+    patch(root, { preview: undefined, loadError: undefined, notice });
+    routerClient
+      .getPushPreview(sessionId, { repo: root, target: repoTarget })
+      .then((p) => {
+        if (loads.current.get(root) === n) patch(root, { preview: p });
+      })
+      .catch((err: unknown) => {
+        if (loads.current.get(root) === n)
+          patch(root, {
+            loadError: err instanceof Error ? err.message : String(err),
+          });
+      });
+  }
+
+  useEffect(() => {
+    // Every listed repo at once, when the dialog opens.
+    for (const r of repos) load(r.root, targetFor(r, target));
+    // Mounted per opening; the list is the one it opened with.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const ready = repos.filter((r) => canPush(pushes[r.root]));
+
+  async function pushAll() {
+    setRunning(true);
+    let failed: string | undefined;
+    for (const repo of ready) {
+      const root = repo.root;
+      const r = pushes[root];
+      const preview = r.preview!;
+      patch(root, { pushing: true, result: undefined, notice: undefined });
+      try {
+        const res = await routerClient.pushSession(sessionId, {
+          repo: root,
+          target: r.target,
+          rebase: (preview.behind > 0 && r.rebase) || undefined,
+          expect: preview.head,
+        });
+        if (res.outcome === "pushed") {
+          patch(root, { pushed: res });
+          onPushed(res);
+        } else if (
+          res.outcome === "refused" &&
+          (res.reason === "moved" || res.reason === "behind")
+        ) {
+          // Stale: this repo's preview again, saying why.
+          failed ??= root;
+          load(root, r.target, pushRefusalCopy(res.reason));
+        } else {
+          failed ??= root;
+          patch(root, { result: res });
+        }
+      } catch (err) {
+        failed ??= root;
+        patch(root, {
+          result: {
+            outcome: "refused",
+            detail: err instanceof Error ? err.message : String(err),
+          },
+        });
+      } finally {
+        patch(root, { pushing: false });
+      }
+    }
+    setRunning(false);
+    if (!failed) {
+      onClose();
+      return;
+    }
+    setPane(failed);
+  }
+
+  const current = repos.find((r) => r.root === pane)!;
+  const cur = pushes[pane];
+  const anyPushed = repos.some((r) => pushes[r.root]?.pushed);
+
+  return (
+    <div className={shell.backdrop} onMouseDown={onClose}>
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className={cx(shell.dialog, shell.wide)}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className={shell.head}>
+          <h2 id={titleId} className={shell.title}>
+            Push this session's repos?
+          </h2>
+          <p className={shell.subtitle}>
+            One push per repo, one at a time · never forced
+          </p>
+        </div>
+        <div className={cx(shell.main, shell.mainSplit)}>
+          <div className={shell.split}>
+            <div className={shell.rlist} role="group" aria-label="Repos">
+              {repos.map((r) => (
+                <PushItem
+                  key={r.root}
+                  repo={r}
+                  push={pushes[r.root]}
+                  on={r.root === pane}
+                  onSelect={() => setPane(r.root)}
+                />
+              ))}
+            </div>
+            <div className={shell.rpane} data-repo={pane}>
+              <RepoPushPane
+                repo={current}
+                push={cur}
+                disabled={running}
+                onRebase={(rebase) => patch(pane, { rebase })}
+                onAskAgent={
+                  onAskAgent &&
+                  ((text) => {
+                    onAskAgent(text);
+                    onClose();
+                  })
+                }
+              />
+            </div>
+          </div>
+        </div>
+        <div className={shell.foot}>
+          <span className={shell.spacer} />
+          <Button variant="ghost" onClick={onClose}>
+            {anyPushed ? "Done" : "Cancel"}
+          </Button>
+          <Button
+            variant="primary"
+            disabled={running || ready.length === 0}
+            onClick={() => void pushAll()}
+          >
+            {running ? "Pushing…" : `Push ${plural(ready.length, "repo")}`}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** One repo in the list: name, ↑ahead · ↓behind · branch, and its dot. */
+function PushItem({
+  repo,
+  push,
+  on,
+  onSelect,
+}: {
+  repo: SessionRepo;
+  push: RepoPush | undefined;
+  on: boolean;
+  onSelect: () => void;
+}) {
+  const status = pushStatus(push);
+  const p = push?.preview;
+  let sub: ReactNode;
+  if (status === "pushed") sub = <span className={shell.tagOk}>✓ pushed</span>;
+  else if (status === "loading") sub = "Fetching…";
+  else if (status === "blocked") sub = "can't push";
+  else if (status === "failed") sub = "didn't push · see why";
+  else
+    sub = [
+      `↑${p?.ahead ?? repo.unpushed_count ?? 0}`,
+      p && p.behind > 0 && `↓${p.behind}`,
+      p?.branch,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  return (
+    <button
+      type="button"
+      className={cx(shell.ritem, on && shell.ritemOn)}
+      aria-current={on || undefined}
+      title={repo.root}
+      data-status={status}
+      onClick={onSelect}
+    >
+      <span className={shell.rtitle}>
+        <span className={cx(shell.dot, DOT[status])} aria-hidden="true" />
+        {repoName(repo.root)}
+      </span>
+      <span className={shell.rsub}>{sub}</span>
+    </button>
+  );
+}
+
+/** The selected repo: what its push would send, its rebase opt-in, how it went. */
+function RepoPushPane({
+  repo,
+  push,
+  disabled,
+  onRebase,
+  onAskAgent,
+}: {
+  repo: SessionRepo;
+  push: RepoPush | undefined;
+  disabled: boolean;
+  onRebase: (rebase: boolean) => void;
+  onAskAgent?: (text: string) => void;
+}) {
+  const p = push?.preview;
+  return (
+    <div className={shell.pane}>
+      <div className={shell.paneHead}>
+        <span className={shell.paneName}>
+          {p ? pushTitle(p) : repoName(repo.root)}
+        </span>
+        <span className={shell.where} title={repo.root}>
+          {displayPath(repo.root)}
+        </span>
+      </div>
+      {p?.new_branch && <div className={shell.muted}>{newBranchNote(p)}</div>}
+      {push?.pushed ? (
+        <div className={shell.partial}>{pushedCopy(push.pushed)}.</div>
+      ) : push?.loadError ? (
+        <div className={shell.error}>
+          Couldn't check the remote: {push.loadError}
+        </div>
+      ) : !p ? (
+        <Fetching remote={undefined} />
+      ) : (
+        <PreviewBody
+          preview={p}
+          notice={push?.notice}
+          result={push?.result}
+          onAskAgent={onAskAgent}
+          rebase={{
+            checked: Boolean(push?.rebase),
+            disabled: disabled || Boolean(push?.pushing),
+            onChange: onRebase,
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function pushTitle(p: PushPreview): string {
+  return `Push ${p.branch ?? "this branch"}${p.remote ? ` to ${p.remote}` : ""}${p.new_branch ? " as a new branch" : ""}?`;
+}
+
+function newBranchNote(p: PushPreview): string {
+  return `${p.remote} has no ${p.branch} yet: the push creates it and tracks it.`;
+}
+
+function Fetching({ remote }: { remote: string | undefined }) {
+  return (
+    <div className={styles.loading} role="status">
+      <span className={styles.spinner} aria-hidden="true" />
+      Fetching {remote ?? "the remote"}…
+    </div>
+  );
+}
+
+/**
+ * What a push would send, the line about the fetch, why it can't run, what's
+ * coming in (and, in the multi-repo dialog, the rebase opt-in), and how the
+ * last try went.
+ */
+function PreviewBody({
+  preview,
+  notice,
+  result,
+  onAskAgent,
+  rebase,
+}: {
+  preview: PushPreview;
+  notice?: string;
+  result?: PushResult;
+  onAskAgent?: (text: string) => void;
+  /** The multi-repo dialog's per-repo opt-in; the single pane's main button is its own. */
+  rebase?: { checked: boolean; disabled: boolean; onChange: (on: boolean) => void };
+}) {
+  const remote = preview.remote;
+  const upstream = remoteRef(remote, preview.remote_branch);
+  const behind = preview.behind > 0;
+  const blocked = preview.blocked;
+  const rebaseBlocked = behind ? preview.rebase_blocked : undefined;
+  return (
+    <>
+      {notice && <div className={styles.notice}>{notice}</div>}
+      {preview.commits.length > 0 && (
+        <div>
+          <div className={styles.listHead}>
+            {plural(preview.ahead, "commit")}:
+          </div>
+          <CommitList
+            commits={preview.commits}
+            total={preview.ahead}
+            label="Commits to push"
+          />
+        </div>
+      )}
+      {preview.fetch_error ? (
+        <div className={shell.error}>
+          Couldn't fetch {remote ?? "the remote"}: {preview.fetch_error}
+        </div>
+      ) : (
+        <div className={shell.muted}>
+          {remote ? `${upstream} fetched just now` : "fetched just now"}
+          {behind ? "" : " · fast-forward"} · never forced
+        </div>
+      )}
+      {blocked && (
+        <div className={styles.blocked} data-reason={blocked.reason}>
+          {blocked.detail ?? "Push can't run here."}
+        </div>
+      )}
+      {!blocked && behind && (
+        <div>
+          <div className={styles.listHead}>
+            {upstream} has {plural(preview.behind, "commit")} you don't have
+          </div>
+          <CommitList
+            commits={preview.incoming}
+            total={preview.behind}
+            label="Incoming commits"
+          />
+          {rebase && (
+            <label className={styles.optIn}>
+              <input
+                type="checkbox"
+                checked={rebase.checked && !rebaseBlocked}
+                disabled={rebase.disabled || Boolean(rebaseBlocked)}
+                onChange={(e) => rebase.onChange(e.target.checked)}
+              />
+              Rebase onto {upstream} first
+            </label>
+          )}
+          {rebaseBlocked && (
+            <div className={styles.blocked} data-reason={rebaseBlocked.reason}>
+              {rebaseBlocked.detail ?? "It can't be rebased here."}
+              {rebaseBlocked.files && rebaseBlocked.files.length > 0 && (
+                <ul className={styles.files}>
+                  {rebaseBlocked.files.map((f) => (
+                    <li key={f}>{f}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          {rebase && !rebaseBlocked && !rebase.checked && (
+            <div className={shell.muted}>
+              Left out of this push until you tick it.
+            </div>
+          )}
+        </div>
+      )}
+      {result && (
+        <Outcome
+          result={result}
+          branch={preview.branch}
+          upstream={upstream}
+          onAskAgent={onAskAgent}
+        />
+      )}
+    </>
   );
 }
 

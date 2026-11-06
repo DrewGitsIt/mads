@@ -36,9 +36,9 @@ export interface WorkAreaProps {
   onClose: () => void;
 }
 
-/** outsideControlTitle ends by telling the old header button's click; the dock's click opens the popover. */
+/** outsideControlTitle without its last sentence, the click: the popover's explainer says why, its buttons what to do. */
 function outsideWhy(files: number): string {
-  return outsideControlTitle(files).replace(/\s*Click to ask the agent to tidy up\.$/, "");
+  return outsideControlTitle(files).replace(/\s*Click to choose what to commit\.$/, "");
 }
 
 /** Why an in-place session has no Land, from its worktree status. */
@@ -136,6 +136,10 @@ export function WorkArea({
     work?.onAskAgent?.(text);
     close();
   }
+  function commitDialog() {
+    close();
+    work?.onCommitDialog?.();
+  }
 
   const fresh = awaiting && landOutcomeKey(landOutcome) !== awaiting.before ? landOutcome : undefined;
 
@@ -171,7 +175,8 @@ export function WorkArea({
           committing={work.committing}
           onCommit={work.onCommit}
           onLand={land}
-          onOutside={toggleFresh}
+          onOutside={work.onCommitDialog ?? toggleFresh}
+          outsideOpensCommit={Boolean(work.onCommitDialog)}
           onPush={work.onPush}
         />
       )}
@@ -257,15 +262,22 @@ export function WorkArea({
           {state?.kind === "outside" && !fresh && (
             <div className={cx(styles.outcome, styles.tone_warn)} data-testid="outside-explainer">
               <b>Changes outside this session are holding Land back.</b> {outsideWhy(state.files)}
-              {work?.onAskAgent && (
+              {(work?.onCommitDialog || work?.onAskAgent) && (
                 <div className={styles.outcomeActs}>
-                  <button
-                    type="button"
-                    className={cx(line.btn, line.btnPrimary)}
-                    onClick={() => ask(tidyOutsidePrompt())}
-                  >
-                    Ask the agent
-                  </button>
+                  {work.onCommitDialog && (
+                    <button type="button" className={cx(line.btn, line.btnPrimary)} onClick={commitDialog}>
+                      Commit them…
+                    </button>
+                  )}
+                  {work.onAskAgent && (
+                    <button
+                      type="button"
+                      className={cx(line.btn, !work.onCommitDialog && line.btnPrimary)}
+                      onClick={() => ask(tidyOutsidePrompt())}
+                    >
+                      Ask the agent
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -281,6 +293,7 @@ export function WorkArea({
               landing={landing}
               onAskAgent={work?.onAskAgent ? ask : undefined}
               onLandAgain={work ? land : undefined}
+              onCommitDialog={work?.onCommitDialog ? commitDialog : undefined}
             />
           )}
         </div>
@@ -356,6 +369,7 @@ function WorkButton({
   onCommit,
   onLand,
   onOutside,
+  outsideOpensCommit,
   onPush,
 }: {
   state: WorkState;
@@ -363,7 +377,10 @@ function WorkButton({
   committing?: boolean;
   onCommit: () => void;
   onLand: () => void;
+  /** Opens the Commit dialog when the caller can, else the popover. */
   onOutside: () => void;
+  /** onOutside opens the Commit dialog: the title says so. */
+  outsideOpensCommit?: boolean;
   onPush?: (target: PushTarget) => void;
 }) {
   if (landing) {
@@ -381,7 +398,9 @@ function WorkButton({
         className={cx(styles.work, styles.outside)}
         onClick={onOutside}
         aria-label={`Changes outside this session · ${plural(state.files, "file")}`}
-        title={`${outsideWhy(state.files)} Click for what to do.`}
+        title={
+          outsideOpensCommit ? outsideControlTitle(state.files) : `${outsideWhy(state.files)} Click for what to do.`
+        }
         data-work-state="outside"
       >
         <span className={line.vFull}>Changes outside</span>
@@ -448,11 +467,14 @@ function LandOutcome({
   landing,
   onAskAgent,
   onLandAgain,
+  onCommitDialog,
 }: {
   card: LandCardModel;
   landing: boolean;
   onAskAgent?: (text: string) => void;
   onLandAgain?: () => void;
+  /** A dirty refusal's files are Commit's to take (D6). */
+  onCommitDialog?: () => void;
 }) {
   const again = onLandAgain && (
     <button type="button" className={line.btn} disabled={landing} onClick={onLandAgain}>
@@ -524,6 +546,7 @@ function LandOutcome({
       const copy = refusalCopy(card.reason, card.base, card.files, card.outside);
       const showDetail = Boolean(card.detail) && (refusalDetailIsGit(card.reason) || copy.title === "Land didn't run");
       const tidy = card.reason === "dirty" && card.outside?.length ? card.outside : undefined;
+      const commit = card.reason === "dirty" ? onCommitDialog : undefined;
       return (
         <div
           className={cx(styles.outcome, styles[`tone_${copy.tone}`])}
@@ -533,12 +556,17 @@ function LandOutcome({
         >
           <b>{copy.title}.</b> {copy.body}
           {showDetail && <pre className={styles.detail}>{card.detail}</pre>}
-          {((tidy && onAskAgent) || (copy.retry && again)) && (
+          {(commit || (tidy && onAskAgent) || (copy.retry && again)) && (
             <div className={styles.outcomeActs}>
+              {commit && (
+                <button type="button" className={cx(line.btn, line.btnPrimary)} onClick={commit}>
+                  Commit them…
+                </button>
+              )}
               {tidy && onAskAgent && (
                 <button
                   type="button"
-                  className={cx(line.btn, line.btnPrimary)}
+                  className={cx(line.btn, !commit && line.btnPrimary)}
                   onClick={() => onAskAgent(tidyOutsidePrompt(tidy))}
                 >
                   Ask the agent

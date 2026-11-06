@@ -87,9 +87,9 @@ export function refusalCopy(
         retry: true,
       };
     case "dirty": {
-      // Commit only offers the change list, so "Commit them first" is
-      // advice the user can't take for files the agent changed through a
-      // shell: say which those are and who can deal with them.
+      // Files off the change list (edited through a shell, most likely)
+      // still show in Commit, under "Changed by someone else" (COMMIT-LAND-
+      // PUSH D6): say which they are, and that they start unchecked there.
       const off = outside ?? [];
       if (off.length > 0) {
         const them = off.length === 1 ? "it" : "them";
@@ -98,8 +98,8 @@ export function refusalCopy(
           title: "Changes outside this session are holding Land back",
           body:
             `${nameFiles(off)} changed in the session's folder but ${off.length === 1 ? "isn't" : "aren't"} on its change list ` +
-            `(edited through a shell, most likely), so Commit can't include ${them}. ` +
-            `Ask the agent to commit or revert ${them}, or commit ${them} yourself in the session's folder, then Land again.` +
+            `(edited through a shell, most likely). Commit lists ${them} under “Changed by someone else”, unchecked: ` +
+            `commit ${them} there, or ask the agent to commit or revert ${them}, then Land again.` +
             (own > 0 ? ` Commit this session's other ${plural(own, "changed file")} too.` : ""),
           tone: "warn",
           retry: true,
@@ -109,7 +109,7 @@ export function refusalCopy(
       return {
         title: "This session has uncommitted changes",
         body: named
-          ? `${named} ${files!.length === 1 ? "is" : "are"} uncommitted in the session's folder. Commit ${it} first — if Commit doesn't list one, ask the agent to commit or revert it. Land only moves committed work.`
+          ? `${named} ${files!.length === 1 ? "is" : "are"} uncommitted in the session's folder. Commit ${it} first. Land only moves committed work.`
           : "Commit them first. Land only moves committed work.",
         tone: "warn",
         retry: false,
@@ -225,7 +225,7 @@ export function undoRefusalCopy(reason: string | undefined): string {
 /** The header control's hover text while files off the change list hold Land back. */
 export function outsideControlTitle(n: number): string {
   const them = n === 1 ? "it" : "them";
-  return `${plural(n, "file")} in this session's folder changed outside its change list, so Commit can't include ${them} and Land won't run until ${n === 1 ? "it's" : "they're"} committed or reverted. Click to ask the agent to tidy up.`;
+  return `${plural(n, "file")} in this session's folder changed outside its change list, so Land won't run until ${n === 1 ? "it's" : "they're"} committed or reverted. Commit can take ${them} as changes by someone else. Click to choose what to commit.`;
 }
 
 /** The message "Ask the agent to commit them" puts in the composer: an ordinary, editable user turn. */
