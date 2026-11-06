@@ -235,6 +235,33 @@ func dirStatus(ctx context.Context, dir string) contracts.DirStatus {
 	return contracts.DirStatusPlain
 }
 
+// childRepos lists the git repos directly inside dir: subfolders holding a
+// .git entry (a directory, or a worktree's .git file). One directory read
+// and a stat per subfolder — never a walk, so a folder like ~ or / costs
+// the same as any other. Hidden folders are skipped. Sorted, capped at
+// contracts.MaxDirRepos.
+func childRepos(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries { // ReadDir sorts by name
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		if _, err := os.Lstat(filepath.Join(p, ".git")); err != nil {
+			continue
+		}
+		out = append(out, p)
+		if len(out) == contracts.MaxDirRepos {
+			break
+		}
+	}
+	return out
+}
+
 // discoveredModels reads a provider's catalog WITHOUT spawning. Defaults
 // resolution runs on the Launchpad's create-session path, where a missing
 // default model is already a tolerated degradation (the caller simply
@@ -283,8 +310,12 @@ func (s *server) handleSessionDefaults(w http.ResponseWriter, r *http.Request) {
 	var status contracts.DirStatus
 	var branch string
 	var owner *contracts.WorktreeTenant
+	var repos []string
 	if dir.Value != "" {
 		status = dirStatus(r.Context(), dir.Value)
+	}
+	if status == contracts.DirStatusPlain {
+		repos = childRepos(dir.Value)
 	}
 	if status == contracts.DirStatusGit {
 		// Best-effort: a detached HEAD (or any git hiccup) just leaves the
@@ -300,6 +331,7 @@ func (s *server) handleSessionDefaults(w http.ResponseWriter, r *http.Request) {
 		Trust:           contracts.ResolvedSessionField{Value: string(sess.Trust), Source: src.Trust},
 		Dir:             dir,
 		DirStatus:       status,
+		DirRepos:        repos,
 		DirBranch:       branch,
 		DirOwnerSession: owner,
 		Workspace:       src.Workspace,

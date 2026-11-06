@@ -194,8 +194,10 @@ export interface SessionDefaults {
   trust: ResolvedSessionField;
   /** Where the session would start. Source "builtin" = the Router's own directory (nobody asked). */
   dir: ResolvedSessionField;
-  /** What's at `dir` on disk — "plain" means worktree isolation will run in the folder itself. */
+  /** What's at `dir` on disk — "plain": not a git repo, so worktree isolation runs in the folder itself and Commit only reaches the repos the agent touches. */
   dir_status?: DirStatus;
+  /** Git repos directly inside a "plain" `dir` (one level), absolute — offered as shortcuts. At most 8. */
+  dir_repos?: string[];
   /** The branch the checkout at `dir` has open — only for a git dir on a branch (absent when detached). */
   dir_branch?: string;
   /** The session whose worktree `dir` is (its branch is mads/session/<id>) — only while that session exists. */

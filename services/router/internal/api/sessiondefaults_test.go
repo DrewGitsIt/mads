@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -32,7 +34,7 @@ func TestSessionDefaultsNoWorkspace(t *testing.T) {
 	if got.Dir != (contracts.ResolvedSessionField{Value: wd, Source: contracts.SessionDefaultSourceBuiltin}) {
 		t.Errorf("dir = %+v, want builtin %q", got.Dir, wd)
 	}
-	got.Dir, got.DirStatus, got.DirBranch = contracts.ResolvedSessionField{}, "", ""
+	got.Dir, got.DirStatus, got.DirBranch, got.DirRepos = contracts.ResolvedSessionField{}, "", "", nil
 
 	want := contracts.SessionDefaults{
 		Provider:  contracts.ResolvedSessionField{Value: "fake", Source: contracts.SessionDefaultSourceConfig},
@@ -40,7 +42,7 @@ func TestSessionDefaultsNoWorkspace(t *testing.T) {
 		Isolation: contracts.ResolvedSessionField{Value: contracts.IsolationWorktree, Source: contracts.SessionDefaultSourceBuiltin},
 		Trust:     contracts.ResolvedSessionField{Value: string(contracts.TrustLimited), Source: contracts.SessionDefaultSourceConfig},
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got = %+v, want %+v", got, want)
 	}
 }
@@ -282,6 +284,41 @@ func TestSessionDefaultsDirStatus(t *testing.T) {
 		if got := getDefaults(t, srv.URL, url.Values{"dir": {dir}}); got.DirStatus != want {
 			t.Errorf("dir_status(%s) = %q, want %q", dir, got.DirStatus, want)
 		}
+	}
+}
+
+// dir_repos offers the repos directly inside a plain folder — one level,
+// hidden folders and plain subfolders skipped, a worktree's .git file
+// counted — and nothing for a repo.
+func TestSessionDefaultsDirRepos(t *testing.T) {
+	srv := newTestServer(t)
+	setDefaultProvider(t, srv.URL, "fake")
+	parent := t.TempDir()
+	mk := func(rel string) string {
+		t.Helper()
+		p := filepath.Join(parent, rel)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for _, rel := range []string{"b-repo", "a-repo", ".hidden-repo", "plain/nested-repo"} {
+		if out, err := exec.Command("git", "init", "-q", mk(rel)).CombinedOutput(); err != nil {
+			t.Fatalf("git init %s: %v\n%s", rel, err, out)
+		}
+	}
+	wt := mk("c-worktree")
+	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: /elsewhere\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := getDefaults(t, srv.URL, url.Values{"dir": {parent}})
+	want := []string{filepath.Join(parent, "a-repo"), filepath.Join(parent, "b-repo"), wt}
+	if got.DirStatus != contracts.DirStatusPlain || !slices.Equal(got.DirRepos, want) {
+		t.Errorf("dir_status, dir_repos = %q, %q; want plain, %q", got.DirStatus, got.DirRepos, want)
+	}
+	if got := getDefaults(t, srv.URL, url.Values{"dir": {filepath.Join(parent, "a-repo")}}); len(got.DirRepos) != 0 {
+		t.Errorf("dir_repos for a repo = %q, want none", got.DirRepos)
 	}
 }
 

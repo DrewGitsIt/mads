@@ -19,7 +19,7 @@ import type {
 } from "../../../router/types";
 import { LinkChooserDialog } from "../rail/LinkChooserDialog";
 import { useProviderMatrix } from "../../settings/state/useProviderMatrix";
-import { FolderPill, recentDirs } from "../pills/FolderPill";
+import { FolderPill, folderName, recentDirs } from "../pills/FolderPill";
 import { AgentPill } from "../pills/AgentPill";
 import { ModelPill } from "../pills/ModelPill";
 import { TrustPill } from "../pills/TrustPill";
@@ -285,10 +285,20 @@ export function Launchpad({
   let dirWarning: string | null = null;
   if (resolved?.dir_status === "missing") {
     dirWarning = `${dirShown} doesn't exist on this machine — choose another folder to start in.`;
-  } else if (resolved?.dir_status === "plain" && effectiveIsolation === "worktree") {
-    dirWarning = `${dirShown} isn't a git repository, so there's no worktree to isolate this session — it will work in the folder directly.`;
+  } else if (resolved?.dir_status === "plain") {
+    // Commit and Land only reach the repos the agent touches, so say so
+    // whatever the isolation (docs/COMMIT-LAND-PUSH-DESIGN.md D9).
+    dirWarning =
+      effectiveIsolation === "worktree"
+        ? `${dirShown} isn't a git repository, so there's no worktree to isolate this session — it will work in the folder directly, and changes can only be committed in the repos the agent touches.`
+        : `${dirShown} isn't a git repository. You can work here, but changes can only be committed in the repos the agent touches.`;
   }
+  const dirRepos = resolved?.dir_status === "plain" ? (resolved.dir_repos ?? []) : [];
   const dirOwner = resolved?.dir_status === "git" ? resolved.dir_owner_session : undefined;
+  function pickDir(dir: string) {
+    setSelectedWorkspace(undefined);
+    setStaged((prev) => ({ ...prev, dir, workspace: undefined }));
+  }
   // Never offer to save a folder that isn't there: every later Start would fail.
   const canSaveDefaults =
     !!savedConfig &&
@@ -435,10 +445,7 @@ export function Launchpad({
             resolvedDir={resolved?.dir}
             resolvedWorkspace={resolved?.workspace}
             recent={recentDirs(sessions)}
-            onPickDir={(dir) => {
-              setSelectedWorkspace(undefined);
-              setStaged((prev) => ({ ...prev, dir, workspace: undefined }));
-            }}
+            onPickDir={pickDir}
             onPickWorkspace={(ws) => {
               setSelectedWorkspace(ws);
               setStaged((prev) => ({ ...prev, workspace: ws.name, dir: undefined }));
@@ -497,6 +504,20 @@ export function Launchpad({
         {dirWarning && (
           <p className={styles.dirWarning} role="status">
             {dirWarning}
+            {dirRepos.length > 0 && (
+              <>
+                {" "}
+                Start in one of its repos instead:{" "}
+                {dirRepos.map((repo, i) => (
+                  <span key={repo}>
+                    {i > 0 && " · "}
+                    <button type="button" className={styles.noteLink} title={repo} onClick={() => pickDir(repo)}>
+                      {folderName(repo)}
+                    </button>
+                  </span>
+                ))}
+              </>
+            )}
           </p>
         )}
         {!dirWarning && dirOwner && <OwnerNote owner={dirOwner} isolation={effectiveIsolation} />}

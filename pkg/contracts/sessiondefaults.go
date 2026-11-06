@@ -40,6 +40,11 @@ type SessionDefaults struct {
 	// Start: DirStatusGit, DirStatusPlain (worktree isolation will run in
 	// the folder itself) or DirStatusMissing. Empty when Dir is empty.
 	DirStatus DirStatus `json:"dir_status,omitempty"`
+	// DirRepos are the git repos directly inside Dir (one level, never
+	// deeper), absolute and sorted, capped at MaxDirRepos — offered as
+	// shortcuts when DirStatus is DirStatusPlain, since a session there can
+	// only commit in the repos its agent touches. Empty otherwise.
+	DirRepos []string `json:"dir_repos,omitempty"`
 	// DirBranch is the branch the checkout at Dir has open, when DirStatus
 	// is DirStatusGit and HEAD is on a branch — empty when detached. The
 	// conversation header shows it for a session working in place, whose
@@ -66,3 +71,6 @@ const (
 	DirStatusPlain   DirStatus = "plain"
 	DirStatusMissing DirStatus = "missing"
 )
+
+// MaxDirRepos caps SessionDefaults.DirRepos.
+const MaxDirRepos = 8

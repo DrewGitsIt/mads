@@ -107,7 +107,7 @@ describe("Launchpad folder + defaults", () => {
     );
   });
 
-  it("warns below the pills when a plain folder meets worktree isolation", async () => {
+  it("warns about a plain folder whatever the isolation, and only worktree adds the isolation note", async () => {
     stubRouter(
       (dir) =>
         dir
@@ -122,14 +122,43 @@ describe("Launchpad folder + defaults", () => {
     typeFolder("/tmp/notes");
     await waitFor(() =>
       expect(screen.getByRole("status").textContent).toMatch(
-        /\/tmp\/notes isn't a git repository/,
+        /\/tmp\/notes isn't a git repository, so there's no worktree to isolate this session.*only be committed in the repos the agent touches/,
       ),
     );
 
-    // Choosing to work in place answers the warning.
+    // Working in place drops the isolation part; the commit part stays.
     fireEvent.click(screen.getByText(/New worktree \(default\)/));
     fireEvent.click(screen.getByText("Current directory"));
-    await waitFor(() => expect(screen.queryByText(/isn't a git repository/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/no worktree to isolate/)).toBeNull());
+    expect(screen.getByRole("status").textContent).toMatch(
+      /\/tmp\/notes isn't a git repository\. You can work here, but changes can only be committed in the repos the agent touches\./,
+    );
+  });
+
+  it("offers a plain folder's repos as shortcuts that pick that folder", async () => {
+    stubRouter(
+      (dir) =>
+        dir === "~/repo"
+          ? defaults({ dir: { value: dir }, dir_status: "plain", dir_repos: ["/home/me/repo/alpha", "/home/me/repo/mads"] })
+          : dir
+            ? defaults({ dir: { value: dir }, dir_status: "git" })
+            : defaults(),
+      { ...DEFAULT_CONFIG },
+    );
+    const createSession = vi.fn().mockResolvedValue({ id: "ses_1" });
+    render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(/mads \(default\)/)).toBeTruthy());
+
+    typeFolder("~/repo");
+    await waitFor(() => expect(screen.getByRole("status").textContent).toMatch(/Start in one of its repos instead: alpha · mads/));
+    fireEvent.click(screen.getByRole("button", { name: "mads" }));
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+
+    fireEvent.change(screen.getByLabelText("Describe your goal"), { target: { value: "go" } });
+    fireEvent.click(screen.getByText("Start session"));
+    await waitFor(() =>
+      expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ dir: "/home/me/repo/mads" })),
+    );
   });
 
   it("warns about a folder that isn't there, and won't save it as a default", async () => {
