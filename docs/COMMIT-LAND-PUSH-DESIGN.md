@@ -1,6 +1,6 @@
 # Commit, Land, Push: multi-repo sessions and Commit from Changes
 
-**Status:** Slices 1–2 built on `commit-multirepo` (2026-11-05); see Implementation notes. Next: slice 3 (move into repo).
+**Status:** Slices 1–3 built on `commit-multirepo` (2026-11-05); see Implementation notes. Next: slice 4 (Push).
 **Date:** 2026-11-05. **Driver:** Drew started a session in `~/repo` by accident.
 Its agent did real work in `~/repo/mads`. Changes showed most of it, but Commit
 and Land refused it, and there was no way to recover without re-rooting.
@@ -314,5 +314,19 @@ deeper.
   followed; scan cost 19–37 µs per call on the pump; one look about 15 ms
   in mads. Looks (an upper bound on ledger writes and events) were at most
   about 1.6 per write-capable call before coalescing.
-- **Not yet:** moving files into a repo (slice 3); Push (slice 4); Land and
-  Push across repos, and a dirty Land opening Commit (slice 5).
+
+### Slice 3 (2026-11-05)
+
+- **D4, as built:** `POST /sessions/{id}/move` (Router) and
+  `GET /sessions/{id}/move/folders` (from `git ls-files --cached --others
+  --exclude-standard`, same-extension folders first). The plan carries
+  `move_targets`: its repos, the repos directly inside a non-repo session
+  folder, and the workspace's repos. Outside files that are gone (moved,
+  deleted) leave the plan.
+- **The note to the agent** generalizes the re-root note:
+  `Session.PendingNotes` (scoped `PATCH /sessions/{id}/notes`) ride the
+  next turn sent, after any re-root note, and only the delivered ones are
+  removed. The Router tells a live child through `POST /notes`. As with the
+  re-root note, terminal (PTY) input doesn't carry it; it stays owed.
+- **Not yet:** Push (slice 4); Land and Push across repos, and a dirty Land
+  opening Commit (slice 5).
