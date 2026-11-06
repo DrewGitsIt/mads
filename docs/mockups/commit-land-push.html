@@ -1,0 +1,619 @@
+<!doctype html>
+<!--
+  mads — Commit from Changes, multi-repo Commit, Commit → Land → Push (v2)
+  ======================================================================
+
+  Context (2026-11-05): session ses_6ea9f23b1559f1f6 started in ~/repo (not a
+  repo) and edited ~/repo/mads. Commit refused (no git folder) and Changes
+  under-reported.
+
+  Drew's picks from v1:
+  - Commit dialog: B (repo list + detail). Group renamed "Changed by someone
+    else": these are real changes the user may commit, just not this agent's.
+  - One repo (or nothing in a repo): no list, the single-pane dialog (v1 §2).
+  - Move into a repo: v1's "after the drop" picker, redone inside B.
+  - Dock: F2 (next-step button + the path in the ⎇ popover).
+  - Changes tab: the git-ops control lives in the Compare to / totals row.
+    This version mocks options for that (G1–G3).
+
+  Rejected in v1: dialog A (stacked) and C (two steps); dock F1 (chain);
+  Changes E1 (toolbar chain) and E2 (bottom bar).
+
+  Data is the test session's real files. learnanywhere is hypothetical.
+  Tokens: clay / dark (as changes-v2.html). Accent buttons use dark ink.
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — Commit, Land, Push</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+    --ok:#7cb389; --ok-soft:rgba(124,179,137,.14);
+    --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13);
+    --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+    --info:#96afc7; --info-soft:rgba(150,175,199,.13);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px; --fs-xs:11px; --fs-sm:12px; --fs-body:13px; --fs-ui:14px;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.5 var(--sans); }
+  button, select, input, textarea { font:inherit; color:inherit; }
+  button { background:none; border:0; cursor:pointer; }
+  code, .mono { font:var(--fs-sm) var(--mono); }
+  code { background:var(--bg2); border-radius:3px; padding:1px 4px; }
+
+  .page { max-width:1180px; margin:0 auto; padding:28px 24px 120px; display:flex; flex-direction:column; gap:28px; }
+  header.intro h1 { font-size:20px; font-weight:650; }
+  header.intro p { color:var(--text2); max-width:100ch; margin-top:8px; }
+  nav.toc { display:flex; gap:16px; flex-wrap:wrap; font-size:var(--fs-sm); }
+  nav.toc a { color:var(--accent); text-decoration:none; }
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); overflow:hidden; }
+  .block > h2 { font-size:var(--fs-ui); font-weight:650; padding:12px 16px; border-bottom:1px solid var(--line-soft); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .block > h2 .sub { font-weight:500; color:var(--text3); font-size:var(--fs-sm); }
+  .note { padding:12px 16px; color:var(--text2); border-top:1px solid var(--line-soft); font-size:var(--fs-sm); }
+  .note ul { margin-top:4px; } .note li { margin-left:18px; margin-top:3px; } .note b { color:var(--text); }
+  .note .pro { color:var(--ok); } .note .con { color:var(--bad-fg); }
+  .stage { padding:28px 16px; background:
+    repeating-linear-gradient(45deg, var(--bg0) 0 10px, #15120d 10px 20px); display:flex; justify-content:center; gap:24px; flex-wrap:wrap; align-items:flex-start; }
+
+  /* option switcher */
+  .opts { display:inline-flex; border:1px solid var(--line); border-radius:var(--r-sm); overflow:hidden; margin-left:auto; }
+  .opts button { padding:3px 12px; font-size:var(--fs-sm); color:var(--text2); border-right:1px solid var(--line); }
+  .opts button:last-child { border-right:0; }
+  .opts button[aria-pressed=true] { background:var(--bg3); color:var(--text); }
+  [data-opt] { display:none; } [data-opt].on { display:block; }
+
+  /* buttons */
+  .btn { border:1px solid var(--line); border-radius:var(--r-sm); padding:4px 12px; font-size:var(--fs-sm); color:var(--text); background:var(--bg2); white-space:nowrap; }
+  .btn.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+  .btn.primary:disabled { opacity:.45; cursor:not-allowed; }
+  .btn.ghost { background:none; border-color:transparent; color:var(--text2); }
+  .btn.sm { padding:2px 8px; font-size:var(--fs-xs); }
+  .link { color:var(--accent); cursor:pointer; font-size:var(--fs-sm); }
+  .link:hover { text-decoration:underline; }
+  .muted { color:var(--text3); font-size:var(--fs-sm); }
+  .add { color:var(--ok); } .del { color:var(--bad-fg); }
+
+  /* dialog shell */
+  .dlg { width:680px; max-width:100%; background:var(--bg1); border:1px solid var(--line); border-radius:12px; box-shadow:0 24px 60px rgba(0,0,0,.55); display:flex; flex-direction:column; max-height:760px; }
+  .dlg.wide { width:860px; }
+  .dlg-h { padding:14px 18px 10px; }
+  .dlg-h h3 { font-size:15px; font-weight:650; }
+  .dlg-h p { color:var(--text3); font-size:var(--fs-sm); margin-top:2px; }
+  .dlg-b { padding:4px 18px 12px; overflow:auto; display:flex; flex-direction:column; gap:12px; }
+  .dlg-f { padding:12px 18px; border-top:1px solid var(--line-soft); display:flex; align-items:center; gap:10px; }
+  .dlg-f .spacer { flex:1; }
+
+  /* repo section */
+  .repo { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg0); transition:border-color .12s, box-shadow .12s; }
+  .repo.drop { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+  .repo-h { display:flex; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid var(--line-soft); }
+  .repo-h .name { font-weight:650; }
+  .repo-h .where { color:var(--text3); font:var(--fs-xs) var(--mono); }
+  .branch { font:var(--fs-xs) var(--mono); color:var(--info); background:var(--info-soft); border-radius:999px; padding:0 7px; }
+  .repo-h .count { margin-left:auto; color:var(--text3); font-size:var(--fs-xs); }
+  .sub-h { padding:6px 10px 2px; color:var(--text3); font-size:var(--fs-xs); text-transform:uppercase; letter-spacing:.04em; display:flex; gap:8px; align-items:center; }
+  .sub-h .link { text-transform:none; letter-spacing:0; font-size:var(--fs-xs); }
+  .file { display:grid; grid-template-columns:18px 14px 1fr auto auto; align-items:center; gap:8px; padding:3px 10px; font-size:var(--fs-sm); }
+  .file:hover { background:var(--bg2); }
+  .file .p { font-family:var(--mono); font-size:var(--fs-sm); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text); cursor:pointer; }
+  .file .p:hover { text-decoration:underline; text-decoration-color:var(--text3); }
+  .file.off .p { color:var(--text3); }
+  .file .stat { font:var(--fs-xs) var(--mono); }
+  .file .why { font-size:var(--fs-xs); color:var(--text3); }
+  .kind { font:600 10px var(--mono); width:14px; text-align:center; }
+  .kind.A { color:var(--ok); } .kind.M { color:var(--warn); } .kind.D { color:var(--bad-fg); }
+  input[type=checkbox] { accent-color:var(--accent); }
+  .msg { margin:8px 10px 10px; display:flex; flex-direction:column; gap:4px; }
+  .msg textarea { width:100%; min-height:52px; resize:vertical; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm); padding:6px 8px; font:var(--fs-sm)/1.45 var(--mono); color:var(--text); }
+  .msg .bar { display:flex; gap:10px; align-items:center; }
+  .msg .bar .spacer { flex:1; }
+
+  /* outside-of-repo section */
+  .outside { border:1px dashed var(--line); border-radius:var(--r); }
+  .outside .repo-h { border-bottom:1px dashed var(--line-soft); }
+  .ofile { display:grid; grid-template-columns:14px 14px 1fr auto auto; gap:8px; align-items:center; padding:4px 10px; font-size:var(--fs-sm); }
+  .ofile .grip { color:var(--text3); cursor:grab; letter-spacing:-2px; user-select:none; }
+  .ofile .p { font-family:var(--mono); font-size:var(--fs-sm); color:var(--text2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ofile[draggable=true]:active { cursor:grabbing; }
+  .ofile.dragging { opacity:.4; }
+  .tag { font-size:10.5px; border-radius:999px; padding:0 7px; background:var(--bg3); color:var(--text2); white-space:nowrap; }
+  .tag.scratch { background:var(--warn-soft); color:var(--warn); }
+  .tag.ok { background:var(--ok-soft); color:var(--ok); }
+  .tag.bad { background:var(--bad-soft); color:var(--bad-fg); }
+
+  /* move row */
+  .moving { margin:4px 10px 8px; border:1px solid var(--accent); border-radius:var(--r-sm); background:var(--bg2); padding:8px 10px; display:flex; flex-direction:column; gap:6px; }
+  .moving .row { display:flex; align-items:center; gap:6px; font-size:var(--fs-sm); flex-wrap:wrap; }
+  .pathfield { display:flex; align-items:center; border:1px solid var(--line); border-radius:var(--r-sm); background:var(--bg0); font:var(--fs-sm) var(--mono); flex:1; min-width:260px; }
+  .pathfield .root { padding:3px 0 3px 8px; color:var(--text3); }
+  .pathfield input { flex:1; background:none; border:0; outline:0; padding:3px 8px 3px 0; color:var(--text); font:var(--fs-sm) var(--mono); }
+  .suggest { border:1px solid var(--line); border-radius:var(--r-sm); background:var(--bg1); font:var(--fs-sm) var(--mono); overflow:hidden; }
+  .suggest div { padding:3px 10px; color:var(--text2); cursor:pointer; display:flex; justify-content:space-between; }
+  .suggest div.hi { background:var(--bg3); color:var(--text); }
+  .suggest div span { color:var(--text3); font-family:var(--sans); font-size:var(--fs-xs); }
+
+  /* B: repo list */
+  .split { display:grid; grid-template-columns:210px 1fr; min-height:420px; }
+  .rlist { border-right:1px solid var(--line-soft); padding:8px; display:flex; flex-direction:column; gap:4px; }
+  .ritem { border-radius:var(--r-sm); padding:6px 8px; cursor:pointer; display:flex; flex-direction:column; gap:1px; }
+  .ritem:hover { background:var(--bg2); }
+  .ritem.on { background:var(--bg3); }
+  .ritem .t { display:flex; align-items:center; gap:6px; font-weight:600; font-size:var(--fs-sm); }
+  .ritem .s { font-size:var(--fs-xs); color:var(--text3); }
+  .dot { width:7px; height:7px; border-radius:50%; flex:none; }
+  .dot.ready { background:var(--ok); } .dot.need { background:var(--warn); } .dot.skip { background:var(--bg4); }
+  .rpane { padding:10px 12px; display:flex; flex-direction:column; gap:8px; }
+
+  /* C: steps */
+  .steps { display:flex; gap:6px; align-items:center; font-size:var(--fs-sm); color:var(--text3); }
+  .steps .on { color:var(--text); font-weight:600; }
+  .steps .num { display:inline-grid; place-items:center; width:18px; height:18px; border-radius:50%; background:var(--bg3); font-size:var(--fs-xs); margin-right:4px; }
+  .steps .on .num { background:var(--accent); color:var(--accent-ink); }
+
+  /* dock + flow */
+  .dock { width:760px; max-width:100%; background:var(--bg1); border:1px solid var(--line); border-radius:var(--r); }
+  .dock .composer { padding:10px 12px; color:var(--text3); border-bottom:1px solid var(--line-soft); font-size:var(--fs-sm); }
+  .status { display:flex; align-items:center; gap:10px; padding:5px 10px; font-size:var(--fs-sm); color:var(--text2); }
+  .status .spacer { flex:1; }
+  .status .seg { color:var(--text3); }
+  .status .loc { font-family:var(--mono); font-size:var(--fs-xs); }
+  .work { border:1px solid var(--line); border-radius:var(--r-sm); padding:1px 9px; font-size:var(--fs-sm); background:var(--bg2); }
+  .work.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+  .work .n { font-family:var(--mono); font-size:var(--fs-xs); opacity:.85; }
+  .chain { display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:var(--r-sm); overflow:hidden; }
+  .chain .st { padding:1px 9px; font-size:var(--fs-sm); color:var(--text3); display:flex; gap:5px; align-items:center; border-right:1px solid var(--line); background:var(--bg1); }
+  .chain .st:last-child { border-right:0; }
+  .chain .st.done { color:var(--ok); }
+  .chain .st.next { background:var(--accent); color:var(--accent-ink); font-weight:600; }
+  .chain .st.wait { color:var(--text2); background:var(--bg2); }
+  .chain .st.na { display:none; }
+  .arrow { color:var(--text3); }
+  .pop { width:360px; background:var(--bg1); border:1px solid var(--line); border-radius:var(--r); box-shadow:0 18px 40px rgba(0,0,0,.5); padding:10px 12px; display:flex; flex-direction:column; gap:8px; font-size:var(--fs-sm); }
+  .pop h4 { font-size:var(--fs-sm); color:var(--text3); font-weight:600; }
+  .pipe { display:flex; flex-direction:column; gap:0; }
+  .pstep { display:grid; grid-template-columns:22px 1fr auto; gap:8px; align-items:start; padding:6px 0; position:relative; }
+  .pstep .ic { width:18px; height:18px; border-radius:50%; border:1.5px solid var(--line); display:grid; place-items:center; font-size:10px; margin-top:1px; background:var(--bg1); z-index:1; }
+  .pstep.done .ic { border-color:var(--ok); color:var(--ok); }
+  .pstep.next .ic { border-color:var(--accent); background:var(--accent); color:var(--accent-ink); }
+  .pstep:not(:last-child)::after { content:""; position:absolute; left:8.5px; top:24px; bottom:-6px; width:1.5px; background:var(--line-soft); }
+  .pstep .t { font-weight:600; } .pstep .d { color:var(--text3); font-size:var(--fs-xs); }
+  .scen { display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
+  .scen .lbl { color:var(--text3); font-size:var(--fs-xs); text-transform:uppercase; letter-spacing:.05em; }
+
+  /* changes tab */
+  .app { width:100%; max-width:1100px; background:var(--bg0); border:1px solid var(--line); border-radius:var(--r); overflow:hidden; display:flex; flex-direction:column; height:440px; }
+  .tabs { display:flex; gap:2px; padding:0 12px; border-bottom:1px solid var(--line-soft); background:var(--bg1); }
+  .tabs span { padding:8px 12px; color:var(--text3); font-size:var(--fs-sm); }
+  .tabs span.on { color:var(--text); box-shadow:inset 0 -2px var(--accent); }
+  .tabs .count { background:var(--bg3); border-radius:999px; padding:0 6px; margin-left:4px; font-size:10.5px; color:var(--text2); }
+  .toolbar { display:flex; align-items:center; gap:10px; padding:7px 12px; border-bottom:1px solid var(--line-soft); font-size:var(--fs-sm); color:var(--text3); flex-wrap:wrap; }
+  .toolbar .spacer { flex:1; }
+  .toolbar .seg2 { display:inline-flex; border:1px solid var(--line); border-radius:var(--r-sm); overflow:hidden; }
+  .toolbar .seg2 span { padding:2px 9px; border-right:1px solid var(--line); }
+  .toolbar .seg2 span:last-child { border-right:0; } .toolbar .seg2 span.on { background:var(--bg3); color:var(--text); }
+  .cbody { flex:1; display:grid; grid-template-columns:340px 1fr; min-height:0; }
+  .clist { border-right:1px solid var(--line-soft); overflow:auto; padding:6px 0; font-size:var(--fs-sm); }
+  .clist .g { padding:6px 12px 2px; color:var(--text3); font-size:var(--fs-xs); text-transform:uppercase; letter-spacing:.04em; }
+  .clist .r { display:flex; gap:8px; padding:2px 12px; font-family:var(--mono); font-size:var(--fs-sm); }
+  .clist .r .s { margin-left:auto; font-size:var(--fs-xs); }
+  .clist .r.sel { background:var(--bg3); }
+  .diff { padding:10px 14px; font:var(--fs-sm)/1.6 var(--mono); color:var(--text3); }
+  .diff .a { color:var(--ok); background:var(--ok-soft); display:block; } .diff .d { color:var(--bad-fg); background:var(--bad-soft); display:block; }
+  .footbar { display:flex; align-items:center; gap:10px; padding:8px 12px; border-top:1px solid var(--line-soft); background:var(--bg1); font-size:var(--fs-sm); color:var(--text2); }
+  .footbar .spacer { flex:1; }
+
+  .qa { padding:14px 16px; display:flex; flex-direction:column; gap:10px; font-size:var(--fs-body); }
+  .qa li { margin-left:20px; margin-top:4px; color:var(--text2); } .qa b { color:var(--text); }
+
+  /* v2: Changes header replica */
+  .ctab { width:100%; max-width:1100px; background:var(--bg0); border:1px solid var(--line); border-radius:var(--r); overflow:hidden; }
+  .ctab .top { display:flex; align-items:center; gap:28px; padding:8px 14px; border-bottom:1px solid var(--line-soft); background:var(--bg1); }
+  .ctab .top .title { font-weight:650; font-size:var(--fs-ui); }
+  .ctab .top .t { color:var(--text2); font-size:var(--fs-ui); padding:4px 0; }
+  .ctab .top .t.on { color:var(--text); box-shadow:inset 0 -2px var(--accent); }
+  .ctab .top .more { margin-left:auto; color:var(--text3); }
+  .ctb { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding:8px 12px; border-bottom:1px solid var(--line-soft); min-height:41px; font-size:var(--fs-sm); }
+  .ctb .lbl { color:var(--text3); }
+  .ctb .seg2 { display:inline-flex; border:1px solid var(--line); border-radius:var(--r-sm); overflow:hidden; }
+  .ctb .seg2 span { padding:2px 10px; color:var(--text2); border-right:1px solid var(--line); }
+  .ctb .seg2 span:last-child { border-right:0; } .ctb .seg2 span.on { background:var(--bg3); color:var(--text); }
+  .ctb .tot { font:var(--fs-sm) var(--mono); color:var(--text2); white-space:nowrap; }
+  .ctb .cnotes { color:var(--text3); }
+  .ctb .wt { margin-left:auto; }
+  .ctab .strip { display:flex; align-items:center; gap:14px; padding:8px 14px; color:var(--text3); font-size:var(--fs-sm); border-bottom:1px solid var(--line-soft); }
+  .ctab .strip .bars { display:flex; gap:10px; align-items:flex-end; height:30px; }
+  .ctab .strip .bars i { width:22px; height:3px; background:var(--bg4); display:block; border-radius:2px; }
+  .ctab .strip .bars i.tall { height:28px; }
+  .split-btn { display:inline-flex; border-radius:var(--r-sm); overflow:hidden; border:1px solid var(--accent); white-space:nowrap; }
+  .split-btn button { padding:2px 10px; font-size:var(--fs-sm); background:var(--accent); color:var(--accent-ink); font-weight:600; }
+  .split-btn button + button { border-left:1px solid color-mix(in srgb,var(--accent-ink) 35%,var(--accent)); padding:2px 7px; }
+  .split-btn.quiet { border-color:var(--line); }
+  .split-btn.quiet button { background:var(--bg2); color:var(--text); font-weight:500; }
+  .split-btn.quiet button + button { border-left:1px solid var(--line); }
+  .split-btn .n { font:var(--fs-xs) var(--mono); opacity:.85; margin-left:4px; }
+  .workchip { display:inline-flex; align-items:stretch; border:1px solid var(--line); border-radius:var(--r-sm); overflow:hidden; font-size:var(--fs-sm); white-space:nowrap; }
+  .workchip > span { padding:2px 10px; display:flex; align-items:center; gap:6px; }
+  .workchip .tot2 { font-family:var(--mono); color:var(--text2); background:var(--bg1); }
+  .workchip .state { color:var(--text2); background:var(--bg2); border-left:1px solid var(--line); }
+  .workchip .state .d { width:7px; height:7px; border-radius:50%; background:var(--warn); }
+  .workchip .state .d.ok { background:var(--ok); }
+  .workchip button { padding:2px 10px; background:var(--accent); color:var(--accent-ink); font-weight:600; font-size:var(--fs-sm); }
+  .workchip button.caret { border-left:1px solid color-mix(in srgb,var(--accent-ink) 35%,var(--accent)); padding:2px 7px; }
+  .workchip.done button { background:var(--bg2); color:var(--text); font-weight:500; border-left:1px solid var(--line); }
+  .states { display:flex; flex-direction:column; gap:14px; width:100%; max-width:1100px; }
+  .states .lbl2 { color:var(--text3); font-size:var(--fs-xs); text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px; }
+  .ctb-only { background:var(--bg0); border:1px solid var(--line); border-radius:var(--r); overflow:hidden; }
+  .chosen { font-size:10.5px; border-radius:999px; padding:0 8px; background:var(--ok-soft); color:var(--ok); font-weight:600; }
+  .rpane .hidden { display:none; }
+  .ritem.drop { outline:2px solid var(--accent); outline-offset:-2px; background:var(--accent-soft); }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="intro">
+  <h1>Commit from Changes · multi-repo Commit · Commit → Land → Push <span class="chosen">v2</span></h1>
+  <p>Revised after your picks: dialog <b>B</b>, dock <b>F2</b>, the one-repo case unchanged, the move redone inside B, and new options for
+  putting the git-ops control in the Changes tab's <b>Compare to</b> row. The files are the test session's (<code>ses_6ea9f23b1559f1f6</code>);
+  <b>learnanywhere</b> is a made-up second repo.</p>
+</header>
+
+<nav class="toc">
+  <a href="#dialog">1 · Commit dialog (B) + moving a file in</a>
+  <a href="#single">2 · The one-repo case</a>
+  <a href="#flow">3 · Dock (F2)</a>
+  <a href="#entry">4 · Git ops in the Compare to row (G1 / G2 / G3)</a>
+  <a href="#open">5 · Open questions</a>
+</nav>
+
+<!-- =============================================================== 1 -->
+<section class="block" id="dialog">
+  <h2>1 · Commit dialog, several repos <span class="chosen">B · chosen</span>
+    <span class="sub">this one works: click the repos on the left; drag a file from “Not in a repo” onto a repo on the left</span></h2>
+  <div class="stage">
+    <div class="dlg wide">
+      <div class="dlg-h">
+        <h3>Commit this session's changes</h3>
+        <p>Everything uncommitted in Changes, whatever the current filter · one commit per repo, as you</p>
+      </div>
+      <div class="split">
+        <div class="rlist" id="rlist">
+          <div class="ritem on" data-pane="mads" data-drop="mads"><div class="t"><span class="dot ready"></span>mads</div><div class="s" id="madsSum">9 of 10 files · message ✓ · main</div></div>
+          <div class="ritem" data-pane="la" data-drop="learnanywhere"><div class="t"><span class="dot need"></span>learnanywhere</div><div class="s">2 of 2 files · needs a message</div></div>
+          <div class="ritem" data-pane="out"><div class="t"><span class="dot skip"></span>Not in a repo</div><div class="s" id="outSum">2 files · can't commit</div></div>
+        </div>
+
+        <div class="rpane">
+          <!-- mads -->
+          <div data-p="mads">
+            <div class="repo-h" style="padding:0 0 6px;border:0"><span class="name">mads</span><span class="where">~/repo/mads</span><span class="branch">main</span><span class="count" id="madsCount">9 of 10 files</span></div>
+            <div class="moveSlot" data-slot="mads"></div>
+            <div class="repo" style="border:0;background:none">
+              <div class="sub-h">Changed by this session <span class="link">uncheck all</span></div>
+              <div class="file"><input type="checkbox" checked><span class="kind M">M</span><span class="p">ui/src/conversation/useRunway.ts</span><span class="stat"><span class="add">+5</span> <span class="del">−1</span></span><span></span></div>
+              <div class="file"><input type="checkbox" checked><span class="kind M">M</span><span class="p">ui/src/conversation/useRunway.test.tsx</span><span class="stat"><span class="add">+20</span></span><span></span></div>
+              <div class="file"><input type="checkbox" checked><span class="kind M">M</span><span class="p">ui/src/features/sessions/launchpad/Launchpad.tsx</span><span class="stat"><span class="add">+19</span> <span class="del">−9</span></span><span></span></div>
+              <div class="file"><input type="checkbox" checked><span class="kind M">M</span><span class="p">ui/src/features/sessions/launchpad/Launchpad.module.css</span><span class="stat"><span class="add">+53</span> <span class="del">−4</span></span><span></span></div>
+              <div class="file"><input type="checkbox" checked><span class="kind M">M</span><span class="p">ui/src/features/sessions/rail/SessionRail.tsx</span><span class="stat"><span class="add">+5</span> <span class="del">−3</span></span><span></span></div>
+              <div class="file"><input type="checkbox" checked><span class="kind M">M</span><span class="p">ui/src/features/sessions/rail/SessionRail.module.css</span><span class="stat"><span class="add">+32</span> <span class="del">−14</span></span><span></span></div>
+              <div class="file"><input type="checkbox" checked><span class="kind M">M</span><span class="p">… 3 test files</span><span class="stat"><span class="add">+42</span> <span class="del">−23</span></span><span></span></div>
+              <div class="sub-h">Changed by someone else <span class="link">check all</span></div>
+              <div class="file off"><input type="checkbox"><span class="kind A">A</span><span class="p">docs/mockups/launchpad-pills-v2.html</span><span class="stat"><span class="add">+188</span></span><span class="why">session “Launchpad Pills UX Polish”</span></div>
+              <div class="file off"><input type="checkbox"><span class="kind M">M</span><span class="p">README.md</span><span class="stat"><span class="add">+2</span></span><span class="why">not by a mads session</span></div>
+            </div>
+            <div class="msg" style="margin:6px 0 0">
+              <textarea>ui: runway glide fix, rail Done header, launchpad hints</textarea>
+              <div class="bar"><span class="link">Draft with Fast Model</span><span class="spacer"></span><span class="muted">commits to <span class="mono">main</span></span></div>
+            </div>
+          </div>
+          <!-- learnanywhere -->
+          <div data-p="la" class="hidden">
+            <div class="repo-h" style="padding:0 0 6px;border:0"><span class="name">learnanywhere</span><span class="where">~/repo/learnanywhere</span><span class="branch">ios-port</span><span class="count">2 of 2 files</span></div>
+            <div class="moveSlot" data-slot="learnanywhere"></div>
+            <div class="repo" style="border:0;background:none">
+              <div class="sub-h">Changed by this session</div>
+              <div class="file"><input type="checkbox" checked><span class="kind M">M</span><span class="p">ios/LearnAnywhere/Settings.swift</span><span class="stat"><span class="add">+12</span> <span class="del">−3</span></span><span></span></div>
+              <div class="file"><input type="checkbox" checked><span class="kind A">A</span><span class="p">ios/LearnAnywhere/SettingsTests.swift</span><span class="stat"><span class="add">+40</span></span><span></span></div>
+            </div>
+            <div class="msg" style="margin:6px 0 0">
+              <textarea placeholder="What does this change do, and why?"></textarea>
+              <div class="bar"><span class="link">Draft with Fast Model</span><span class="spacer"></span><span class="tag bad">needs a message</span><span class="muted">commits to <span class="mono">ios-port</span></span></div>
+            </div>
+          </div>
+          <!-- outside -->
+          <div data-p="out" class="hidden">
+            <div class="repo-h" style="padding:0 0 6px;border:0"><span class="name">Not in a repo</span><span class="muted">these can't be committed where they are · drag one onto a repo on the left, or Move to…</span></div>
+            <div id="outsideBox">
+              <div class="ofile" draggable="true" data-file="mads-ux-mockups-v2.html"><span class="grip">⋮⋮</span><span class="kind A">A</span><span class="p">~/repo/mads-ux-mockups-v2.html</span><span class="tag scratch">scratch</span><span class="link" data-moveto>Move to…</span></div>
+              <div class="ofile" draggable="true" data-file="mads-launchpad-toolbar-mockups.html"><span class="grip">⋮⋮</span><span class="kind M">M</span><span class="p">~/repo/mads-launchpad-toolbar-mockups.html</span><span class="tag scratch">scratch</span><span class="link" data-moveto>Move to…</span></div>
+            </div>
+            <div class="suggest hidden" id="repoMenu" style="margin-top:6px;width:240px">
+              <div class="hi" data-r="mads">mads <span>~/repo/mads</span></div>
+              <div data-r="learnanywhere">learnanywhere <span>~/repo/learnanywhere</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="dlg-f">
+        <span class="link">Draft all messages</span>
+        <span class="spacer"></span>
+        <span class="muted">mads ready · learnanywhere needs a message</span>
+        <button class="btn ghost">Cancel</button>
+        <button class="btn primary" disabled>Commit 2 repos</button>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:10px;width:300px">
+      <div class="scen"><span class="lbl">If the move can't go ahead</span></div>
+      <div class="moving" style="margin:0;border-color:var(--bad)">
+        <div class="row"><span class="tag bad">exists</span><span class="mono">docs/mockups/mads-ux-mockups-v2.html</span></div>
+        <div class="row"><span class="muted">already exists: rename it, or pick another folder</span></div>
+        <div class="row"><span class="tag bad">ignored</span><span class="muted">mads ignores <span class="mono">dist/</span>, so it couldn't be committed there</span></div>
+      </div>
+      <div class="scen"><span class="lbl">Partial failure</span></div>
+      <div class="rlist" style="border:1px solid var(--line-soft);border-radius:var(--r);background:var(--bg1)">
+        <div class="ritem"><div class="t"><span class="dot ready"></span>mads</div><div class="s"><span class="tag ok">committed a1b2c3d</span></div></div>
+        <div class="ritem on"><div class="t"><span class="dot" style="background:var(--bad)"></span>learnanywhere</div><div class="s">pre-commit hook failed · selection kept</div></div>
+      </div>
+      <div class="muted">The failed repo is selected and shows git's output; the button becomes “Commit 1 repo”.</div>
+    </div>
+  </div>
+  <div class="note">
+    <ul>
+      <li><b>“Changed by someone else”</b>: files that differ in this repo but weren't changed by this session's tools. They start unchecked, but you can commit them. When mads knows who did it, the row names the other session; otherwise “not by a mads session” (you, an editor, a script).</li>
+      <li><b>The left list</b> is the order you'd go in: repos with files to commit, then “Not in a repo” last. Each dot shows ready (green), needs a message (amber), nothing selected (grey), failed (red).</li>
+      <li><b>Moving a file:</b> the repo items on the left are the drop targets. Dropping one switches to that repo and opens the folder picker (your “after the drop” from v1) at the top of its pane. Move to… does the same through a repo menu instead of dragging.</li>
+      <li><b>After the move</b> the file sits in that repo's “Changed by this session” group, checked, and mads adds a line to the conversation with its new path so the agent doesn't keep using the old one.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- =============================================================== 2 -->
+<section class="block" id="single">
+  <h2>2 · The one-repo case <span class="sub">no repo list when everything is in one repo, or nothing is in a repo</span></h2>
+  <div class="stage">
+    <div class="dlg" style="width:560px">
+      <div class="dlg-h"><h3>Commit this session's changes</h3><p>mads · <span class="mono">main</span> · as you</p></div>
+      <div class="dlg-b">
+        <div class="repo" style="border:0;background:none">
+          <div class="file"><input type="checkbox" checked><span class="kind M">M</span><span class="p">ui/src/conversation/useRunway.ts</span><span class="stat"><span class="add">+5</span> <span class="del">−1</span></span><span></span></div>
+          <div class="file"><input type="checkbox" checked><span class="kind M">M</span><span class="p">ui/src/conversation/useRunway.test.tsx</span><span class="stat"><span class="add">+20</span></span><span></span></div>
+          <div class="file"><input type="checkbox" checked><span class="kind M">M</span><span class="p">… 7 more</span><span class="stat"></span><span></span></div>
+          <div class="sub-h">Changed by someone else</div>
+          <div class="file off"><input type="checkbox"><span class="kind A">A</span><span class="p">docs/mockups/launchpad-pills-v2.html</span><span class="stat"><span class="add">+188</span></span><span class="why">session “Launchpad Pills UX Polish”</span></div>
+          <div class="msg" style="margin:8px 0 0"><textarea placeholder="What does this change do, and why?"></textarea><div class="bar"><span class="link">Draft with Fast Model</span></div></div>
+        </div>
+      </div>
+      <div class="dlg-f"><span class="spacer"></span><button class="btn ghost">Cancel</button><button class="btn primary" disabled>Commit 9 files</button></div>
+    </div>
+    <div class="dlg" style="width:420px">
+      <div class="dlg-h"><h3>Nothing here can be committed</h3><p>None of this session's changed files are in a git repo</p></div>
+      <div class="dlg-b">
+        <div class="ofile"><span class="grip">⋮⋮</span><span class="kind A">A</span><span class="p">~/notes/plan.md</span><span class="link">Move to…</span><span></span></div>
+        <div class="muted">Move to… lists the workspace's repos and repos you've started sessions in.</div>
+      </div>
+      <div class="dlg-f"><span class="spacer"></span><button class="btn ghost">Close</button></div>
+    </div>
+  </div>
+  <div class="note">With one repo the repo moves into the subtitle and the button counts files (as in v1). With no repos at all, the dialog only offers moving files; the Changes-tab button for this case is in §4.</div>
+</section>
+
+<!-- =============================================================== 3 -->
+<section class="block" id="flow">
+  <h2>3 · Commit → Land → Push in the dock <span class="chosen">F2 · chosen</span> <span class="sub">unchanged from v1</span></h2>
+  <div class="stage">
+    <div class="scen"><span class="lbl">Status line: one button, the next step</span>
+      <div class="dock" style="width:520px"><div class="composer">Message the agent…</div>
+        <div class="status"><span class="seg">opus · full</span><span class="spacer"></span><span class="loc">⎇ mads / mads/rail-fix → main</span>
+          <button class="work primary">Land into main <span class="n">↑3</span></button></div></div>
+    </div>
+    <div class="scen"><span class="lbl">The ⎇ popover: the whole path</span>
+      <div class="pop" id="pathPop">
+        <h4>Where this session's work goes</h4>
+        <div class="pipe">
+          <div class="pstep done"><span class="ic">✓</span><div><div class="t">Commit</div><div class="d">all 9 files committed · a1b2c3d</div></div><span></span></div>
+          <div class="pstep next"><span class="ic">2</span><div><div class="t">Land into main</div><div class="d">3 commits on mads/rail-fix · merges into ~/repo/mads</div></div><button class="btn primary sm">Land</button></div>
+          <div class="pstep"><span class="ic">3</span><div><div class="t">Push</div><div class="d">before Land: pushes <span class="mono">mads/rail-fix</span> to origin (for a PR)<br>after Land: pushes <span class="mono">main</span> to origin</div></div><button class="btn sm">Push branch</button></div>
+        </div>
+        <div class="muted">Stop at any step. Nothing is pushed unless you press Push.</div>
+      </div>
+    </div>
+    <div class="scen"><span class="lbl">Push confirm</span>
+      <div class="pop">
+        <h4>Push main to origin?</h4>
+        <div>1 commit: <span class="mono">a1b2c3d ui: runway glide fix…</span></div>
+        <div class="muted">origin/main was fetched just now · fast-forward · no force push, ever</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn ghost sm">Cancel</button><button class="btn primary sm">Push</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =============================================================== 4 -->
+<section class="block" id="entry">
+  <h2>4 · Git ops in the Compare to row <span class="sub">the row from your screenshot; the control is the dock's F2 button plus a ▾ that opens the same path popover</span>
+    <span class="opts" data-group="entry">
+      <button aria-pressed="true" data-show="G1">G1 · After the totals</button>
+      <button aria-pressed="false" data-show="G2">G2 · Right end</button>
+      <button aria-pressed="false" data-show="G3">G3 · Totals + status chip</button>
+    </span>
+  </h2>
+
+  <!-- G1 -->
+  <div data-opt="G1" data-group="entry" class="on">
+    <div class="stage" style="flex-direction:column;align-items:center">
+      <div class="ctab">
+        <div class="top"><span class="title">Mads UX Issues Investigation</span><span class="t">Conversation</span><span class="t">Tasks</span><span class="t on">Changes</span><span class="more">⋮</span></div>
+        <div class="ctb"><span class="lbl">Compare to</span><span class="seg2"><span class="on">Session start</span><span>main</span></span>
+          <span class="tot">10 files · <span class="add">+229</span> <span class="del">−55</span></span>
+          <span class="split-btn"><button>Commit<span class="n">9</span></button><button aria-label="Where the work goes">▾</button></span>
+          <button class="btn wt">Half-width</button></div>
+        <div class="strip"><span>‹</span><span class="bars"><i></i><i></i><i class="tall"></i></span><span>›</span><span class="mono">ALL TURNS</span></div>
+      </div>
+      <div class="states">
+        <div><div class="lbl2">Isolated, committed, ready to land</div><div class="ctb ctb-only"><span class="lbl">Compare to</span><span class="seg2"><span class="on">Session start</span><span>Base branch</span><span>main</span></span><span class="tot">4 files · <span class="add">+88</span> <span class="del">−12</span></span><span class="split-btn"><button>Land into main<span class="n">↑3</span></button><button>▾</button></span><button class="btn wt">Half-width</button></div></div>
+        <div><div class="lbl2">All committed, ready to push</div><div class="ctb ctb-only"><span class="lbl">Compare to</span><span class="seg2"><span class="on">Session start</span><span>main</span></span><span class="tot">10 files · <span class="add">+229</span> <span class="del">−55</span></span><span class="split-btn quiet"><button>Push<span class="n">↑1</span></button><button>▾</button></span><button class="btn wt">Half-width</button></div></div>
+        <div><div class="lbl2">Several repos, plus a long note (the row wraps; the button stays next to the totals)</div><div class="ctb ctb-only"><span class="lbl">Compare to</span><span class="seg2"><span class="on">Session start</span></span><span class="tot">12 files · <span class="add">+229</span> <span class="del">−55</span></span><span class="split-btn"><button>Commit<span class="n">11 · 2 repos</span></button><button>▾</button></span><span class="cnotes">2 files in 1 subagent worktree not listed; their work shows here once it lands</span><button class="btn wt">Half-width</button></div></div>
+        <div><div class="lbl2">Nothing in a repo</div><div class="ctb ctb-only"><span class="lbl">Compare to</span><span class="seg2"><span class="on">Session start</span></span><span class="tot">1 file · <span class="add">+40</span> <span class="del">−0</span></span><span class="split-btn quiet"><button>Move into a repo…</button></span><button class="btn wt">Half-width</button></div></div>
+      </div>
+    </div>
+    <div class="note"><b>G1 · Right after the totals.</b> The totals and the button read as one sentence: “10 files · +229 −55, Commit 9.”
+      <ul>
+        <li class="pro">Sits next to what it acts on, and doesn't move when notes or “Updating…” appear (they come after it).</li>
+        <li class="con">Its position depends on how wide Compare to is: one baseline vs. three moves it sideways.</li>
+      </ul></div>
+  </div>
+
+  <!-- G2 -->
+  <div data-opt="G2" data-group="entry">
+    <div class="stage" style="flex-direction:column;align-items:center">
+      <div class="ctab">
+        <div class="top"><span class="title">Mads UX Issues Investigation</span><span class="t">Conversation</span><span class="t">Tasks</span><span class="t on">Changes</span><span class="more">⋮</span></div>
+        <div class="ctb"><span class="lbl">Compare to</span><span class="seg2"><span class="on">Session start</span><span>main</span></span>
+          <span class="tot">10 files · <span class="add">+229</span> <span class="del">−55</span></span>
+          <span class="split-btn wt"><button>Commit<span class="n">9</span></button><button>▾</button></span>
+          <button class="btn">Half-width</button></div>
+        <div class="strip"><span>‹</span><span class="bars"><i></i><i></i><i class="tall"></i></span><span>›</span><span class="mono">ALL TURNS</span></div>
+      </div>
+      <div class="states">
+        <div><div class="lbl2">Isolated, ready to land</div><div class="ctb ctb-only"><span class="lbl">Compare to</span><span class="seg2"><span class="on">Session start</span><span>Base branch</span><span>main</span></span><span class="tot">4 files · <span class="add">+88</span> <span class="del">−12</span></span><span class="split-btn wt"><button>Land into main<span class="n">↑3</span></button><button>▾</button></span><button class="btn">Half-width</button></div></div>
+        <div><div class="lbl2">Several repos, plus a long note</div><div class="ctb ctb-only"><span class="lbl">Compare to</span><span class="seg2"><span class="on">Session start</span></span><span class="tot">12 files · <span class="add">+229</span> <span class="del">−55</span></span><span class="cnotes">2 files in 1 subagent worktree not listed; their work shows here once it lands</span><span class="split-btn wt"><button>Commit<span class="n">11 · 2 repos</span></button><button>▾</button></span><button class="btn">Half-width</button></div></div>
+      </div>
+    </div>
+    <div class="note"><b>G2 · Right end, before Half-width.</b> A fixed spot, like a review tool's “Submit”.
+      <ul>
+        <li class="pro">Always in the same place whatever the baseline count; matches where the dock's button sits (right end).</li>
+        <li class="con">Far from the totals on a wide screen, and sits beside Half-width, an unrelated layout control.</li>
+        <li class="con">When a long note wraps the row, it can drop to the second line on its own.</li>
+      </ul></div>
+  </div>
+
+  <!-- G3 -->
+  <div data-opt="G3" data-group="entry">
+    <div class="stage" style="flex-direction:column;align-items:center">
+      <div class="ctab">
+        <div class="top"><span class="title">Mads UX Issues Investigation</span><span class="t">Conversation</span><span class="t">Tasks</span><span class="t on">Changes</span><span class="more">⋮</span></div>
+        <div class="ctb"><span class="lbl">Compare to</span><span class="seg2"><span class="on">Session start</span><span>main</span></span>
+          <span class="workchip"><span class="tot2">10 files · <span class="add">+229</span> <span class="del">−55</span></span><span class="state"><span class="d"></span>9 uncommitted</span><button>Commit</button><button class="caret">▾</button></span>
+          <button class="btn wt">Half-width</button></div>
+        <div class="strip"><span>‹</span><span class="bars"><i></i><i></i><i class="tall"></i></span><span>›</span><span class="mono">ALL TURNS</span></div>
+      </div>
+      <div class="states">
+        <div><div class="lbl2">Isolated, ready to land</div><div class="ctb ctb-only"><span class="lbl">Compare to</span><span class="seg2"><span class="on">Session start</span><span>Base branch</span><span>main</span></span><span class="workchip"><span class="tot2">4 files · <span class="add">+88</span> <span class="del">−12</span></span><span class="state"><span class="d"></span>3 commits to land</span><button>Land</button><button class="caret">▾</button></span><button class="btn wt">Half-width</button></div></div>
+        <div><div class="lbl2">All committed, ready to push</div><div class="ctb ctb-only"><span class="lbl">Compare to</span><span class="seg2"><span class="on">Session start</span><span>main</span></span><span class="workchip done"><span class="tot2">10 files · <span class="add">+229</span> <span class="del">−55</span></span><span class="state"><span class="d ok"></span>committed · 1 to push</span><button>Push</button><button class="caret">▾</button></span><button class="btn wt">Half-width</button></div></div>
+        <div><div class="lbl2">Everything pushed</div><div class="ctb ctb-only"><span class="lbl">Compare to</span><span class="seg2"><span class="on">Session start</span><span>main</span></span><span class="workchip done"><span class="tot2">10 files · <span class="add">+229</span> <span class="del">−55</span></span><span class="state"><span class="d ok"></span>committed and pushed</span><button class="caret">▾</button></span><button class="btn wt">Half-width</button></div></div>
+      </div>
+    </div>
+    <div class="note"><b>G3 · Totals + status chip.</b> The totals, the state in words and the next step are one joined control.
+      <ul>
+        <li class="pro">Says the state in words (“9 uncommitted”, “3 commits to land”, “committed and pushed”), so the end state is visible, not just an absent button.</li>
+        <li class="pro">Clearly one thing: these totals, this state, this action.</li>
+        <li class="con">The widest of the three; at narrow widths the state text would drop first.</li>
+        <li class="con">Turns the plain totals into part of a control, a bigger change to the existing row than G1.</li>
+      </ul></div>
+  </div>
+
+  <div class="note">
+    <b>In all three:</b> the main half is the next step and does what the dock's button does (Commit opens the §1 dialog; Land and Push run with their confirm). ▾ opens §3's path popover, since there's no ⎇ segment in this tab.
+    The counts come from the session's work state, not the Compare to choice: switching to <i>main</i> changes the totals but not “Commit 9”.
+  </div>
+</section>
+
+<!-- =============================================================== 5 -->
+<section class="block" id="open">
+  <h2>5 · Open questions</h2>
+  <div class="qa">
+    <ol>
+      <li><b>Filters.</b> The dialog ignores Changes' current tier, turn, search and baseline and takes everything uncommitted (it says so in the subtitle). OK, or carry the filter over as the starting checkboxes?</li>
+      <li><b>Which push.</b> Before Land, Push sends the session branch (for a PR). After Land, or in place, it sends the base branch from your checkout. Both in v1?</li>
+      <li><b>Confirming a push.</b> Every time, or only for the repo's default branch?</li>
+      <li><b>Land and Push across repos.</b> Same as Commit: one dialog, the repo list on the left?</li>
+      <li><b>“Changed by someone else” at Land.</b> Land refuses while the worktree has uncommitted files. Should the refusal open this dialog with those files shown, so you can commit them (or not) in one place?</li>
+    </ol>
+  </div>
+</section>
+
+</div>
+
+<script>
+  // option switchers
+  document.querySelectorAll(".opts").forEach((g) => {
+    const group = g.dataset.group;
+    g.querySelectorAll("button").forEach((b) =>
+      b.addEventListener("click", () => {
+        g.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+        document.querySelectorAll(`[data-opt][data-group="${group}"]`).forEach((o) =>
+          o.classList.toggle("on", o.dataset.opt === b.dataset.show));
+      }));
+  });
+
+  // §1 repo list
+  const items = document.querySelectorAll("#rlist .ritem");
+  function showPane(id) {
+    items.forEach((i) => i.classList.toggle("on", i.dataset.pane === id));
+    document.querySelectorAll(".rpane [data-p]").forEach((p) => p.classList.toggle("hidden", p.dataset.p !== id));
+  }
+  items.forEach((i) => i.addEventListener("click", () => showPane(i.dataset.pane)));
+
+  // §1 move into a repo: drag onto a repo item, or Move to… → repo menu
+  const roots = { mads: "~/repo/mads/", learnanywhere: "~/repo/learnanywhere/" };
+  const folders = { mads: ["docs/mockups/", "docs/", "ui/", "ui/src/", "scripts/"], learnanywhere: ["docs/", "ios/", "ios/LearnAnywhere/"] };
+  const paneOf = { mads: "mads", learnanywhere: "la" };
+  let dragged = null, menuFor = null;
+  function startMove(row, repo) {
+    showPane(paneOf[repo]);
+    const slot = document.querySelector(`[data-slot="${repo}"]`);
+    const name = row.dataset.file;
+    slot.innerHTML = `
+      <div class="moving" style="margin:0 0 8px">
+        <div class="row"><span class="kind A">A</span><span class="mono">${name}</span><span class="muted">→ ${repo}</span></div>
+        <div class="row"><div class="pathfield"><span class="root">${roots[repo]}</span><input class="mvPath" value="${repo === "mads" ? "docs/mo" : ""}" aria-label="Folder in ${repo}"></div></div>
+        <div class="suggest mvSug"></div>
+        <div class="row"><span class="muted">Moves it out of ~/repo. The agent is told the new path.</span></div>
+        <div class="row"><span style="flex:1"></span><button class="btn ghost sm mvCancel">Cancel</button><button class="btn primary sm mvGo">Move here</button></div>
+      </div>`;
+    const input = slot.querySelector(".mvPath"), sug = slot.querySelector(".mvSug");
+    const render = () => {
+      const q = input.value;
+      const hits = folders[repo].filter((f) => f.startsWith(q));
+      sug.innerHTML = hits.slice(0, 4).map((f, i) =>
+        `<div class="${i === 0 ? "hi" : ""}" data-f="${f}">${f}<span>${f === "docs/mockups/" ? "30 files · has .html" : ""}</span></div>`).join("")
+        || `<div>${q ? "new folder: " + q : "(repo root)"}<span></span></div>`;
+      sug.querySelectorAll("[data-f]").forEach((d) => d.addEventListener("click", () => { input.value = d.dataset.f; render(); }));
+    };
+    input.addEventListener("input", render); render(); input.focus();
+    slot.querySelector(".mvCancel").onclick = () => (slot.innerHTML = "");
+    slot.querySelector(".mvGo").onclick = () => {
+      const dest = input.value.replace(/^\/+/, "");
+      slot.innerHTML = `<div class="sub-h">Moved in</div><div class="file"><input type="checkbox" checked><span class="kind A">A</span><span class="p">${dest}${name}</span><span class="stat"><span class="add">new</span></span><span class="tag ok">moved</span></div>`;
+      row.remove();
+      const left = document.querySelectorAll("#outsideBox .ofile").length;
+      document.getElementById("outSum").textContent = left ? `${left} file${left > 1 ? "s" : ""} · can't commit` : "none left";
+      if (repo === "mads") { document.getElementById("madsCount").textContent = "10 of 11 files"; document.getElementById("madsSum").textContent = "10 of 11 files · message ✓ · main"; }
+    };
+  }
+  document.querySelectorAll("#outsideBox .ofile").forEach((row) => {
+    row.addEventListener("dragstart", (e) => { dragged = row; row.classList.add("dragging"); e.dataTransfer.setData("text/plain", row.dataset.file); });
+    row.addEventListener("dragend", () => { row.classList.remove("dragging"); items.forEach((i) => i.classList.remove("drop")); });
+    row.querySelector("[data-moveto]").addEventListener("click", () => { menuFor = row; document.getElementById("repoMenu").classList.remove("hidden"); });
+  });
+  document.querySelectorAll("#repoMenu [data-r]").forEach((d) => d.addEventListener("click", () => {
+    document.getElementById("repoMenu").classList.add("hidden");
+    if (menuFor) startMove(menuFor, d.dataset.r);
+  }));
+  items.forEach((it) => {
+    if (!it.dataset.drop) return;
+    it.addEventListener("dragover", (e) => { if (dragged) { e.preventDefault(); it.classList.add("drop"); } });
+    it.addEventListener("dragleave", () => it.classList.remove("drop"));
+    it.addEventListener("drop", (e) => { e.preventDefault(); it.classList.remove("drop"); if (dragged) startMove(dragged, it.dataset.drop); dragged = null; });
+  });
+</script>
+</body>
+</html>
