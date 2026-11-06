@@ -23,11 +23,11 @@ func (r *Runner) worktreeOps() sessionwt.Ops {
 
 // WorktreeStatus is the header/dialog state, with the busy gate filled in
 // from this runner. pipeline is the Router's word on an active run.
-func (r *Runner) WorktreeStatus(ctx context.Context, pipeline bool) (contracts.WorktreeStatus, error) {
+func (r *Runner) WorktreeStatus(ctx context.Context, repo string, pipeline bool) (contracts.WorktreeStatus, error) {
 	r.mu.Lock()
 	busy := r.busy || r.landing
 	r.mu.Unlock()
-	return r.worktreeOps().Status(ctx, r.sessionID, sessionwt.Gates{Busy: busy, Pipeline: pipeline})
+	return r.worktreeOps().Status(ctx, r.sessionID, repo, sessionwt.Gates{Busy: busy, Pipeline: pipeline})
 }
 
 // Commit commits the selected session files (D5). It doesn't wait for the
@@ -39,8 +39,8 @@ func (r *Runner) Commit(ctx context.Context, req contracts.CommitRequest) (contr
 
 // UndoCommit takes back the session's last Commit while it is still the
 // tip (D5).
-func (r *Runner) UndoCommit(ctx context.Context, hash string) (contracts.UndoCommitResult, error) {
-	return r.worktreeOps().Undo(context.WithoutCancel(ctx), r.sessionID, hash)
+func (r *Runner) UndoCommit(ctx context.Context, repo, hash string) (contracts.UndoCommitResult, error) {
+	return r.worktreeOps().Undo(context.WithoutCancel(ctx), r.sessionID, repo, hash)
 }
 
 // Land lands the session branch into its base (D6). It is refused while a

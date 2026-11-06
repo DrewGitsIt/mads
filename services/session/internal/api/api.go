@@ -177,7 +177,7 @@ func (s *server) handleCompact(w http.ResponseWriter, r *http.Request) {
 func pipelineActive(r *http.Request) bool { return r.URL.Query().Get("pipeline") == "1" }
 
 func (s *server) handleWorktreeStatus(w http.ResponseWriter, r *http.Request) {
-	st, err := s.runner.WorktreeStatus(r.Context(), pipelineActive(r))
+	st, err := s.runner.WorktreeStatus(r.Context(), r.URL.Query().Get("repo"), pipelineActive(r))
 	if err != nil {
 		writeRunnerError(w, err)
 		return
@@ -203,7 +203,7 @@ func (s *server) handleUndoCommit(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	res, err := s.runner.UndoCommit(r.Context(), req.Hash)
+	res, err := s.runner.UndoCommit(r.Context(), req.Repo, req.Hash)
 	if err != nil {
 		writeRunnerError(w, err)
 		return

@@ -72,8 +72,13 @@ type WorktreeTenant struct {
 
 // CommitRequest is POST /sessions/{id}/commit.
 type CommitRequest struct {
-	// Paths are relative to the session's folder (WorktreeFile.Path).
-	// Empty means every uncommitted session file.
+	// Repo is the top of the repo to commit in, one of the session's
+	// (docs/COMMIT-LAND-PUSH-DESIGN.md D1). Empty is its folder's repo, or
+	// its only repo when the folder isn't one. Paths are relative to it.
+	Repo string `json:"repo,omitempty"`
+	// Paths are relative to the repo's top (WorktreeFile.Path). Empty
+	// means every uncommitted session file there. A named path may be any
+	// file git reports changed in the repo, the session's or not (D2).
 	Paths []string `json:"paths,omitempty"`
 	// Message is the commit message as the user wrote it; the Session:
 	// trailer is appended server-side. Empty is refused unless
@@ -108,7 +113,7 @@ const (
 )
 
 // CommitPath is one requested path's outcome. Reason is set for rejected
-// paths: "outside_folder", "not_session_file", "pipeline_task_file".
+// paths: "outside_folder", "pipeline_task_file".
 type CommitPath struct {
 	Path   string `json:"path"`
 	Status string `json:"status"`
@@ -137,6 +142,7 @@ const (
 	CommitNoFastModel     = "no_fast_model"
 	CommitDraftFailed     = "draft_failed"
 	CommitLocked          = "locked"
+	CommitUnknownRepo     = "unknown_repo"
 )
 
 // CommitError is a refused POST /sessions/{id}/commit (or /commit/draft):
@@ -156,6 +162,7 @@ type CommitError struct {
 // CommitDraftRequest is POST /sessions/{id}/commit/draft. Empty Paths
 // means every uncommitted session file.
 type CommitDraftRequest struct {
+	Repo  string   `json:"repo,omitempty"` // as CommitRequest.Repo
 	Paths []string `json:"paths,omitempty"`
 }
 
@@ -169,6 +176,7 @@ type CommitDraft struct {
 
 // UndoCommitRequest is POST /sessions/{id}/commit/undo.
 type UndoCommitRequest struct {
+	Repo string `json:"repo,omitempty"` // as CommitRequest.Repo
 	Hash string `json:"hash"`
 }
 

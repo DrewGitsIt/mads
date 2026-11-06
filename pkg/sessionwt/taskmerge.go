@@ -211,5 +211,5 @@ func (m *TaskMerge) SaveEdits(ctx context.Context, files []string) (hash string,
 // Refresh recomputes and publishes the session's header counts (D4) after a
 // merge moved its branch.
 func (m *TaskMerge) Refresh(ctx context.Context) error {
-	return RefreshCounts(context.WithoutCancel(ctx), m.Store, m.Target)
+	return RefreshCounts(context.WithoutCancel(ctx), m.Store, m.Target.SessionID)
 }

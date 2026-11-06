@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -85,6 +86,19 @@ func (s *server) childPath(id, path string) string {
 	return path
 }
 
+// withRepo adds a repo query parameter to a child path (childPath's or a
+// bare one), when there is one.
+func withRepo(path, repo string) string {
+	if repo == "" {
+		return path
+	}
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return path + sep + "repo=" + url.QueryEscape(repo)
+}
+
 // handleSessionWorktree is the session's worktree status, plus what only
 // the Router knows: who else works in the folder, and whether a pipeline
 // run is active — either keeps the folder through a delete.
@@ -98,8 +112,9 @@ func (s *server) handleSessionWorktree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err) // 404 before anything else
 		return
 	}
+	repo := r.URL.Query().Get("repo")
 	if addr, ok := s.sup.SessionAddr(id); ok {
-		status, raw, err := callChild(r.Context(), addr, http.MethodGet, s.childPath(id, "/worktree"), nil)
+		status, raw, err := callChild(r.Context(), addr, http.MethodGet, withRepo(s.childPath(id, "/worktree"), repo), nil)
 		if err != nil {
 			writeErrMsg(w, http.StatusBadGateway, "session child: ", err)
 			return
@@ -110,7 +125,11 @@ func (s *server) handleSessionWorktree(w http.ResponseWriter, r *http.Request) {
 		writeRaw(w, status, raw)
 		return
 	}
-	st, err := s.worktreeOps().Status(r.Context(), id, sessionwt.Gates{Pipeline: s.sup.HasPipeline(id)})
+	st, err := s.worktreeOps().Status(r.Context(), id, repo, sessionwt.Gates{Pipeline: s.sup.HasPipeline(id)})
+	if errors.Is(err, sessionwt.ErrUnknownRepo) {
+		writeErrMsg(w, http.StatusNotFound, "worktree status: ", err)
+		return
+	}
 	if err != nil {
 		writeErrMsg(w, http.StatusInternalServerError, "worktree status: ", err)
 		return
@@ -258,7 +277,7 @@ func (s *server) handleSessionCommit(w http.ResponseWriter, r *http.Request) {
 			}})
 			return
 		}
-		msg, _, err := s.draftCommitMessage(r.Context(), id, req.Paths)
+		msg, _, err := s.draftCommitMessage(r.Context(), id, req.Repo, req.Paths)
 		if err != nil {
 			writeCommitRefusal(w, err)
 			return
@@ -301,7 +320,7 @@ func (s *server) handleSessionUndoCommit(w http.ResponseWriter, r *http.Request)
 	s.worktreeRoute(w, r, func(addr string) {
 		s.forwardToChild(w, r, addr, http.MethodPost, "/commit/undo", req)
 	}, func() {
-		res, err := s.worktreeOps().Undo(context.WithoutCancel(r.Context()), id, req.Hash)
+		res, err := s.worktreeOps().Undo(context.WithoutCancel(r.Context()), id, req.Repo, req.Hash)
 		if err != nil {
 			writeErrMsg(w, http.StatusInternalServerError, "undo commit: ", err)
 			return
@@ -339,7 +358,7 @@ func (s *server) handleSessionCommitDraft(w http.ResponseWriter, r *http.Request
 		writeError(w, err)
 		return
 	}
-	msg, truncated, err := s.draftCommitMessage(r.Context(), id, req.Paths)
+	msg, truncated, err := s.draftCommitMessage(r.Context(), id, req.Repo, req.Paths)
 	if err != nil {
 		writeCommitRefusal(w, err)
 		return
@@ -355,8 +374,8 @@ const commitDraftSystem = `You write git commit messages. Reply with the message
 // prompt says when it was cut. Failures are *sessionwt.CommitRefusal:
 // no_fast_model when none is configured, draft_failed when it answered
 // unusably.
-func (s *server) draftCommitMessage(ctx context.Context, id string, paths []string) (msg string, truncated bool, err error) {
-	folder, files, err := s.worktreeOps().SelectForDraft(ctx, id, paths)
+func (s *server) draftCommitMessage(ctx context.Context, id, repo string, paths []string) (msg string, truncated bool, err error) {
+	folder, files, err := s.worktreeOps().SelectForDraft(ctx, id, repo, paths)
 	if err != nil {
 		return "", false, err
 	}

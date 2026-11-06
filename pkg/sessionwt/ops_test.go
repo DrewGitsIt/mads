@@ -189,7 +189,7 @@ func TestStatusListsSessionFiles(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(s.folder, "not-mine.txt"), "other\n")
 
-	st, err := s.ops.Status(context.Background(), s.store.sess.ID, Gates{})
+	st, err := s.ops.Status(context.Background(), s.store.sess.ID, "", Gates{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,13 +303,16 @@ func TestCommitRejectsEscapes(t *testing.T) {
 		"/etc/passwd":        "outside_folder",
 		"link.txt":           "outside_folder",
 		"linkdir/secret.txt": "outside_folder",
-		"unlisted.txt":       "not_session_file",
 		"task.txt":           "pipeline_task_file",
 	}
 	for p, r := range want {
 		if reasons[p] != r {
 			t.Errorf("%s: reason %q, want %q", p, reasons[p], r)
 		}
+	}
+	// A changed file off the session's list is the user's to commit (D2).
+	if _, ok := reasons["unlisted.txt"]; ok {
+		t.Errorf("unlisted.txt was rejected: %+v", body.Paths)
 	}
 	if _, ok := reasons["ok.txt"]; ok {
 		t.Errorf("ok.txt was rejected: %+v", body.Paths)
@@ -409,7 +412,7 @@ func TestCommitInPlace(t *testing.T) {
 	st.rows = []contracts.FileChange{{Repo: filepath.Join(primary, "sub"), Path: "x.txt"}}
 	ops := Ops{Store: st}
 
-	status, err := ops.Status(context.Background(), "ses_inplace", Gates{})
+	status, err := ops.Status(context.Background(), "ses_inplace", "", Gates{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,11 +438,11 @@ func TestUndo(t *testing.T) {
 	s.work(t, map[string]string{"b.txt": "b\n"})
 	second := s.commit(t, contracts.CommitRequest{Paths: []string{"b.txt"}, Message: "B"})
 
-	res, err := s.ops.Undo(context.Background(), "ses_test", first.Hash)
+	res, err := s.ops.Undo(context.Background(), "ses_test", "", first.Hash)
 	if err != nil || res.Undone || res.Reason != "not_tip" {
 		t.Fatalf("undo non-tip = %+v, %v; want refused not_tip", res, err)
 	}
-	res, err = s.ops.Undo(context.Background(), "ses_test", second.Hash[:12])
+	res, err = s.ops.Undo(context.Background(), "ses_test", "", second.Hash[:12])
 	if err != nil || !res.Undone || res.Hash != second.Hash {
 		t.Fatalf("undo tip = %+v, %v", res, err)
 	}
@@ -454,7 +457,7 @@ func TestUndo(t *testing.T) {
 	}
 
 	gitRun(t, s.folder, "commit", "-q", "-m", "by hand")
-	res, _ = s.ops.Undo(context.Background(), "ses_test", head(t, s.folder, "HEAD"))
+	res, _ = s.ops.Undo(context.Background(), "ses_test", "", head(t, s.folder, "HEAD"))
 	if res.Undone || res.Reason != "not_session_commit" {
 		t.Errorf("undo of a hand-made commit = %+v", res)
 	}
@@ -476,17 +479,17 @@ func TestUndoRefusesPushedCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	status, err := ops.Status(context.Background(), "ses_inplace", Gates{})
+	status, err := ops.Status(context.Background(), "ses_inplace", "", Gates{})
 	if err != nil || status.LastCommit == nil || !status.LastCommit.Undoable {
 		t.Fatalf("before pushing: status = %+v, %v; want undoable", status.LastCommit, err)
 	}
 
 	gitRun(t, primary, "push", "-q", "origin", "main")
-	status, err = ops.Status(context.Background(), "ses_inplace", Gates{})
+	status, err = ops.Status(context.Background(), "ses_inplace", "", Gates{})
 	if err != nil || status.LastCommit == nil || status.LastCommit.Undoable {
 		t.Errorf("after pushing: status = %+v, %v; want not undoable", status.LastCommit, err)
 	}
-	undo, err := ops.Undo(context.Background(), "ses_inplace", res.Hash)
+	undo, err := ops.Undo(context.Background(), "ses_inplace", "", res.Hash)
 	if err != nil || undo.Undone || undo.Reason != "already_pushed" {
 		t.Fatalf("undo = %+v, %v; want refused already_pushed", undo, err)
 	}
@@ -780,7 +783,7 @@ func TestLandGates(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := RefreshCounts(context.Background(), s.store, target); err != nil {
+		if err := RefreshCounts(context.Background(), s.store, target.SessionID); err != nil {
 			t.Fatal(err)
 		}
 		if p := s.store.patches[len(s.store.patches)-1]; *p.UncommittedCount != 1 || *p.OutsideCount != 1 {
@@ -900,7 +903,7 @@ func TestOpsLockWaitRefusesLocked(t *testing.T) {
 	if !errors.As(err, &r) || r.Body.Code != contracts.CommitLocked || r.HTTPStatus() != 409 {
 		t.Errorf("commit under a held session lock = %v", err)
 	}
-	if undo, err := ops.Undo(ctx, "ses_test", first.Hash); err != nil || undo.Undone || undo.Reason != "locked" {
+	if undo, err := ops.Undo(ctx, "ses_test", "", first.Hash); err != nil || undo.Undone || undo.Reason != "locked" {
 		t.Errorf("undo under a held session lock = %+v, %v", undo, err)
 	}
 	res, err := ops.Land(ctx, "ses_test", Gates{})
@@ -973,7 +976,7 @@ func TestRecountNoFolder(t *testing.T) {
 func TestStatusCorrectsStaleHeaderCounts(t *testing.T) {
 	s := newIsolated(t)
 	s.store.sess.UncommittedCount, s.store.sess.UnlandedCount = 2, 3
-	if _, err := s.ops.Status(context.Background(), s.store.sess.ID, Gates{}); err != nil {
+	if _, err := s.ops.Status(context.Background(), s.store.sess.ID, "", Gates{}); err != nil {
 		t.Fatal(err)
 	}
 	if u, l := s.store.lastCounts(t); u != 0 || l != 0 {
@@ -982,7 +985,7 @@ func TestStatusCorrectsStaleHeaderCounts(t *testing.T) {
 
 	s.store.sess.UncommittedCount, s.store.sess.UnlandedCount = 0, 0
 	s.store.patches = nil
-	if _, err := s.ops.Status(context.Background(), s.store.sess.ID, Gates{}); err != nil {
+	if _, err := s.ops.Status(context.Background(), s.store.sess.ID, "", Gates{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.store.patches) != 0 {

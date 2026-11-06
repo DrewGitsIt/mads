@@ -873,31 +873,16 @@ func (r *Runner) appendWorktreeEvent(ctx context.Context, payload map[string]any
 // call it directly once they exist. A no-op for a session with nowhere to
 // count.
 func (r *Runner) RefreshWorktreeCounts(ctx context.Context) error {
-	r.mu.Lock()
-	wt := r.wt
-	r.mu.Unlock()
-	if wt.dir == "" {
+	sum, repos, err := sessionwt.Ops{Store: r.data}.CountAll(ctx, r.sessionID)
+	if errors.Is(err, sessionwt.ErrNoFolder) {
 		return nil
 	}
-	top, err := sessionwt.Toplevel(ctx, wt.dir)
-	if err != nil {
-		return err
-	}
-	rows, err := r.data.FileChanges(ctx, r.sessionID)
-	if err != nil {
-		return fmt.Errorf("load session files: %w", err)
-	}
-	c, err := sessionwt.Count(ctx, sessionwt.CountTarget{
-		Dir: top, Files: sessionwt.SessionFiles(top, rows), Branch: wt.branch, Base: wt.base,
-	})
 	if err != nil {
 		return err
 	}
 	r.recordMu.Lock()
 	defer r.recordMu.Unlock()
-	return r.data.SetSessionWorktree(ctx, r.sessionID, contracts.SessionWorktreePatch{
-		UncommittedCount: &c.Uncommitted, UnlandedCount: &c.Unlanded, OutsideCount: &c.Outside,
-	})
+	return r.data.SetSessionWorktree(ctx, r.sessionID, sessionwt.CountsPatch(sum, repos))
 }
 
 // refreshCountsAsync runs RefreshWorktreeCounts off the caller's goroutine

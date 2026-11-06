@@ -107,7 +107,7 @@ func TestRunnerCommitAndLand(t *testing.T) {
 
 	writeTestFile(t, filepath.Join(sess.WorktreeDir, "feature.txt"), "f\n")
 	r.recordFileChange("feature.txt")
-	status, err := r.WorktreeStatus(ctx, false)
+	status, err := r.WorktreeStatus(ctx, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

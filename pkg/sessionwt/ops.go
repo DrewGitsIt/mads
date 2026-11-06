@@ -101,8 +101,15 @@ func (o Ops) load(ctx context.Context, sessionID string) (contracts.Session, Tar
 // header's: work committed or merged outside mads otherwise left the header
 // offering a Commit or Land the dialog then found nothing for. No git work
 // beyond what Status already did.
-func (o Ops) Status(ctx context.Context, sessionID string, g Gates) (contracts.WorktreeStatus, error) {
-	sess, t, rows, err := o.load(ctx, sessionID)
+func (o Ops) Status(ctx context.Context, sessionID, repo string, g Gates) (contracts.WorktreeStatus, error) {
+	sess, primary, all, rows, err := o.targets(ctx, sessionID)
+	if err != nil {
+		return contracts.WorktreeStatus{}, err
+	}
+	t, err := pick(primary, all, repo)
+	if errors.Is(err, ErrUnknownRepo) {
+		return contracts.WorktreeStatus{}, err
+	}
 	if errors.Is(err, ErrNoFolder) {
 		return contracts.WorktreeStatus{
 			Files:       []contracts.WorktreeFile{},
@@ -116,14 +123,25 @@ func (o Ops) Status(ctx context.Context, sessionID string, g Gates) (contracts.W
 	if err != nil {
 		return st, err
 	}
-	if st.UncommittedCount != sess.UncommittedCount || st.UnlandedCount != sess.UnlandedCount {
-		if err := o.Store.SetSessionWorktree(context.WithoutCancel(ctx), sessionID, contracts.SessionWorktreePatch{
-			UncommittedCount: &st.UncommittedCount, UnlandedCount: &st.UnlandedCount,
-		}); err != nil {
-			log.Printf("sessionwt: correct counts for %s: %v", sessionID, err)
-		}
+	if recorded := recordedCounts(sess, t); st.UncommittedCount != recorded.Uncommitted || st.UnlandedCount != recorded.Unlanded {
+		o.refresh(ctx, t)
 	}
 	return st, nil
+}
+
+// recordedCounts is what the session record says about t's repo: its
+// Repos entry, or the record's sums when it has no per-repo breakdown
+// (written before there was one).
+func recordedCounts(sess contracts.Session, t Target) Counts {
+	if len(sess.Repos) == 0 {
+		return Counts{Uncommitted: sess.UncommittedCount, Unlanded: sess.UnlandedCount}
+	}
+	for _, r := range sess.Repos {
+		if samePath(r.Root, t.Folder) {
+			return Counts{Uncommitted: r.UncommittedCount, Unlanded: r.UnlandedCount}
+		}
+	}
+	return Counts{}
 }
 
 // Recount is POST /sessions/{id}/worktree/refresh: the header counts (D4)
@@ -132,27 +150,17 @@ func (o Ops) Status(ctx context.Context, sessionID string, g Gates) (contracts.W
 // since a commit or merge made outside mads reaches no other recount. A
 // session with no git folder has nothing to count.
 func (o Ops) Recount(ctx context.Context, sessionID string) error {
-	_, t, _, err := o.load(ctx, sessionID)
-	if errors.Is(err, ErrNoFolder) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
 	if o.Refresh != nil {
 		return o.Refresh(ctx)
 	}
-	return RefreshCounts(ctx, o.Store, t)
+	return RefreshCounts(ctx, o.Store, sessionID)
 }
 
 // SelectForDraft resolves a draft request's paths exactly as Commit
 // would, returning the folder and the uncommitted files among them.
-func (o Ops) SelectForDraft(ctx context.Context, sessionID string, paths []string) (folder string, files []string, err error) {
-	_, t, rows, err := o.load(ctx, sessionID)
-	if errors.Is(err, ErrNoFolder) {
-		return "", nil, refuseCommit(contracts.CommitNoFolder, "This session has no git folder to commit in.")
-	}
-	if err != nil {
+func (o Ops) SelectForDraft(ctx context.Context, sessionID, repo string, paths []string) (folder string, files []string, err error) {
+	t, rows, err := o.loadRepo(ctx, sessionID, repo)
+	if err := repoRefusal(err); err != nil {
 		return "", nil, err
 	}
 	valid, results, ok := SelectPaths(t, rows, paths)
@@ -176,14 +184,23 @@ func (o Ops) SelectForDraft(ctx context.Context, sessionID string, paths []strin
 	return t.Folder, files, nil
 }
 
+// repoRefusal turns loadRepo's "no such repo" errors into Commit
+// refusals; anything else passes through.
+func repoRefusal(err error) error {
+	switch {
+	case errors.Is(err, ErrNoFolder):
+		return refuseCommit(contracts.CommitNoFolder, "This session has no git folder to commit in.")
+	case errors.Is(err, ErrUnknownRepo):
+		return refuseCommit(contracts.CommitUnknownRepo, "That repo isn't one this session changed files in.")
+	}
+	return err
+}
+
 // Commit is POST /sessions/{id}/commit with a message already in hand (a
 // draft, if any, was written before). Refusals are *CommitRefusal.
 func (o Ops) Commit(ctx context.Context, sessionID string, req contracts.CommitRequest) (contracts.CommitResult, error) {
-	_, t, rows, err := o.load(ctx, sessionID)
-	if errors.Is(err, ErrNoFolder) {
-		return contracts.CommitResult{}, refuseCommit(contracts.CommitNoFolder, "This session has no git folder to commit in.")
-	}
-	if err != nil {
+	t, rows, err := o.loadRepo(ctx, sessionID, req.Repo)
+	if err := repoRefusal(err); err != nil {
 		return contracts.CommitResult{}, err
 	}
 	var res contracts.CommitResult
@@ -228,9 +245,9 @@ func committedCount(paths []contracts.CommitPath) int {
 
 // Undo is POST /sessions/{id}/commit/undo. An undone commit's record goes
 // too (the Data Service appends commit.undone).
-func (o Ops) Undo(ctx context.Context, sessionID, hash string) (contracts.UndoCommitResult, error) {
-	_, t, _, err := o.load(ctx, sessionID)
-	if errors.Is(err, ErrNoFolder) {
+func (o Ops) Undo(ctx context.Context, sessionID, repo, hash string) (contracts.UndoCommitResult, error) {
+	t, _, err := o.loadRepo(ctx, sessionID, repo)
+	if errors.Is(err, ErrNoFolder) || errors.Is(err, ErrUnknownRepo) {
 		return contracts.UndoCommitResult{Hash: hash, Reason: "no_folder", Detail: "This session has no git folder."}, nil
 	}
 	if err != nil {
@@ -433,42 +450,25 @@ func (o Ops) refresh(ctx context.Context, t Target) {
 	if o.Refresh != nil {
 		err = o.Refresh(ctx)
 	} else {
-		err = RefreshCounts(ctx, o.Store, t)
+		err = RefreshCounts(ctx, o.Store, t.SessionID)
 	}
 	if err != nil {
 		log.Printf("sessionwt: refresh counts for %s: %v", t.SessionID, err)
 	}
 }
 
-// RefreshCounts recomputes a session's header counts (D4) from its record
-// and change list and writes them through the scoped worktree patch — the
+// RefreshCounts recomputes a session's header counts (D4) in every repo
+// of its set (D1) and writes them through the scoped worktree patch — the
 // Router's way, for a session with no live child to do it.
-func RefreshCounts(ctx context.Context, store Store, t Target) error {
-	c := Counts{}
-	if exists(t.Folder) {
-		rows, err := store.FileChanges(ctx, t.SessionID)
-		if err != nil {
-			return err
-		}
-		mine := SessionFiles(t.Folder, rows)
-		if c.Uncommitted, err = CountUncommitted(ctx, t.Folder, mine); err != nil {
-			return err
-		}
-		if t.Isolated() {
-			if c.Outside, err = CountOutside(ctx, t.Folder, mine); err != nil {
-				return err
-			}
-		}
+func RefreshCounts(ctx context.Context, store Store, sessionID string) error {
+	sum, repos, err := Ops{Store: store}.CountAll(ctx, sessionID)
+	if errors.Is(err, ErrNoFolder) {
+		return nil
 	}
-	if t.Isolated() {
-		var err error
-		if c.Unlanded, err = CountUnlanded(ctx, t.Primary, t.Base, t.Branch); err != nil {
-			return err
-		}
+	if err != nil {
+		return err
 	}
-	return store.SetSessionWorktree(ctx, t.SessionID, contracts.SessionWorktreePatch{
-		UncommittedCount: &c.Uncommitted, UnlandedCount: &c.Unlanded, OutsideCount: &c.Outside,
-	})
+	return store.SetSessionWorktree(ctx, sessionID, CountsPatch(sum, repos))
 }
 
 // Cleanup removes a deleted session's worktree and branch (D7), under the
