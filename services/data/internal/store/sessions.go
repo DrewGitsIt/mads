@@ -10,6 +10,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -112,6 +114,7 @@ func (s *Sessions) Update(ctx context.Context, sess *contracts.Session, actor st
 		sess.UncommittedCount = old.UncommittedCount
 		sess.UnlandedCount = old.UnlandedCount
 		sess.OutsideCount = old.OutsideCount
+		sess.Repos = old.Repos
 		// So is the one bit of Tags the user owns. SessionTagAside reaches
 		// the record only through SetAside, and the runner full-PUTs this
 		// record at times it chooses — persistProviderRef and the shutdown
@@ -424,9 +427,16 @@ func (s *Sessions) SetWorktree(ctx context.Context, id string, p contracts.Sessi
 		setIf(&sess.UncommittedCount, p.UncommittedCount)
 		setIf(&sess.UnlandedCount, p.UnlandedCount)
 		setIf(&sess.OutsideCount, p.OutsideCount)
+		if p.Repos != nil {
+			sess.Repos = *p.Repos
+			if len(sess.Repos) == 0 {
+				sess.Repos = nil
+			}
+		}
 		if sess.WorktreeDir == before.WorktreeDir && sess.WorktreeBranch == before.WorktreeBranch &&
 			sess.WorktreeBase == before.WorktreeBase && sess.UncommittedCount == before.UncommittedCount &&
-			sess.UnlandedCount == before.UnlandedCount && sess.OutsideCount == before.OutsideCount {
+			sess.UnlandedCount == before.UnlandedCount && sess.OutsideCount == before.OutsideCount &&
+			slices.Equal(sess.Repos, before.Repos) {
 			return nil
 		}
 		if err := s.write(tx, sess); err != nil {
@@ -754,6 +764,52 @@ func (s *Sessions) FileChanges(ctx context.Context, sessionID string) ([]contrac
 		out = append(out, fc)
 	}
 	return out, errors.Join(rows.Err(), rows.Close())
+}
+
+// pathTouchersChunk bounds one query's IN list, well under SQLite's
+// variable limit.
+const pathTouchersChunk = 400
+
+// PathTouchers names, for each of paths, the session other than exclude
+// whose own tools (attributed ledger rows) changed it most recently. Paths
+// are matched as recorded, so a row stored relative to its repo doesn't
+// match an absolute path; the ledger records absolute paths in practice.
+func (s *Sessions) PathTouchers(ctx context.Context, paths []string, exclude string) ([]contracts.PathToucher, error) {
+	var out []contracts.PathToucher
+	for start := 0; start < len(paths); start += pathTouchersChunk {
+		chunk := paths[start:min(start+pathTouchersChunk, len(paths))]
+		args := make([]any, 0, len(chunk)+1)
+		args = append(args, exclude)
+		for _, p := range chunk {
+			args = append(args, p)
+		}
+		rows, err := s.log.db.QueryContext(ctx,
+			`SELECT fc.path, fc.session_id, COALESCE(json_extract(se.data, '$.name'), '')
+			 FROM file_changes fc JOIN sessions se ON se.id = fc.session_id
+			 WHERE fc.attributed = 1 AND fc.session_id != ?
+			   AND fc.path IN (?`+strings.Repeat(",?", len(chunk)-1)+`)
+			 ORDER BY fc.path, fc.timestamp DESC, fc.id DESC`, args...)
+		if err != nil {
+			return nil, err
+		}
+		last := ""
+		for rows.Next() {
+			var t contracts.PathToucher
+			if err := rows.Scan(&t.Path, &t.SessionID, &t.SessionName); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			if t.Path == last {
+				continue // an older row for a path already named
+			}
+			last = t.Path
+			out = append(out, t)
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // CommitReport is the input to RecordCommit: what the observing layer knows.

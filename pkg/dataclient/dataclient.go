@@ -555,6 +555,18 @@ func (c *Client) FileChanges(ctx context.Context, sessionID string) ([]contracts
 	return list, err
 }
 
+// PathTouchers names the session other than exclude that last changed each
+// of paths through its own tools; paths nobody else changed are absent.
+func (c *Client) PathTouchers(ctx context.Context, paths []string, exclude string) ([]contracts.PathToucher, error) {
+	var list []contracts.PathToucher
+	if len(paths) == 0 {
+		return list, nil
+	}
+	err := c.do(ctx, http.MethodPost, "/file-changes/touchers",
+		contracts.PathTouchersRequest{Paths: paths, ExcludeSession: exclude}, &list)
+	return list, err
+}
+
 // CommitReport is what the post-commit hook (pkg/githook) sends: the raw
 // commit plus whatever the hook itself could read out of the commit
 // message. Task-linkage resolution (trailer → session context → heuristic →

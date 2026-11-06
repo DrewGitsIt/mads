@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -505,6 +506,69 @@ func TestSetWorktreeScopedWrite(t *testing.T) {
 	}
 	if got, _ := s.Get(ctx, sess.ID); got.OutsideCount != 0 || updates() != n+1 {
 		t.Errorf("outside patch: %+v, %d updates (was %d), want it cleared and announced", got, updates(), n)
+	}
+
+	// Per-repo counts: replaced whole, kept through a stale PUT, announced
+	// only when they change, and cleared by an empty slice.
+	repos := []contracts.SessionRepo{{Root: "/r/a", Primary: true, UncommittedCount: 2}, {Root: "/r/b", UncommittedCount: 1}}
+	if err := s.SetWorktree(ctx, sess.ID, contracts.SessionWorktreePatch{Repos: &repos}, "session"); err != nil {
+		t.Fatal(err)
+	}
+	n = updates()
+	same := slices.Clone(repos)
+	if err := s.SetWorktree(ctx, sess.ID, contracts.SessionWorktreePatch{Repos: &same}, "session"); err != nil {
+		t.Fatal(err)
+	}
+	if updates() != n {
+		t.Error("unchanged repos announced session.updated")
+	}
+	stale, _ = s.Get(ctx, sess.ID)
+	stale.Repos = nil
+	if err := s.Update(ctx, stale, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get(ctx, sess.ID); !slices.Equal(got.Repos, repos) {
+		t.Errorf("repos after a PUT without them = %+v, want %+v", got.Repos, repos)
+	}
+	n = updates()
+	none := []contracts.SessionRepo{}
+	if err := s.SetWorktree(ctx, sess.ID, contracts.SessionWorktreePatch{Repos: &none}, "session"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get(ctx, sess.ID); got.Repos != nil || updates() != n+1 {
+		t.Errorf("repos after clearing = %+v (%d updates, was %d), want nil and announced", got.Repos, updates(), n)
+	}
+}
+
+// PathTouchers names the other session that last changed each path through
+// its own tools, skipping the asking session and observed-only rows.
+func TestPathTouchers(t *testing.T) {
+	s, _, _ := newSessionStore(t)
+	ctx := context.Background()
+	me := mkSession(t, s, contracts.Session{Name: "Me", Isolation: contracts.IsolationCurrentDir})
+	older := mkSession(t, s, contracts.Session{Name: "Older", Isolation: contracts.IsolationCurrentDir})
+	newer := mkSession(t, s, contracts.Session{Name: "Newer", Isolation: contracts.IsolationCurrentDir})
+	t0 := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	record := func(sessionID, path string, origin contracts.ChangeOrigin, at time.Time) {
+		t.Helper()
+		if err := s.RecordFileChange(ctx, &contracts.FileChange{
+			SessionID: sessionID, Path: path, Change: "modified", Origin: origin, Timestamp: at,
+		}, sessionID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record(older.ID, "/r/shared.go", contracts.OriginToolUse, t0)
+	record(newer.ID, "/r/shared.go", contracts.OriginToolUse, t0.Add(time.Minute))
+	record(me.ID, "/r/mine.go", contracts.OriginToolUse, t0)
+	record(older.ID, "/r/seen.go", contracts.OriginObserved, t0)
+
+	got, err := s.PathTouchers(ctx, []string{"/r/shared.go", "/r/mine.go", "/r/seen.go", "/r/nobody.go"}, me.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []contracts.PathToucher{{Path: "/r/shared.go", SessionID: newer.ID, SessionName: "Newer"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("PathTouchers = %+v, want %+v", got, want)
 	}
 }
 

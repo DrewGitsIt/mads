@@ -213,6 +213,22 @@ func sessionRoutes(mux *http.ServeMux, log *store.Log) {
 		writeJSON(w, http.StatusCreated, res)
 	})
 
+	mux.HandleFunc("POST /file-changes/touchers", func(w http.ResponseWriter, r *http.Request) {
+		var req contracts.PathTouchersRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		list, err := s.PathTouchers(r.Context(), req.Paths, req.ExcludeSession)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		if list == nil {
+			list = []contracts.PathToucher{}
+		}
+		writeJSON(w, http.StatusOK, list)
+	})
+
 	mux.HandleFunc("GET /sessions/{id}/files", func(w http.ResponseWriter, r *http.Request) {
 		list, err := s.FileChanges(r.Context(), r.PathValue("id"))
 		if err != nil {

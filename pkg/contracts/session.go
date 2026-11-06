@@ -288,6 +288,12 @@ type Session struct {
 	// but Land refuses over them (sessionwt.CountOutside). Same writers and
 	// moments as the two above; always 0 in place.
 	OutsideCount int `json:"outside_count,omitempty"`
+	// Repos breaks the three counts above down by repo when the session's
+	// work spans more than its folder's repo, or its folder isn't one
+	// (docs/COMMIT-LAND-PUSH-DESIGN.md D1): one entry per repo it has
+	// uncommitted or unlanded work in, the counts above being their sums.
+	// Same writers and moments. Empty when there's nothing to count.
+	Repos []SessionRepo `json:"repos,omitempty"`
 	// ShadowDir is the absolute base path of this session's shadow git store
 	// (docs/SHADOW-GIT-DIFFS-ADR.md; services/session/shadow) — one shadow
 	// git dir per touched root underneath it, plus the capture index. Set by
@@ -405,6 +411,23 @@ type SessionWorktreePatch struct {
 	UncommittedCount *int    `json:"uncommitted_count,omitempty"`
 	UnlandedCount    *int    `json:"unlanded_count,omitempty"`
 	OutsideCount     *int    `json:"outside_count,omitempty"`
+	// Repos replaces Session.Repos whole; a non-nil empty slice clears it.
+	Repos *[]SessionRepo `json:"repos,omitempty"`
+}
+
+// SessionRepo is one repo's share of a session's header counts.
+type SessionRepo struct {
+	// Root is the top of the repo's working tree: the session's worktree
+	// when Isolated, else the checkout the work was done in.
+	Root     string `json:"root"`
+	Branch   string `json:"branch,omitempty"`
+	Isolated bool   `json:"isolated,omitempty"`
+	// Primary marks the repo of the session's own folder, the one the
+	// header's one-click Commit and Land act on.
+	Primary          bool `json:"primary,omitempty"`
+	UncommittedCount int  `json:"uncommitted_count,omitempty"`
+	UnlandedCount    int  `json:"unlanded_count,omitempty"`
+	OutsideCount     int  `json:"outside_count,omitempty"`
 }
 
 // ChangeOrigin is how a file change was noticed (spec §5).
@@ -475,6 +498,23 @@ type ShellFileChanges struct {
 type ShellFileChangesResult struct {
 	Recorded  []FileChange `json:"recorded"`
 	Contested []string     `json:"contested"`
+}
+
+// PathTouchersRequest is POST /file-changes/touchers: which sessions other
+// than ExcludeSession last changed each of Paths (absolute) through their
+// own tools — the Commit dialog's "changed by someone else" names.
+type PathTouchersRequest struct {
+	Paths          []string `json:"paths"`
+	ExcludeSession string   `json:"exclude_session,omitempty"`
+}
+
+// PathToucher is the session that most recently changed Path, per its
+// ledger (attributed rows only). Paths no other session changed are
+// absent from the answer.
+type PathToucher struct {
+	Path        string `json:"path"`
+	SessionID   string `json:"session_id"`
+	SessionName string `json:"session_name,omitempty"`
 }
 
 // How a commit got linked to a task — the §3/§5 resolution chain, in order.
