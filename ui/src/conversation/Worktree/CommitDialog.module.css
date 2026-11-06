@@ -1,37 +1,261 @@
-/* The Commit dialog's body — docs/mockups/session-worktrees.html §2. Dialog
-   chrome is ConfirmDialog's. */
+/* The Commit dialog — docs/mockups/commit-land-push.html §1 (several repos:
+   the repo list on the left, the selected repo on the right) and §2 (one
+   repo: a single pane). */
 
-.body {
+.backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 200;
+}
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  width: 560px;
+  max-width: calc(100vw - var(--space-6));
+  max-height: calc(100vh - var(--space-6));
+  background: var(--bg1);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  box-shadow: var(--shadow);
+}
+
+.wide {
+  width: 860px;
+}
+
+.head {
+  padding: var(--space-4) var(--space-4) var(--space-2);
+}
+
+.title {
+  margin: 0;
+  font: 650 var(--fs-ui) var(--sans);
+  color: var(--text);
+}
+
+.subtitle {
+  margin: 2px 0 0;
+  font: var(--fs-sm) var(--sans);
+  color: var(--text3);
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-1) var(--space-4) var(--space-3);
+  font: var(--fs-body) var(--sans);
+  color: var(--text2);
+}
+
+.mainSplit {
+  padding: 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--line-soft);
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* ---- B: repo list + the selected repo ---- */
+
+.split {
+  display: grid;
+  grid-template-columns: 210px 1fr;
+  min-height: 380px;
+}
+
+.rlist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-2);
+  border-right: 1px solid var(--line-soft);
+}
+
+.ritem {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ritem:hover {
+  background: var(--bg2);
+}
+
+.ritemOn,
+.ritemOn:hover {
+  background: var(--bg3);
+}
+
+.rtitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font: 600 var(--fs-sm) var(--sans);
+  overflow-wrap: anywhere;
+}
+
+.rsub {
+  font: var(--fs-chip) var(--sans);
+  color: var(--text3);
+}
+
+.dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.dot_ready,
+.dot_committed {
+  background: var(--ok);
+}
+
+.dot_need {
+  background: var(--warn);
+}
+
+.dot_skip {
+  background: var(--bg4);
+}
+
+.dot_failed {
+  background: var(--bad);
+}
+
+.tagOk {
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--ok-soft);
+  color: var(--ok-fg);
+  font-family: var(--mono);
+}
+
+.rpane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3);
+}
+
+.pane {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
 }
 
+.paneHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.paneName {
+  font: 650 var(--fs-body) var(--sans);
+  color: var(--text);
+}
+
+.where {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font: var(--fs-chip) var(--mono);
+  color: var(--text3);
+}
+
+.branch {
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--info-soft);
+  color: var(--info-fg);
+  font: var(--fs-chip) var(--mono);
+}
+
+.count {
+  margin-left: auto;
+  font: var(--fs-chip) var(--sans);
+  color: var(--text3);
+}
+
+/* ---- files ---- */
+
 .files {
   display: flex;
   flex-direction: column;
-  max-height: 260px;
+  max-height: 300px;
   overflow-y: auto;
   border: 1px solid var(--line-soft);
   border-radius: var(--r-sm);
   background: var(--bg2);
 }
 
+.group + .group {
+  border-top: 1px solid var(--line-soft);
+}
+
+.groupHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-3) 2px;
+  font: 600 var(--fs-chip) var(--sans);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+
+.groupHead .linkbtn {
+  font-size: var(--fs-chip);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .file {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 6px var(--space-3);
+  padding: 4px var(--space-3);
   font: 500 var(--fs-sm) var(--mono);
   color: var(--text2);
 }
 
-.file + .file {
-  border-top: 1px solid var(--line-soft);
+.file:hover {
+  background: var(--bg3);
 }
 
 .file input {
+  flex: none;
   accent-color: var(--accent);
+}
+
+.outsideFile {
+  padding: 6px var(--space-3);
 }
 
 .path {
@@ -61,16 +285,11 @@ button.path:hover {
   color: var(--text3);
 }
 
-.off .path {
-  text-decoration: line-through;
-  text-decoration-color: var(--line);
-}
-
 .kind {
   flex: none;
-  font: 600 var(--fs-chip) var(--sans);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  width: 14px;
+  text-align: center;
+  font: 600 10px var(--mono);
 }
 
 .kindAdded {
@@ -78,7 +297,7 @@ button.path:hover {
 }
 
 .kindModified {
-  color: var(--info-fg);
+  color: var(--warn-fg);
 }
 
 .kindDeleted {
@@ -91,12 +310,23 @@ button.path:hover {
   color: var(--warn-fg);
 }
 
+/* Whose a "Changed by someone else" file is. */
+.why {
+  flex: none;
+  max-width: 45%;
+  font: var(--fs-chip) var(--sans);
+  color: var(--text3);
+  text-align: right;
+}
+
 .notes {
   margin: 0;
   padding-left: var(--space-4);
   font: 500 var(--fs-sm) var(--sans);
   color: var(--text2);
 }
+
+/* ---- message ---- */
 
 .msg {
   width: 100%;
@@ -115,6 +345,7 @@ button.path:hover {
   justify-content: space-between;
   align-items: center;
   gap: var(--space-2);
+  margin-top: calc(-1 * var(--space-2));
 }
 
 .linkbtn {

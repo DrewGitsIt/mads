@@ -138,6 +138,26 @@ describe("ConversationTab — Commit and Land", () => {
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
   });
 
+  it("always opens the dialog when uncommitted files span more than one repo", async () => {
+    const client = makeClient({
+      ...fixtureIsolatedSession,
+      uncommitted_count: 6,
+      repos: [
+        { root: "/home/user/.mads/session-worktrees/session-isolated", primary: true, isolated: true, uncommitted_count: 4 },
+        { root: "/home/user/repo/learnanywhere", uncommitted_count: 2 },
+      ],
+    });
+    vi.spyOn(client, "getConfig").mockResolvedValue({ ...fixtureConfig, auto_commit_messages: true });
+    const status = vi.spyOn(client, "getFastModelStatus");
+    await mount(client);
+    // Both settings answers are in, so a single repo would commit in one click.
+    await waitFor(() => expect(status).toHaveBeenCalled());
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: /Commit…/ }));
+    expect(await screen.findByRole("alertdialog")).toBeTruthy();
+    expect(client.commitCalls).toHaveLength(0);
+  });
+
   it("falls back to the dialog, with the reason, when a one-click Commit is refused", async () => {
     const client = makeClient();
     vi.spyOn(client, "getConfig").mockResolvedValue({ ...fixtureConfig, auto_commit_messages: true });

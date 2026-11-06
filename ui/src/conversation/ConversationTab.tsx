@@ -86,6 +86,7 @@ import { ShellBridge, type ShellDockBridge } from "./ShellDock/shellBridge";
 import { getShellDockState, setShellDockState, useShellDockState } from "./ShellDock/dockState";
 import { CommitDialog } from "./Worktree/CommitDialog";
 import { useCommitSettings } from "./Worktree/useCommitSettings";
+import { uncommittedRepos } from "./Worktree/workState";
 import { useWorktreeCards } from "./Worktree/useWorktreeCards";
 import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
 import { STREAM_REATTACH_EVENT, type StreamReattachDetail } from "./streamReattachSignal";
@@ -641,9 +642,12 @@ export function ConversationTab({
   const optimisticTurn = useRef(false);
 
   // The dock's Commit…: one click with "Write commit messages for me" on and a
-  // Fast Model to write them, else the dialog.
+  // Fast Model to write them, else the dialog. Uncommitted files in more
+  // than one repo always get the dialog: one message per repo, written or
+  // read before anything commits (COMMIT-LAND-PUSH D2).
+  const multiRepo = session ? uncommittedRepos(session) > 1 : false;
   const handleCommit = useCallback(() => {
-    if (!(commitSettings.autoCommitMessages && commitSettings.fastModel)) {
+    if (!(commitSettings.autoCommitMessages && commitSettings.fastModel) || multiRepo) {
       setCommitDialog({});
       return;
     }
@@ -658,7 +662,7 @@ export function ConversationTab({
           message: err instanceof Error ? err.message : "Couldn't commit.",
         });
     });
-  }, [commitSettings, commitAll, stick]);
+  }, [commitSettings, commitAll, stick, multiRepo]);
 
   // The dock's Land / a card's "Land again". The outcome is a card either
   // way (and the dock's ⎇ popover shows it at the button); only an unexpected

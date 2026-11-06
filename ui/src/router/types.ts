@@ -55,6 +55,14 @@ export interface Session {
    */
   outside_count?: number;
   /**
+   * The three counts above by repo, when the session's work spans more than
+   * its folder's repo or its folder isn't one (docs/COMMIT-LAND-PUSH-DESIGN.md
+   * D1): one entry per repo with uncommitted or unlanded work, the counts
+   * above being their sums. Same writers and moments; absent when there's
+   * nothing to count.
+   */
+  repos?: SessionRepo[];
+  /**
    * The directory the session asked to start in — the Launchpad's folder,
    * else its workspace's primary repo, else Config.default_dir. Absent means
    * nobody asked: the agent runs wherever the Router was started.
@@ -1268,8 +1276,68 @@ export interface WorktreeTenant {
   name: string;
 }
 
+/** One repo's share of a session's Commit/Land counts (Session.repos). mirrors pkg/contracts/session.go SessionRepo */
+export interface SessionRepo {
+  /** The top of the repo's working tree: the session's worktree when isolated, else the checkout the work was done in. */
+  root: string;
+  branch?: string;
+  isolated?: boolean;
+  /** The repo of the session's own folder — the one the dock's one-click Commit and Land act on. */
+  primary?: boolean;
+  uncommitted_count?: number;
+  unlanded_count?: number;
+  outside_count?: number;
+}
+
+/** When a file the session didn't change was changed: during this session, or already uncommitted before it. */
+export type CommitPlanSince = "session" | "before";
+
+/** One uncommitted file in a repo. Path is relative to the repo's root. */
+export interface CommitPlanFile {
+  path: string;
+  kind: WorktreeFileKind;
+  /** The session's own tools changed it — the dialog checks these. */
+  mine?: boolean;
+  /** Not mine: the other session whose tools last changed it, when the ledger says. */
+  by?: WorktreeTenant;
+  /** Not mine: when it changed, when the session-start snapshot can tell. */
+  since?: CommitPlanSince;
+}
+
+/** One repo's section of the Commit dialog. */
+export interface CommitPlanRepo {
+  /** The top of the repo's working tree — CommitRequest.repo. */
+  root: string;
+  branch?: string;
+  isolated?: boolean;
+  /** The session folder's own repo. */
+  primary?: boolean;
+  files: CommitPlanFile[];
+}
+
+/** A file the session changed outside every repo: it can't be committed where it is. Path is absolute. */
+export interface CommitPlanOutside {
+  path: string;
+  kind: WorktreeFileKind | string;
+}
+
+/**
+ * GET /sessions/{id}/commit-plan (docs/COMMIT-LAND-PUSH-DESIGN.md D2):
+ * every uncommitted file in each of the session's repos, whoever changed
+ * it, and its changed files outside every repo. Runs git per call, so
+ * fetched when the Commit dialog opens, never per render.
+ */
+export interface CommitPlan {
+  /** Repos with anything uncommitted, the folder's repo first. Never null. */
+  repos: CommitPlanRepo[];
+  /** Never null. */
+  outside: CommitPlanOutside[];
+}
+
 export interface CommitRequest {
-  /** Relative to the session's folder; empty means every uncommitted session file. */
+  /** A repo root from the commit plan; empty is the folder's repo, or the session's only repo. */
+  repo?: string;
+  /** Relative to the repo's root; empty means every uncommitted session file there. Any file git reports changed may be named, the session's or not. */
   paths?: string[];
   /** Empty asks the Fast Model to draft one (only when Config.auto_commit_messages is on). */
   message?: string;
@@ -1278,7 +1346,7 @@ export interface CommitRequest {
 export interface CommitPath {
   path: string;
   status: "committed" | "already_committed" | "rejected";
-  /** Rejected paths only: "outside_folder", "not_session_file", "pipeline_task_file". */
+  /** Rejected paths only: "outside_folder", "pipeline_task_file" (older Routers: "not_session_file"). */
   reason?: string;
 }
 
@@ -1298,7 +1366,8 @@ export type CommitErrorCode =
   | "no_folder"
   | "no_fast_model"
   | "draft_failed"
-  | "locked";
+  | "locked"
+  | "unknown_repo";
 
 /** A refused POST /commit or /commit/draft: rendered in place, keeping the user's selection. */
 export interface CommitError {

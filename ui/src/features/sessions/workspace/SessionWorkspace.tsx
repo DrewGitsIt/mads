@@ -385,6 +385,7 @@ export function SessionWorkspace({
             active={tab.id === activeTab}
             routerClient={routerClient}
             pipelineClient={pipelineClient}
+            session={session ?? undefined}
             provisioning={provisioning}
             onProvisioningDone={onProvisioningDone}
             pendingFirstMessage={pendingFirstMessage}

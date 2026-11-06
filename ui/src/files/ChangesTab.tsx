@@ -6,7 +6,8 @@ import { SegmentedControl, type SegmentedOption } from "../components/SegmentedC
 import { Toast, type ToastTone } from "../components/Toast/Toast";
 import { getLinkOpener } from "../platform/links";
 import type { RouterClient } from "../router/client";
-import type { ChangeBaselineId, ChangeTurn, ChangedFile, FileDiff } from "../router/types";
+import type { ChangeBaselineId, ChangeTurn, ChangedFile, FileDiff, Session } from "../router/types";
+import { isIsolated } from "../conversation/Worktree/workState";
 import { FileCounts, KindBadge, LineCounts } from "./ChangeBits";
 import { buildCommitGroups, buildTierGroups, buildTurnGroups } from "./changeGroups";
 import { FolderTreeView, GroupList, type ChangeSelection, type RowContext } from "./ChangesList";
@@ -17,6 +18,7 @@ import { useFullWidth } from "../features/sessions/fullWidth";
 import { useSeenState } from "./seenState";
 import { TurnStrip } from "./TurnStrip";
 import { useChangeSet } from "./useChangeSet";
+import { WorkChip } from "./WorkChip";
 import styles from "./ChangesTab.module.css";
 
 export interface ChangesTabProps {
@@ -30,6 +32,12 @@ export interface ChangesTabProps {
   focusView?: ChangesFocus;
   /** Whether the Changes tab is the one showing (tabs stay mounted when hidden). Gates keys and Full-width. */
   active?: boolean;
+  /**
+   * The session record, kept live by SessionWorkspace: its Commit/Land
+   * counts drive the toolbar's status chip. Unset (or a session with no git
+   * at all), the toolbar shows the plain totals.
+   */
+  session?: Session;
 }
 
 export type Grouping = "tier" | "folder" | "turn" | "commit" | "intent";
@@ -84,7 +92,15 @@ function isTypingTarget(t: EventTarget | null): boolean {
  * the selected file's Monaco diff. Everything is read from the session's
  * server-computed ChangeSet; the tab only groups, filters and sorts it.
  */
-export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, focusView, active = true }: ChangesTabProps) {
+export function ChangesTab({
+  sessionId,
+  routerClient,
+  focusPath,
+  focusCommit,
+  focusView,
+  active = true,
+  session,
+}: ChangesTabProps) {
   const [vs, setVs] = useState<ChangeBaselineId>("start");
   const { changeSet: cs, loading, error, refetch } = useChangeSet(routerClient, sessionId, vs);
   const { isUnseen, markSeen } = useSeenState(sessionId);
@@ -471,6 +487,17 @@ export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, fo
   const baselines = cs.baselines.filter((b) => b.available);
   const filtered = visible.length !== files.length;
   const shownTotals = filtered ? sumLines(visible) : { added: cs.totals.added, deleted: cs.totals.deleted };
+  const totals = (
+    <>
+      {filtered ? `${visible.length} of ${files.length}` : files.length} {files.length === 1 ? "file" : "files"} ·{" "}
+      <LineCounts added={shownTotals.added} deleted={shownTotals.deleted} />
+    </>
+  );
+  // The chip needs git somewhere: a repo in the change set, or Commit/Land
+  // counts on the record (a session started outside any repo).
+  const inGit =
+    session !== undefined &&
+    (git || (session.uncommitted_count ?? 0) > 0 || (session.repos?.length ?? 0) > 0 || isIsolated(session));
 
   const groupOptions: SegmentedOption<Grouping>[] = [
     { value: "tier", label: "Tier" },
@@ -511,10 +538,20 @@ export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, fo
             />
           </>
         )}
-        <span className={styles.totals} data-testid="changes-totals">
-          {filtered ? `${visible.length} of ${files.length}` : files.length} {files.length === 1 ? "file" : "files"} ·{" "}
-          <LineCounts added={shownTotals.added} deleted={shownTotals.deleted} />
-        </span>
+        {inGit && session ? (
+          <WorkChip
+            session={session}
+            routerClient={routerClient}
+            onCommitted={refetch}
+            onError={(message) => setToast({ tone: "bad", title: "Couldn't land", description: message })}
+          >
+            {totals}
+          </WorkChip>
+        ) : (
+          <span className={styles.totals} data-testid="changes-totals">
+            {totals}
+          </span>
+        )}
         {loading && <span className={styles.quiet}>Updating…</span>}
         {error && <span className={styles.quiet}>Couldn't refresh: {error}</span>}
         {cs.notes && cs.notes.length > 0 && <span className={styles.notes}>{cs.notes.join(" · ")}</span>}

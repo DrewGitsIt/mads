@@ -121,6 +121,21 @@ func TestCommitInEachRepo(t *testing.T) {
 		t.Errorf("recorded commits = %+v, want one in b", m.store.commits)
 	}
 
+	// Undo from a commit card names only the commit: it's found in b.
+	undo, err := m.ops.Undo(ctx, m.store.sess.ID, "", res.Hash)
+	if err != nil || !undo.Undone {
+		t.Fatalf("undo of b's commit by hash alone = %+v, %v", undo, err)
+	}
+	if out, _ := Git(ctx, m.b, "status", "--porcelain"); out == "" {
+		t.Error("undo didn't put b's files back")
+	}
+	res, err = m.ops.Commit(ctx, m.store.sess.ID, contracts.CommitRequest{
+		Repo: m.b, Paths: []string{"b.txt", "theirs.txt"}, Message: "b work",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// Counts span both repos; b has nothing left.
 	sum, repos, err := m.ops.CountAll(ctx, m.store.sess.ID)
 	if err != nil {

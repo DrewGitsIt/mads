@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -246,7 +247,16 @@ func committedCount(paths []contracts.CommitPath) int {
 // Undo is POST /sessions/{id}/commit/undo. An undone commit's record goes
 // too (the Data Service appends commit.undone).
 func (o Ops) Undo(ctx context.Context, sessionID, repo, hash string) (contracts.UndoCommitResult, error) {
-	t, _, err := o.loadRepo(ctx, sessionID, repo)
+	var t Target
+	_, primary, all, _, err := o.targets(ctx, sessionID)
+	if err == nil {
+		if repo == "" {
+			// A commit card names its commit, not its repo: the repo whose
+			// tip it is, if any, else the default.
+			repo = tipRepo(ctx, all, hash)
+		}
+		t, err = pick(primary, all, repo)
+	}
 	if errors.Is(err, ErrNoFolder) || errors.Is(err, ErrUnknownRepo) {
 		return contracts.UndoCommitResult{Hash: hash, Reason: "no_folder", Detail: "This session has no git folder."}, nil
 	}
@@ -270,6 +280,21 @@ func (o Ops) Undo(ctx context.Context, sessionID, repo, hash string) (contracts.
 	}
 	o.refresh(ctx, t)
 	return res, nil
+}
+
+// tipRepo is the folder of the repo in all whose checked-out commit is hash
+// (a full hash or a prefix), "" when none is.
+func tipRepo(ctx context.Context, all []Target, hash string) string {
+	if len(all) < 2 || hash == "" {
+		return ""
+	}
+	for _, t := range all {
+		out, err := Git(ctx, t.Folder, "rev-parse", "HEAD")
+		if err == nil && strings.HasPrefix(strings.TrimSpace(out), hash) {
+			return t.Folder
+		}
+	}
+	return ""
 }
 
 // Land is POST /sessions/{id}/land: the gates, then LandSteps, under the

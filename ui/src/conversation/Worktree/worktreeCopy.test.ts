@@ -5,10 +5,13 @@ import {
   checkResolutionsPrompt,
   commitPathReason,
   nameFiles,
+  notMineNote,
   outsideControlTitle,
   refusalCopy,
+  repoName,
   resolveConflictPrompt,
   tidyOutsidePrompt,
+  uncommittedCopy,
   undoRefusalCopy,
 } from "./worktreeCopy";
 
@@ -121,6 +124,23 @@ describe("worktree copy helpers", () => {
     expect(undoRefusalCopy("already_pushed")).toBe("Can't undo: it has already been pushed.");
     expect(commitPathReason("already_committed")).toBe("already committed");
     expect(commitPathReason("rejected", "outside_folder")).toBe("outside this session's folder");
+  });
+
+  it("says whose a file changed by someone else is, as far as it's known", () => {
+    expect(notMineNote({ by: { id: "ses_1", name: "Launchpad Pills UX Polish" }, since: "session" })).toBe(
+      "session “Launchpad Pills UX Polish”",
+    );
+    expect(notMineNote({ by: { id: "ses_1", name: "" } })).toBe("session “ses_1”");
+    expect(notMineNote({ since: "session" })).toBe("changed while this session ran");
+    expect(notMineNote({ since: "before" })).toBe("uncommitted before this session started");
+    expect(notMineNote({})).toBe("not by this session");
+  });
+
+  it("names a repo by its folder and counts uncommitted files across repos", () => {
+    expect(repoName("/home/u/repo/mads")).toBe("mads");
+    expect(repoName("/home/u/repo/mads/")).toBe("mads");
+    expect(uncommittedCopy(9, 1)).toBe("9 uncommitted");
+    expect(uncommittedCopy(11, 2)).toBe("11 uncommitted in 2 repos");
   });
 });
 

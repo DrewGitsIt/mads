@@ -170,6 +170,35 @@ describe("dock Commit / Land control (D4)", () => {
     expect(control()).toBeNull();
   });
 
+  it("counts the repos when uncommitted files span more than one (COMMIT-LAND-PUSH D3)", () => {
+    const { onCommit } = renderDock({
+      ...fixtureSessions["session-active"],
+      uncommitted_count: 11,
+      repos: [
+        { root: "/home/user/repo/mads", uncommitted_count: 9 },
+        { root: "/home/user/repo/learnanywhere", uncommitted_count: 2 },
+      ],
+    });
+    const button = control()!;
+    expect(button.getAttribute("data-work-state")).toBe("commit");
+    expect(button.textContent).toBe("Commit… 11 · 2 repos");
+    expect(button.getAttribute("title")).toBe("Commit 11 files in 2 repos");
+    fireEvent.click(button);
+    expect(onCommit).toHaveBeenCalled();
+  });
+
+  it("doesn't count a listed repo with nothing uncommitted", () => {
+    renderDock({
+      ...fixtureIsolatedSession,
+      unlanded_count: 0,
+      repos: [
+        { root: "/home/user/.mads/session-worktrees/session-isolated", primary: true, isolated: true, uncommitted_count: 4 },
+        { root: "/home/user/repo/learnanywhere", unlanded_count: 0 },
+      ],
+    });
+    expect(control()!.textContent).toBe("Commit… 4");
+  });
+
   it("re-renders from a live record update", () => {
     const work = { onCommit: vi.fn(), onLand: vi.fn() };
     const { rerender } = render(dock({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0 }, work));
@@ -187,40 +216,79 @@ describe("dock ⎇ popover", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("lists folder, worktree, branch → base and status, with Commit… and Land into base", () => {
+  it("lists folder, worktree and branch → base, then where the work goes: Commit, then Land", () => {
     const { onCommit } = renderDock(fixtureIsolatedSession);
     fireEvent.click(screen.getByTestId("dock-location"));
     const pop = screen.getByTestId("work-popover");
     expect(pop.textContent).toContain("/home/user/repo/mads");
     expect(pop.textContent).toContain("/home/user/.mads/session-worktrees/session-isolated");
     expect(pop.textContent).toContain("mads/session/session-isolated → main");
-    expect(screen.getByTestId("work-status").textContent).toBe("3 commits to land · 4 files uncommitted");
+
+    const path = within(pop).getByTestId("work-path");
+    expect(path.textContent).toContain("Where this session's work goes");
+    const commitStep = within(path).getByTestId("work-step-commit");
+    expect(commitStep.getAttribute("data-state")).toBe("next");
+    expect(commitStep.textContent).toContain("4 uncommitted");
+    const landStep = within(path).getByTestId("work-step-land");
+    expect(landStep.getAttribute("data-state")).toBe("wait");
+    expect(landStep.textContent).toContain("Land into main");
+    expect(landStep.textContent).toContain("3 commits on mads/session/session-isolated · merges into main");
 
     // Land would only be refused over uncommitted files: held, with why.
-    const land = within(pop).getByRole("button", { name: "Land into main" }) as HTMLButtonElement;
+    const land = within(landStep).getByRole("button", { name: "Land" }) as HTMLButtonElement;
     expect(land.disabled).toBe(true);
+    expect(land.title).toBe("Commit this session's changes first. Land only moves committed work.");
 
-    fireEvent.click(within(pop).getByRole("button", { name: "Commit…" }));
+    fireEvent.click(within(commitStep).getByRole("button", { name: "Commit…" }));
     expect(onCommit).toHaveBeenCalled();
     expect(screen.queryByTestId("work-popover")).toBeNull();
   });
 
-  it("says when there's nothing to do, and toggles closed from the segment", () => {
+  it("lands from the path once everything is committed", () => {
+    const { onLand } = renderDock(clean);
+    fireEvent.click(screen.getByTestId("dock-location"));
+    const path = screen.getByTestId("work-path");
+    const commitStep = within(path).getByTestId("work-step-commit");
+    expect(commitStep.getAttribute("data-state")).toBe("done");
+    expect(commitStep.textContent).toContain("all committed");
+    expect(within(commitStep).queryByRole("button")).toBeNull();
+    const landStep = within(path).getByTestId("work-step-land");
+    expect(landStep.getAttribute("data-state")).toBe("next");
+    fireEvent.click(within(landStep).getByRole("button", { name: "Land" }));
+    expect(onLand).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the work is done when there's nothing to do, and toggles closed from the segment", () => {
     renderDock({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0 });
     fireEvent.click(screen.getByTestId("dock-location"));
-    expect(screen.getByTestId("work-status").textContent).toBe("Nothing to commit or land");
-    const commit = within(screen.getByTestId("work-popover")).getByRole("button", { name: "Commit…" });
-    expect((commit as HTMLButtonElement).disabled).toBe(true);
+    const path = screen.getByTestId("work-path");
+    expect(within(path).getByTestId("work-step-commit").getAttribute("data-state")).toBe("done");
+    expect(within(path).getByTestId("work-step-land").getAttribute("data-state")).toBe("done");
+    expect(within(path).queryAllByRole("button")).toHaveLength(0);
     fireEvent.click(screen.getByTestId("dock-location"));
     expect(screen.queryByTestId("work-popover")).toBeNull();
   });
 
-  it("has no Land button for a session working in place", () => {
+  it("has no Land step for a session working in place", () => {
     renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 1 });
     fireEvent.click(screen.getByTestId("dock-location"));
     const pop = screen.getByTestId("work-popover");
+    expect(within(pop).queryByTestId("work-step-land")).toBeNull();
     expect(within(pop).queryByRole("button", { name: /Land/ })).toBeNull();
     expect(pop.textContent).not.toContain("Worktree");
+  });
+
+  it("sums a session's repos in the path", () => {
+    renderDock({
+      ...fixtureSessions["session-active"],
+      uncommitted_count: 11,
+      repos: [
+        { root: "/home/user/repo/mads", uncommitted_count: 9 },
+        { root: "/home/user/repo/learnanywhere", uncommitted_count: 2 },
+      ],
+    });
+    fireEvent.click(screen.getByTestId("dock-location"));
+    expect(screen.getByTestId("work-step-commit").textContent).toContain("11 uncommitted in 2 repos");
   });
 
   it("says why a session working in place has no Land, asking only once the popover opens", async () => {

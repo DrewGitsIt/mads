@@ -14,6 +14,7 @@ import type {
   Commit,
   CommitDraft,
   CommitError,
+  CommitPlan,
   CommitRequest,
   CommitResult,
   Config,
@@ -237,16 +238,18 @@ export interface RouterClient {
   getToolDiff(sessionId: string, toolUseId: string): Promise<ToolDiff | null>;
 
   // Commit and Land (docs/SESSION-WORKTREES-DESIGN.md D5, D6).
-  /** Runs git status server-side — call when a dialog opens or at confirm time, never per render. */
-  getWorktreeStatus(sessionId: string): Promise<WorktreeStatus>;
+  /** Runs git status server-side — call when a dialog opens or at confirm time, never per render. `repo` is one of the session's repo roots; empty is its folder's. */
+  getWorktreeStatus(sessionId: string, repo?: string): Promise<WorktreeStatus>;
+  /** What the Commit dialog lists, across the session's repos (COMMIT-LAND-PUSH D2). Runs git: fetch when the dialog opens. */
+  getCommitPlan(sessionId: string): Promise<CommitPlan>;
   /** Recounts the header's Commit/Land counts (cheap; they arrive on the session record). */
   refreshWorktreeCounts(sessionId: string): Promise<void>;
   /** Throws CommitRefusedError for a structured refusal (invalid_paths, git_failed, …). */
   commitSession(sessionId: string, req: CommitRequest): Promise<CommitResult>;
   /** Resolves for a refusal too (undone: false, with its reason) — only an unexpected failure throws. */
-  undoCommit(sessionId: string, hash: string): Promise<UndoCommitResult>;
-  /** Throws CommitRefusedError (no_fast_model, draft_failed, …). */
-  draftCommitMessage(sessionId: string, paths?: string[]): Promise<CommitDraft>;
+  undoCommit(sessionId: string, hash: string, repo?: string): Promise<UndoCommitResult>;
+  /** Throws CommitRefusedError (no_fast_model, draft_failed, …). `repo` as CommitRequest.repo. */
+  draftCommitMessage(sessionId: string, paths?: string[], repo?: string): Promise<CommitDraft>;
   /** Landed, conflicted and refused all resolve — each is a card. */
   landSession(sessionId: string): Promise<LandResult>;
 
@@ -961,8 +964,12 @@ export class FetchRouterClient implements RouterClient {
     return readJSON<ToolDiff>(res);
   }
 
-  async getWorktreeStatus(sessionId: string): Promise<WorktreeStatus> {
-    return routerGet(this.baseUrl, `/sessions/${sessionId}/worktree`);
+  async getWorktreeStatus(sessionId: string, repo?: string): Promise<WorktreeStatus> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/worktree`, { repo: repo || undefined });
+  }
+
+  async getCommitPlan(sessionId: string): Promise<CommitPlan> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/commit-plan`);
   }
 
   async refreshWorktreeCounts(sessionId: string): Promise<void> {
@@ -978,11 +985,11 @@ export class FetchRouterClient implements RouterClient {
     return readCommitJSON<CommitResult>(res);
   }
 
-  async undoCommit(sessionId: string, hash: string): Promise<UndoCommitResult> {
+  async undoCommit(sessionId: string, hash: string, repo?: string): Promise<UndoCommitResult> {
     const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/commit/undo`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hash }),
+      body: JSON.stringify(repo ? { repo, hash } : { hash }),
     });
     // A refusal is a 409 carrying the same shape, undone: false.
     if (res.status === 409) {
@@ -995,11 +1002,11 @@ export class FetchRouterClient implements RouterClient {
     return readJSON<UndoCommitResult>(res);
   }
 
-  async draftCommitMessage(sessionId: string, paths?: string[]): Promise<CommitDraft> {
+  async draftCommitMessage(sessionId: string, paths?: string[], repo?: string): Promise<CommitDraft> {
     const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/commit/draft`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(paths?.length ? { paths } : {}),
+      body: JSON.stringify({ ...(repo ? { repo } : {}), ...(paths?.length ? { paths } : {}) }),
     });
     return readCommitJSON<CommitDraft>(res);
   }

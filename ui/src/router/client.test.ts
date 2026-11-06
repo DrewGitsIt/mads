@@ -253,6 +253,37 @@ describe("FetchRouterClient", () => {
     expect(draft.truncated).toBe(true);
   });
 
+  it("draftCommitMessage and undoCommit name the repo when given one", async () => {
+    let fetchMock = mockFetchOnce({ message: "Fix it" });
+    const client = new FetchRouterClient("http://router.local");
+    await client.draftCommitMessage("s1", ["a.go"], "/repo/mads");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/commit/draft",
+      expect.objectContaining({ body: JSON.stringify({ repo: "/repo/mads", paths: ["a.go"] }) }),
+    );
+    fetchMock = mockFetchOnce({ undone: true, hash: "abc" });
+    await client.undoCommit("s1", "abc", "/repo/mads");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/commit/undo",
+      expect.objectContaining({ body: JSON.stringify({ repo: "/repo/mads", hash: "abc" }) }),
+    );
+  });
+
+  it("getCommitPlan GETs /sessions/:id/commit-plan", async () => {
+    const plan = { repos: [{ root: "/repo/mads", files: [{ path: "a.go", kind: "modified", mine: true }] }], outside: [] };
+    const fetchMock = mockFetchOnce(plan);
+    const client = new FetchRouterClient("http://router.local");
+    expect(await client.getCommitPlan("s1")).toEqual(plan);
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/commit-plan");
+  });
+
+  it("getWorktreeStatus asks about one repo when given one", async () => {
+    const fetchMock = mockFetchOnce({ isolated: false, files: [], uncommitted_count: 0, unlanded_count: 0 });
+    const client = new FetchRouterClient("http://router.local");
+    await client.getWorktreeStatus("s1", "/repo/mads");
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/worktree?repo=%2Frepo%2Fmads");
+  });
+
   it("landSession POSTs to /sessions/:id/land and resolves every outcome", async () => {
     const fetchMock = mockFetchOnce({ outcome: "refused", reason: "busy", base: "main" });
     const client = new FetchRouterClient("http://router.local");

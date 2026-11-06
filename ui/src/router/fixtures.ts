@@ -18,6 +18,7 @@ import type {
   Commit,
   CommitDraft,
   CommitError,
+  CommitPlan,
   CommitRequest,
   CommitResult,
   Config,
@@ -1513,13 +1514,24 @@ export class FakeRouterClient implements RouterClient {
 
   // --- Commit and Land: canned answers a test can swap, plus every call ---
   worktreeStatus: WorktreeStatus = structuredClone(fixtureWorktreeStatus);
-  /** A CommitError makes commitSession throw it as CommitRefusedError; undefined commits whatever was asked. */
-  commitOutcome?: CommitResult | CommitError;
+  /**
+   * The Commit dialog's plan. Unset, it is worktreeStatus as one primary
+   * repo whose files are all the session's own — the single-repo case every
+   * flow before COMMIT-LAND-PUSH D2 assumed.
+   */
+  commitPlan?: CommitPlan;
+  readonly commitPlanCalls: string[] = [];
+  /**
+   * A CommitError makes commitSession throw it as CommitRefusedError;
+   * undefined commits whatever was asked. A function answers per request
+   * (one repo committing, another refusing).
+   */
+  commitOutcome?: CommitResult | CommitError | ((req: CommitRequest) => CommitResult | CommitError | undefined);
   readonly commitCalls: { sessionId: string; req: CommitRequest }[] = [];
   undoOutcome?: UndoCommitResult;
-  readonly undoCalls: { sessionId: string; hash: string }[] = [];
+  readonly undoCalls: { sessionId: string; hash: string; repo?: string }[] = [];
   draftOutcome: CommitDraft | CommitError = { message: "deploy: detect Ubuntu 24.04 runners by codename" };
-  readonly draftCalls: { sessionId: string; paths?: string[] }[] = [];
+  readonly draftCalls: { sessionId: string; paths?: string[]; repo?: string }[] = [];
   /** A function lets a test hold the answer back (Landing… stays up until it resolves). */
   landOutcome: LandResult | (() => Promise<LandResult>) = {
     outcome: "landed",
@@ -1530,8 +1542,30 @@ export class FakeRouterClient implements RouterClient {
   };
   readonly landCalls: string[] = [];
 
-  async getWorktreeStatus(_sessionId: string): Promise<WorktreeStatus> {
+  async getWorktreeStatus(_sessionId: string, _repo?: string): Promise<WorktreeStatus> {
     return structuredClone(this.worktreeStatus);
+  }
+
+  async getCommitPlan(sessionId: string): Promise<CommitPlan> {
+    this.commitPlanCalls.push(sessionId);
+    return structuredClone(this.commitPlan ?? this.planFromStatus());
+  }
+
+  private planFromStatus(): CommitPlan {
+    const st = this.worktreeStatus;
+    if (!st.folder || st.files.length === 0) return { repos: [], outside: [] };
+    return {
+      repos: [
+        {
+          root: st.folder,
+          branch: st.branch,
+          isolated: st.isolated || undefined,
+          primary: true,
+          files: st.files.map((f) => ({ ...f, mine: true })),
+        },
+      ],
+      outside: [],
+    };
   }
 
   readonly refreshWorktreeCountsCalls: string[] = [];
@@ -1541,10 +1575,17 @@ export class FakeRouterClient implements RouterClient {
 
   async commitSession(sessionId: string, req: CommitRequest): Promise<CommitResult> {
     this.commitCalls.push({ sessionId, req });
-    const out = this.commitOutcome;
+    const out = typeof this.commitOutcome === "function" ? this.commitOutcome(req) : this.commitOutcome;
     if (out && "code" in out) throw new CommitRefusedError(out, out.code === "git_failed" ? 422 : 400);
     if (out) return out;
-    const paths = req.paths?.length ? req.paths : this.worktreeStatus.files.map((f) => f.path);
+    const plan = this.commitPlan ?? this.planFromStatus();
+    const repo = req.repo ? plan.repos.find((r) => r.root === req.repo) : (plan.repos.find((r) => r.primary) ?? plan.repos[0]);
+    if (req.repo && !repo) {
+      throw new CommitRefusedError({ code: "unknown_repo", error: "That repo isn't one this session works in." }, 400);
+    }
+    const paths = req.paths?.length
+      ? req.paths
+      : (repo?.files.filter((f) => f.mine).map((f) => f.path) ?? this.worktreeStatus.files.map((f) => f.path));
     return {
       hash: "a41c09e5d2",
       message: req.message || "drafted",
@@ -1554,13 +1595,13 @@ export class FakeRouterClient implements RouterClient {
     };
   }
 
-  async undoCommit(sessionId: string, hash: string): Promise<UndoCommitResult> {
-    this.undoCalls.push({ sessionId, hash });
+  async undoCommit(sessionId: string, hash: string, repo?: string): Promise<UndoCommitResult> {
+    this.undoCalls.push(repo ? { sessionId, hash, repo } : { sessionId, hash });
     return this.undoOutcome ?? { undone: true, hash };
   }
 
-  async draftCommitMessage(sessionId: string, paths?: string[]): Promise<CommitDraft> {
-    this.draftCalls.push({ sessionId, paths });
+  async draftCommitMessage(sessionId: string, paths?: string[], repo?: string): Promise<CommitDraft> {
+    this.draftCalls.push(repo ? { sessionId, paths, repo } : { sessionId, paths });
     const out = this.draftOutcome;
     if ("code" in out) throw new CommitRefusedError(out, 409);
     return out;

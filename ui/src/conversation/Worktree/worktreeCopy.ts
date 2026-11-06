@@ -1,4 +1,4 @@
-import type { LandRefusalReason } from "../../router/types";
+import type { CommitPlanFile, LandRefusalReason } from "../../router/types";
 
 /**
  * The words Commit and Land speak (docs/mockups/session-worktrees.html).
@@ -278,6 +278,29 @@ export function commitPathReason(status: string, reason?: string): string {
     default:
       return status === "rejected" ? "not committed" : "";
   }
+}
+
+/**
+ * Why a "Changed by someone else" row isn't this session's
+ * (docs/COMMIT-LAND-PUSH-DESIGN.md D2): the other session the ledger
+ * names, else when it changed, as far as the session-start snapshot can say.
+ */
+export function notMineNote(file: Pick<CommitPlanFile, "by" | "since">): string {
+  if (file.by) return `session “${file.by.name || file.by.id}”`;
+  if (file.since === "session") return "changed while this session ran";
+  if (file.since === "before") return "uncommitted before this session started";
+  return "not by this session";
+}
+
+/** A repo by its folder's name: "/home/u/repo/mads" → "mads". */
+export function repoName(root: string): string {
+  const trimmed = root.replace(/\/+$/, "");
+  return trimmed.slice(trimmed.lastIndexOf("/") + 1) || trimmed;
+}
+
+/** "11 uncommitted", "11 uncommitted in 2 repos" — the session's state in words (Changes' chip, the ⎇ path). */
+export function uncommittedCopy(files: number, repos: number): string {
+  return `${files} uncommitted${repos > 1 ? ` in ${repos} repos` : ""}`;
 }
 
 function taskName(task: string | undefined): string {

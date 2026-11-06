@@ -17,6 +17,7 @@ import {
   shortHash,
   tidyOutsidePrompt,
 } from "../Worktree/worktreeCopy";
+import { WorkPath } from "../Worktree/WorkPath";
 import { isIsolated, workState, type WorkState } from "../Worktree/workState";
 import { landOutcomeKey, shortBranch } from "./dockLabels";
 import { UPWARD_RIGHT, cx } from "./Pickers";
@@ -50,7 +51,8 @@ interface NoLandNote {
 /**
  * The status line's right end: the `⎇ {workspace} / {branch} → {base}`
  * segment, then the Commit/Land control, sharing one upward popover that
- * says where the session works and offers Commit… and Land. A Land click
+ * says where the session works and where its work goes (WorkPath: Commit,
+ * then Land, each with its button). A Land click
  * opens the popover and its outcome (landed, conflicted, refused — with the
  * refusal's own fix, e.g. "Ask the agent" for changes outside the session)
  * renders there, at the button, as well as in the transcript.
@@ -175,14 +177,10 @@ export function WorkArea({
     </>
   );
 
-  const uncommitted = session.uncommitted_count ?? 0;
-  const unlanded = isolated ? (session.unlanded_count ?? 0) : 0;
-  const outside = isolated ? (session.outside_count ?? 0) : 0;
-  const status = [
-    unlanded > 0 && `${plural(unlanded, "commit")} to land`,
-    uncommitted > 0 && `${plural(uncommitted, "file")} uncommitted`,
-    outside > 0 && `${plural(outside, "file")} changed outside this session`,
-  ].filter(Boolean);
+  // The path needs git: an isolated session, a branch, or counts the
+  // record has for some repo (a session started in a non-repo folder).
+  const inGit =
+    isolated || Boolean(branch) || (session.uncommitted_count ?? 0) > 0 || (session.repos?.length ?? 0) > 0;
 
   // Where the agent actually runs: an isolated session's own worktree, else
   // the folder it works in place.
@@ -212,36 +210,21 @@ export function WorkArea({
                 <dd title={branchText}>{branchText}</dd>
               </>
             )}
-            <dt>Status</dt>
-            <dd className={status.length > 0 ? styles.warn : styles.plain} data-testid="work-status">
-              {status.length > 0 ? status.join(" · ") : "Nothing to commit or land"}
-            </dd>
           </dl>
-          {work && (
-            <div className={styles.acts}>
-              <button
-                type="button"
-                className={line.btn}
-                disabled={uncommitted === 0 || work.committing}
-                onClick={() => {
+          {inGit && (
+            <WorkPath
+              session={session}
+              committing={work?.committing}
+              landing={landing}
+              onCommit={
+                work &&
+                (() => {
                   close();
                   work.onCommit();
-                }}
-              >
-                {work.committing ? "Committing…" : "Commit…"}
-              </button>
-              {isolated && (
-                <button
-                  type="button"
-                  className={cx(line.btn, line.btnPrimary)}
-                  disabled={landing || state?.kind !== "land"}
-                  title={state?.kind === "land" ? undefined : landHeldTitle(state)}
-                  onClick={land}
-                >
-                  {landing ? "Landing…" : `Land into ${base}`}
-                </button>
-              )}
-            </div>
+                })
+              }
+              onLand={work && land}
+            />
           )}
           {note && (note.detail || owner) && (
             <div className={cx(styles.outcome, styles.tone_quiet)} data-testid="no-land-note">
@@ -347,17 +330,6 @@ function PathRow({ path, what, workDir }: { path: string; what: "folder" | "work
   );
 }
 
-function landHeldTitle(state: WorkState): string {
-  switch (state?.kind) {
-    case "commit":
-      return "Commit this session's changes first. Land only moves committed work.";
-    case "outside":
-      return "Files changed outside this session's change list hold Land back.";
-    default:
-      return "Nothing to land.";
-  }
-}
-
 /**
  * The status-line Commit/Land control (docs/SESSION-WORKTREES-DESIGN.md D4),
  * driven by workState(): Commit… while files are uncommitted, Land once the
@@ -428,12 +400,17 @@ function WorkButton({
       onClick={onCommit}
       title={
         `Commit ${plural(state.files, "file")}` +
+        (state.repos > 1 ? ` in ${state.repos} repos` : "") +
         (state.thenLand > 0 ? `, then land ${plural(state.thenLand, "commit")}` : "")
       }
       data-work-state="commit"
     >
       {committing ? "Committing…" : "Commit…"}
-      <span className={cx(styles.count, line.lblFull)}> {state.files}</span>
+      <span className={cx(styles.count, line.lblFull)}>
+        {" "}
+        {state.files}
+        {state.repos > 1 && ` · ${state.repos} repos`}
+      </span>
     </button>
   );
 }
