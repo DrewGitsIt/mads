@@ -150,6 +150,8 @@ export function Launchpad({
   // through "+ New session" picks up where the goal was left.
   const [initialDraft] = useState(getLaunchpadDraft);
   const [text, setText] = useState(initialDraft.text);
+  // The keyboard hint under the goal shows while it's being written.
+  const [focused, setFocused] = useState(false);
   const [staged, setStaged] = useState<StagedConfig>(initialDraft.staged);
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | undefined>(
     initialDraft.selectedWorkspace,
@@ -338,7 +340,16 @@ export function Launchpad({
             onChange={(e) => setText(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={onPaste}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
           />
+          {/* Outside the field, so it can never be sent: once the placeholder
+              is gone, the keys are a note under the text being written. */}
+          {focused && text !== "" && (
+            <div className={styles.keyHint} aria-hidden="true" data-testid="launchpad-key-hint">
+              <kbd>↵</kbd> to start, <kbd>⇧↵</kbd> for a new line
+            </div>
+          )}
           <AttachmentChips
             items={attachments}
             thumbnailUrl={(a) =>
@@ -358,28 +369,26 @@ export function Launchpad({
                 className={styles.fileInput}
                 onChange={handleFilesSelected}
               />
-              <Button
+              <button
                 type="button"
-                variant="secondary"
-                size="sm"
-                className={styles.noWrap}
+                className={[styles.attachLink, styles.noWrap].join(" ")}
                 onClick={() => fileInputRef.current?.click()}
               >
                 <span aria-hidden="true">📎</span> Attach files
-              </Button>
-              <span className={styles.attachHint}>Or paste or drop them — the agent opens each one</span>
+              </button>
+              <span className={styles.attachHint}>or drop / paste</span>
             </div>
             <div className={styles.sendGroup}>
-              <span className={styles.hint}>↵ to start · Shift↵ for a new line</span>
               {FLAGS.linkedSessions ? (
                 <div className={[styles.splitButton, styles.noWrap].join(" ")}>
                   <Button
                     variant="primary"
                     className={styles.splitMain}
                     disabled={text.trim() === "" || submitting || uploading}
+                    aria-label={submitting || stagedLinks.length > 0 ? undefined : "Start session"}
                     onClick={() => void submit()}
                   >
-                    {submitting ? "Starting…" : stagedLinks.length > 0 ? "Start & link" : "Start session"}
+                    {submitting ? "Starting…" : stagedLinks.length > 0 ? "Start & link" : "Start"}
                   </Button>
                   <Popover
                     open={menuOpen}
@@ -422,9 +431,10 @@ export function Launchpad({
                   variant="primary"
                   className={styles.noWrap}
                   disabled={text.trim() === "" || submitting || uploading}
+                  aria-label={submitting ? undefined : "Start session"}
                   onClick={() => void submit()}
                 >
-                  {submitting ? "Starting…" : "Start session"}
+                  {submitting ? "Starting…" : "Start"}
                 </Button>
               )}
             </div>

@@ -269,7 +269,7 @@ describe("SessionsSurface", () => {
     fireEvent.change(screen.getByLabelText("Describe your goal"), {
       target: { value: "Fix the deploy script" },
     });
-    fireEvent.click(screen.getByText("Start session"));
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
 
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
     expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy();

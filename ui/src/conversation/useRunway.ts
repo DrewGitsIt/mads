@@ -76,6 +76,7 @@ export function useRunway(turnActive: boolean): Runway {
       }
       const m = measure(el, anchor, spacer);
       let glide = false;
+      let opened = false;
       const key = anchor.dataset.runwayAnchor ?? "";
       if (!s.seen || key !== s.key) {
         stopSettle();
@@ -85,9 +86,12 @@ export function useRunway(turnActive: boolean): Runway {
         const live = anchor.dataset.runwayLive !== undefined;
         Object.assign(s, { seen: true, key, pages: 0, cap: live || active.current ? null : m.tail });
         glide = live;
+        opened = !live;
       }
       const r = runwayFor({ ...m, cap: s.cap });
-      if (r.pages > s.pages) glide = true;
+      // Pages history already filled aren't turns: it opens at its end, not
+      // gliding there from the top (through the older-page trigger).
+      if (r.pages > s.pages && !opened) glide = true;
       s.pages = r.pages;
       s.floor = r.floor;
       spacer.style.height = `${r.spacer}px`;

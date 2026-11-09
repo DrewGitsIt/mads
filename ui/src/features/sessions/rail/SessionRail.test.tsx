@@ -1573,13 +1573,13 @@ describe("SessionRail — Done", () => {
     vi.useRealTimers();
   });
 
-  it("puts a checked-off session under an open 'Done · 1' toggle, below the active list", () => {
+  it("puts a checked-off session under an open 'Done 1' toggle, below the active list", () => {
     vi.useFakeTimers({ now: NOW });
     render(<SessionRail sessions={[kept, finished]} openTaskCounts={{}} />);
 
     expect(activeNames()).toEqual(["keep me"]);
     expect(doneNames()).toEqual(["done with this"]);
-    expect(doneToggle().textContent).toContain("· 1");
+    expect(doneToggle().textContent).toMatch(/Done1$/);
     expect(doneToggle().getAttribute("aria-expanded")).toBe("true");
     // Below, not beside: the whole rail reads active first, then Done.
     expect(cardNames()).toEqual(["keep me", "done with this"]);
@@ -1719,7 +1719,7 @@ describe("SessionRail — Done", () => {
     expect(doneNames()).toEqual(["started first", "in between", "started last"]);
   });
 
-  it("caps Done at five rows behind 'Show N more', which expands and reads 'Show fewer'", () => {
+  it("caps Done at five rows behind 'Show all N completed', which expands and reads 'Show fewer'", () => {
     vi.useFakeTimers({ now: NOW });
     const seven = Array.from({ length: 7 }, (_, i) =>
       makeSession({
@@ -1731,10 +1731,10 @@ describe("SessionRail — Done", () => {
     );
     render(<SessionRail sessions={seven} openTaskCounts={{}} />);
 
-    expect(doneToggle().textContent).toContain("· 7");
+    expect(doneToggle().textContent).toMatch(/Done7$/);
     expect(doneNames()).toEqual(["done 0", "done 1", "done 2", "done 3", "done 4"]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show all 7 completed" }));
     expect(doneNames()).toEqual(seven.map((s) => s.name));
 
     fireEvent.click(screen.getByRole("button", { name: "Show fewer" }));

@@ -82,9 +82,6 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  /* a hairline sets the toolbar apart from the composer above it */
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--line-soft);
 }
 
 .attachGroup {
@@ -101,6 +98,59 @@
 
 .fileInput {
   display: none;
+}
+
+/* Text-weight, like "Save as my defaults": Start is the one filled control in the box. */
+.attachLink {
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text2);
+  font: 500 var(--fs-sm) var(--sans);
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.attachLink:hover {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+/* The keys, under the goal while it's written: a margin note set off by a
+   dashed rule and italics, so it reads as about the text, not part of it. */
+.keyHint {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: calc(var(--space-2) * -1);
+  padding-top: var(--space-1);
+  border-top: 1px dashed var(--line);
+  color: var(--text3);
+  font: italic 500 var(--fs-sm) var(--sans);
+  text-align: left;
+  user-select: none;
+  pointer-events: none;
+  animation: keyHintIn var(--dur) var(--ease-out);
+}
+
+.keyHint kbd {
+  font: 600 var(--fs-chip) var(--mono);
+  font-style: normal;
+  color: var(--text2);
+  background: var(--bg3);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+@keyframes keyHintIn {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
 }
 
 .splitButton {
@@ -170,7 +220,6 @@
 }
 
 /* one hint size everywhere in the box — legible, not chip-tiny */
-.hint,
 .attachHint {
   color: var(--text3);
   font: 500 var(--fs-sm) var(--sans);

@@ -165,7 +165,7 @@ export interface RailLinkEditor {
   onPick: (sessionId: string) => boolean;
 }
 
-/** How many Done rows show before "Show N more". */
+/** How many Done rows show before "Show all N completed". */
 const DONE_PREVIEW = 5;
 
 /** localStorage key: whether the Done list is open ("0" = collapsed). A view preference, so local. */
@@ -696,7 +696,7 @@ export function SessionRail({
               className={styles.sectionCount}
               data-bump={(doneArriving && !doneOpen) || undefined}
             >
-              · {doneRows.length - doneLeaving}
+              {doneRows.length - doneLeaving}
             </span>
           </button>
           {doneOpen &&
@@ -707,9 +707,11 @@ export function SessionRail({
             <button
               type="button"
               className={styles.showMore}
+              aria-expanded={doneShowAll}
               onClick={() => setDoneShowAll(!doneShowAll)}
             >
-              {doneShowAll ? "Show fewer" : `Show ${doneRows.length - DONE_PREVIEW} more`}
+              {doneShowAll ? "Show fewer" : `Show all ${doneRows.length - doneLeaving} completed`}
+              <span aria-hidden="true">{doneShowAll ? "▴" : "▾"}</span>
             </button>
           )}
         </div>

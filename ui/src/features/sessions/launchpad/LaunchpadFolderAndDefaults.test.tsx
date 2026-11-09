@@ -99,7 +99,7 @@ describe("Launchpad folder + defaults", () => {
     expect(screen.getByText("spike")).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText("Describe your goal"), { target: { value: "go" } });
-    fireEvent.click(screen.getByText("Start session"));
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
     await waitFor(() =>
       expect(createSession).toHaveBeenCalledWith(
         expect.objectContaining({ dir: "~/scratch/spike", workspace: undefined }),
@@ -155,7 +155,7 @@ describe("Launchpad folder + defaults", () => {
     await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
 
     fireEvent.change(screen.getByLabelText("Describe your goal"), { target: { value: "go" } });
-    fireEvent.click(screen.getByText("Start session"));
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
     await waitFor(() =>
       expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ dir: "/home/me/repo/mads" })),
     );
@@ -343,7 +343,7 @@ describe("Launchpad draft", () => {
       <Launchpad createSession={createSession} onSessionCreated={vi.fn()} />,
     );
     await stageDraft();
-    fireEvent.click(screen.getByText("Start session"));
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
     await waitFor(() =>
       expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ isolation: "current_dir" })),
     );
@@ -360,7 +360,7 @@ describe("Launchpad draft", () => {
       <Launchpad createSession={createSession} onSessionCreated={vi.fn()} />,
     );
     await stageDraft();
-    fireEvent.click(screen.getByText("Start session"));
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
     await waitFor(() => expect(screen.getByText(/spawn failed/)).toBeTruthy());
     unmount();
 

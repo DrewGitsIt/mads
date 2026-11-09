@@ -200,28 +200,40 @@
 }
 
 /* Anything a day cold folds down here rather than padding the scroll. */
-/* The Done list's header: a quiet section label that folds the list. */
+/* The Done list's header: a section label that folds the list. */
 .sectionToggle {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  padding: var(--space-2) var(--space-3);
+  /* A section of its own, not a footnote to the list above: a full rule over
+     it and the label at a readable size. */
+  margin-top: var(--space-2);
+  padding: var(--space-3) var(--space-3) var(--space-2);
   background: none;
   border: none;
-  color: var(--text3);
-  font: 600 var(--fs-chip) var(--sans);
+  border-top: 1px solid var(--line);
+  color: var(--text2);
+  font: 650 var(--fs-sm) var(--sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   text-align: left;
   cursor: pointer;
 }
 
 .sectionToggle:hover {
-  color: var(--text2);
+  color: var(--text);
 }
 
 .sectionCount {
   display: inline-block;
-  opacity: 0.6;
+  padding: 0 7px;
+  background: var(--bg3);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  color: var(--text2);
+  font: 600 var(--fs-chip) var(--sans);
+  letter-spacing: 0;
 }
 
 /* A card folded into a closed Done list: the count it joined ticks. */
@@ -265,19 +277,25 @@
   opacity: 1;
 }
 
+/* An action, not a footnote: a full-width dashed button under the cards. */
 .showMore {
-  align-self: flex-start;
-  margin: var(--space-1) 0 0 var(--space-3);
-  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  margin: var(--space-1) var(--space-2) 0;
+  padding: 7px var(--space-3);
   background: none;
-  border: none;
-  color: var(--text3);
-  font: 500 var(--fs-chip) var(--sans);
+  border: 1px dashed var(--line);
+  border-radius: var(--r-sm);
+  color: var(--text2);
+  font: 600 var(--fs-sm) var(--sans);
   cursor: pointer;
 }
 .showMore:hover {
-  color: var(--text2);
-  text-decoration: underline;
+  background: var(--bg2);
+  border-style: solid;
+  color: var(--text);
 }
 
 /* One reorderable slot: a holder card with its delegates and subjects. The
