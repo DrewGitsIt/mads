@@ -274,7 +274,7 @@ describe("useSessionAgentState", () => {
   });
 
   it("seeds running delegates from one cold read, under anything the stream already said", async () => {
-    vi.mocked(router.listDelegates).mockResolvedValue([
+    vi.mocked(router.listDelegatesEndedAfter).mockResolvedValue([
       record("s1", "early", { backgrounded: true }),
       record("s2", "x"),
       // The stream retires this one before the (older) snapshot lands.
@@ -282,15 +282,18 @@ describe("useSessionAgentState", () => {
     ]);
     let resolveLate: () => void = () => {};
     const gate = new Promise<void>((r) => (resolveLate = r));
-    const listed = vi.mocked(router.listDelegates).getMockImplementation();
-    vi.mocked(router.listDelegates).mockImplementation(async (state) => {
+    const listed = vi.mocked(router.listDelegatesEndedAfter).getMockImplementation();
+    vi.mocked(router.listDelegatesEndedAfter).mockImplementation(async (after) => {
       await gate;
-      return listed!(state);
+      return listed!(after);
     });
 
-    // "0 min": only running delegates are worth a cold read.
+    // "0 min": only live delegates are worth a cold read — what ended after
+    // now is nothing, while the store serves every live one, waiting too.
     const { result } = renderHook(() => useSessionAgentState([], undefined, 0));
-    expect(router.listDelegates).toHaveBeenCalledWith("running");
+    expect(router.listDelegates).not.toHaveBeenCalled();
+    const cutoff = Date.parse(vi.mocked(router.listDelegatesEndedAfter).mock.calls[0][0]);
+    expect(Math.abs(Date.now() - cutoff)).toBeLessThan(5_000);
     delegate("s2", "done-already", "completed");
     resolveLate();
 
@@ -298,6 +301,58 @@ describe("useSessionAgentState", () => {
     expect(result.current.s1?.blockingSubagents).toBe(0);
     expect(result.current.s1?.subagentsSince).toBe("2026-09-28T09:30:00Z");
     expect(result.current.s2?.subagents).toBe(1);
+  });
+
+  it("holds a waiting delegate as live — counted apart from running, never faded", async () => {
+    // "0 min": a finished record would be gone at once; a waiting one isn't finished.
+    const { result } = renderHook(() => useSessionAgentState([], undefined, 0));
+    delegate("s1", "m", "running");
+    delegate("s1", "kid", "running", { parent_harness_id: "m" });
+    await waitFor(() => expect(result.current.s1?.subagents).toBe(2));
+    expect(result.current.s1?.waitingSubagents).toBeUndefined();
+
+    // Its turn ends while its subagent still runs: waiting, not done.
+    delegate("s1", "m", "completed", { ended_at: "2026-09-28T10:02:00Z", waiting_on: { subagents: 1 } });
+    await waitFor(() => expect(result.current.s1?.waitingSubagents).toBe(1));
+    expect(result.current.s1?.subagents).toBe(1);
+    expect(result.current.s1?.delegates?.map((d) => d.harness_id)).toEqual(["m", "kid"]);
+
+    // Its subagent finishes and it finishes too: both leave, under "0 min".
+    delegate("s1", "kid", "completed", { parent_harness_id: "m", ended_at: "2026-09-28T10:03:00Z" });
+    delegate("s1", "m", "completed", { ended_at: "2026-09-28T10:04:00Z" });
+    await waitFor(() => expect(result.current.s1).toBeUndefined());
+  });
+
+  it("dates a delegate that stops waiting from its ended_at, for the fade window", async () => {
+    const { result } = renderHook(() => useSessionAgentState([], undefined, Infinity));
+    delegate("s1", "m", "completed", { waiting_on: { processes: 1 } });
+    await waitFor(() => expect(result.current.s1?.waitingSubagents).toBe(1));
+    expect(result.current.s1?.subagents).toBe(0);
+    expect(result.current.s1?.subagentsSince).toBeUndefined();
+
+    delegate("s1", "m", "completed", { ended_at: "2026-09-28T10:09:00Z" });
+    await waitFor(() => expect(result.current.s1?.waitingSubagents).toBeUndefined());
+    expect(result.current.s1?.delegates?.map((d) => [d.harness_id, d.ended_at])).toEqual([["m", "2026-09-28T10:09:00Z"]]);
+  });
+
+  it("cold-reads a waiting delegate as live, whatever the window", async () => {
+    vi.mocked(router.listDelegatesEndedAfter).mockResolvedValue([
+      { ...record("s1", "w"), state: "completed", ended_at: "2026-09-28T09:40:00Z", waiting_on: { subagents: 2 } },
+    ]);
+    const { result } = renderHook(() => useSessionAgentState([], undefined, 0));
+    await waitFor(() => expect(result.current.s1?.waitingSubagents).toBe(1));
+    expect(result.current.s1?.delegates?.map((d) => d.harness_id)).toEqual(["w"]);
+  });
+
+  it("counts a nested foreground subagent as blocking only when its parent blocks", async () => {
+    const { result } = renderHook(() => useSessionAgentState());
+    working("s1", "Delegating", "2026-09-28T10:00:00Z");
+    delegate("s1", "fg", "running");
+    delegate("s1", "fg-kid", "running", { parent_harness_id: "fg" });
+    delegate("s1", "bg", "running", { backgrounded: true });
+    delegate("s1", "bg-kid", "running", { parent_harness_id: "bg" });
+    await waitFor(() => expect(result.current.s1?.subagents).toBe(4));
+    expect(result.current.s1?.blockingSubagents).toBe(2);
   });
 
   it("reports the turn in flight from agent_state alone — an in-turn signal is not a turn", async () => {
@@ -538,6 +593,57 @@ describe("useSessionAgentState — the fade window (Settings' 'Fade out subagent
 
     rerender({ fade: Infinity });
     await waitFor(() => expect(result.current.s1?.delegates?.map((d) => d.harness_id)).toEqual(["old"]));
+  });
+
+  it("keeps a finished parent past the window while a subagent under it is live, then lets it fade", async () => {
+    const { result } = renderHook(() => useSessionAgentState([], undefined, 60_000));
+    emit("session.delegate_changed", "s1", record("s1", "kid", { parent_harness_id: "m" }));
+    emit("session.delegate_changed", "s1", record("s1", "grandkid", { parent_harness_id: "kid" }));
+    emit("session.delegate_changed", "s1", {
+      ...record("s1", "m", { parent_harness_id: "g" }),
+      state: "completed",
+      ended_at: ago(120_000),
+    });
+    emit("session.delegate_changed", "s1", { ...record("s1", "g"), state: "completed", ended_at: ago(300_000) });
+    // Another ending prunes: m and g stay — kid and grandkid nest under them.
+    emit("session.delegate_changed", "s1", { ...record("s1", "x"), state: "completed", ended_at: ago(1_000) });
+    await waitFor(() =>
+      expect(result.current.s1?.delegates?.map((d) => d.harness_id).sort()).toEqual(["g", "grandkid", "kid", "m", "x"]),
+    );
+
+    // Everything under them finishes: they fade from their own ended_at — at once.
+    emit("session.delegate_changed", "s1", { ...record("s1", "grandkid", { parent_harness_id: "kid" }), state: "completed", ended_at: ago(500) });
+    emit("session.delegate_changed", "s1", { ...record("s1", "kid", { parent_harness_id: "m" }), state: "completed", ended_at: ago(500) });
+    await waitFor(() =>
+      expect(result.current.s1?.delegates?.map((d) => d.harness_id).sort()).toEqual(["grandkid", "kid", "x"]),
+    );
+  });
+
+  it("fills in a live subagent's parents the cold read didn't carry, with one read per session", async () => {
+    vi.mocked(router.listDelegatesEndedAfter).mockResolvedValue([
+      record("s1", "kid", { parent_harness_id: "m" }),
+      record("s1", "kid2", { parent_harness_id: "m" }),
+    ]);
+    const sessionList = vi.spyOn(router, "getSessionDelegates").mockResolvedValue([
+      { ...record("s1", "g"), state: "completed", ended_at: ago(3_600_000) },
+      { ...record("s1", "m", { parent_harness_id: "g" }), state: "completed", ended_at: ago(3_000_000) },
+      { ...record("s1", "unrelated"), state: "completed", ended_at: ago(3_000_000) },
+      record("s1", "kid", { parent_harness_id: "m" }),
+    ]);
+    const { result } = renderHook(() => useSessionAgentState([], undefined, 60_000));
+    await waitFor(() =>
+      expect(result.current.s1?.delegates?.map((d) => d.harness_id).sort()).toEqual(["g", "kid", "kid2", "m"]),
+    );
+    expect(sessionList).toHaveBeenCalledTimes(1);
+    expect(sessionList).toHaveBeenCalledWith("s1");
+  });
+
+  it("reads no session's list when the cold read already holds every parent", async () => {
+    vi.mocked(router.listDelegatesEndedAfter).mockResolvedValue([record("s1", "m"), record("s1", "kid", { parent_harness_id: "m" })]);
+    const sessionList = vi.spyOn(router, "getSessionDelegates").mockResolvedValue([]);
+    const { result } = renderHook(() => useSessionAgentState([], undefined, 60_000));
+    await waitFor(() => expect(result.current.s1?.subagents).toBe(2));
+    expect(sessionList).not.toHaveBeenCalled();
   });
 
   it("drops a finished delegate the window has passed", async () => {

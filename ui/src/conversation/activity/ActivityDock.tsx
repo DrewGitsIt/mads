@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PermissionRequest, ToolDiff, ToolStatus, ToolUse } from "../../router/types";
+import type { Delegate, PermissionRequest, ToolDiff, ToolStatus, ToolUse } from "../../router/types";
 import { ActivityGroup } from "./ActivityGroup";
 import type { ActivityEntry, SubStreamItem, TaskModel } from "./conversationItems";
 import { DiffView } from "./DiffView";
 import { Markdown } from "../ChatRenderer/markdown";
 import { formatMessageTime, parseMessageTime } from "../ChatRenderer/messageTime";
 import { KindIcon, McpBadge, Spinner, StatusGlyph } from "./primitives";
-import { TaskCounters, TaskStatusGlyph } from "./TaskCard";
+import { DelegateCallCard, TaskCounters, TaskStatusGlyph } from "./TaskCard";
 import {
   commandInput,
   diffHunks,
@@ -348,6 +348,8 @@ export function SubagentStream({
   onResolvePermission,
   selectedToolId,
   onOpenTool,
+  delegatesByToolUse,
+  onOpenDelegate,
 }: {
   items: SubStreamItem[];
   running: boolean;
@@ -359,6 +361,15 @@ export function SubagentStream({
   selectedToolId?: string;
   /** Opens one call's full detail; absent leaves the rows to their peek. */
   onOpenTool?: (tool: ToolUse) => void;
+  /**
+   * The session's delegates by their spawning call (Delegate.tool_use_id).
+   * An Agent (or legacy Task) call found here is a subagent this one
+   * spawned, and renders as a DelegateCallCard between the groups rather
+   * than as a row inside one; an unmatched call stays a plain row.
+   */
+  delegatesByToolUse?: ReadonlyMap<string, Delegate>;
+  /** Opens a spawned subagent's card in the main pane. */
+  onOpenDelegate?: (d: Delegate) => void;
 }) {
   // Same grouping components as the main stream: fold contiguous
   // tool/thinking items into groups between text paragraphs. While the
@@ -370,10 +381,19 @@ export function SubagentStream({
       | { type: "text"; text: string; timestamp?: string }
       | { type: "message"; text: string; timestamp?: string }
       | { type: "group"; entries: ActivityEntry[]; inFlight: boolean }
+      | { type: "delegate"; delegate: Delegate }
     )[] = [];
     for (const item of items) {
       if (item.type === "text" || item.type === "message") {
         out.push(item);
+        continue;
+      }
+      const spawned =
+        item.type === "tool" && item.tool.id && kindOf(item.tool) === "agent"
+          ? delegatesByToolUse?.get(item.tool.id)
+          : undefined;
+      if (spawned) {
+        out.push({ type: "delegate", delegate: spawned });
         continue;
       }
       const inFlight = running && item.type === "tool" && !item.tool.result;
@@ -385,7 +405,7 @@ export function SubagentStream({
       } else out.push({ type: "group", entries: [entry], inFlight });
     }
     return out;
-  }, [items, running]);
+  }, [items, running, delegatesByToolUse]);
 
   return (
     <>
@@ -398,6 +418,10 @@ export function SubagentStream({
               <SubStamp timestamp={b.timestamp} />
             </div>
             {b.text}
+          </div>
+        ) : b.type === "delegate" ? (
+          <div key={i} className={styles.subGroup}>
+            <DelegateCallCard delegate={b.delegate} onOpen={onOpenDelegate} />
           </div>
         ) : b.type === "text" ? (
           <div key={i} className={styles.subText}>

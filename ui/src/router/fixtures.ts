@@ -1,5 +1,6 @@
 import type { RouterClient, SessionEventSource } from "./client";
 import { EVENTS_BATCH_LIMIT } from "./eventPages";
+import { isLiveDelegate } from "./delegateLive";
 import { CommitRefusedError, MoveRefusedError, RouterValidationError } from "./client";
 import type {
   Attachment,
@@ -2136,7 +2137,8 @@ export class FakeRouterClient implements RouterClient {
   async listDelegatesEndedAfter(endedAfter: string): Promise<Delegate[]> {
     const cutoff = Date.parse(endedAfter);
     return this.delegates
-      .filter((d) => d.state === "running" || (d.ended_at !== undefined && Date.parse(d.ended_at) >= cutoff))
+      // Waiting ones are live, as the store's LiveOrEndedAfter serves them.
+      .filter((d) => isLiveDelegate(d) || (d.ended_at !== undefined && Date.parse(d.ended_at) >= cutoff))
       .map((d) => structuredClone(d));
   }
 

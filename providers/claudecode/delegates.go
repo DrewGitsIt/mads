@@ -18,16 +18,19 @@ import (
 // subagentMeta is a subagent's <agent>.meta.json beside its transcript
 // (verified on claude-code 2.1.285). requestShape is "foreground" or
 // "background"; worktreePath is set for a subagent isolated in its own
-// worktree.
+// worktree. A subagent's own subagents live in the same subagents/ folder,
+// their meta carrying spawnDepth 2 and parentAgentId, the spawning
+// subagent's agentId; a depth-1 meta has no parentAgentId.
 type subagentMeta struct {
 	AgentType string `json:"agentType"`
 	// ToolUseID is the parent's Agent call that spawned it; Description that
 	// call's description.
-	ToolUseID    string `json:"toolUseId"`
-	Description  string `json:"description"`
-	SpawnDepth   int    `json:"spawnDepth"`
-	WorktreePath string `json:"worktreePath"`
-	RequestShape string `json:"requestShape"`
+	ToolUseID     string `json:"toolUseId"`
+	Description   string `json:"description"`
+	SpawnDepth    int    `json:"spawnDepth"`
+	ParentAgentID string `json:"parentAgentId"`
+	WorktreePath  string `json:"worktreePath"`
+	RequestShape  string `json:"requestShape"`
 }
 
 // delegateIDPattern is the shape of a claude-code agentId: hex today, letters,
@@ -81,6 +84,11 @@ func delegateInfo(path string) (provider.DelegateInfo, subagentMeta) {
 	}
 	info.Type = meta.AgentType
 	info.Depth = meta.SpawnDepth
+	// Checked like any harness id: it ends up keying a record lookup, and
+	// an id claude-code wouldn't write is no parent mads could find.
+	if delegateIDPattern.MatchString(meta.ParentAgentID) {
+		info.ParentHarnessID = meta.ParentAgentID
+	}
 	info.WorktreePath = meta.WorktreePath
 	info.Background = meta.RequestShape == "background"
 	return info, meta

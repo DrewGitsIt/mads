@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { router } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
 import { DEFAULT_DELEGATE_FADE_MS } from "../rail/DelegateRows";
+import { isLiveDelegate } from "../../../router/delegateLive";
 import type { SessionAgentState } from "../rail/railGroups";
 import type { AgentState, Delegate, Envelope, Session } from "../../../router/types";
 
@@ -34,9 +35,10 @@ interface Fold {
   /** Unresolved permission parks, request_id → the tool it named and when it parked. */
   pending: Map<string, { tool?: string; at: string }>;
   /**
-   * Running delegates (docs/DELEGATES-DESIGN.md) by harness id — the server
+   * Live delegates (docs/DELEGATES-DESIGN.md) by harness id, at every depth —
+   * running, or waiting on work they own (isLiveDelegate). The server
    * decides their lifecycle, so this only mirrors session.delegate_changed.
-   * `backgrounded`: the main agent is NOT waiting on it.
+   * `backgrounded`: its parent is NOT waiting on it.
    */
   delegates: Map<string, Delegate>;
   /**
@@ -48,7 +50,7 @@ interface Fold {
   recent: Map<string, Delegate>;
   /**
    * Every delegate this connection has heard about live, running or not. The
-   * cold read (GET /delegates?state=running) may answer after a newer event,
+   * cold read (GET /delegates?ended_after=…) may answer after a newer event,
    * and must never resurrect a delegate that event already retired.
    */
   heard: Set<string>;
@@ -97,10 +99,33 @@ function clearInFlight(fold: Fold): void {
   fold.delegates.clear();
 }
 
-/** Drops finished delegates past the fade window (Infinity: never). */
+/**
+ * The finished delegates a live one (running or waiting) descends from, via
+ * parent_harness_id: the rail keeps a parent's row while anything under it
+ * is live, so the row it nests under has to outlast the fade window too.
+ */
+function liveAncestors(fold: Fold): Set<string> {
+  const out = new Set<string>();
+  for (const d of fold.delegates.values()) {
+    let parent = d.parent_harness_id;
+    while (parent && !out.has(parent)) {
+      out.add(parent);
+      parent = (fold.delegates.get(parent) ?? fold.recent.get(parent))?.parent_harness_id;
+    }
+  }
+  return out;
+}
+
+/**
+ * Drops finished delegates past the fade window (Infinity: never) — except
+ * one with a live descendant, which stays until that finishes; after that it
+ * fades from its own ended_at, so it may go at once.
+ */
 function pruneRecent(fold: Fold, fadeMs: number, now: number): void {
   if (fadeMs === Infinity) return;
+  const keep = liveAncestors(fold);
   for (const [id, d] of fold.recent) {
+    if (keep.has(id)) continue;
     const ended = d.ended_at ? Date.parse(d.ended_at) : NaN;
     if (!Number.isFinite(ended) || now - ended >= fadeMs) fold.recent.delete(id);
   }
@@ -181,7 +206,9 @@ function apply(fold: Fold, env: Envelope, fadeMs: number): void {
       if (!d.harness_id) return;
       fold.heard.add(d.harness_id);
       const record = { ...d, started_at: d.started_at ?? env.timestamp } as Delegate;
-      if (record.state === "running") {
+      // A waiting one is live: its turn ended, its work didn't. It joins the
+      // fade window only once it stops waiting, counted from its ended_at.
+      if (isLiveDelegate(record)) {
         fold.delegates.set(record.harness_id, record);
         fold.recent.delete(record.harness_id);
       } else {
@@ -193,6 +220,22 @@ function apply(fold: Fold, env: Envelope, fadeMs: number): void {
       return;
     }
   }
+}
+
+/**
+ * Whether the main agent is, in the end, waiting on this running delegate: it
+ * runs in the foreground of a parent that is itself blocking — the main
+ * agent, or a foreground subagent the main agent waits on. A parent this
+ * connection doesn't hold (not live, or never heard) ends the chain at the
+ * delegate's own flag, so a record the rail can't place counts as it always
+ * did.
+ */
+function blocksMainAgent(d: Delegate, live: ReadonlyMap<string, Delegate>, seen = new Set<string>()): boolean {
+  if (d.backgrounded) return false;
+  const parent = d.parent_harness_id ? live.get(d.parent_harness_id) : undefined;
+  if (!parent || seen.has(parent.harness_id)) return true;
+  seen.add(d.harness_id);
+  return parent.state === "running" && blocksMainAgent(parent, live, seen);
 }
 
 /**
@@ -238,13 +281,19 @@ function project(
     // gone, whatever a record that missed its last write still says.
     const delegates =
       fold && (!session || session.activity === "active") ? [...fold.delegates.values()] : [];
-    const state: SessionAgentState = { subagents: delegates.length };
+    // Counted at every depth: a subagent's own subagents are the session's
+    // work too. Running and waiting apart — a waiting one spends nothing
+    // until what it waits on reports back, so it must not spin the card.
+    const running = delegates.filter((d) => d.state === "running");
+    const state: SessionAgentState = { subagents: running.length };
+    const waiting = delegates.length - running.length;
+    if (waiting > 0) state.waitingSubagents = waiting;
     // Only when it says something, like every other field here: absent means
     // "they all block", so the common case keeps the shape it always had.
-    const blocking = delegates.filter((d) => !d.backgrounded).length;
+    const blocking = running.filter((d) => blocksMainAgent(d, fold!.delegates)).length;
     if (blocking !== state.subagents) state.blockingSubagents = blocking;
-    if (delegates.length > 0) {
-      state.subagentsSince = delegates.map((d) => d.started_at).sort()[0];
+    if (running.length > 0) {
+      state.subagentsSince = running.map((d) => d.started_at).sort()[0];
     }
     const recent = fold ? [...fold.recent.values()] : [];
     if (delegates.length + recent.length > 0) {
@@ -319,15 +368,45 @@ export function useSessionAgentState(
 
   // The cold read: delegates that started or ended before this connection
   // opened never announce themselves again, so one call answers for every
-  // session — the running ones, plus the finished ones the fade window still
-  // shows. Declared after the subscription, so nothing falls in the gap;
-  // anything the stream has spoken about since wins over this older snapshot.
-  // A changed window reads again.
+  // session — the live ones, plus the finished ones the fade window still
+  // shows. "0 min" asks for what ended after now: nothing finished, but every
+  // live one — waiting included, which ?state=running would miss (the store
+  // serves waiting records as live, LiveOrEndedAfter). Declared after the
+  // subscription, so nothing falls in the gap; anything the stream has spoken
+  // about since wins over this older snapshot. A changed window reads again.
   useEffect(() => {
     let cancelled = false;
+    // A live subagent whose parent ended before the window: the list didn't
+    // carry the parent, and without it the rail has nowhere to nest the row.
+    // One read per such session — not per record — fills the chain in.
+    const fillAncestors = async () => {
+      const missing = [...folds.current.entries()].filter(([, fold]) =>
+        [...liveAncestors(fold)].some((id) => !fold.delegates.has(id) && !fold.recent.has(id)),
+      );
+      await Promise.all(
+        missing.map(async ([sessionId, fold]) => {
+          const list = await router.getSessionDelegates(sessionId).catch(() => [] as Delegate[]);
+          if (cancelled) return;
+          const byId = new Map(list.map((d) => [d.harness_id, d]));
+          // Until nothing new: a filled-in parent may name a parent of its own.
+          for (let added = true; added; ) {
+            added = false;
+            for (const id of liveAncestors(fold)) {
+              const d = byId.get(id);
+              // Only the gaps: anything held already is as new or newer.
+              if (!d || fold.delegates.has(id) || fold.recent.has(id)) continue;
+              if (isLiveDelegate(d)) fold.delegates.set(id, d);
+              else fold.recent.set(id, d);
+              added = true;
+            }
+          }
+        }),
+      );
+      if (!cancelled && missing.length > 0) publish();
+    };
     const read =
       fadeMs === 0
-        ? router.listDelegates("running")
+        ? router.listDelegatesEndedAfter(new Date().toISOString())
         : fadeMs === Infinity
           ? router.listDelegates()
           : router.listDelegatesEndedAfter(new Date(Date.now() - fadeMs).toISOString());
@@ -346,13 +425,14 @@ export function useSessionAgentState(
             // snapshot can't be staler than an ending, and a window that has
             // since widened (Never, once Config loads) wants it back.
             const tracked = fold.delegates.has(d.harness_id) || fold.recent.has(d.harness_id);
-            if (tracked || d.state === "running") continue;
+            if (tracked || isLiveDelegate(d)) continue;
           }
-          if (d.state === "running") fold.delegates.set(d.harness_id, d);
+          if (isLiveDelegate(d)) fold.delegates.set(d.harness_id, d);
           else fold.recent.set(d.harness_id, d);
         }
         for (const fold of folds.current.values()) pruneRecent(fold, fadeMs, Date.now());
         publish();
+        return fillAncestors();
       })
       // Best effort: without it, live events still fill the count in.
       .catch(() => undefined);

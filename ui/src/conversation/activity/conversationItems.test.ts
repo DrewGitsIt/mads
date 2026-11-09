@@ -386,6 +386,17 @@ describe("delegate records over the task-line fold", () => {
       taskId: "a1", toolUseId: "toolu_spawn", description: "audit", subagentType: "Explore", completed: true, durationMs: 1900,
     });
   });
+
+  it("carries a waiting record's waiting_on through, and drops it once the record stops waiting", () => {
+    const waiting = rec({ state: "completed", waiting_on: { subagents: 1 } });
+    expect(mergeDelegates(new Map(), new Map([["a1", waiting]])).get("a1")).toMatchObject({
+      state: "completed",
+      running: false,
+      waitingOn: { subagents: 1 },
+    });
+    const tasks = mergeDelegates(new Map(), new Map([["a1", waiting]]));
+    expect(mergeDelegates(tasks, new Map([["a1", rec({ state: "completed" })]])).get("a1")?.waitingOn).toBeUndefined();
+  });
 });
 
 describe("transcriptSubStream", () => {

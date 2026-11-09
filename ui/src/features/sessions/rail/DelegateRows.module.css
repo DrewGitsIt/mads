@@ -92,7 +92,26 @@
   color: var(--text2);
 }
 
-.more {
+/* A subagent's own subagents, one level in (docs/mockups/nested-delegates.html):
+   the same hairline again, 13px further over — so the indent alone says
+   whose they are, with no elbows or arrowheads that would read as a link. */
+.nested {
+  margin: 0 0 2px 13px;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* "waiting" is the row's whole state, not a counter — a touch brighter than
+   a duration, since it is news that it hasn't finished. */
+.row[data-state="waiting"] .meta {
+  color: var(--text2);
+}
+
+.more,
+.fold {
   align-self: flex-start;
   padding: 1px 6px;
   background: none;
@@ -102,6 +121,7 @@
   cursor: pointer;
 }
 
-.more:hover {
+.more:hover,
+.fold:hover {
   color: var(--text2);
 }

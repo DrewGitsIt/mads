@@ -25,9 +25,16 @@
 //     running (Runs counts the runs). The harness counts each run's tools and
 //     time from zero; the record's are totals across runs, and the runs
 //     before the latest are kept apart (Prior*) for the live run to add to.
+//   - A delegate can spawn its own (ParentHarnessID). One whose run
+//     completed while its own subagents or background processes still run
+//     is waiting on them (WaitingOn), not done: Claude Code re-enters it
+//     when that work reports. The tracker recomputes this after every
+//     change that can move it (settleWaitingLocked), so a child ending
+//     returns its parent's record too.
 package delegates
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -89,6 +96,11 @@ type Tracker struct {
 	// defaults is the harness's capability set from its provider matrix
 	// (SetDefaults).
 	defaults CapabilityDefaults
+	// processes counts the running background processes each delegate
+	// started, by its spawning call (provider.BackgroundTask's
+	// ParentToolUseID, which is what the record's first-seen ToolUseID
+	// holds even across relay re-entries). Replaced whole by Background.
+	processes map[string]int
 }
 
 // Observation is what the harness's own store says about one delegate at
@@ -98,8 +110,12 @@ type Observation struct {
 	TranscriptPath string
 	Type           string
 	Depth          int
-	WorktreePath   string
-	Background     bool
+	// ParentHarnessID is the delegate that spawned it (empty: the session's
+	// own agent). Fills a record that has none; the live tag usually got
+	// there first.
+	ParentHarnessID string
+	WorktreePath    string
+	Background      bool
 	// Model, Branch and Usage are what its latest recorded line says.
 	Model  string
 	Branch string
@@ -177,6 +193,9 @@ func (t *Tracker) Inspect(harnessID string, o Observation) []contracts.Delegate 
 	if e.d.Depth == 0 {
 		e.d.Depth = o.Depth
 	}
+	if e.d.ParentHarnessID == "" && o.ParentHarnessID != harnessID {
+		e.d.ParentHarnessID = o.ParentHarnessID
+	}
 	if o.Background {
 		e.d.Backgrounded = true
 	}
@@ -189,10 +208,8 @@ func (t *Tracker) Inspect(harnessID string, o Observation) []contracts.Delegate 
 		e.d.Model, e.d.Usage = o.Usage.Model, contractsUsage(o.Usage)
 	}
 	e.d.Capabilities = t.resolveLocked(e.d)
-	if known && sameRecord(before, e.d) {
-		return nil
-	}
-	return []contracts.Delegate{e.d}
+	// A parent learned here can make the parent wait on it.
+	return t.changedLocked(e, known, before)
 }
 
 // resolveLocked is the record's capability set: the defaults, corrected by
@@ -225,6 +242,7 @@ func FromHistory(sessionID string, r provider.DelegateRecord, defaults Capabilit
 		HarnessID:       r.HarnessID,
 		ToolUseID:       r.ToolUseID,
 		Depth:           r.Depth,
+		ParentHarnessID: r.ParentHarnessID,
 		Type:            r.Type,
 		Description:     r.Description,
 		Backgrounded:    r.Background,
@@ -266,11 +284,12 @@ func New(sessionID string, grace time.Duration) *Tracker {
 // later harness process keeps its identity, anchor and run count — and
 // returns the ones it had to correct: anything still running belonged to a
 // harness process that is gone (a runner only seeds at start), so it becomes
-// orphaned.
+// orphaned — and so does whatever a stored WaitingOn was waiting on, so that
+// is cleared.
 func (t *Tracker) Seed(stored []contracts.Delegate, now time.Time) []contracts.Delegate {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	var out []contracts.Delegate
+	var out []*entry
 	for _, d := range stored {
 		e := &entry{d: d}
 		e.runToolUses = max(d.ToolUses-d.PriorToolUses, 0)
@@ -281,14 +300,15 @@ func (t *Tracker) Seed(stored []contracts.Delegate, now time.Time) []contracts.D
 		t.byID[d.HarnessID] = e
 		if d.State == contracts.DelegateRunning {
 			t.endLocked(e, contracts.DelegateOrphaned, ReasonRunnerRestart, true, now)
-			out = append(out, e.d)
+			out = append(out, e)
 		}
 	}
-	return out
+	return t.withWaitingLocked(out)
 }
 
-// Task folds one lifecycle report and returns the records it changed (at
-// most one). Progress ticks change nothing on the record — live counters
+// Task folds one lifecycle report and returns the records it changed: its
+// delegate's, then any whose WaitingOn moved with it (a parent whose child
+// just started or ended). Progress ticks change nothing on the record — live counters
 // stay on the session.subagent_task stream; the tracker only keeps the
 // latest for its run total — except to revive a delegate mads had wrongly
 // concluded ended.
@@ -307,9 +327,13 @@ func (t *Tracker) Task(r contracts.SubagentTask, now time.Time) []contracts.Dele
 	case "started":
 		if !known {
 			e = t.createLocked(r, now)
+		} else {
+			t.fillLocked(e, r)
+		}
+		t.parentLocked(e, r.ParentToolUseID)
+		if !known {
 			break
 		}
-		t.fillLocked(e, r)
 		if r.IsBackgrounded {
 			e.d.Backgrounded = true
 		}
@@ -350,10 +374,126 @@ func (t *Tracker) Task(r contracts.SubagentTask, now time.Time) []contracts.Dele
 	default:
 		return nil
 	}
-	if known && sameRecord(before, e.d) {
-		return nil
+	return t.changedLocked(e, known, before)
+}
+
+// parentLocked records which delegate spawned e, from a started report's
+// parent tag: the spawning delegate's own spawning call (the provider
+// resolves it; claude-code's task lines carry no tag of their own). First
+// seen wins. A nested start with no depth of its own sits one below its
+// parent.
+func (t *Tracker) parentLocked(e *entry, parentToolUseID string) {
+	if parentToolUseID == "" || e.d.ParentHarnessID != "" {
+		return
 	}
-	return []contracts.Delegate{e.d}
+	for _, p := range t.sortedLocked() {
+		if p != e && p.d.ToolUseID == parentToolUseID {
+			e.d.ParentHarnessID = p.d.HarnessID
+			if e.d.Depth == 0 && p.d.Depth > 0 {
+				e.d.Depth = p.d.Depth + 1
+			}
+			return
+		}
+	}
+}
+
+// changedLocked settles WaitingOn after a change to e and returns e's record
+// if it changed (or is new), followed by every other record whose WaitingOn
+// the change moved.
+func (t *Tracker) changedLocked(e *entry, known bool, before contracts.Delegate) []contracts.Delegate {
+	moved := t.settleWaitingLocked()
+	var out []contracts.Delegate
+	if !known || !sameRecord(before, e.d) {
+		out = append(out, e.d)
+	}
+	for _, m := range moved {
+		if m != e {
+			out = append(out, m.d)
+		}
+	}
+	return out
+}
+
+// withWaitingLocked settles WaitingOn after a change to the entries in
+// changed and returns their records plus every other one whose WaitingOn
+// moved, each once, in a stable order.
+func (t *Tracker) withWaitingLocked(changed []*entry) []contracts.Delegate {
+	moved := t.settleWaitingLocked()
+	seen := make(map[*entry]bool, len(changed)+len(moved))
+	var out []contracts.Delegate
+	for _, e := range append(changed, moved...) {
+		if !seen[e] {
+			seen[e] = true
+			out = append(out, e.d)
+		}
+	}
+	return out
+}
+
+// settleWaitingLocked recomputes every record's WaitingOn and returns the
+// entries whose value changed. A completed delegate waits while one of its
+// direct children runs or itself waits, or a background process it started
+// still runs. Computed afresh each time as a least fixpoint — no record
+// waits until something live is found under it — so a stale value, or a
+// parent cycle in bad data, can never keep itself alive. Only a completed
+// run waits: one that failed, was stopped or orphaned isn't coming back for
+// what it left behind, and a running one is visibly not done anyway.
+func (t *Tracker) settleWaitingLocked() []*entry {
+	children := map[string][]*entry{}
+	for _, e := range t.byID {
+		if p := e.d.ParentHarnessID; p != "" && p != e.d.HarnessID {
+			children[p] = append(children[p], e)
+		}
+	}
+	live := func(c *entry, waiting map[*entry]bool) bool {
+		return c.d.State == contracts.DelegateRunning || waiting[c]
+	}
+	waiting := map[*entry]bool{}
+	for grew := true; grew; {
+		grew = false
+		for _, e := range t.byID {
+			if waiting[e] || e.d.State != contracts.DelegateCompleted {
+				continue
+			}
+			if t.processes[e.d.ToolUseID] > 0 || slices.ContainsFunc(children[e.d.HarnessID], func(c *entry) bool { return live(c, waiting) }) {
+				waiting[e], grew = true, true
+			}
+		}
+	}
+	var moved []*entry
+	for _, e := range t.sortedLocked() {
+		var next *contracts.DelegateWaiting
+		if waiting[e] {
+			next = &contracts.DelegateWaiting{Processes: t.processes[e.d.ToolUseID]}
+			for _, c := range children[e.d.HarnessID] {
+				if live(c, waiting) {
+					next.Subagents++
+				}
+			}
+		}
+		if !sameWaiting(e.d.WaitingOn, next) {
+			e.d.WaitingOn = next
+			moved = append(moved, e)
+		}
+	}
+	return moved
+}
+
+// Background folds the harness's list of running background processes
+// (provider EventBackground — the processes, not the subagents) and returns
+// the records whose WaitingOn it moved. A process is counted against the
+// delegate whose spawning call started it; the main agent's own processes
+// (no parent call) are not a delegate's business.
+func (t *Tracker) Background(tasks []provider.BackgroundTask, _ time.Time) []contracts.Delegate {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.processes = map[string]int{}
+	for _, b := range tasks {
+		if b.ParentToolUseID != "" {
+			t.processes[b.ParentToolUseID]++
+		}
+	}
+	return t.withWaitingLocked(nil)
 }
 
 // Usage folds one of a running delegate's API calls — found by its spawning
@@ -457,48 +597,77 @@ func (t *Tracker) NextExpiry() (time.Time, bool) {
 func (t *Tracker) Expire(now time.Time) []contracts.Delegate {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	var out []contracts.Delegate
+	var out []*entry
 	for _, e := range t.sortedLocked() {
 		if e.leftAt.IsZero() || e.d.State != contracts.DelegateRunning || now.Sub(e.leftAt) < t.grace {
 			continue
 		}
 		t.endLocked(e, contracts.DelegateStopped, ReasonRoster, true, e.leftAt)
-		out = append(out, e.d)
+		out = append(out, e)
 	}
-	return out
+	return t.withWaitingLocked(out)
 }
 
 // TurnEnd folds the main agent's turn ending: a foreground delegate still
 // running was cut short with its parent (see the package rules).
-// Backgrounded delegates are untouched.
+// Backgrounded delegates are untouched. So is a foreground one a delegate
+// spawned while that delegate still runs in the background: it is its
+// spawner's turn it waits in, not the main agent's (endsWithTurnLocked).
 func (t *Tracker) TurnEnd(now time.Time) []contracts.Delegate {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	var out []contracts.Delegate
+	var out []*entry
 	for _, e := range t.sortedLocked() {
-		if e.d.State != contracts.DelegateRunning || e.d.Backgrounded {
+		if !t.endsWithTurnLocked(e) {
 			continue
 		}
-		t.endLocked(e, contracts.DelegateStopped, ReasonTurnEnd, true, now)
-		out = append(out, e.d)
+		out = append(out, e)
 	}
-	return out
+	for _, e := range out {
+		t.endLocked(e, contracts.DelegateStopped, ReasonTurnEnd, true, now)
+	}
+	return t.withWaitingLocked(out)
+}
+
+// endsWithTurnLocked reports whether the main agent's turn ending cuts e
+// short: it is running in the foreground, and so is every delegate up its
+// spawn chain to the main agent. A spawner mads doesn't know, or one no
+// longer running, falls back to the plain foreground rule. Decided for the
+// whole set before any is ended, so the chain is read as it stood.
+func (t *Tracker) endsWithTurnLocked(e *entry) bool {
+	if e.d.State != contracts.DelegateRunning || e.d.Backgrounded {
+		return false
+	}
+	for hops := 0; hops < len(t.byID); hops++ {
+		p, ok := t.byID[e.d.ParentHarnessID]
+		if !ok || p == e || p.d.State != contracts.DelegateRunning {
+			return true
+		}
+		if p.d.Backgrounded {
+			return false // it waits in a background spawner's turn
+		}
+		e = p
+	}
+	return true
 }
 
 // ProcessExit folds the harness process ending: every running delegate
 // ran inside it (Claude Code's subagents are in-process), so each one stops.
+//
+// Its background processes went with it, so nothing is waited on any more.
 func (t *Tracker) ProcessExit(now time.Time) []contracts.Delegate {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	var out []contracts.Delegate
+	var out []*entry
 	for _, e := range t.sortedLocked() {
 		if e.d.State != contracts.DelegateRunning {
 			continue
 		}
 		t.endLocked(e, contracts.DelegateStopped, ReasonProcessExit, true, now)
-		out = append(out, e.d)
+		out = append(out, e)
 	}
-	return out
+	t.processes = nil
+	return t.withWaitingLocked(out)
 }
 
 // LiveSpawn reports whether the delegate anchored at spawnToolUseID (the id
@@ -663,12 +832,18 @@ func sameRecord(a, b contracts.Delegate) bool {
 		(a.Capabilities != nil && b.Capabilities != nil && *a.Capabilities == *b.Capabilities)
 	sameUsage := (a.Usage == nil && b.Usage == nil) ||
 		(a.Usage != nil && b.Usage != nil && *a.Usage == *b.Usage)
-	if !sameEnd || !sameCaps || !sameUsage || !a.StartedAt.Equal(b.StartedAt) {
+	if !sameEnd || !sameCaps || !sameUsage || !sameWaiting(a.WaitingOn, b.WaitingOn) || !a.StartedAt.Equal(b.StartedAt) {
 		return false
 	}
 	a.EndedAt, b.EndedAt = nil, nil
 	a.Capabilities, b.Capabilities = nil, nil
 	a.Usage, b.Usage = nil, nil
+	a.WaitingOn, b.WaitingOn = nil, nil
 	a.StartedAt, b.StartedAt = time.Time{}, time.Time{}
 	return a == b
+}
+
+// sameWaiting compares two WaitingOn values by value.
+func sameWaiting(a, b *contracts.DelegateWaiting) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
 }

@@ -923,6 +923,14 @@ export interface DelegateCapabilities {
 /** mirrors pkg/contracts/delegate.go DelegateState. No "idle": a finished delegate is finished. */
 export type DelegateState = "running" | "completed" | "failed" | "stopped" | "orphaned";
 
+/** mirrors pkg/contracts/delegate.go DelegateWaiting — what a waiting delegate's ended turn left running (at least one count is non-zero). */
+export interface DelegateWaiting {
+  /** Its direct child subagents still running or waiting. */
+  subagents?: number;
+  /** Its own background processes (a run_in_background command, a watch). */
+  processes?: number;
+}
+
 /**
  * mirrors pkg/contracts/delegate.go Delegate — a harness-run subagent
  * (docs/DELEGATES-DESIGN.md), decided server-side by the session runner and
@@ -936,6 +944,19 @@ export interface Delegate {
   harness_id: string;
   tool_use_id?: string;
   depth?: number;
+  /**
+   * The harness id of the delegate that spawned this one, within the same
+   * session. Absent: the session's own agent spawned it.
+   */
+  parent_harness_id?: string;
+  /**
+   * Set only on a record whose latest run ended (state "completed") while
+   * work it owns still runs — its direct child subagents (running, or
+   * waiting themselves) and its own background processes. It picks up again
+   * when they report back, so it is live, not finished: see
+   * isLiveDelegate. Absent otherwise.
+   */
+  waiting_on?: DelegateWaiting;
   type?: string;
   description?: string;
   backgrounded?: boolean;

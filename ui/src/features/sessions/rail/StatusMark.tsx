@@ -138,3 +138,21 @@ const MARKS: Record<RailStatusKind, React.JSX.Element> = {
     />
   ),
 };
+
+/**
+ * A delegate that is waiting (Delegate.waiting_on): its turn ended, and it
+ * picks up again when the work it owns reports back. The status line's idle
+ * dial, so the rail has one picture for "nothing being worked on, something
+ * still pending" — the session card's "Waiting on N processes" draws the
+ * same. Not the spinner: a spinner says tokens are being spent, and until
+ * that work reports back none are. Wrapped so it carries a name and a
+ * data-status like StatusGlyph's marks, for the rows, the main pane's
+ * header and the task cards alike.
+ */
+export function WaitingGlyph() {
+  return (
+    <span className={styles.waitingGlyph} role="img" aria-label="waiting" data-status="waiting">
+      <StatusMark kind="idle" />
+    </span>
+  );
+}

@@ -362,3 +362,104 @@ describe("DelegateView — a long session's log", () => {
     expect(screen.getByTestId("delegate-counters").textContent).toContain("7 tools");
   });
 });
+
+describe("DelegateView — nested subagents", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const waiting: Delegate = {
+    ...record,
+    harness_id: "m",
+    tool_use_id: "toolu_m",
+    description: "Research mitigations",
+    type: "general-purpose",
+    state: "completed",
+    ended_at: "2026-10-08T10:03:00Z",
+    waiting_on: { subagents: 1, processes: 1 },
+  };
+  const kid: Delegate = {
+    ...record,
+    id: "dlg_kid",
+    harness_id: "kid",
+    tool_use_id: "toolu_kid",
+    parent_harness_id: "m",
+    description: "Fetch RAGTruth tables",
+    type: "Explore",
+  };
+
+  it("says what a waiting delegate waits on, with the waiting dial, instead of Completed", async () => {
+    const client = new FakeRouterClient();
+    client.delegates.push(waiting);
+    vi.spyOn(client, "getEvents").mockResolvedValue([]);
+    render(<DelegateView sessionId="s1" harnessId="m" routerClient={client} onBack={() => {}} />);
+    expect(
+      await screen.findByText(
+        /Its turn ended; waiting on 1 subagent and a background command\. It picks up again when they report back\./,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Completed/)).toBeNull();
+    const header = screen.getByTestId("delegate-view").querySelector("header")!;
+    expect(header.querySelector('[data-status="waiting"]')).toBeTruthy();
+    expect(header.querySelector('[data-status="completed"]')).toBeNull();
+  });
+
+  it("names the subagent that spawned it", async () => {
+    const client = new FakeRouterClient();
+    client.delegates.push(waiting, kid);
+    vi.spyOn(client, "getEvents").mockResolvedValue([]);
+    render(<DelegateView sessionId="s1" harnessId="kid" routerClient={client} onBack={() => {}} />);
+    expect(await screen.findByText(/Spawned by Research mitigations/)).toBeTruthy();
+  });
+
+  it("renders the Agent calls it made as live subagent cards that open them", async () => {
+    const client = new FakeRouterClient();
+    client.delegates.push(waiting, kid);
+    client.delegateTranscripts.set("s1/m", {
+      available: true,
+      messages: [
+        { role: "user", text: "Research mitigations" },
+        { role: "tool", tool: { id: "toolu_kid", name: "Agent", kind: "agent", title: "Fetch RAGTruth tables" } },
+        { role: "tool", tool: { id: "toolu_stray", name: "Agent", kind: "agent", title: "No record for this one" } },
+        { role: "tool", tool: { id: "t2", name: "Bash", kind: "execute", title: "sleep 900" } },
+      ],
+    });
+    vi.spyOn(client, "getEvents").mockResolvedValue([]);
+    const onOpenDelegate = vi.fn();
+    render(
+      <DelegateView sessionId="s1" harnessId="m" routerClient={client} onBack={() => {}} onOpenDelegate={onOpenDelegate} />,
+    );
+    const card = await screen.findByTestId("delegate-call-card");
+    expect(card.textContent).toContain("Fetch RAGTruth tables");
+    expect(card.textContent).toContain("subagent · Explore");
+    expect(card.textContent).toContain("Open ›");
+    expect(card.querySelector('[data-status="in_progress"]')).toBeTruthy();
+    // An Agent call with no record stays a plain row; so does everything else.
+    expect(row("No record for this one")).toBeTruthy();
+    expect(row("sleep 900")).toBeTruthy();
+    expect(screen.getAllByTestId("delegate-call-card")).toHaveLength(1);
+
+    fireEvent.click(within(card).getByRole("button"));
+    expect(onOpenDelegate).toHaveBeenCalledWith(expect.objectContaining({ harness_id: "kid" }));
+
+    // Its status follows the record live: waiting now, and it says on what.
+    const control = FakeEventSource.instances.find((s) => s.url.includes("session.delegate_changed"));
+    act(() => {
+      control!.emit(
+        "session.delegate_changed",
+        JSON.stringify(
+          env(9, "session.delegate_changed", {
+            ...kid,
+            state: "completed",
+            ended_at: "2026-10-08T10:05:00Z",
+            waiting_on: { processes: 2 },
+          }),
+        ),
+      );
+    });
+    await waitFor(() => expect(card.querySelector('[data-status="waiting"]')).toBeTruthy());
+    expect(card.textContent).toContain("subagent · Explore · waiting on 2 background commands");
+  });
+});

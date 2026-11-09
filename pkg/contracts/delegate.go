@@ -52,9 +52,15 @@ type Delegate struct {
 	// First-seen wins: a re-entry's different tool_use_id never moves it.
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	// Depth is the nesting depth (1 = spawned by the main agent).
-	Depth       int    `json:"depth,omitempty"`
-	Type        string `json:"type,omitempty"`
-	Description string `json:"description,omitempty"`
+	Depth int `json:"depth,omitempty"`
+	// ParentHarnessID is the HarnessID of the delegate that spawned this
+	// one; empty when the session's own agent did. A Claude Code subagent
+	// can spawn its own (claude-code 2.1.285: the child's .meta.json carries
+	// parentAgentId and spawnDepth 2). First seen wins and it is never
+	// cleared: like ToolUseID, it is identity, not state.
+	ParentHarnessID string `json:"parent_harness_id,omitempty"`
+	Type            string `json:"type,omitempty"`
+	Description     string `json:"description,omitempty"`
 	// Backgrounded: the parent did not wait on it. Sticky once seen — a
 	// Claude Code re-entry always runs backgrounded.
 	Backgrounded bool          `json:"backgrounded,omitempty"`
@@ -66,6 +72,19 @@ type Delegate struct {
 	// Inferred marks a State mads concluded rather than the harness
 	// reported. A later harness report always overrides an inferred state.
 	Inferred bool `json:"inferred,omitempty"`
+	// WaitingOn is set while its latest run has ended completed but work it
+	// started is still going: its own subagents, or background processes
+	// it ran. Claude Code lets a subagent end its turn with that work in
+	// flight, reports "completed" to the parent anyway, and re-enters the
+	// same task id (running again) when the work reports back. The run did
+	// complete, so State stays completed and this is the extra fact,
+	// rather than a new state: a consumer that doesn't know the field
+	// degrades to today's finished ✓ instead of meeting a state it can't
+	// render — the same reason the parent's turn ending is not a
+	// transition (DelegateState). Nil in every other case, including a
+	// failed, stopped or orphaned run (whatever it left behind is not
+	// coming back to it).
+	WaitingOn *DelegateWaiting `json:"waiting_on,omitempty"`
 	// Runs counts how many times it has entered running (re-entries > 1).
 	Runs int `json:"runs"`
 	// StartedAt is when the latest run started; EndedAt when it left
@@ -105,6 +124,17 @@ type Delegate struct {
 	PriorDurationMS int       `json:"prior_duration_ms,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// DelegateWaiting is what a completed delegate is still waiting on
+// (Delegate.WaitingOn). At least one count is non-zero.
+type DelegateWaiting struct {
+	// Subagents counts its direct child delegates that are running or are
+	// themselves waiting: a chain waits as long as its deepest live link.
+	Subagents int `json:"subagents,omitempty"`
+	// Processes counts the background processes it started (a
+	// run_in_background Bash) that are still running.
+	Processes int `json:"processes,omitempty"`
 }
 
 // DelegateSteer is how a user's message can reach a delegate.

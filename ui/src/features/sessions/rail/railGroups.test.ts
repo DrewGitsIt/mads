@@ -101,6 +101,41 @@ describe("statusOf", () => {
     expect(statusOf(makeSession({ activity: "inactive" }), state, idle, DURING).kind).toBe("sleeping");
   });
 
+  it("adds waiting subagents to the running count, at every depth the state counted", () => {
+    const session = makeSession({ activity: "active" });
+    const state = makeAgentState({ subagents: 2, waitingSubagents: 1, subagentsSince: TURN_START });
+    expect(statusOf(session, state, idle, DURING)).toMatchObject({
+      kind: "delegating",
+      tone: "working",
+      label: "2 subagents running · 1 waiting",
+      since: TURN_START,
+    });
+    expect(statusOf(session, { ...state, done: true }, idle, DURING).label).toBe("Done · 2 subagents running · 1 waiting");
+  });
+
+  it("reads only-waiting subagents calmly, with the clock — nothing is being worked on", () => {
+    const session = makeSession({ activity: "active" });
+    expect(statusOf(session, makeAgentState({ waitingSubagents: 1 }), idle, DURING)).toEqual({
+      kind: "idle",
+      tone: "idle",
+      dot: "on",
+      label: "1 subagent waiting",
+    });
+    expect(statusOf(session, makeAgentState({ waitingSubagents: 3 }), idle, DURING).label).toBe("3 subagents waiting");
+    // An unseen turn end still leads.
+    expect(statusOf(session, makeAgentState({ waitingSubagents: 2, done: true }), idle, DURING)).toMatchObject({
+      kind: "done",
+      label: "Done · 2 subagents waiting",
+    });
+    // A turn in flight still owns the line; asleep, nothing is waiting in it.
+    expect(statusOf(session, makeAgentState({ waitingSubagents: 1, workingSince: TURN_START }), idle, DURING).kind).toBe(
+      "working",
+    );
+    expect(statusOf(makeSession({ activity: "inactive" }), makeAgentState({ waitingSubagents: 1 }), idle, DURING).label).toBe(
+      "Sleeping",
+    );
+  });
+
   it("reads a crash first, naming its blocked work when there is any", () => {
     const state = makeAgentState({ crashed: true, awaitingTool: "Bash", workingSince: "2026-07-01T00:00:00Z", done: true });
     expect(statusOf(makeSession({}), state, idle, DURING)).toMatchObject({

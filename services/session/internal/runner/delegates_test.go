@@ -266,6 +266,28 @@ func TestBackgroundClearsWhenProcessEnds(t *testing.T) {
 	}
 }
 
+// A delegate whose run completed with its own background process still
+// running is stored waiting on it, through the pump's EventBackground; the
+// process ending (here: the harness process going) clears it on the record.
+func TestDelegateWaitingOnItsProcess(t *testing.T) {
+	r, data, sid := newDelegateRunner(t)
+	r.observeConversation(taskEv("started", "a1", "toolu_agent", "", true))
+	r.observeConversation(provider.Event{Kind: provider.EventBackground, Background: []provider.BackgroundTask{
+		{TaskID: "b1", ToolUseID: "toolu_bash", ParentToolUseID: "toolu_agent"},
+	}})
+	r.observeConversation(taskEv("notification", "a1", "toolu_agent", "completed", true))
+	d := storedDelegate(t, data, sid, "a1")
+	if d.State != contracts.DelegateCompleted || d.WaitingOn == nil || d.WaitingOn.Processes != 1 {
+		t.Fatalf("completed with its process running = %+v (waiting %+v)", d, d.WaitingOn)
+	}
+
+	r.endDelegatesForProcessExit()
+	r.clearBackground()
+	if d := storedDelegate(t, data, sid, "a1"); d.State != contracts.DelegateCompleted || d.WaitingOn != nil {
+		t.Fatalf("after the process went = %+v (waiting %+v)", d, d.WaitingOn)
+	}
+}
+
 // A subagent's API calls reach its record: the model and context of the
 // first at once, a burst's latest when the held report is flushed.
 func TestSubagentUsageReachesTheRecord(t *testing.T) {

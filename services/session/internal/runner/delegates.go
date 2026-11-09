@@ -84,6 +84,10 @@ func (r *Runner) observeDelegates(ev provider.Event) {
 		r.armDelegateExpiry()
 	case ev.Kind == provider.EventTurnEnd:
 		r.publishDelegates(r.delegates.TurnEnd(now))
+	case ev.Kind == provider.EventBackground:
+		// A delegate whose run completed with its own processes still going
+		// is waiting on them, not done.
+		r.publishDelegates(r.delegates.Background(ev.Background, now))
 	}
 }
 
@@ -232,14 +236,15 @@ func (r *Runner) inspectDelegateAfter(harnessID string, delay time.Duration) {
 			return
 		}
 		r.publishDelegates(r.delegates.Inspect(harnessID, delegates.Observation{
-			TranscriptPath: info.TranscriptPath,
-			Type:           info.Type,
-			Depth:          info.Depth,
-			WorktreePath:   info.WorktreePath,
-			Background:     info.Background,
-			Model:          info.Model,
-			Branch:         info.Branch,
-			Usage:          info.Usage,
+			TranscriptPath:  info.TranscriptPath,
+			Type:            info.Type,
+			Depth:           info.Depth,
+			ParentHarnessID: info.ParentHarnessID,
+			WorktreePath:    info.WorktreePath,
+			Background:      info.Background,
+			Model:           info.Model,
+			Branch:          info.Branch,
+			Usage:           info.Usage,
 		}))
 	}
 	if delay <= 0 {

@@ -39,7 +39,8 @@ func delegateRoutes(mux *http.ServeMux, log *store.Log) {
 	})
 
 	// ?state= filters (the rail's cold read is state=running);
-	// ?ended_after=<RFC 3339> instead lists the running ones plus those that
+	// ?ended_after=<RFC 3339> instead lists the live ones (running, or
+	// completed but still waiting on work they started) plus those that
 	// finished since then (the rail under a fade window).
 	mux.HandleFunc("GET /delegates", func(w http.ResponseWriter, r *http.Request) {
 		if raw := r.URL.Query().Get("ended_after"); raw != "" {

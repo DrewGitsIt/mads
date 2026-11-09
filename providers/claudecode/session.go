@@ -206,7 +206,8 @@ type streamSession struct {
 	// subagent's process from the main agent's, and the line follows the
 	// roster immediately. A subagent's calls (sideCalls: tool_use id →
 	// spawning call, dropped once a task_started claims one) say which
-	// subagent a process belongs to.
+	// subagent a process belongs to — and which subagent spawned a nested
+	// one (nestedSpawnLocked).
 	background []provider.BackgroundTask
 	bgRoster   []wireRosterTask
 	bgCalls    map[string]bgCall
@@ -370,6 +371,7 @@ func (s *streamSession) handleLine(raw []byte) {
 	}
 	dropTask := s.isOtherTask(&l)
 	background, bgChanged := s.noteBackground(&l, time.Now())
+	nestedParent := s.nestedSpawnLocked(&l)
 	subagentWindow := 0
 	if u := l.Message.callUsage(); l.ParentToolUseID != "" && u != nil {
 		subagentWindow = s.windows[baseModel(u.Model)]
@@ -397,6 +399,9 @@ func (s *streamSession) handleLine(raw []byte) {
 		}
 		if ev.Account != nil {
 			ev.Account.Account = s.account
+		}
+		if ev.Kind == provider.EventTask && nestedParent != "" {
+			ev.ParentToolUseID = nestedParent
 		}
 		if ev.Kind == provider.EventSubagentUsage {
 			ev.Usage.ContextWindow = subagentWindow
@@ -510,6 +515,28 @@ func (s *streamSession) noteBackground(l *wireLine, now time.Time) ([]provider.B
 	}
 	s.background = next
 	return slices.Clone(next), true
+}
+
+// nestedSpawnLocked is, for a subagent's task_started line, the spawning
+// call of the subagent that spawned it — empty when the main agent did.
+// claude-code never parent-tags system lines, but the spawning Agent call
+// arrives first on an assistant line tagged with the spawning subagent's own
+// call (sideCalls), and the child's task_started names that Agent call as its
+// tool_use_id (claude-code 2.1.285; seen in the mads event log on
+// 2026-11-08: the tool_use, then three lines later the task_started). The
+// entry is dropped once claimed, as noteBackground does for a process. A
+// re-entry's task_started names its SendMessage call, which resolves the same
+// way when a subagent sent it. Caller holds s.mu.
+func (s *streamSession) nestedSpawnLocked(l *wireLine) string {
+	if l.Type != "system" || l.Subtype != "task_started" || !l.isAgentTask() || l.ToolUseID == "" {
+		return ""
+	}
+	parent, ok := s.sideCalls[l.ToolUseID]
+	if !ok {
+		return ""
+	}
+	delete(s.sideCalls, l.ToolUseID)
+	return parent
 }
 
 // isOtherTask reports whether l is a task-lifecycle line for a background

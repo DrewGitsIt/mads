@@ -481,6 +481,9 @@ type DelegateInfo struct {
 	Type string
 	// Depth is its nesting depth (1 = spawned by the main agent).
 	Depth int
+	// ParentHarnessID is the delegate that spawned it, by harness id; empty
+	// when the session's own agent did.
+	ParentHarnessID string
 	// WorktreePath is the separate worktree it runs in, when it has one.
 	WorktreePath string
 	// Background reports the harness ran it in the background.
