@@ -40,7 +40,7 @@ for (const name of ["localStorage", "sessionStorage"] as const) {
   }
 }
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   // One in-memory store for the whole file: without this, state a test persisted
   // (the rail's seen-session ids, say) decides what the next test renders.
@@ -49,4 +49,10 @@ afterEach(() => {
   // the first test to touch a session handed them) and the launchpad draft.
   clearAllStagedAttachments();
   clearLaunchpadDraft();
+  // And the window-wide session list, which otherwise hands one test's
+  // sessions (and its in-flight fetch) to the next. Imported lazily: a module
+  // a setup file imports up front is cached before the test file's vi.mock
+  // calls register, so a static import here would pull router/events past
+  // the tests that mock it.
+  (await import("./router/sessionsStore")).resetSessionsStoreForTests?.();
 });

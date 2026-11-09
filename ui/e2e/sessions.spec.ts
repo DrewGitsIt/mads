@@ -202,12 +202,9 @@ test("sessions journey: sleep, wake affordance, delete", async ({ page, routerUR
 
 /**
  * Polls getCount() until it has reached at least minCount and hasn't
- * changed for quietMs — used to wait for a whole *batch* of GET /sessions
- * requests triggered by one SSE event, since two independent
- * useSessionsList() instances are mounted at once (SessionsSurface's rail
- * and App.tsx's always-mounted useCommandPaletteData), so one event fires
- * more than one refetch and the exact count isn't a stable assumption to
- * hard-code.
+ * changed for quietMs — waits for one SSE event's GET /sessions to have been
+ * issued without hard-coding when it goes out (the shared sessions store
+ * debounces refetches, router/sessionsStore.ts).
  */
 async function waitForRequestBatch(
   getCount: () => number,
@@ -232,15 +229,15 @@ async function waitForRequestBatch(
 }
 
 test("sessions journey: sleep survives an out-of-order rail refetch", async ({ page, routerURL }) => {
-  // Reproduces the actual stale-rail defect: useSessionsList.refetch() fires
-  // on every session.* SSE event with no request-ordering guard
-  // (useSessionsList.ts). An unrelated refetch already in flight when the
-  // sleep's own refetch is issued can resolve *after* it and overwrite the
-  // freshly-correct "inactive" state with the stale snapshot it captured —
-  // and since no further event arrives to trigger another refetch, the rail
-  // is stuck exactly like the bug report ("stays stale... until the whole
-  // UI is restarted"). This test forces that resolution order deterministically
-  // instead of hoping to catch it on timing luck.
+  // The stale-rail defect: an unrelated refetch already in flight when the
+  // sleep lands captured the still-active snapshot, and once refetches could
+  // overlap, it could resolve last and overwrite the correct "inactive" with
+  // nothing left to fix it ("stays stale... until the whole UI is
+  // restarted"). The shared sessions store (router/sessionsStore.ts) is
+  // single-flight: the sleep's event, arriving mid-fetch, issues no second
+  // GET but buys exactly one follow-up after the in-flight one lands, so the
+  // fresh snapshot is always the last word. This holds the in-flight GET
+  // deterministically instead of hoping to catch the window on timing luck.
   const dataURL = process.env.MADS_DATA_URL!;
 
   await page.goto(routerURL);
@@ -262,6 +259,9 @@ test("sessions journey: sleep survives an out-of-order rail refetch", async ({ p
   const rail = page.locator('[aria-label="Session list"]');
   const sessionRow = rail.getByText(goal, { exact: true });
   await expect(sessionRow).toBeVisible();
+  // "Went inactive" is read off this card's data-activity, the list's own
+  // belief, rather than its status line text.
+  const sessionCard = sessionRow.locator('xpath=ancestor::div[@role="button"][1]');
 
   // Hold every GET /sessions response instead of letting it land — captured
   // in issue order, released under this test's control below.
@@ -272,31 +272,36 @@ test("sessions journey: sleep survives an out-of-order rail refetch", async ({ p
     held.push({ fulfill: () => route.fulfill({ response }) });
   });
 
-  // Batch A: an unrelated session.created event (a second, never-opened
-  // session) triggers a refetch in every mounted useSessionsList instance
-  // while our session is still active — these GETs are captured (and held)
-  // with that still-active snapshot.
+  // A: an unrelated session.created (a second, never-opened session) while
+  // ours is still active — one held GET for the whole window, however many
+  // components read the list, carrying the still-active snapshot.
   await createSessionNoSpawn(dataURL, { name: `unrelated ${Date.now()}`, provider: "fake" });
-  const batchABoundary = await waitForRequestBatch(() => held.length, 1);
+  expect(await waitForRequestBatch(() => held.length, 1)).toBe(1);
 
-  // Batch B: sleep the real session — its refetch(es) are issued (and
-  // held) strictly after batch A's, capturing the correct post-sleep
-  // "inactive" snapshot.
-  await page.getByLabel("Workspace actions").click();
-  await page.getByRole("button", { name: "Sleep now", exact: true }).click();
-  const batchBBoundary = await waitForRequestBatch(() => held.length, batchABoundary + 1);
+  // Sleep the session while A is held: single-flight, so no second GET goes
+  // out, however long we wait.
+  await Promise.all([
+    page.waitForResponse(
+      (res) => res.request().method() === "POST" && res.url().includes(`/sessions/${sessionId}/terminate`),
+    ),
+    (async () => {
+      await page.getByLabel("Workspace actions").click();
+      await page.getByRole("button", { name: "Sleep now", exact: true }).click();
+    })(),
+  ]);
+  await page.waitForTimeout(1_000);
+  expect(held.length).toBe(1);
 
-  // Release batch B (later-issued, correct) first...
-  for (let i = batchABoundary; i < batchBBoundary; i++) await held[i].fulfill();
-  // "Went inactive" is read off this card's data-activity, the list's own
-  // belief, rather than its status line text.
-  const sessionCard = sessionRow.locator('xpath=ancestor::div[@role="button"][1]');
+  // Release A (stale). The store's follow-up GET then goes out on its own,
+  // capturing the post-sleep snapshot.
+  await held[0].fulfill();
+  await expect.poll(() => held.length).toBe(2);
+  await held[1].fulfill();
   await expect(sessionCard).toHaveAttribute("data-activity", "inactive");
 
-  // ...then release batch A (earlier-issued, stale) after. Without the
-  // request-ordering guard in useSessionsList.ts, this overwrites the rail
-  // back to showing the session active — reproducing the reported bug.
-  for (let i = 0; i < batchABoundary; i++) await held[i].fulfill();
+  // And it stays that way: nothing further overwrites it.
+  await page.waitForTimeout(1_000);
+  for (const h of held.slice(2)) await h.fulfill();
   await expect(sessionCard).toHaveAttribute("data-activity", "inactive");
 });
 
