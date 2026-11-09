@@ -26,7 +26,9 @@ BASE="${MADS_MIGRATIONS_BASE:-origin/main}"
 log() { printf 'check-migrations: %s\n' "$*" >&2; }
 
 if [ -z "${MADS_MIGRATIONS_NO_FETCH:-}" ]; then
-    git fetch --quiet --depth=1 origin main
+    # No --depth: in a full clone a depth-1 fetch writes main's tip into
+    # .git/shallow, which hides all history behind it (2026-11-09).
+    git fetch --quiet origin main
 fi
 
 # "NNNN name" per migration, one line each (up/down collapsed).
