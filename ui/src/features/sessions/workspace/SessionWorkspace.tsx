@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "../../../components/Button/Button";
 import { Toast } from "../../../components/Toast/Toast";
 import type { PipelineClient } from "../../../pipeline/client/pipelineClient";
 import type { RouterClient } from "../../../router/client";
+import { coalesce, type Coalescer } from "../../../router/coalesce";
 import { subscribeToEvents } from "../../../router/events";
 import {
   SESSION_SHELL_REFETCH_EVENT_TYPES,
@@ -113,31 +114,55 @@ export function SessionWorkspace({
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
   const runTaskCount = useLiveRunTaskCount(sessionId, pipelineClient, running);
 
+  // The open session's record. Event-driven refetches are coalesced (the
+  // bus replays its durable log on connect, so one per event was a storm of
+  // GET /sessions/:id) and single-flight, so an older response can never be
+  // the last word. A user action's refetch (after a bounce, a failed rename)
+  // goes through now(): immediate, but still in turn with any fetch in flight.
+  const sessionFetch = useRef<Coalescer | null>(null);
   const refetchSession = useCallback(() => {
-    void routerClient.getSession(sessionId).then(setSession);
-  }, [routerClient, sessionId]);
+    sessionFetch.current?.now();
+  }, []);
 
   // One session-scoped subscription for everything this shell and its
   // Conversation tab need (session lifecycle, linked-session inject,
   // pipeline run status) instead of three — see
   // WORKSPACE_SESSION_EVENT_TYPES's own comment for why.
   useEffect(() => {
-    refetchSession();
+    let cancelled = false;
+    const fetcher = coalesce(() =>
+      routerClient.getSession(sessionId).then(
+        (s) => {
+          // A response for a session this shell no longer shows (sessionId
+          // changed, or unmounted) is dropped.
+          if (!cancelled) setSession(s);
+        },
+        () => {},
+      ),
+    );
+    sessionFetch.current = fetcher;
+    fetcher.now();
     setRunning(false);
-    return subscribeToEvents(
+    const unsubscribe = subscribeToEvents(
       { sessionId, types: WORKSPACE_SESSION_EVENT_TYPES },
       (envelope) => {
         if ((RUN_EVENT_TYPES as string[]).includes(envelope.type)) {
           setRunning(envelope.type === "pipeline.started");
         } else if ((SESSION_SHELL_REFETCH_EVENT_TYPES as string[]).includes(envelope.type)) {
-          refetchSession();
+          fetcher.request();
         }
         // Anything else in WORKSPACE_SESSION_EVENT_TYPES (task.*/stage.*/
         // file.changed/note.created) is there only for usePipelineRun's
         // shared subscription — this shell has nothing to do with it.
       },
     );
-  }, [refetchSession, sessionId]);
+    return () => {
+      cancelled = true;
+      fetcher.cancel();
+      if (sessionFetch.current === fetcher) sessionFetch.current = null;
+      unsubscribe();
+    };
+  }, [routerClient, sessionId]);
 
   // BounceSession (supervisor.go) returns early with no respawn if
   // terminate fails (e.g. the child is busy past terminateGrace) — a
