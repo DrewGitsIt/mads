@@ -5,6 +5,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog/ConfirmDialog";
 import { Toast } from "../components/Toast/Toast";
 import type { RouterClient, SessionEventSource } from "../router/client";
 import { CommitRefusedError, TransportSwitchError } from "../router/client";
+import { coalesce, type Coalescer } from "../router/coalesce";
 import { subscribeToEvents } from "../router/events";
 import { getAllEvents } from "../router/eventPages";
 import { contextWindowForModel, countsTokens } from "../router/modelDisplay";
@@ -549,9 +550,16 @@ export function ConversationTab({
     if (turnPhase !== "live") setAgentSince(undefined);
   }, [turnPhase]);
 
+  // Event-driven refetches of the session record are coalesced (the bus
+  // replays its durable log on connect: one GET /sessions/:id per replayed
+  // event before) and single-flight, so an older response is never the last
+  // word. A user action's refetch (after a push) goes through now() —
+  // immediate, still in turn with a fetch in flight. The mount read above
+  // stays its own fetch: it also seeds usage and agent state.
+  const sessionFetch = useRef<Coalescer | null>(null);
   const refetchSession = useCallback(() => {
-    void routerClient.getSession(sessionId).then(setSession);
-  }, [routerClient, sessionId]);
+    sessionFetch.current?.now();
+  }, []);
 
   // Link updates held while the session slept (docs/HELD-UPDATES-DESIGN.md):
   // listed at the end of the stream, shown as a chip in the composer, and
@@ -752,11 +760,22 @@ export function ConversationTab({
   // linked-session inject/digest needs nothing here: it reaches the
   // conversation as a user_message frame like any send.
   useEffect(() => {
-    return subscribeToEvents(
+    let cancelled = false;
+    const fetcher = coalesce(() =>
+      routerClient.getSession(sessionId).then(
+        (s) => {
+          // Dropped once this tab shows another session, or none.
+          if (!cancelled) setSession(s);
+        },
+        () => {},
+      ),
+    );
+    sessionFetch.current = fetcher;
+    const unsubscribe = subscribeToEvents(
       { sessionId, types: WORKSPACE_SESSION_EVENT_TYPES },
       (envelope) => {
         if ((SESSION_SHELL_REFETCH_EVENT_TYPES as string[]).includes(envelope.type)) {
-          refetchSession();
+          fetcher.request();
         }
         // Anything else in WORKSPACE_SESSION_EVENT_TYPES (task.*/stage.*/
         // file.changed/note.created/pipeline.*) is there only for other
@@ -764,7 +783,13 @@ export function ConversationTab({
         // nothing to do with them.
       },
     );
-  }, [refetchSession, sessionId]);
+    return () => {
+      cancelled = true;
+      fetcher.cancel();
+      if (sessionFetch.current === fetcher) sessionFetch.current = null;
+      unsubscribe();
+    };
+  }, [routerClient, sessionId]);
 
   // The terminal view's data-plane stream (services/session's legacy GET
   // /output, proxied via the Router): the channel SessionTerminalBridge

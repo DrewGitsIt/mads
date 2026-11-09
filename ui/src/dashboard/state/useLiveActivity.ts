@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { coalesce } from "../../router/coalesce";
 import { subscribeToEvents } from "../../router/events";
 import type { MetricsClient } from "../client/metricsClient";
 
@@ -34,33 +35,32 @@ export function useLiveActivity(client: MetricsClient): UseLiveActivity {
   const [runningPipelineCount, setRunningPipelineCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const mounted = useRef(true);
-
-  const refetch = useCallback(async () => {
-    try {
-      const [sessions, runs] = await Promise.all([client.listSessions(), client.metricsPipelineRuns()]);
-      if (mounted.current) {
+  useEffect(() => {
+    let cancelled = false;
+    const refetch = async () => {
+      try {
+        const [sessions, runs] = await Promise.all([client.listSessions(), client.metricsPipelineRuns()]);
+        if (cancelled) return;
         setActiveSessionCount(sessions.filter((s) => s.activity === "active").length);
         setRunningPipelineCount(runs.filter((r) => r.outcome === "running").length);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    } catch (err) {
-      if (mounted.current) setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      if (mounted.current) setLoading(false);
-    }
-  }, [client]);
-
-  useEffect(() => {
-    mounted.current = true;
-    void refetch();
-    const unsubscribe = subscribeToEvents({ types: LIVE_EVENT_TYPES }, () => {
-      void refetch();
-    });
+    };
+    // The bus replays its durable log on connect: coalesce that burst (and
+    // any live one) into a run or two rather than a pair of fetches per
+    // event. The mount fetch is immediate.
+    const refresh = coalesce(refetch);
+    refresh.now();
+    const unsubscribe = subscribeToEvents({ types: LIVE_EVENT_TYPES }, () => refresh.request());
     return () => {
-      mounted.current = false;
+      cancelled = true;
+      refresh.cancel();
       unsubscribe();
     };
-  }, [refetch]);
+  }, [client]);
 
   return { activeSessionCount, runningPipelineCount, loading, error };
 }
