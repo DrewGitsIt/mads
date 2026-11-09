@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ContextRail } from "./ContextRail";
+import { setChangeBaseline } from "../files/changeBaseline";
 import { FakeRouterClient, fixtureTasks } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
 
@@ -113,6 +114,30 @@ describe("ContextRail", () => {
     expand();
     fireEvent.click(screen.getByRole("button", { name: "Changes" }));
     await waitFor(() => expect(screen.getByText("ingest.go")).toBeTruthy());
+  });
+
+  it("compares against the Changes tab's baseline, and says so", async () => {
+    const client = new FakeRouterClient();
+    render(<ContextRail sessionId="session-active" routerClient={client} tasks={fixtureTasks} tasksById={tasksById} />);
+    expand();
+    fireEvent.click(screen.getByRole("button", { name: "Changes" }));
+    await waitFor(() => expect(screen.getByText("ingest.go")).toBeTruthy());
+    expect(screen.queryByTestId("rail-baseline")).toBeNull();
+
+    try {
+      act(() => setChangeBaseline("session-active", "main"));
+      await waitFor(() => expect(client.changeSetCalls.at(-1)).toEqual({ sessionId: "session-active", vs: "main" }));
+      expect((await screen.findByTestId("rail-baseline")).textContent).toBe("Compared to main");
+      // Another session's choice doesn't move this rail.
+      const calls = client.changeSetCalls.length;
+      act(() => setChangeBaseline("session-other", "base"));
+      expect(client.changeSetCalls).toHaveLength(calls);
+    } finally {
+      act(() => {
+        setChangeBaseline("session-active", "start");
+        setChangeBaseline("session-other", "start");
+      });
+    }
   });
 
   it("collapses and expands", () => {

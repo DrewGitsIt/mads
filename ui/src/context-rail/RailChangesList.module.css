@@ -175,3 +175,9 @@
 .link:hover {
   text-decoration: underline;
 }
+
+/* "Compared to main": the Changes tab's baseline, when it isn't Session start. */
+.vs {
+  font-size: var(--fs-sm);
+  color: var(--text3);
+}

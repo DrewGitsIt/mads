@@ -157,8 +157,7 @@ type builder struct {
 	captures  map[string]shadow.Record // path → first capture record
 	files     map[string]*fileBuild
 	notes     []string
-	repoRoots map[string]bool // every repo root seen, for Git and commits
-	unknownN  int
+	repoRoots map[string]bool  // every repo root seen, for Git and commits
 	nested    *nestedWorktrees // subagent worktrees under the folder, left out (worktrees.go)
 }
 
@@ -464,13 +463,11 @@ func (b *builder) ledgerOnlyFile(ctx context.Context, p, root string) *fileBuild
 	}
 	if !known {
 		fb.unknown = true
-		b.unknownN++
 		return fb
 	}
 	e, same, err := noIndexNumstat(ctx, original, p)
 	if err != nil {
 		fb.unknown = true
-		b.unknownN++
 		return fb
 	}
 	if same {
@@ -597,6 +594,16 @@ func (b *builder) finish(ctx context.Context, vs string, baselines []resolvedBas
 
 	commits, commitsByPath := b.commits(ctx)
 
+	// A session working in place shares its folder with the user and other
+	// sessions, so what differs on disk since it started is everyone's work.
+	// List only what this session changed (its tools, per the ledger) or
+	// committed; the Commit dialog still shows the rest when it matters.
+	// Not for a session in its own worktree (anything changed there is for
+	// it), nor one with no ledger rows or commits at all (a harness that
+	// reports no tool use: filtering would empty the list).
+	ownOnly := b.in.Session.WorktreeDir == "" && (len(b.in.Ledger) > 0 || len(b.in.Commits) > 0)
+	others, unknown := 0, 0
+
 	out := make([]contracts.ChangedFile, 0, len(b.files))
 	for _, fb := range b.files {
 		cf := contracts.ChangedFile{
@@ -644,6 +651,13 @@ func (b *builder) finish(ctx context.Context, vs string, baselines []resolvedBas
 		if hs := commitsByPath[fb.path]; len(hs) > 0 {
 			cf.Commits = hs
 		}
+		if ownOnly && !cf.Attributed && len(cf.Commits) == 0 {
+			others++
+			continue
+		}
+		if cf.CountsUnknown {
+			unknown++
+		}
 		cf.Uncommitted = true
 		if fb.root != "" && !facts.Ignored {
 			if rel, ok := relUnder(fb.root, fb.path); ok {
@@ -682,8 +696,12 @@ func (b *builder) finish(ctx context.Context, vs string, baselines []resolvedBas
 		turns[i].Files = turnFiles[turns[i].N]
 	}
 
-	if b.unknownN > 0 {
-		b.note("line counts unavailable for %d %s with no saved original", b.unknownN, plural(b.unknownN, "file", "files"))
+	if others > 0 {
+		b.note("%d %s changed by others since this session started %s not listed; Commit shows them",
+			others, plural(others, "file", "files"), plural(others, "is", "are"))
+	}
+	if unknown > 0 {
+		b.note("line counts unavailable for %d %s with no saved original", unknown, plural(unknown, "file", "files"))
 	}
 
 	list := make([]contracts.ChangeBaseline, len(baselines))

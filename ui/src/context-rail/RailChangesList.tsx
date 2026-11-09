@@ -75,6 +75,12 @@ export function RailChangesList({ changeSet, loading, error, isUnseen, onOpen }:
 
   return (
     <div className={styles.panel}>
+      {cs.baseline !== "start" && (
+        // Set from the Changes tab's "Compare to"; the rail has no switch of its own.
+        <div className={styles.vs} data-testid="rail-baseline">
+          Compared to {cs.baselines.find((b) => b.id === cs.baseline)?.label ?? cs.baseline}
+        </div>
+      )}
       <div className={styles.ctl}>
         <Select value={tier} options={options} onChange={chooseTier} className={styles.tier} />
         {cs.turns.length > 0 && (

@@ -6,7 +6,7 @@ import { SegmentedControl, type SegmentedOption } from "../components/SegmentedC
 import { Toast, type ToastTone } from "../components/Toast/Toast";
 import { getLinkOpener } from "../platform/links";
 import type { RouterClient } from "../router/client";
-import type { ChangeBaselineId, ChangeTurn, ChangedFile, FileDiff, Session } from "../router/types";
+import type { ChangeTurn, ChangedFile, FileDiff, Session } from "../router/types";
 import { isIsolated } from "../conversation/Worktree/workState";
 import { FileCounts, KindBadge, LineCounts } from "./ChangeBits";
 import { buildCommitGroups, buildTierGroups, buildTurnGroups } from "./changeGroups";
@@ -15,6 +15,7 @@ import { filterFiles, sumLines, turnByN, type ChangesFocus } from "./changesMode
 import { DiffViewer } from "./DiffViewer/DiffViewer";
 import { buildFolderTree } from "./folderTree";
 import { useFullWidth } from "../features/sessions/fullWidth";
+import { useChangeBaseline } from "./changeBaseline";
 import { useSeenState } from "./seenState";
 import { TurnStrip } from "./TurnStrip";
 import { useChangeSet } from "./useChangeSet";
@@ -101,7 +102,8 @@ export function ChangesTab({
   active = true,
   session,
 }: ChangesTabProps) {
-  const [vs, setVs] = useState<ChangeBaselineId>("start");
+  // Shared with the Context Rail's Changes list, so both compare against the same thing.
+  const [vs, setVs] = useChangeBaseline(sessionId);
   const { changeSet: cs, loading, error, refetch } = useChangeSet(routerClient, sessionId, vs);
   const { isUnseen, markSeen } = useSeenState(sessionId);
 

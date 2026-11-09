@@ -70,6 +70,9 @@ func TestSessionChangeSet(t *testing.T) {
 	mustWrite(t, filepath.Join(repo, "a.go"), "package a\n\nvar X = 1\n")
 	mustWrite(t, filepath.Join(repo, "tmp_try.py"), "print(1)\n")
 	recordChange(t, data, sess.ID, "", filepath.Join(repo, "a.go"), "modified")
+	// The agent's shell made it (shellwatch records it as the session's own):
+	// an in-place session lists only its own changes.
+	recordChange(t, data, sess.ID, "", filepath.Join(repo, "tmp_try.py"), "added")
 
 	resp := getChangeSet(t, srv.URL, sess.ID, "")
 	if resp.StatusCode != http.StatusOK {
@@ -83,7 +86,7 @@ func TestSessionChangeSet(t *testing.T) {
 	if a.Display != "a.go" || a.Tier != contracts.TierSource || !a.Attributed || a.Added != 2 {
 		t.Errorf("a.go = %+v", a)
 	}
-	if tmp.Display != "tmp_try.py" || tmp.Tier != contracts.TierScratch || tmp.Attributed {
+	if tmp.Display != "tmp_try.py" || tmp.Tier != contracts.TierScratch || !tmp.Attributed {
 		t.Errorf("tmp_try.py = %+v", tmp)
 	}
 	if len(set.Baselines) != 3 {

@@ -101,6 +101,9 @@ func TestBuildStartFromDisk(t *testing.T) {
 		"keep.txt":   "untouched\n",
 	})
 	sess, _ := shadowFor(t, repo)
+	// Its own worktree: changes mads didn't see there are listed, unattributed
+	// (an in-place session lists only its own — TestBuildInPlaceListsOnlyOwnChanges).
+	sess.WorktreeDir = repo
 
 	writeFile(t, filepath.Join(repo, "a.go"), "package a\n\nfunc A() { B() }\n\nfunc B() {}\n")
 	if err := os.Remove(filepath.Join(repo, "gone.txt")); err != nil {
@@ -719,5 +722,54 @@ func TestBuildCommitRepoIsARoot(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("primary-checkout commit file not listed; files %+v notes %q", set.Files, set.Notes)
+	}
+}
+
+// A session working in place shares its folder with the user and other
+// sessions: only files its tools changed or its commits include are listed,
+// and the rest are counted in a note.
+func TestBuildInPlaceListsOnlyOwnChanges(t *testing.T) {
+	repo := newRepo(t, map[string]string{"mine.go": "package a\n", "theirs.go": "package a\n", "done.go": "package a\n"})
+	sess, _ := shadowFor(t, repo)
+
+	writeFile(t, filepath.Join(repo, "mine.go"), "package a\n\nfunc Mine() {}\n")
+	writeFile(t, filepath.Join(repo, "theirs.go"), "package a\n\nfunc Theirs() {}\n") // another session's edit
+	writeFile(t, filepath.Join(repo, "other.go"), "package a\n")                      // the user's new file
+	writeFile(t, filepath.Join(repo, "done.go"), "package a\n\nfunc Done() {}\n")     // committed by this session
+	git(t, repo, "add", "done.go")
+	git(t, repo, "commit", "-q", "-m", "session work")
+	hash := git(t, repo, "rev-parse", "HEAD")
+
+	in := Inputs{
+		Session: sess,
+		Ledger:  []contracts.FileChange{ledgerRow(filepath.Join(repo, "mine.go"), "modified", time.Now())},
+		Commits: []contracts.Commit{{Hash: hash, Repo: repo, Message: "session work"}},
+	}
+	set := build(t, in)
+	files := byDisplay(set)
+	if len(files) != 2 || !files["mine.go"].Attributed || len(files["done.go"].Commits) != 1 {
+		t.Fatalf("files = %v, want mine.go (ledger) and done.go (commit)", keys(files))
+	}
+	if set.Totals.Files != 2 {
+		t.Errorf("totals = %+v, want 2 files", set.Totals)
+	}
+	found := false
+	for _, n := range set.Notes {
+		found = found || strings.Contains(n, "2 files changed by others since this session started are not listed")
+	}
+	if !found {
+		t.Errorf("notes = %v, want the changed-by-others note", set.Notes)
+	}
+
+	// Every baseline filters the same way.
+	in.Baseline = contracts.BaselineMain
+	if got := byDisplay(build(t, in)); got["theirs.go"].Path != "" || got["other.go"].Path != "" {
+		t.Errorf("main baseline lists others' files: %v", keys(got))
+	}
+
+	// No ledger rows and no commits: nothing to attribute by (a harness that
+	// reports no tool use), so everything stays listed.
+	if got := byDisplay(build(t, Inputs{Session: sess})); len(got) != 4 {
+		t.Errorf("no-signal session files = %v, want all 4", keys(got))
 	}
 }
