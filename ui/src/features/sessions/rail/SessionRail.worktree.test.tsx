@@ -4,7 +4,7 @@ import { SessionRail } from "./SessionRail";
 import { FakeRouterClient } from "../../../router/fixtures";
 import type { Session } from "../../../router/types";
 
-// The quiet work marker on the rail (docs/mockups/session-worktrees.html §1).
+// The work note on the rail (docs/mockups/session-worktrees.html §1).
 // Sleep's "land or keep for later" question (§5, D6) is no longer the rail's
 // to ask — it moved into useSessionSleep so the workspace kebab asks it too,
 // and its tests moved with it to ../actions/useSessionSleep.test.tsx.
@@ -31,34 +31,39 @@ function renderRail(session: Session, client = new FakeRouterClient()) {
   return { client };
 }
 
-describe("SessionRail — work marker", () => {
-  it("is a filled dot with 'N commits to land' when commits wait to land", () => {
+describe("SessionRail — work note", () => {
+  const note = () => document.querySelector("[data-work-note]");
+
+  it("reads 'N commits to land' when commits wait to land", () => {
     renderRail(isolated());
-    const mark = document.querySelector('[data-work-mark="land"]')!;
-    expect(mark.getAttribute("aria-label")).toBe("3 commits to land");
-    expect(mark.className).not.toMatch(/Hollow/);
+    expect(note()?.getAttribute("data-work-note")).toBe("land");
     expect(screen.getByRole("status").textContent).toContain("· 3 commits to land");
   });
 
-  it("is a hollow dot with 'uncommitted changes' while files are uncommitted", () => {
+  it("reads 'uncommitted changes' while files are uncommitted", () => {
     renderRail(isolated({ uncommitted_count: 2 }));
-    const mark = document.querySelector('[data-work-mark="commit"]')!;
-    expect(mark.className).toMatch(/Hollow/);
+    expect(note()?.getAttribute("data-work-note")).toBe("commit");
     expect(screen.getByRole("status").textContent).toContain("· uncommitted changes");
   });
 
-  it("doesn't mark commits waiting to be pushed: they're the checkout's, shared by its sessions", () => {
+  it("is the only work indicator: no dot by the name says it again", () => {
+    renderRail(isolated({ uncommitted_count: 2 }));
+    expect(screen.getAllByText(/uncommitted changes/)).toHaveLength(1);
+    expect(screen.queryByLabelText("uncommitted changes")).toBeNull();
+  });
+
+  it("doesn't note commits waiting to be pushed: they're the checkout's, shared by its sessions", () => {
     renderRail(isolated({ unlanded_count: 0, unpushed_count: 2 }));
-    expect(document.querySelector("[data-work-mark]")).toBeNull();
+    expect(note()).toBeNull();
     expect(screen.queryByText(/to push/)).toBeNull();
   });
 
   it("is absent when there's no work waiting", () => {
     renderRail(isolated({ unlanded_count: 0 }));
-    expect(document.querySelector("[data-work-mark]")).toBeNull();
+    expect(note()).toBeNull();
   });
 
-  it("keeps the status line for a live state, marking the card only", () => {
+  it("gives a live state's status line to the live clause, with no note", () => {
     render(
       <SessionRail
         sessions={[isolated({ activity: "active" })]}
@@ -66,7 +71,7 @@ describe("SessionRail — work marker", () => {
         agentStates={{ s1: { subagents: 0, workingSince: new Date().toISOString(), label: "Running bash" } }}
       />,
     );
-    expect(document.querySelector('[data-work-mark="land"]')).toBeTruthy();
+    expect(note()).toBeNull();
     expect(screen.getByRole("status").textContent).not.toContain("to land");
   });
 });

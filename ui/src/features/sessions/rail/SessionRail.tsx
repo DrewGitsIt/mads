@@ -1079,11 +1079,13 @@ function SessionRow({
   const now = useRelativeNow();
   const status = statusOf(session, agentState, openTaskBreakdown, now);
   const name = session.name || "Untitled session";
-  // The work marker (mockup docs/mockups/session-worktrees.html §1): hollow
-  // for uncommitted files, filled for commits waiting to land. Quiet — read
-  // off the record's counts, the same ones the dock's Commit/Land control uses.
-  // Push isn't marked: commits ahead of the remote are the checkout's, shared
-  // by every session working in it, so the mark would light up all of them.
+  // The work note (mockup docs/mockups/session-worktrees.html §1): what's
+  // waiting — uncommitted changes, commits to land — in words on the status
+  // line. Read off the record's counts, the same ones the dock's Commit/Land
+  // control uses. Push isn't noted: commits ahead of the remote are the
+  // checkout's, shared by every session working in it, so it would show on
+  // all of them. (There was a dot by the name too; it said the same thing,
+  // less precisely, and was dropped.)
   const next = workState(session);
   const work = next?.kind === "push" ? null : next;
   // last_turn_at, not updated_at: the stamp says "last reply", and only a turn
@@ -1360,16 +1362,6 @@ function SessionRow({
         {linkEdit?.blocked && <span className={styles.linkBlockedTag}>separate worktree</span>}
         {/* The tint is colour alone; this is the same fact for a screen reader. */}
         {unseen && <span className={styles.srOnly}>New session</span>}
-        {work && (
-          <span
-            className={[styles.workMark, work.kind === "land" ? "" : styles.workMarkHollow]
-              .filter(Boolean)
-              .join(" ")}
-            title={workNote(work)}
-            aria-label={workNote(work)}
-            data-work-mark={work.kind}
-          />
-        )}
         <HarnessMark provider={session.provider} />
         <span className={styles.when} title={stampTitle}>
           {stamp}
@@ -1382,7 +1374,11 @@ function SessionRow({
         <span className={styles.statusLabel}>{status.label}</span>
         {status.since && <StatusElapsed since={status.since} />}
         {/* Only while resting: a live state's clause is the thing to read. */}
-        {work && RESTING.has(status.kind) && <span className={styles.workNote}>· {workNote(work)}</span>}
+        {work && RESTING.has(status.kind) && (
+          <span className={styles.workNote} data-work-note={work.kind}>
+            · {workNote(work)}
+          </span>
+        )}
       </div>
       {/* One reason, never an inventory: workspace beats branch beats dir. */}
       {reason && (
@@ -1607,7 +1603,7 @@ function replayAnimation(el: HTMLElement, cls: string) {
 /** Status kinds with nothing live to say — the work note may share the line. */
 const RESTING = new Set(["done", "idle", "sleeping"]);
 
-/** The work marker's words: what the dock's Commit/Land control would offer next. */
+/** The work note: what the dock's Commit/Land control would offer next. */
 function workNote(work: Exclude<WorkState, null | { kind: "push" }>): string {
   if (work.kind === "commit") return "uncommitted changes";
   if (work.kind === "outside") return "changes outside this session";

@@ -446,8 +446,8 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
     const rail = page.locator('[aria-label="Session list"]');
     const row = rail.getByText(name, { exact: true });
     const card = row.locator('xpath=ancestor::div[@role="button"][1]');
-    // The rail's hollow marker: this session has uncommitted changes.
-    await expect(card.locator('[data-work-mark="commit"]')).toBeVisible();
+    // The rail's work note: this session has uncommitted changes.
+    await expect(card.locator('[data-work-note="commit"]')).toHaveText("· uncommitted changes");
     await shot(page, "09-rail-markers.png");
 
     await row.hover();
