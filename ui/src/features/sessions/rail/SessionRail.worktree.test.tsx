@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { SessionRail } from "./SessionRail";
 import { FakeRouterClient } from "../../../router/fixtures";
@@ -27,9 +27,8 @@ function isolated(overrides: Partial<Session> = {}): Session {
 }
 
 function renderRail(session: Session, client = new FakeRouterClient()) {
-  const onSleep = vi.fn();
-  render(<SessionRail sessions={[session]} openTaskCounts={{}} onSleep={onSleep} routerClient={client} />);
-  return { onSleep, client };
+  render(<SessionRail sessions={[session]} openTaskCounts={{}} routerClient={client} />);
+  return { client };
 }
 
 describe("SessionRail — work marker", () => {

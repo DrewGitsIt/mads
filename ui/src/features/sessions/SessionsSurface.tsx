@@ -89,9 +89,10 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelin
     });
   }
 
-  // One controller for both sleep controls — the rail card's ⏸ and the
-  // workspace kebab's "Sleep now" — so the unlanded-commits question is asked
-  // from either, and the prompt below is the only one of its kind on screen.
+  // One controller for every control that sleeps a session — the workspace
+  // kebab's "Sleep now" and the rail's ✓ (Done + sleep) — so the
+  // unlanded-commits question is asked from either, and the prompt below is
+  // the only one of its kind on screen.
   // The ✓ and bring-back's motion on the rail: the controller says when a
   // request goes out and what the server answered, the rail draws it.
   const doneMotion = useDoneMotion();
@@ -229,7 +230,6 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelin
               // over an unrelated session.
               setActionError(undefined);
             }}
-            onSleep={sleep.requestSleep}
             doneMotion={doneMotion}
             onSetDone={(session, done, working) => {
               if (done) sleep.requestDone(session, working);

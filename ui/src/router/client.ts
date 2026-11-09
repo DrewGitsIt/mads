@@ -41,6 +41,7 @@ import type {
   ChangeSet,
   DeleteScratchResult,
   GenerateAgentBody,
+  HeldUpdates,
   Link,
   LinkRequest,
   LandResult,
@@ -431,6 +432,19 @@ export interface RouterClient {
   createLink(req: LinkRequest): Promise<Link>;
   updateLink(id: string, req: LinkRequest): Promise<Link>;
   deleteLink(id: string): Promise<void>;
+
+  // --- Held link updates (docs/HELD-UPDATES-DESIGN.md) ---
+  /** The pushes held while the session slept, and the ones discarded since its last drain. */
+  getHeldUpdates(sessionId: string): Promise<HeldUpdates>;
+  /** Soft-deletes held updates by id (Undo is `restoreHeldUpdates`); resolves how many changed. */
+  discardHeldUpdates(ids: number[]): Promise<number>;
+  restoreHeldUpdates(ids: number[]): Promise<number>;
+  /**
+   * "Send updates only": wakes the session if it sleeps and delivers
+   * everything held as one turn with no text of the user's. Resolves how
+   * many went; a failed wake throws SessionWakeError, as `sendMessage` does.
+   */
+  deliverHeldUpdates(sessionId: string): Promise<number>;
 }
 
 /**
@@ -479,6 +493,26 @@ export class SessionWakeError extends Error {
   ) {
     super(message);
   }
+}
+
+/**
+ * A failed wake's SessionWakeError, read off a non-2xx response whose body
+ * carries a `code`; null for any other failure. Parses the clone, like
+ * readJSON: the Router's standard error shape ({error, path}) has no `code`,
+ * and falling through to res.text() after res.json() consumed the body
+ * throws "body stream already read" — masking the actual error.
+ */
+async function readWakeError(res: Response): Promise<SessionWakeError | null> {
+  const errBody = (await res
+    .clone()
+    .json()
+    .catch(() => null)) as { error?: string; code?: string; retryable?: boolean } | null;
+  if (!errBody?.code) return null;
+  return new SessionWakeError(
+    errBody.error ?? `router request failed: ${res.status}`,
+    errBody.code,
+    errBody.retryable ?? false,
+  );
 }
 
 /**
@@ -658,25 +692,8 @@ export class FetchRouterClient implements RouterClient {
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      // Parse the clone, like readJSON: the Router's standard error shape
-      // ({error, path}) has no `code`, and falling through to res.text()
-      // after res.json() consumed the body throws "body stream already
-      // read" — masking the actual error.
-      const errBody = (await res
-        .clone()
-        .json()
-        .catch(() => null)) as {
-        error?: string;
-        code?: string;
-        retryable?: boolean;
-      } | null;
-      if (errBody?.code) {
-        throw new SessionWakeError(
-          errBody.error ?? `router request failed: ${res.status}`,
-          errBody.code,
-          errBody.retryable ?? false,
-        );
-      }
+      const wakeError = await readWakeError(res);
+      if (wakeError) throw wakeError;
       if (res.status === 409 && body.queue) {
         // Only a session process predating the queue refuses a queued
         // send mid-turn; it goes away once that session restarts.
@@ -1468,6 +1485,31 @@ export class FetchRouterClient implements RouterClient {
 
   async deleteLink(id: string): Promise<void> {
     return routerDelete(this.baseUrl, `/links/${id}`);
+  }
+
+  async getHeldUpdates(sessionId: string): Promise<HeldUpdates> {
+    const res = await routerGet<Partial<HeldUpdates> | null>(this.baseUrl, `/sessions/${sessionId}/held-updates`);
+    return { held: res?.held ?? [], discarded: res?.discarded ?? [] };
+  }
+
+  async discardHeldUpdates(ids: number[]): Promise<number> {
+    const res = await routerPost<{ changed?: number }>(this.baseUrl, "/link-digests/discard", { ids });
+    return res?.changed ?? 0;
+  }
+
+  async restoreHeldUpdates(ids: number[]): Promise<number> {
+    const res = await routerPost<{ changed?: number }>(this.baseUrl, "/link-digests/restore", { ids });
+    return res?.changed ?? 0;
+  }
+
+  async deliverHeldUpdates(sessionId: string): Promise<number> {
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/held-updates/deliver`, { method: "POST" });
+    if (!res.ok) {
+      const wakeError = await readWakeError(res);
+      if (wakeError) throw wakeError;
+    }
+    const body = await readJSON<{ delivered?: number } | null>(res);
+    return body?.delivered ?? 0;
   }
 }
 

@@ -90,13 +90,25 @@ export const EMPTY_AGENT_STATE: SessionAgentState = { subagents: 0 };
 /**
  * One per mark in StatusMark.tsx, which switches on exactly this union.
  *
- * `idle` is one kind, not the old `ready` + `sleeping` pair: those named
- * whether a provider child was alive, and that is not a fact worth a card's
- * only status line. Nothing the user does depends on it — a session with no
- * child wakes transparently on the first send — so the rail was reporting an
- * implementation detail in the slot reserved for what the session is doing.
+ * `idle` and `sleeping` are both the calm resting state; they differ only in
+ * whether a provider child is alive. From 2026-10-22 that was one kind, on
+ * the grounds that nothing the user does depends on it (a session with no
+ * child wakes transparently on the first send). Links made it matter again:
+ * a link holder depends on being awake. A sleeping Follow leader gets no
+ * digests; they are held in its mailbox until it next wakes
+ * (docs/HELD-UPDATES-DESIGN.md), and a card that said "Idle" hid that. So
+ * awake vs asleep is worth the status line. `sleeping` keeps the idle tone
+ * and files under the Idle filter chip; only the word and the mark differ.
  */
-export type RailStatusKind = "crashed" | "needs" | "working" | "delegating" | "stalled" | "done" | "idle";
+export type RailStatusKind =
+  | "crashed"
+  | "needs"
+  | "working"
+  | "delegating"
+  | "stalled"
+  | "done"
+  | "idle"
+  | "sleeping";
 
 /** Maps 1:1 onto the mockup's `.status.bad|needs|working|done|idle` tones. */
 export type RailStatusTone = "bad" | "needs" | "working" | "done" | "idle";
@@ -248,18 +260,27 @@ export function statusOf(
   if (state.done && session.activity === "active") {
     return { kind: "done", tone: "done", dot, label: "Done · your turn" };
   }
+  // Everything above wins over this: a live turn, an approval park, a crash,
+  // an unseen Done, running delegates or background processes. What is left
+  // is the resting state, and whether the child is alive is the one thing
+  // that still tells two resting cards apart (see RailStatusKind).
+  const asleep = session.activity === "inactive";
+  const kind = asleep ? "sleeping" : "idle";
+  const word = asleep ? "Sleeping" : "Idle";
   // The dot used to carry this alone: amber for blocked work. It is gone from
   // the card, so the status line says it — in the needs tone, which is the
-  // amber the dot was.
+  // amber the dot was. dotState() only turns amber for a sleeper today, so in
+  // practice this reads "Sleeping · N blocked tasks"; the word still follows
+  // `asleep` so the two can't drift apart if that rule changes.
   if (dot === "attn") {
     return {
-      kind: "idle",
+      kind,
       tone: "needs",
       dot,
-      label: `Idle · ${plural(breakdown.blocked, "blocked task")}`,
+      label: `${word} · ${plural(breakdown.blocked, "blocked task")}`,
     };
   }
-  return { kind: "idle", tone: "idle", dot, label: "Idle" };
+  return { kind, tone: "idle", dot, label: word };
 }
 
 /**
@@ -305,7 +326,7 @@ export function mostUrgentBucket(buckets: RailFilterBucket[]): RailFilterBucket 
  * "Needs you" is the whole attention set: a parked approval, a crash, and also
  * a quiet session carrying blocked work (the amber puck dotState() already
  * draws, which is what the command palette's attention badge counts too).
- * Everything else that isn't mid-turn is Idle, live or sleeping alike —
+ * Everything else that isn't mid-turn is Idle, awake or sleeping alike —
  * "Done · your turn" included, since the turn it is reporting is over.
  */
 export function filterBucketOf(status: RailStatus): RailFilterBucket {

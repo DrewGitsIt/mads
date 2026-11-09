@@ -491,3 +491,12 @@ waits for it. Drew's call (option b):
   is the count of deferred entries where the session is the recipient. The rail
   card shows "N updates waiting" until the flush clears it; deferring and
   flushing emit `session.updated` so every open browser refetches.
+- **Held updates (2026-11-05).** Superseded in part by
+  [HELD-UPDATES-DESIGN.md](HELD-UPDATES-DESIGN.md): the deferred entries are
+  listed in the sleeping session's conversation (`GET
+  /sessions/{id}/held-updates`) and can be discarded (a soft delete,
+  `discarded_at`, migration 0034) or restored. A composer send that wakes the
+  session now carries them in the same turn, as `attached="true"` blocks ahead
+  of the user's text: the Router drains them before the wake, so the start
+  hook's flush finds nothing. The flush on start still covers every other wake
+  ("Send updates only", link wakes, manual resume).

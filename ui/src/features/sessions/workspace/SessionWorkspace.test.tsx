@@ -401,7 +401,7 @@ describe("SessionWorkspace", () => {
 
   // Sleep and wake are not this shell's to issue: it hands the session to the
   // surface's one controller (useSessionSleep), which is what makes "Sleep
-  // now" here ask about unlanded commits exactly as the rail card's ⏸ does.
+  // now" here ask about unlanded commits exactly as the rail's ✓ does.
   // This shell used to call terminate itself, and skipped that question.
   it("Sleep now hands this session to the shared sleep controller, issuing nothing itself", async () => {
     const routerClient = new FakeRouterClient();

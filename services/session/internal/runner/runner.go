@@ -398,6 +398,10 @@ type pendingInjection struct {
 	// preWire is a multi-part injection's wire, wrapped part by part when it
 	// was queued (InjectParts); drainNextLocked delivers it as is.
 	preWire string
+	// attached are the held link updates riding with a queued user message
+	// (docs/HELD-UPDATES-DESIGN.md): delivered ahead of its text, in the
+	// same turn (linkwrap.Attach).
+	attached []contracts.InjectPart
 	// userID is set for the user's own message queued by SendOrQueue, empty
 	// for a linked-session injection. A user entry delivers as an ordinary
 	// user turn (no Attribution) and is the only kind the queue API cancels.
@@ -977,7 +981,14 @@ func (r *Runner) typeInto(ctx context.Context, sess provider.Session, wire strin
 // Send relays one user turn. Returns ErrTurnInFlight (surfaced as HTTP 409)
 // if a turn is already in flight. In terminal mode it types the message
 // instead (typeInto) and starts no turn the runner tracks.
-func (r *Runner) Send(ctx context.Context, text string) error {
+//
+// attached are held link updates riding with the message (the Router
+// attaches them to a send that wakes the session, docs/HELD-UPDATES-
+// DESIGN.md): each is wrapped flagged attached, ahead of the user's text, in
+// the same turn (linkwrap.Attach). Only the user's own text reaches the
+// synthesis engine and the digest; each update gets its injection audit
+// once the turn is accepted.
+func (r *Runner) Send(ctx context.Context, text string, attached ...contracts.InjectPart) error {
 	r.mu.Lock()
 	if r.sess == nil {
 		r.mu.Unlock()
@@ -1012,8 +1023,9 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 	sess := r.sess
 	// The user's own words go to the synthesis engine and digest; the
 	// provider (and the locator, which matches the transcript's first
-	// message) gets them with any owed re-root note in front.
-	wire, note := r.claimRerootNoteLocked(text)
+	// message) gets them after any attached updates, with any owed re-root
+	// note in front of everything.
+	wire, note := r.claimRerootNoteLocked(linkwrap.Attach(attached, text))
 	r.mu.Unlock()
 
 	if armed {
@@ -1024,7 +1036,11 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 	r.digest.recordUser(text, false)
 
 	if terminal {
-		return r.typeInto(ctx, sess, wire, note)
+		if err := r.typeInto(ctx, sess, wire, note); err != nil {
+			return err
+		}
+		r.auditAttached(ctx, attached)
+		return nil
 	}
 	r.markAgentWorking(text)
 	if err := r.sendTurn(ctx, sess, wire, newMessageID(), false); err != nil {
@@ -1040,10 +1056,19 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 		}
 		return err
 	}
+	r.auditAttached(ctx, attached)
 	if !note.empty() {
 		r.noteDelivered(ctx, note)
 	}
 	return nil
+}
+
+// auditAttached records each attached update's injection audit
+// (recordInjectionAudit), as InjectParts does for its parts.
+func (r *Runner) auditAttached(ctx context.Context, attached []contracts.InjectPart) {
+	for _, p := range attached {
+		r.recordInjectionAudit(ctx, p.Attribution, p.Text)
+	}
 }
 
 // Inject delivers a message from a linked session into this session's
@@ -1329,7 +1354,7 @@ func (r *Runner) drainNextLocked() pendingInjection {
 	}
 	if head.userID != "" {
 		r.pending = r.pending[1:]
-		head.wire = head.text
+		head.wire = linkwrap.Attach(head.attached, head.text)
 		return head
 	}
 	if !head.attribution.DigestAttributed {

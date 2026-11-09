@@ -492,13 +492,20 @@ func (s *server) wakeSession(ctx context.Context, id string) (string, error) {
 // wakeSession's contract (the caller has confirmed no child is tracked) only
 // holds if nobody else can spawn between the check and the spawn.
 func (s *server) ensureSession(ctx context.Context, id string) (string, error) {
-	mu, _ := s.wakeLocks.LoadOrStore(id, &sync.Mutex{})
-	mu.(*sync.Mutex).Lock()
-	defer mu.(*sync.Mutex).Unlock()
+	unlock := s.lockWake(id)
+	defer unlock()
 	if addr, ok := s.sup.SessionAddr(id); ok {
 		return addr, nil
 	}
 	return s.wakeSession(ctx, id)
+}
+
+// lockWake takes id's wake lock (wakeLocks) and returns its unlock. Anything
+// that checks for a child and then acts on its absence holds it across both.
+func (s *server) lockWake(id string) (unlock func()) {
+	mu, _ := s.wakeLocks.LoadOrStore(id, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	return mu.(*sync.Mutex).Unlock
 }
 
 // WakeSession implements job.SessionWaker, letting job bodies (a

@@ -1018,6 +1018,34 @@ func (c *Client) DrainDeferredLinkDigests(ctx context.Context, id string) ([]con
 	return out, err
 }
 
+// HeldUpdates lists the deferred pushes waiting for sessionID (and the ones
+// discarded since its last drain), oldest first.
+func (c *Client) HeldUpdates(ctx context.Context, sessionID string) (contracts.HeldUpdates, error) {
+	var out contracts.HeldUpdates
+	err := c.do(ctx, http.MethodGet, "/sessions/"+url.PathEscape(sessionID)+"/held-updates", nil, &out)
+	return out, err
+}
+
+// DiscardLinkDigests soft-deletes held updates by id; RestoreLinkDigests
+// undoes it. Both return how many entries changed.
+func (c *Client) DiscardLinkDigests(ctx context.Context, ids []int64) (int, error) {
+	return c.setLinkDigestsDiscarded(ctx, "/link-digests/discard", ids)
+}
+
+// RestoreLinkDigests: see DiscardLinkDigests.
+func (c *Client) RestoreLinkDigests(ctx context.Context, ids []int64) (int, error) {
+	return c.setLinkDigestsDiscarded(ctx, "/link-digests/restore", ids)
+}
+
+func (c *Client) setLinkDigestsDiscarded(ctx context.Context, path string, ids []int64) (int, error) {
+	if ids == nil {
+		ids = []int64{}
+	}
+	var out contracts.LinkDigestsChanged
+	err := c.do(ctx, http.MethodPost, path, contracts.LinkDigestIDs{IDs: ids}, &out)
+	return out.Changed, err
+}
+
 // DeferredLinkCounts returns, keyed by granting session, how many deferred
 // pushes wait for it.
 func (c *Client) DeferredLinkCounts(ctx context.Context) (map[string]int, error) {

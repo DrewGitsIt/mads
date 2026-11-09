@@ -7,6 +7,7 @@ import { useSessionAgentState } from "../state/useSessionAgentState";
 import type { SessionAgentState } from "./railGroups";
 import type { Link, Session } from "../../../router/types";
 import { readFileSync } from "node:fs";
+import { HELD_REVEAL_EVENT, takeHeldReveal } from "../../../conversation/HeldUpdates/heldRevealSignal";
 
 function makeSession(overrides: Partial<Session>): Session {
   return {
@@ -56,7 +57,7 @@ describe("SessionRail", () => {
     ]);
   });
 
-  it("says 'Idle · N blocked tasks' in the needs tone for an idle session with blocked work", () => {
+  it("says 'Sleeping · N blocked tasks' in the needs tone for a sleeping session with blocked work", () => {
     render(
       <SessionRail
         sessions={[makeSession({ id: "r1", activity: "inactive", name: "needs work" })]}
@@ -65,7 +66,7 @@ describe("SessionRail", () => {
     );
     const row = screen.getByText("needs work").closest('[role="button"]')!;
     const status = row.querySelector('[role="status"]')!;
-    expect(status.textContent).toBe("Idle · 1 blocked task");
+    expect(status.textContent).toBe("Sleeping · 1 blocked task");
     expect(status.className).toMatch(/status-needs/);
     expect(row.querySelector('[class*="dot"]')).toBeNull();
     expect(screen.getByText("1 blocked")).toBeTruthy();
@@ -86,7 +87,33 @@ describe("SessionRail", () => {
     expect(screen.queryByText(/updates? waiting/)).toBeNull();
   });
 
-  it("stays plain 'Idle' in the idle tone when the open work is only running/ready", () => {
+  it("opens the session at its held list when 'N updates waiting' is clicked", () => {
+    const onSelect = vi.fn();
+    const asks: string[] = [];
+    const onAsk = (e: Event) => asks.push((e as CustomEvent<{ sessionId: string }>).detail.sessionId);
+    window.addEventListener(HELD_REVEAL_EVENT, onAsk);
+    try {
+      render(
+        <SessionRail
+          sessions={[makeSession({ id: "w1", activity: "inactive", name: "asleep", waiting_updates: 2 })]}
+          openTaskCounts={{}}
+          onSelect={onSelect}
+        />,
+      );
+      const waiting = screen.getByRole("button", { name: "2 updates waiting" });
+      expect(waiting.getAttribute("title")).toBe("Held while this session slept; they go with your next message");
+      fireEvent.click(waiting);
+      // Once: the card's own click doesn't open it a second time.
+      expect(onSelect.mock.calls).toEqual([["w1"]]);
+      expect(asks).toEqual(["w1"]);
+      // Parked for a conversation tab that mounts after the selection.
+      expect(takeHeldReveal("w1")).toBe(true);
+    } finally {
+      window.removeEventListener(HELD_REVEAL_EVENT, onAsk);
+    }
+  });
+
+  it("stays plain 'Sleeping' in the idle tone when the open work is only running/ready", () => {
     render(
       <SessionRail
         sessions={[makeSession({ id: "r1", activity: "inactive", name: "steady work" })]}
@@ -95,7 +122,7 @@ describe("SessionRail", () => {
     );
     const row = screen.getByText("steady work").closest('[role="button"]')!;
     const status = row.querySelector('[role="status"]')!;
-    expect(status.textContent).toBe("Idle");
+    expect(status.textContent).toBe("Sleeping");
     expect(status.className).toMatch(/status-idle/);
   });
 
@@ -234,12 +261,9 @@ describe("SessionRail", () => {
     expect(onSelect).toHaveBeenCalledWith("r1");
   });
 
-  it("shows the sleep affordance for active and inactive sessions alike, wired to onSleep", () => {
-    // Sleep/terminate is safe against the Supervisor in every activity
-    // state, and the activity record can drift from the real child state —
-    // so it must never be hidden based on that record alone.
-    const onSleep = vi.fn();
-    const onSelect = vi.fn();
+  it("offers no sleep control on the card, active or asleep", () => {
+    // ✓ (Done + sleep) and the workspace kebab's "Sleep now" cover it; a ⏸ on
+    // every card made a sleeping card look running (HELD-UPDATES-DESIGN.md).
     render(
       <SessionRail
         sessions={[
@@ -247,31 +271,20 @@ describe("SessionRail", () => {
           makeSession({ id: "r1", name: "resume me", activity: "inactive" }),
         ]}
         openTaskCounts={{}}
-        onSelect={onSelect}
-        onSleep={onSleep}
       />,
     );
-
-    expect(screen.getByRole("button", { name: "Sleep live one" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Sleep resume me" })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Sleep resume me" }));
-    // The whole record, not just the id: the gate that decides whether to
-    // ask about unlanded commits lives in useSessionSleep, not here.
-    expect(onSleep).toHaveBeenCalledWith(expect.objectContaining({ id: "r1" }));
-    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /^Sleep / })).toBeNull();
   });
 
-  it("action cluster exposes labeled sleep and archive buttons, grouped under an aria-label", () => {
+  it("action cluster exposes a labeled archive button, grouped under an aria-label", () => {
     render(
       <SessionRail
         sessions={[makeSession({ id: "r1", name: "resume me", activity: "inactive" })]}
         openTaskCounts={{}}
-        onSleep={vi.fn()}
       />,
     );
     const cluster = screen.getByRole("group", { name: "resume me actions" });
-    expect(within(cluster).getByRole("button", { name: "Sleep resume me" })).toBeTruthy();
+    expect(within(cluster).queryByRole("button", { name: "Sleep resume me" })).toBeNull();
     expect(within(cluster).getByRole("button", { name: "Archive resume me" })).toBeTruthy();
   });
 
@@ -977,9 +990,9 @@ describe("SessionRail status line", () => {
     expect(card.getAttribute("title") ?? "").not.toContain("Background subagents");
   });
 
-  it("renders the same 'Idle' for an inactive session — the process is not the user's business", () => {
+  it("renders 'Sleeping' for an inactive session — a link holder depends on being awake", () => {
     renderWith({}, makeSession({ id: "s1", name: "the session", activity: "inactive" }));
-    expect(statusOf("the session").textContent).toBe("Idle");
+    expect(statusOf("the session").textContent).toBe("Sleeping");
   });
 
   it("renders 'Done · your turn' in the ok tone, as a closed ring", () => {
@@ -1359,7 +1372,7 @@ describe("SessionRail status subscription", () => {
     expect(statusOf("mid-turn one").textContent).toBe("Thinking…20s");
   });
 
-  it("reads a sleeping session's leftover working mirror as idle, never as a live turn", async () => {
+  it("reads a sleeping session's leftover working mirror as asleep, never as a live turn", async () => {
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
     // Only a live Runner clears agent_state, so a hard-killed process leaves
@@ -1371,7 +1384,7 @@ describe("SessionRail status subscription", () => {
       agent_state: { state: "working", label: "Running bash · make check", since: "2026-09-28T09:00:00Z" },
     });
     render(<Harness sessions={[stale]} />);
-    await waitFor(() => expect(statusOf("killed one").textContent).toBe("Idle"));
+    await waitFor(() => expect(statusOf("killed one").textContent).toBe("Sleeping"));
   });
 });
 

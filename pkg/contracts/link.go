@@ -170,6 +170,10 @@ func (l Link) HasGrant(g Grant) bool {
 // the digest's turn anchors (0 = unknown), so a reader can drill into the
 // range it covers.
 type LinkDigest struct {
+	// ID is the entry's mailbox row id, so a drained or listed entry can be
+	// named (discard/restore, docs/HELD-UPDATES-DESIGN.md). Ignored on
+	// append: the store assigns it.
+	ID        int64     `json:"id,omitempty"`
 	Text      string    `json:"text"`
 	FromTurn  int       `json:"from_turn,omitempty"`
 	ToTurn    int       `json:"to_turn,omitempty"`
@@ -185,6 +189,45 @@ type LinkDigest struct {
 	// Noop says a deferred push may close with the NOOP offer.
 	Noop        bool         `json:"noop,omitempty"`
 	Attribution *Attribution `json:"attribution,omitempty"`
+}
+
+// HeldUpdate is one push deferred for a sleeping session, as the
+// conversation's held list shows it (docs/HELD-UPDATES-DESIGN.md): the
+// mailbox entry, the link it waits on, and who it is from. SourceName is the
+// stored Attribution's, else the subject session's current name.
+type HeldUpdate struct {
+	ID              int64  `json:"id"`
+	LinkID          string `json:"link_id"`
+	SourceSessionID string `json:"source_session_id"`
+	SourceName      string `json:"source_name"`
+	// Kind is the stored Attribution's kind ("digest", "signal", "notice",
+	// "message"); empty when the entry carried none.
+	Kind      string    `json:"kind,omitempty"`
+	Text      string    `json:"text"`
+	CreatedAt time.Time `json:"created_at"`
+	Noop      bool      `json:"noop"`
+}
+
+// HeldUpdates is GET /sessions/{id}/held-updates: the deferred entries
+// waiting on every link where the session is the granting side, oldest
+// first, and the ones discarded since its last deferred drain (still stored,
+// so Undo can restore them). Both are never nil.
+type HeldUpdates struct {
+	Held      []HeldUpdate `json:"held"`
+	Discarded []HeldUpdate `json:"discarded"`
+}
+
+// LinkDigestIDs is the body of POST /link-digests/discard and
+// /link-digests/restore.
+type LinkDigestIDs struct {
+	IDs []int64 `json:"ids"`
+}
+
+// LinkDigestsChanged is the answer to a discard or restore: how many entries
+// actually changed state (an id already in the asked-for state, or gone, is
+// not counted).
+type LinkDigestsChanged struct {
+	Changed int `json:"changed"`
 }
 
 // NewSessionPlaceholder marks the to-be-created session's slot in a staged

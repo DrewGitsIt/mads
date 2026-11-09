@@ -63,6 +63,7 @@ import { router, type RouterClient } from "../../../router/client";
 import type { Agent, Delegate, Link, OrchestrateStatus, Session, Workspace } from "../../../router/types";
 import { Fold, usePresence } from "../../../components/Motion";
 import type { DoneMark, DoneMotion } from "./useDoneMotion";
+import { requestHeldReveal } from "../../../conversation/HeldUpdates/heldRevealSignal";
 import styles from "./SessionRail.module.css";
 
 export interface SessionRailProps {
@@ -72,20 +73,15 @@ export interface SessionRailProps {
   agentStates?: Record<string, SessionAgentState>;
   selectedId?: string;
   onSelect?: (id: string) => void;
-  /**
-   * Put a session to sleep: free the agent process. Takes the whole session
-   * because the decision isn't the rail's to make — useSessionSleep reads the
-   * record to know whether to ask about unlanded commits first, and asks the
-   * same question for the workspace kebab.
-   *
-   * The rail deliberately has no counterpart — waking is not a step the user
-   * has to take, since the first send wakes a sleeping session transparently.
-   * An explicit pre-warm lived here as a ▶ button and only ever bought a few
-   * seconds of latency, at the price of a control that looked like a
-   * lifecycle state. The workspace kebab still offers it for a deliberate
-   * warm-up.
+  /*
+   * The rail has no sleep or wake control of its own. ✓ (Done) puts a
+   * session to sleep, and the workspace kebab keeps "Sleep now" (also the
+   * recovery when the activity record drifts from the real child). A ⏸ on
+   * every card made a sleeping card look pausable, i.e. running
+   * (docs/HELD-UPDATES-DESIGN.md). Waking needs no step at all: the first
+   * send wakes a sleeping session transparently, and the kebab's "Wake now"
+   * covers a deliberate warm-up.
    */
-  onSleep?: (session: Session) => void;
   onDelete?: (id: string) => void;
   /**
    * The ✓: check a session off into Done (which also puts its agent to
@@ -220,7 +216,6 @@ export function SessionRail({
   agentStates = {},
   selectedId,
   onSelect,
-  onSleep,
   onDelete,
   onSetDone,
   doneMotion,
@@ -535,7 +530,6 @@ export function SessionRail({
     isUnseen,
     onSeen: markSeen,
     onSelect,
-    onSleep,
     onSetDone,
     bucketOf,
     onDeleteRequest: setConfirmDeleteId,
@@ -749,7 +743,6 @@ interface RailRowContext {
   isUnseen: (id: string) => boolean;
   onSeen: (id: string) => void;
   onSelect?: (id: string) => void;
-  onSleep?: (session: Session) => void;
   onSetDone?: (session: Session, done: boolean, working: boolean) => void;
   /** The rail's group-aware bucket, which the ✓ reads to know whether a turn is running. */
   bucketOf: (session: Session) => RailFilterBucket;
@@ -859,7 +852,6 @@ function RailRowGroup({
         unseen={ctx.isUnseen(row.session.id)}
         onSeen={ctx.onSeen}
         onSelect={ctx.onSelect}
-        onSleep={ctx.onSleep}
         onSetDone={ctx.onSetDone}
         working={ctx.bucketOf(row.session) === "working"}
         doneMark={mark}
@@ -931,7 +923,6 @@ function NestedSessionRow({ row, ctx }: { row: RailRow; ctx: RailRowContext }) {
       unseen={ctx.isUnseen(sub.id)}
       onSeen={ctx.onSeen}
       onSelect={ctx.onSelect}
-      onSleep={ctx.onSleep}
       onDeleteRequest={ctx.onDeleteRequest}
       linkBadge={link.badge}
       orchestrateStatus={link.orchestrateStatus}
@@ -1030,7 +1021,6 @@ function SessionRow({
   unseen,
   onSeen,
   onSelect,
-  onSleep,
   onSetDone,
   working = false,
   doneMark,
@@ -1059,7 +1049,6 @@ function SessionRow({
   unseen: boolean;
   onSeen: (id: string) => void;
   onSelect?: (id: string) => void;
-  onSleep?: (session: Session) => void;
   onSetDone?: (session: Session, done: boolean, working: boolean) => void;
   /** Mid-turn, as the rail reads it: the ✓ asks before stopping a running turn. */
   working?: boolean;
@@ -1260,9 +1249,9 @@ function SessionRow({
       data-rail-card=""
       data-rail-id={session.id}
       data-unseen={unseen ? "" : undefined}
-      // Awake or asleep isn't drawn any more (both read "Idle" — see
-      // RailStatusKind), but the e2e journeys still need to see which one the
-      // rail's list believes.
+      // Awake or asleep is drawn by the status line (Idle vs Sleeping, see
+      // RailStatusKind); the attribute lets the e2e journeys read which one
+      // the rail's list believes without parsing that text.
       data-activity={session.activity}
       data-done-mark={doneMark}
       data-shell-motion={shellMotion || undefined}
@@ -1422,12 +1411,21 @@ function SessionRow({
                   <span className={styles.bucketBlocked}>{openTaskBreakdown.blocked} blocked</span>
                 )}
                 {waitingUpdates > 0 && (
-                  <span
-                    className={styles.bucketWaiting}
-                    title="Link updates held while this session slept; they arrive when it wakes"
+                  // Opens the session at its held list (the end of its
+                  // conversation), where they can be read, discarded or sent.
+                  <button
+                    type="button"
+                    className={`${styles.bucketWaiting} ${styles.waitingLink}`}
+                    title="Held while this session slept; they go with your next message"
+                    onClick={(e) => {
+                      if (linkEdit) return; // the card's own click picks it for the link
+                      e.stopPropagation();
+                      onSelect?.(session.id);
+                      requestHeldReveal(session.id);
+                    }}
                   >
                     {waitingUpdates} {waitingUpdates === 1 ? "update" : "updates"} waiting
-                  </span>
+                  </button>
                 )}
               </span>
             </div>
@@ -1441,26 +1439,6 @@ function SessionRow({
         role="group"
         aria-label={`${name} actions`}
       >
-        {onSleep && (
-          // Always offered, regardless of the activity record: it's the
-          // Supervisor's TerminateSession underneath, which is safe to call
-          // in every state (kills a live child if one exists, or reconciles
-          // an already-inactive record as a no-op) — the record can drift
-          // from the real child state, so it must never be the thing that
-          // hides the one control that recovers from that drift.
-          <button
-            type="button"
-            className={styles.actionButton}
-            title="Sleep now — frees the agent process; it wakes on your next message"
-            aria-label={`Sleep ${name}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onSleep(session);
-            }}
-          >
-            ⏸
-          </button>
-        )}
         {linkedSessionsEnabled && (
           <LinkTrigger
             name={name}
@@ -1627,7 +1605,7 @@ function replayAnimation(el: HTMLElement, cls: string) {
 }
 
 /** Status kinds with nothing live to say — the work note may share the line. */
-const RESTING = new Set(["done", "idle"]);
+const RESTING = new Set(["done", "idle", "sleeping"]);
 
 /** The work marker's words: what the dock's Commit/Land control would offer next. */
 function workNote(work: Exclude<WorkState, null | { kind: "push" }>): string {

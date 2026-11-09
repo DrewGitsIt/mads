@@ -105,6 +105,12 @@ func renderTurn(n int, msgs []contracts.TranscriptMessage) string {
 		msgs[opener].Attribution.Kind == linkwrap.KindNotice && linkwrap.SameSend(msgs[opener], msgs[opener+1]) {
 		opener++
 	}
+	// Updates attached to the user's message (docs/HELD-UPDATES-DESIGN.md)
+	// rode in on it: the turn is the user's.
+	for opener >= 0 && opener+1 < len(msgs) && msgs[opener].Attribution != nil &&
+		msgs[opener].Attribution.Attached && linkwrap.SameSend(msgs[opener], msgs[opener+1]) {
+		opener++
+	}
 	if opener >= 0 {
 		fmt.Fprintf(&sb, "## Turn %d · %s\n", n, turnSourceLabel(msgs[opener]))
 	} else {

@@ -81,7 +81,7 @@ describe("statusOf", () => {
     expect(statusOf(session, makeAgentState({ background: 1, subagents: 1 }), idle, DURING).kind).toBe("delegating");
     // Asleep, its processes went with its child.
     const asleep = makeSession({ activity: "inactive" });
-    expect(statusOf(asleep, makeAgentState({ background: 1 }), idle, DURING).label).toBe("Idle");
+    expect(statusOf(asleep, makeAgentState({ background: 1 }), idle, DURING).label).toBe("Sleeping");
   });
 
   it("reads delegates still running after the turn as busy — never plain Idle", () => {
@@ -98,7 +98,7 @@ describe("statusOf", () => {
     // A turn in flight still owns the line.
     expect(statusOf(session, { ...state, workingSince: TURN_START }, idle, DURING).kind).toBe("working");
     // Asleep, nothing can be running in it.
-    expect(statusOf(makeSession({ activity: "inactive" }), state, idle, DURING).kind).toBe("idle");
+    expect(statusOf(makeSession({ activity: "inactive" }), state, idle, DURING).kind).toBe("sleeping");
   });
 
   it("reads a crash first, naming its blocked work when there is any", () => {
@@ -180,33 +180,62 @@ describe("statusOf", () => {
     });
   });
 
-  it("is the same 'Idle' for an inactive session, even one whose turn once ended", () => {
+  it("reads 'Sleeping' for an inactive session, even one whose turn once ended", () => {
+    // A link holder depends on being awake (a sleeping Follow leader gets its
+    // digests held), so asleep and awake no longer share one word.
     const sleeping = makeSession({ activity: "inactive" });
     expect(statusOf(sleeping, makeAgentState({ done: true }), idle)).toEqual({
+      kind: "sleeping",
+      tone: "idle",
+      dot: "off",
+      label: "Sleeping",
+    });
+    // Awake with nothing going on is still plain Idle.
+    expect(statusOf(makeSession({ activity: "active" }), makeAgentState(), idle)).toMatchObject({
       kind: "idle",
       tone: "idle",
-      // The dot still knows — the filter chips and the palette's attention
-      // badge read it. Only the words stopped saying so.
-      dot: "off",
       label: "Idle",
     });
   });
 
-  it("names the blocked tasks, in the needs tone, for an idle session with blocked work", () => {
+  it("lets every live state win over sleeping, as it wins over idle", () => {
+    // The activity record can lag the child; whatever the agent state says is
+    // happening still owns the line.
+    const sleeping = makeSession({ activity: "inactive" });
+    expect(statusOf(sleeping, makeAgentState({ crashed: true }), idle).kind).toBe("crashed");
+    expect(statusOf(sleeping, makeAgentState({ awaitingSince: TURN_START }), idle).kind).toBe("needs");
+    expect(statusOf(sleeping, makeAgentState({ workingSince: TURN_START }), idle, DURING).kind).toBe("working");
+  });
+
+  it("files a sleeping card under the Idle chip, or Needs you with blocked work", () => {
+    const sleeping = makeSession({ activity: "inactive" });
+    expect(filterBucketOf(statusOf(sleeping, makeAgentState(), idle))).toBe("idle");
+    expect(filterBucketOf(statusOf(sleeping, makeAgentState(), makeBreakdown({ blocked: 1 })))).toBe("needs");
+  });
+
+  it("names the blocked tasks, in the needs tone, for a resting session with blocked work", () => {
     const sleeping = makeSession({ activity: "inactive" });
     expect(statusOf(sleeping, makeAgentState(), makeBreakdown({ blocked: 1 }))).toEqual({
-      kind: "idle",
+      kind: "sleeping",
       tone: "needs",
       dot: "attn",
-      label: "Idle · 1 blocked task",
+      label: "Sleeping · 1 blocked task",
     });
     expect(statusOf(sleeping, makeAgentState(), makeBreakdown({ blocked: 3 })).label).toBe(
-      "Idle · 3 blocked tasks",
+      "Sleeping · 3 blocked tasks",
     );
+    // Awake, blocked work is not amber (dotState: a live session is "on"),
+    // so the line stays plain Idle.
+    expect(statusOf(makeSession({ activity: "active" }), makeAgentState(), makeBreakdown({ blocked: 2 }))).toEqual({
+      kind: "idle",
+      tone: "idle",
+      dot: "on",
+      label: "Idle",
+    });
     // Running/ready work is calm progress: no amber, no count.
     const calm = statusOf(sleeping, makeAgentState(), makeBreakdown({ running: 2, ready: 1 }));
     expect(calm.tone).toBe("idle");
-    expect(calm.label).toBe("Idle");
+    expect(calm.label).toBe("Sleeping");
   });
 
   it("leaves dotState() — which the palette's attention badge counts — agreeing with the label", () => {

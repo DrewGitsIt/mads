@@ -123,4 +123,18 @@ const MARKS: Record<RailStatusKind, React.JSX.Element> = {
       <path d="M5 5 L6.3 5.75" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
     </>
   ),
+  // A crescent: at rest, and no agent process behind it. Same calm family as
+  // idle — the dial's 1.3px rim and its 3.5 radius for the outer edge — so the
+  // two resting marks weigh the same and differ in silhouette only; colour
+  // stays the idle tone. Not a bare ring (that is `done`) and not the dial
+  // without its hand, which would read as `done` drawn thinner. The horns get
+  // a round join, for the same reason `needs` does.
+  sleeping: (
+    <path
+      d="M4.8 1.5 A3.5 3.5 0 1 0 8.37 5.96 A2.9 2.9 0 0 1 4.8 1.5 Z"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinejoin="round"
+    />
+  ),
 };

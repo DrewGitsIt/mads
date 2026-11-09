@@ -1,0 +1,156 @@
+/* The held list at the end of the stream (docs/mockups/held-updates.html,
+   section C): dashed and amber where a delivered digest card (.digest in
+   ChatRenderer.module.css) is solid with an info edge — not delivered yet. */
+.root {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px dashed color-mix(in srgb, var(--warn) 50%, transparent);
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--warn) 4%, transparent);
+  padding: var(--space-3);
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.title {
+  font: 600 var(--fs-sm) var(--sans);
+  color: var(--warn-fg);
+}
+
+.sub {
+  font: var(--fs-chip) var(--sans);
+  color: var(--text3);
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+}
+
+.groupName {
+  font: 600 var(--fs-chip) var(--sans);
+  color: var(--text3);
+  margin: 2px 0;
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: 4px 6px;
+  border-radius: var(--r-sm);
+}
+
+.row:hover {
+  background: var(--bg2);
+}
+
+.toggle,
+.x,
+.undo {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.caret {
+  display: inline-block;
+  width: 10px;
+  font-size: var(--fs-chip);
+  color: var(--text3);
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+  font: var(--fs-sm) var(--sans);
+  color: var(--text2);
+}
+
+.row:not([data-open]) .body {
+  cursor: pointer;
+}
+
+.line {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prose {
+  overflow-wrap: break-word;
+  line-height: 1.55;
+}
+
+.time {
+  flex: none;
+  font: var(--fs-chip) var(--mono);
+  color: var(--text3);
+  white-space: nowrap;
+  padding-top: 1px;
+}
+
+.x {
+  flex: none;
+  font-size: var(--fs-sm);
+  line-height: 1.3;
+  color: var(--text3);
+}
+
+.x:hover {
+  color: var(--bad-fg);
+}
+
+.toggle:focus-visible,
+.x:focus-visible,
+.undo:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+/* "2 discarded · <sessions> · Undo": until the next send drains them. */
+.discarded {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font: 600 var(--fs-chip) var(--sans);
+  color: var(--text3);
+  opacity: 0.8;
+}
+
+.undo {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.undo:hover {
+  text-decoration: underline;
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border-top: 1px solid var(--line-soft);
+  padding-top: var(--space-2);
+}
+
+.spacer {
+  flex: 1;
+}

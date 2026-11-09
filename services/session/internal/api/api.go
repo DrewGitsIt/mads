@@ -78,19 +78,24 @@ func (s *server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		// Queue asks for a message sent mid-turn to wait behind the turn
 		// instead of being refused with 409 (runner.SendOrQueue).
 		Queue bool `json:"queue"`
+		// Attached are held link updates riding with this message, set by
+		// the Router on a send that wakes the session
+		// (docs/HELD-UPDATES-DESIGN.md); the runner wraps them ahead of
+		// Text.
+		Attached []contracts.InjectPart `json:"attached"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	if !body.Queue {
-		if err := s.runner.Send(r.Context(), body.Text); err != nil {
+		if err := s.runner.Send(r.Context(), body.Text, body.Attached...); err != nil {
 			writeRunnerError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
 		return
 	}
-	queued, err := s.runner.SendOrQueue(r.Context(), body.Text)
+	queued, err := s.runner.SendOrQueue(r.Context(), body.Text, body.Attached...)
 	if err != nil {
 		writeRunnerError(w, err)
 		return
