@@ -38,9 +38,9 @@ export function useRunway(turnActive: boolean): Runway {
   const scroller = useRef<HTMLElement | null>(null);
   const active = useRef(turnActive);
   active.current = turnActive;
-  // The runway in force: its anchor's key, the pages turned, and the cap
+  // The runway in force: its anchor's key, the pages turned (and how far), and the cap
   // trim/settle lowered the floor to. `seen` is false until the first anchor.
-  const state = useRef({ seen: false, key: "", pages: 0, cap: null as number | null, floor: 0 });
+  const state = useRef({ seen: false, key: "", pages: 0, offset: 0, cap: null as number | null, floor: 0 });
   const settling = useRef<number | null>(null);
 
   const stopSettle = () => {
@@ -84,15 +84,16 @@ export function useRunway(turnActive: boolean): Runway {
         // it. One that was already there when the stream opened (history, a
         // replay) shows its turn settled — unless that turn is still running.
         const live = anchor.dataset.runwayLive !== undefined;
-        Object.assign(s, { seen: true, key, pages: 0, cap: live || active.current ? null : m.tail });
+        Object.assign(s, { seen: true, key, pages: 0, offset: 0, cap: live || active.current ? null : m.tail });
         glide = live;
         opened = !live;
       }
-      const r = runwayFor({ ...m, cap: s.cap });
+      const r = runwayFor({ ...m, cap: s.cap, pages: s.pages, offset: s.offset });
       // Pages history already filled aren't turns: it opens at its end, not
       // gliding there from the top (through the older-page trigger).
       if (r.pages > s.pages && !opened) glide = true;
       s.pages = r.pages;
+      s.offset = r.offset;
       s.floor = r.floor;
       spacer.style.height = `${r.spacer}px`;
       spacer.dataset.pages = String(r.pages);
