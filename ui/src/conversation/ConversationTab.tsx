@@ -96,6 +96,7 @@ import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
 import { STREAM_REATTACH_EVENT, type StreamReattachDetail } from "./streamReattachSignal";
 import { useStickToBottom } from "./useStickToBottom";
 import { useRunway } from "./useRunway";
+import { useDoubleEnter } from "./useDoubleEnter";
 import { useOlderPages } from "./useOlderPages";
 import { FindBar, useFindBar } from "./Find/FindBar";
 import { useVisibleCards } from "./useVisibleCards";
@@ -1169,6 +1170,10 @@ export function ConversationTab({
       document.removeEventListener("input", onComposer);
     };
   }, [runway]);
+
+  // Enter twice on an empty composer (or nowhere in particular) does what
+  // Show all does: no aiming at a chip on a page that's moving.
+  useDoubleEnter(tabRef, reveal.behind, revealAll);
 
   // Ctrl/Cmd+↑/↓ hops between the user's own messages — anchored on the
   // [data-user-msg] elements ChatRenderer stamps on each user bubble.
