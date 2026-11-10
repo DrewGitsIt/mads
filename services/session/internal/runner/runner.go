@@ -674,6 +674,8 @@ func (r *Runner) Start(ctx context.Context) error {
 
 	r.startShellWatch()
 	go r.pump(provSess)
+	// Stored delegates from before nesting was tracked learn their parent.
+	go r.backfillDelegateParents()
 	if resumeCompact != nil {
 		r.requestResumeCompact(ctx, resumeCompact)
 	}

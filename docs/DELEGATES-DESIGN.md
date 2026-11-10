@@ -81,7 +81,7 @@ cross-session cold read.
 | Field | Meaning |
 |---|---|
 | `harness_id` | the key. Claude Code's `task_id` = `agentId`, stable across resumes |
-| `parent_harness_id` | the delegate that spawned it; empty when the session's own agent did. Live from the nested start's parent tag, else the meta file's `parentAgentId`. First seen wins, never cleared *(2026-11-09)* |
+| `parent_harness_id` | the delegate that spawned it; empty when the session's own agent did. Live from the nested start's parent tag, else the meta file's `parentAgentId`. First seen wins, never cleared *(2026-11-09)*. Records stored before then (depth ≥ 2, no parent) are backfilled from the meta file when their session's runner next starts — that field only *(2026-11-10)* |
 | `tool_use_id` | the spawning call. First seen wins: a relay re-entry reports the SendMessage call's id and must not move the anchor |
 | `depth`, `type`, `description`, `backgrounded` | harness metadata; `backgrounded` is sticky (a re-entry is always backgrounded) |
 | `state`, `reason`, `inferred` | the state, its evidence (the harness's status word or mads's inference), and whether mads concluded it |

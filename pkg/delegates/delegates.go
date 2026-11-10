@@ -280,6 +280,39 @@ func New(sessionID string, grace time.Duration) *Tracker {
 	return &Tracker{sessionID: sessionID, grace: grace, byID: map[string]*entry{}, unseen: map[string]contracts.SubagentTask{}}
 }
 
+// MissingParents lists, oldest first, the delegates below the first level
+// whose spawning delegate was never recorded: records stored before mads
+// tracked nesting (2026-11-10), when only Depth said they were nested. The
+// runner looks each one up in the harness's store once a session's
+// transcript ref is known (AdoptParent).
+func (t *Tracker) MissingParents() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var ids []string
+	for _, e := range t.sortedLocked() {
+		if e.d.Depth >= 2 && e.d.ParentHarnessID == "" {
+			ids = append(ids, e.d.HarnessID)
+		}
+	}
+	return ids
+}
+
+// AdoptParent records a spawning delegate learned after the fact, and
+// nothing else: unlike Inspect it leaves the rest of an old record as it was
+// stored. A record that already names a parent keeps it (first seen wins).
+// Returns the record if it changed.
+func (t *Tracker) AdoptParent(harnessID, parentHarnessID string) []contracts.Delegate {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	e, known := t.byID[harnessID]
+	if !known || parentHarnessID == "" || parentHarnessID == harnessID || e.d.ParentHarnessID != "" {
+		return nil
+	}
+	before := e.d
+	e.d.ParentHarnessID = parentHarnessID
+	return t.changedLocked(e, true, before)
+}
+
 // Seed loads the session's stored records — so a delegate resumed by a
 // later harness process keeps its identity, anchor and run count — and
 // returns the ones it had to correct: anything still running belonged to a

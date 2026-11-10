@@ -276,3 +276,32 @@ func TestTurnEndSparesForegroundUnderBackground(t *testing.T) {
 		t.Error("a background delegate's foreground child must outlive the main turn")
 	}
 }
+
+// A record from before nesting was tracked: listed while its parent is
+// unknown, adopts one parent and keeps it.
+func TestAdoptParent(t *testing.T) {
+	tr := delegates.New("ses_1", 0)
+	tr.Seed([]contracts.Delegate{
+		{SessionID: "ses_1", HarnessID: "p", Depth: 1, State: contracts.DelegateCompleted, Runs: 1, StartedAt: at(0)},
+		{SessionID: "ses_1", HarnessID: "k", Depth: 2, State: contracts.DelegateCompleted, Runs: 1, StartedAt: at(1)},
+	}, at(2))
+	if got := tr.MissingParents(); len(got) != 1 || got[0] != "k" {
+		t.Fatalf("MissingParents = %v", got)
+	}
+	if out := tr.AdoptParent("k", "k"); out != nil {
+		t.Fatalf("self as parent = %+v", out)
+	}
+	out := byID(t, tr.AdoptParent("k", "p"))
+	if len(out) != 1 || out["k"].ParentHarnessID != "p" || out["k"].State != contracts.DelegateCompleted {
+		t.Fatalf("adopt = %+v", out)
+	}
+	if out := tr.AdoptParent("k", "other"); out != nil {
+		t.Fatalf("second adopt moved it: %+v", out)
+	}
+	if got := tr.MissingParents(); len(got) != 0 {
+		t.Fatalf("MissingParents after = %v", got)
+	}
+	if out := tr.AdoptParent("nobody", "p"); out != nil {
+		t.Fatalf("unknown = %+v", out)
+	}
+}
