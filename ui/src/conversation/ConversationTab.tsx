@@ -1440,6 +1440,7 @@ export function ConversationTab({
     if (session.activity !== "active") setWaking(true);
     optimisticTurn.current = !turnLive;
     if (!turnLive) convDispatch({ type: "turn", turn: { active: true } });
+    convDispatch({ type: "sending", on: true });
   };
   const noteSendError = (msg: string) => {
     setWaking(false);
@@ -1447,10 +1448,12 @@ export function ConversationTab({
     setSendFailure(msg);
     if (optimisticTurn.current) convDispatch({ type: "turn", turn: { active: false } });
     optimisticTurn.current = false;
+    convDispatch({ type: "sending", on: false });
   };
   const noteQueued = (q: QueuedMessage) => {
     setWaking(false);
     optimisticTurn.current = false;
+    convDispatch({ type: "sending", on: false }); // it arrives later, as a delivery
     if (!queuedMessages.some((m) => m.id === q.id)) {
       convDispatch({ type: "queued", queued: [...queuedMessages, q] });
     }

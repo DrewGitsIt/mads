@@ -192,6 +192,26 @@ describe("conversationReducer", () => {
     expect(replayed.turn.active).toBe(false);
   });
 
+  it("a send from this tab that comes back in a replay (a sleeping session woke) is still live", () => {
+    const sending: ConvAction = { type: "sending", on: true };
+    // Only the replay's latest user message is the send; earlier ones are history.
+    let s = run(emptyConversation(), sending, hello(), f("user_message", { key: "u0", text: "old" }));
+    s = run(s, f("user_message", { key: "u1", text: "go" }), f("replay_end"));
+    expect(s.rows.u0.paced).toBe(false);
+    expect(s.rows.u1.paced).toBe(true);
+    expect(s.sending).toBe(false);
+    // Arrived: a later replay of it is history again.
+    s = run(s, hello(), f("user_message", { key: "u2", text: "x" }), f("replay_end"));
+    expect(s.rows.u2.paced).toBe(false);
+  });
+
+  it("a send that arrives live ends the wait; one that failed or queued never marks a replay", () => {
+    const live = run(emptyConversation(), { type: "sending", on: true }, hello(), f("replay_end"), f("user_message", { key: "u", text: "q" }));
+    expect(live.sending).toBe(false);
+    const failed = run(emptyConversation(), { type: "sending", on: true }, { type: "sending", on: false }, hello(), f("user_message", { key: "u", text: "q" }));
+    expect(failed.rows.u.paced).toBe(false);
+  });
+
   it("rows stay current through settling and the stored copy, until the next turn starts", () => {
     let s = run(emptyConversation(), hello(), f("replay_end"), f("user_message", { key: "user:1", text: "go" }));
     s = run(s, f("item_start", { key: "t1", item: "tool_use" }), f("tool_use", { key: "t1", tool: { id: "t1", name: "ls" } }));
