@@ -98,11 +98,14 @@ func requireLocalRunner(t *testing.T) {
 }
 
 // cleanEnv builds a process environment rooted at an isolated HOME, with no
-// leaked MADS_DATA_DIR from the outer test process's own environment.
+// leaked MADS_DATA_DIR, MADS_HOME or XDG_DATA_HOME from the outer test
+// process's own environment — uninstall deletes the XDG shadow root, so a
+// leaked XDG_DATA_HOME would point it at the developer's real one.
 func cleanEnv(home string) []string {
 	env := make([]string, 0, len(os.Environ()))
 	for _, e := range os.Environ() {
-		if strings.HasPrefix(e, "HOME=") || strings.HasPrefix(e, "MADS_DATA_DIR=") {
+		if strings.HasPrefix(e, "HOME=") || strings.HasPrefix(e, "MADS_DATA_DIR=") ||
+			strings.HasPrefix(e, "MADS_HOME=") || strings.HasPrefix(e, "XDG_DATA_HOME=") {
 			continue
 		}
 		env = append(env, e)
