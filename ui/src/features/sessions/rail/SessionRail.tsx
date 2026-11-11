@@ -132,8 +132,13 @@ export interface SessionRailProps {
   showDelegates?: boolean;
   /** Settings' "Fade out subagent cards after inactivity", in ms (delegateFadeMs). */
   delegateFadeMs?: number;
-  /** The delegate open in the main pane, if any — its row reads selected. */
-  selectedDelegate?: { sessionId: string; harnessId: string };
+  /**
+   * The delegate open in the main pane, if any — its row reads selected.
+   * `records`: it, its ancestors and its direct subagents as read for that
+   * session (useOpenDelegateRecords), laid under the live rows, so they show
+   * whatever the fade window has let go of.
+   */
+  selectedDelegate?: SelectedDelegate;
   /** Opens a delegate in the main pane. */
   onOpenDelegate?: (d: Delegate) => void;
   /**
@@ -758,14 +763,27 @@ interface RailRowContext {
   routerClient: RouterClient;
   showDelegates: boolean;
   delegateFadeMs?: number;
-  selectedDelegate?: { sessionId: string; harnessId: string };
+  selectedDelegate?: SelectedDelegate;
   onOpenDelegate?: (d: Delegate) => void;
+}
+
+/** SessionRailProps.selectedDelegate. */
+export interface SelectedDelegate {
+  sessionId: string;
+  harnessId: string;
+  records?: Delegate[];
 }
 
 /** A session's delegates nest right under its own card — before any linked subjects, which are other sessions. */
 function delegatesOf(ctx: RailRowContext, sessionId: string, linkTrunk = false) {
-  const list = ctx.showDelegates ? ctx.agentStates[sessionId]?.delegates : undefined;
-  if (!list || list.length === 0) return null;
+  if (!ctx.showDelegates) return null;
+  const live = ctx.agentStates[sessionId]?.delegates ?? [];
+  const open = ctx.selectedDelegate?.sessionId === sessionId ? ctx.selectedDelegate.records : undefined;
+  // What the live fold holds wins: it is newer than the open delegate's read.
+  const list = open?.length
+    ? [...live, ...open.filter((d) => !live.some((l) => l.harness_id === d.harness_id))]
+    : live;
+  if (list.length === 0) return null;
   return (
     <DelegateRows
       delegates={list}

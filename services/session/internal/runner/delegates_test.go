@@ -266,6 +266,28 @@ func TestBackgroundClearsWhenProcessEnds(t *testing.T) {
 	}
 }
 
+// A delegate whose run completed with its own background process still
+// running is stored waiting on it, through the pump's EventBackground; the
+// process ending (here: the harness process going) clears it on the record.
+func TestDelegateWaitingOnItsProcess(t *testing.T) {
+	r, data, sid := newDelegateRunner(t)
+	r.observeConversation(taskEv("started", "a1", "toolu_agent", "", true))
+	r.observeConversation(provider.Event{Kind: provider.EventBackground, Background: []provider.BackgroundTask{
+		{TaskID: "b1", ToolUseID: "toolu_bash", ParentToolUseID: "toolu_agent"},
+	}})
+	r.observeConversation(taskEv("notification", "a1", "toolu_agent", "completed", true))
+	d := storedDelegate(t, data, sid, "a1")
+	if d.State != contracts.DelegateCompleted || d.WaitingOn == nil || d.WaitingOn.Processes != 1 {
+		t.Fatalf("completed with its process running = %+v (waiting %+v)", d, d.WaitingOn)
+	}
+
+	r.endDelegatesForProcessExit()
+	r.clearBackground()
+	if d := storedDelegate(t, data, sid, "a1"); d.State != contracts.DelegateCompleted || d.WaitingOn != nil {
+		t.Fatalf("after the process went = %+v (waiting %+v)", d, d.WaitingOn)
+	}
+}
+
 // A subagent's API calls reach its record: the model and context of the
 // first at once, a burst's latest when the held report is flushed.
 func TestSubagentUsageReachesTheRecord(t *testing.T) {
@@ -293,5 +315,52 @@ func TestSubagentUsageReachesTheRecord(t *testing.T) {
 			t.Fatalf("held usage never flushed: %+v", d.Usage)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Records stored before nesting was tracked learn their spawning delegate
+// from the harness's store at the next start, and only that: the rest of the
+// stored record is left as it was. One whose file is gone stays flat.
+func TestDelegateBackfillParents(t *testing.T) {
+	r, data, sid := newDelegateRunner(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	dir := filepath.Join(root, "-private-tmp-work", "ref-1", "subagents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for id, meta := range map[string]string{
+		"p1":   `{"agentType":"general-purpose","spawnDepth":1}`,
+		"kid1": `{"agentType":"general-purpose","spawnDepth":2,"parentAgentId":"p1","worktreePath":"/wt/should-not-land"}`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, "agent-"+id+".jsonl"), []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "agent-"+id+".meta.json"), []byte(meta), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, d := range []contracts.Delegate{
+		{SessionID: sid, HarnessID: "p1", ToolUseID: "toolu_p1", Depth: 1, State: contracts.DelegateCompleted, Runs: 1, StartedAt: time.Now()},
+		{SessionID: sid, HarnessID: "kid1", ToolUseID: "toolu_k1", Depth: 2, State: contracts.DelegateCompleted, Runs: 1, StartedAt: time.Now()},
+		{SessionID: sid, HarnessID: "gone", ToolUseID: "toolu_g", Depth: 2, State: contracts.DelegateCompleted, Runs: 1, StartedAt: time.Now()},
+	} {
+		if _, err := data.PutDelegate(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.seedDelegates(ctx)
+	r.prov = claudecode.New(claudecode.Config{TranscriptDir: root})
+	r.lastRef = "ref-1"
+
+	r.backfillDelegateParents()
+	if d := storedDelegate(t, data, sid, "kid1"); d.ParentHarnessID != "p1" || d.WorktreePath != "" || d.State != contracts.DelegateCompleted {
+		t.Fatalf("backfilled = %+v", d)
+	}
+	if d := storedDelegate(t, data, sid, "gone"); d.ParentHarnessID != "" {
+		t.Fatalf("no file, still flat = %+v", d)
+	}
+	if d := storedDelegate(t, data, sid, "p1"); d.ParentHarnessID != "" || d.WaitingOn != nil {
+		t.Fatalf("depth-1 record touched = %+v", d)
 	}
 }

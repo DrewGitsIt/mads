@@ -1215,3 +1215,16 @@
     transform: translateX(4px);
   }
 }
+
+/* StatusMark's idle dial as a delegate's "waiting" glyph (WaitingGlyph):
+   centred in the 12px slot the spinner and ✓ share, in a calm tone — it
+   says "pending", not "wants you". */
+.waitingGlyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--text2);
+}

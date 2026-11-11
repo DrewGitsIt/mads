@@ -174,4 +174,23 @@ describe("formatMs", () => {
     expect(formatMs(9 * 60_000 + 43_000)).toBe("9m 43s");
     expect(formatMs(106 * 60_000 + 12_000)).toBe("1h 46m");
   });
+
+  it("shows the waiting dial, not ✓, while a completed delegate waits on work it owns", () => {
+    const model: TaskModel = {
+      taskId: "tk1",
+      toolUseId: "tu1",
+      state: "completed",
+      running: false,
+      completed: true,
+      waitingOn: { subagents: 2 },
+    };
+    const { rerender } = render(<TaskCard tool={spawnTool} model={model} />);
+    expect(screen.getByRole("img", { name: "waiting" })).toBeTruthy();
+    expect(screen.queryByRole("img", { name: "completed" })).toBeNull();
+    expect(screen.getByRole("img", { name: "waiting" }).closest("[title]")?.getAttribute("title")).toBe(
+      "turn ended, waiting on 2 subagents",
+    );
+    rerender(<TaskCard tool={spawnTool} model={{ ...model, waitingOn: undefined }} />);
+    expect(screen.getByRole("img", { name: "completed" })).toBeTruthy();
+  });
 });

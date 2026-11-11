@@ -5,7 +5,7 @@ import { FLAGS } from "../../../featureFlags";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import { useSessionAgentState } from "../state/useSessionAgentState";
 import type { SessionAgentState } from "./railGroups";
-import type { Link, Session } from "../../../router/types";
+import type { Delegate, Link, Session } from "../../../router/types";
 import { readFileSync } from "node:fs";
 import { HELD_REVEAL_EVENT, takeHeldReveal } from "../../../conversation/HeldUpdates/heldRevealSignal";
 
@@ -1149,6 +1149,45 @@ describe("SessionRail status line", () => {
     expect(screen.queryByTestId("delegate-rows")).toBeNull();
     // The status line still counts them: the setting hides rows, not facts.
     expect(statusOf("the session").textContent).toMatch(/1 subagent running/);
+  });
+
+  it("lays the open delegate's own read under the live rows: its finished subagents show past the fade", () => {
+    const rec = (harness_id: string, extra: Partial<Delegate> = {}): Delegate => ({
+      id: `dlg_${harness_id}`,
+      session_id: "s1",
+      harness_id,
+      description: `task ${harness_id}`,
+      state: "running",
+      runs: 1,
+      started_at: inFlight(),
+      created_at: inFlight(),
+      updated_at: inFlight(),
+      ...extra,
+    });
+    const long = "2026-01-01T00:00:00Z";
+    // The live fold says the parent is running; the open read has a stale copy of it.
+    const state = { s1: { subagents: 1, subagentsSince: inFlight(), delegates: [rec("m")] } };
+    const records = [
+      rec("m", { state: "completed", ended_at: long }),
+      rec("old-kid", { parent_harness_id: "m", state: "completed", ended_at: long }),
+    ];
+    const { rerender } = render(
+      <SessionRail
+        sessions={[live]}
+        openTaskCounts={{}}
+        agentStates={state}
+        delegateFadeMs={0}
+        selectedDelegate={{ sessionId: "s1", harnessId: "m", records }}
+      />,
+    );
+    const rows = screen.getByTestId("delegate-rows");
+    expect(rows.textContent).toContain("task old-kid");
+    // The live record wins over the read's copy.
+    expect(within(rows).getByText("task m").closest("button")?.getAttribute("data-state")).toBe("running");
+
+    // Navigated away: the read goes with it.
+    rerender(<SessionRail sessions={[live]} openTaskCounts={{}} agentStates={state} delegateFadeMs={0} />);
+    expect(screen.getByTestId("delegate-rows").textContent).not.toContain("old-kid");
   });
 
   it("renders the same line shape in every state, so card height can't change with it", () => {

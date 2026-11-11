@@ -7,7 +7,7 @@ import { useAgents } from "../../library/agents/useAgents";
 import { useWorkspaces } from "../../library/workspaces/useWorkspaces";
 import { router } from "../../router/client";
 import { OPEN_CREATED_SESSION_EVENT, type CreatedSessionDetail } from "../../appNavigation";
-import type { Session } from "../../router/types";
+import type { Delegate, Session } from "../../router/types";
 import { NoSessionsEmptyState } from "./EmptyStates";
 import { Launchpad } from "./launchpad/Launchpad";
 import { SessionRail } from "./rail/SessionRail";
@@ -18,6 +18,7 @@ import { useLinkEditor, useRailLinkEditor } from "./links/useLinkEditor";
 import { SessionSleepPrompt, useSessionSleep } from "./actions/useSessionSleep";
 import { useOpenTaskCounts } from "./state/useOpenTaskCounts";
 import { useSessionAgentState } from "./state/useSessionAgentState";
+import { useOpenDelegateRecords } from "./state/useOpenDelegateRecords";
 import { useSessionLinks } from "./state/useSessionLinks";
 import { useSessionsList } from "./state/useSessionsList";
 import { SessionWorkspace } from "./workspace/SessionWorkspace";
@@ -52,6 +53,13 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelin
   // A delegate (harness-run subagent) open in the main pane in place of its
   // parent's workspace — opened from its row in the rail.
   const [openDelegate, setOpenDelegate] = useState<{ sessionId: string; harnessId: string }>();
+  // Its own records, past the fade window: the rail lists an open
+  // delegate's finished subagents in full, and keeps its parents' rows.
+  const openDelegateRecords = useOpenDelegateRecords(router, openDelegate);
+  const selectedDelegate = useMemo(
+    () => (openDelegate ? { ...openDelegate, records: openDelegateRecords } : undefined),
+    [openDelegate, openDelegateRecords],
+  );
   const delegateSettings = useDelegateSettings(router);
   const fadeMs = delegateFadeMs(delegateSettings.fade);
   // One subscription for the whole rail, however many cards are listed. The
@@ -62,6 +70,13 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelin
   const [initialTab, setInitialTab] = useState<WorkspaceTabId>();
   const [openRun, setOpenRun] = useState<{ run: number | "new" }>();
   const [actionError, setActionError] = useState<{ title: string; message: string; sessionId: string }>();
+  // Opening one, from its rail row or from its card in another delegate's
+  // stream (a subagent's own subagent): the same path, so the rail selects it.
+  const openDelegateRecord = (d: Delegate) => {
+    setOpenDelegate({ sessionId: d.session_id, harnessId: d.harness_id });
+    setSelectedId(d.session_id);
+    setActionError(undefined);
+  };
   const [provisioningSessionId, setProvisioningSessionId] = useState<string>();
   const [pendingFirstMessage, setPendingFirstMessage] =
     useState<{ sessionId: string; text: string }>();
@@ -205,12 +220,8 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelin
             selectedId={selectedId}
             showDelegates={delegateSettings.show}
             delegateFadeMs={fadeMs}
-            selectedDelegate={openDelegate}
-            onOpenDelegate={(d) => {
-              setOpenDelegate({ sessionId: d.session_id, harnessId: d.harness_id });
-              setSelectedId(d.session_id);
-              setActionError(undefined);
-            }}
+            selectedDelegate={selectedDelegate}
+            onOpenDelegate={openDelegateRecord}
             onSelect={(id) => {
               // A card click from a delegate view lands on that session's own
               // workspace — the parent's included, which stays selected.
@@ -273,6 +284,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, jumpToRun, pipelin
                 setSelectedId(openDelegate.sessionId);
                 setOpenDelegate(undefined);
               }}
+              onOpenDelegate={openDelegateRecord}
             />
           ) : selectedId ? (
             <SessionWorkspace

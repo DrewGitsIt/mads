@@ -37,14 +37,20 @@ export interface SessionAgentState {
   awaitingSince?: string;
   /** The parked call's tool, when the request named one. */
   awaitingTool?: string;
-  /** Delegates (harness subagents) still running, backgrounded or not. */
+  /** Delegates (harness subagents) still running, backgrounded or not, at every depth. */
   subagents: number;
-  /** When the longest-running of those started; set only while subagents > 0. */
+  /**
+   * Delegates whose turn ended while work they own still runs
+   * (Delegate.waiting_on), at every depth — live, but not running. Absent
+   * means none.
+   */
+  waitingSubagents?: number;
+  /** When the longest-running of the running ones started; set only while subagents > 0. */
   subagentsSince?: string;
   /**
-   * The rows behind the count, for the rail's nested delegate rows: every
-   * running delegate plus ones this connection saw finish (with ended_at),
-   * oldest start first. Absent when there are none.
+   * The rows behind the counts, for the rail's nested delegate rows: every
+   * live delegate (running or waiting) plus ones this connection saw finish
+   * (with ended_at), oldest start first. Absent when there are none.
    */
   delegates?: Delegate[];
   /**
@@ -227,13 +233,15 @@ export function statusOf(
       since: state.workingSince,
     };
   }
+  const waiting = state.waitingSubagents ?? 0;
   if (state.subagents > 0 && session.activity === "active") {
     // The main agent's turn is over but its delegates aren't — the case the
     // rail used to call "Ready" while a backgrounded subagent was still busy.
     // It spins and files under Working: something is running. An unseen turn
     // end is still news, so "Done" leads when there is one; otherwise the
-    // count stands alone — "Idle" would contradict it.
-    const running = `${plural(state.subagents, "subagent")} running`;
+    // count stands alone — "Idle" would contradict it. Waiting ones ride
+    // along as a bare count: the running clause already says "subagents".
+    const running = `${plural(state.subagents, "subagent")} running${waiting > 0 ? ` · ${waiting} waiting` : ""}`;
     return {
       kind: "delegating",
       tone: "working",
@@ -243,6 +251,16 @@ export function statusOf(
     };
   }
   const dot = dotState(session, breakdown);
+  if (waiting > 0 && session.activity === "active") {
+    // Only waiting subagents: each ended its turn and picks up when its own
+    // work reports back. Nothing is being worked on until then, so not the
+    // spinner — the calm idle kind and its clock, exactly as a turn waiting
+    // on background processes reads below.
+    const subagents = `${plural(waiting, "subagent")} waiting`;
+    return state.done
+      ? { kind: "done", tone: "done", dot, label: `Done · ${subagents}` }
+      : { kind: "idle", tone: "idle", dot, label: subagents };
+  }
   if (state.background && session.activity === "active") {
     // The turn is over but a process it started isn't: not idle, though
     // nothing is being worked on either — so the calm idle kind (its clock

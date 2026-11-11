@@ -55,6 +55,37 @@ func (r *Runner) seedDelegates(ctx context.Context) {
 	r.publishDelegates(r.delegates.Seed(stored, time.Now()))
 }
 
+// backfillDelegateParents fills in the spawning delegate of stored records
+// that predate nesting (Tracker.MissingParents) from the harness's own store
+// — for claude-code, parentAgentId in each subagent's .meta.json. Only that
+// field is written (AdoptParent), through the ordinary record put. Run once
+// per start, off the pump, after the ref is known: a fresh session has no
+// ref yet and nothing stored to fix; a forked one keeps its files under the
+// old ref, where the lookup finds nothing and the rows stay flat.
+func (r *Runner) backfillDelegateParents() {
+	insp, ok := r.prov.(provider.DelegateInspector)
+	if !ok {
+		return
+	}
+	ids := r.delegates.MissingParents()
+	r.mu.Lock()
+	ref := r.lastRef
+	r.mu.Unlock()
+	if len(ids) == 0 || ref == "" {
+		return
+	}
+	for _, id := range ids {
+		info, found, err := insp.InspectDelegate(context.Background(), ref, id)
+		if err != nil {
+			log.Printf("runner: backfill delegate parent %s/%s: %v", r.sessionID, id, err)
+			continue
+		}
+		if found && info.ParentHarnessID != "" {
+			r.publishDelegates(r.delegates.AdoptParent(id, info.ParentHarnessID))
+		}
+	}
+}
+
 // observeDelegates feeds one provider event's delegate evidence to the
 // tracker. Called from observeConversation BEFORE the turn-end tool sweep, so
 // a foreground delegate the turn end concludes is no longer live when the
@@ -84,6 +115,10 @@ func (r *Runner) observeDelegates(ev provider.Event) {
 		r.armDelegateExpiry()
 	case ev.Kind == provider.EventTurnEnd:
 		r.publishDelegates(r.delegates.TurnEnd(now))
+	case ev.Kind == provider.EventBackground:
+		// A delegate whose run completed with its own processes still going
+		// is waiting on them, not done.
+		r.publishDelegates(r.delegates.Background(ev.Background, now))
 	}
 }
 
@@ -232,14 +267,15 @@ func (r *Runner) inspectDelegateAfter(harnessID string, delay time.Duration) {
 			return
 		}
 		r.publishDelegates(r.delegates.Inspect(harnessID, delegates.Observation{
-			TranscriptPath: info.TranscriptPath,
-			Type:           info.Type,
-			Depth:          info.Depth,
-			WorktreePath:   info.WorktreePath,
-			Background:     info.Background,
-			Model:          info.Model,
-			Branch:         info.Branch,
-			Usage:          info.Usage,
+			TranscriptPath:  info.TranscriptPath,
+			Type:            info.Type,
+			Depth:           info.Depth,
+			ParentHarnessID: info.ParentHarnessID,
+			WorktreePath:    info.WorktreePath,
+			Background:      info.Background,
+			Model:           info.Model,
+			Branch:          info.Branch,
+			Usage:           info.Usage,
 		}))
 	}
 	if delay <= 0 {

@@ -6,9 +6,9 @@ import (
 	"log"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
-	"strings"
 )
 
 // rerootedTag marks a session whose folder was gone when it started.

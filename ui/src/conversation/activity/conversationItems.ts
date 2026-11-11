@@ -2,6 +2,7 @@ import type {
   CompactStatus,
   Delegate,
   DelegateState,
+  DelegateWaiting,
   Envelope,
   PermissionRequest,
   SubagentEvent,
@@ -306,6 +307,12 @@ export interface TaskModel {
   state?: DelegateState;
   /** Whether mads concluded `state` rather than the harness reporting it. */
   inferred?: boolean;
+  /**
+   * The record's waiting_on: its run completed but work it owns still runs,
+   * so it isn't finished — it picks up again when that reports back. Only
+   * ever set alongside state "completed".
+   */
+  waitingOn?: DelegateWaiting;
 }
 
 /** Folds one task lifecycle event into the map (immutably — safe as a state update). */
@@ -428,6 +435,7 @@ export function mergeDelegates(
       startedAt: d.started_at,
       state: d.state,
       inferred: d.inferred,
+      waitingOn: d.waiting_on,
       running: d.state === "running",
       completed: d.state === "completed",
       status: d.reason ?? prev.status,

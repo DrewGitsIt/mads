@@ -15,7 +15,8 @@ import (
 // handleListDelegates serves the delegate records (docs/DELEGATES-DESIGN.md),
 // filtered by ?state= — the session rail's cold read is state=running, one
 // call for every session rather than one per card — or by ?ended_after=, the
-// running ones plus those finished since (the rail under a fade window).
+// live ones (running, or completed but still waiting on work they started)
+// plus those finished since (the rail under a fade window).
 func (s *server) handleListDelegates(w http.ResponseWriter, r *http.Request) {
 	if raw := r.URL.Query().Get("ended_after"); raw != "" {
 		t, err := time.Parse(time.RFC3339Nano, raw)

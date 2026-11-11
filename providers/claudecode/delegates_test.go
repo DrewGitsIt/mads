@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -68,6 +69,60 @@ func TestInspectDelegateReadsSubagentStore(t *testing.T) {
 		if _, ok, err := p.InspectDelegate(ctx, c[0], c[1]); ok || err != nil {
 			t.Errorf("InspectDelegate(%q, %q) = ok %v err %v, want nothing", c[0], c[1], ok, err)
 		}
+	}
+}
+
+// A subagent's own subagent sits in the same subagents/ folder; its meta
+// names the spawning subagent (parentAgentId, spawnDepth 2 — the shape of a
+// real 2.1.285 meta file, trimmed). Both Inspect and the import's history
+// carry it; an id claude-code wouldn't write is dropped.
+func TestDelegateMetaParentAgentID(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "-private-tmp-work", "ref-n", "subagents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("agent-ad75c9882e65b5f88.jsonl", "{}\n")
+	write("agent-ad75c9882e65b5f88.meta.json", `{"agentType":"general-purpose","toolUseId":"toolu_p","spawnDepth":1,"requestShape":"background"}`)
+	write("agent-a2.jsonl", "{}\n")
+	write("agent-a2.meta.json", `{"agentType":"general-purpose","description":"Research vendor+harness grounding docs","toolUseId":"toolu_01M3Ro","parentAgentId":"ad75c9882e65b5f88","spawnDepth":2,"requestShape":"background","requestNonInteractive":true}`)
+	write("agent-a3.jsonl", "{}\n")
+	write("agent-a3.meta.json", `{"toolUseId":"toolu_3","parentAgentId":"../evil*","spawnDepth":2}`)
+
+	p := New(Config{TranscriptDir: root})
+	ctx := context.Background()
+	for id, want := range map[string]string{"ad75c9882e65b5f88": "", "a2": "ad75c9882e65b5f88", "a3": ""} {
+		info, ok, err := p.InspectDelegate(ctx, "ref-n", id)
+		if err != nil || !ok {
+			t.Fatalf("%s: ok=%v err=%v", id, ok, err)
+		}
+		if info.ParentHarnessID != want {
+			t.Errorf("%s: parent = %q, want %q", id, info.ParentHarnessID, want)
+		}
+	}
+	child, _, _ := p.InspectDelegate(ctx, "ref-n", "a2")
+	if child.Depth != 2 {
+		t.Errorf("a2 depth = %d, want 2", child.Depth)
+	}
+
+	hist, err := p.DelegateHistory(ctx, "ref-n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parents := map[string]string{}
+	for _, r := range hist {
+		parents[r.HarnessID] = r.ParentHarnessID
+	}
+	if parents["a2"] != "ad75c9882e65b5f88" || parents["ad75c9882e65b5f88"] != "" || parents["a3"] != "" {
+		t.Errorf("history parents = %v", parents)
+	}
+	if d := delegates.FromHistory("ses_1", hist[slices.IndexFunc(hist, func(r provider.DelegateRecord) bool { return r.HarnessID == "a2" })], delegates.CapabilityDefaults{}); d.ParentHarnessID != "ad75c9882e65b5f88" {
+		t.Errorf("FromHistory parent = %q", d.ParentHarnessID)
 	}
 }
 
@@ -258,5 +313,48 @@ func TestDelegateHistoryReadsEndingsFromTheParent(t *testing.T) {
 
 	if none, err := New(Config{TranscriptDir: root}).DelegateHistory(context.Background(), "other"); err != nil || len(none) != 0 {
 		t.Errorf("a session with no subagents = %+v, %v", none, err)
+	}
+}
+
+// A subagent's own subagent comes through parent-tagged: claude-code never
+// tags a system line, but the spawning subagent's Agent call arrives first,
+// on an assistant line tagged with that subagent's spawn, and the child's
+// task_started names the call. testdata/stream-task-nested-subagent.jsonl is
+// hand-built in the order the mads event log recorded on 2026-11-08
+// (claude-code 2.1.285: tool_use seq 184422, then task_started 184425), not
+// a raw capture. Only the nested start is tagged — the depth-1 start and
+// every ending keep none — and the tracker turns the tag into the child's
+// ParentHarnessID.
+func TestStreamSessionNestedSubagentTagged(t *testing.T) {
+	const (
+		parentID, parentSpawn = "ad75c9882e65b5f88", "toolu_01NestParentSpawn"
+		childID               = "a4c1e0f9b2d37a6c1"
+	)
+	tr := delegates.New("ses_1", 0)
+	var got []string
+	now := time.Now()
+	for _, ev := range streamFixtureEvents(t, "stream-task-nested-subagent.jsonl") {
+		if ev.Kind != provider.EventTask {
+			continue
+		}
+		got = append(got, ev.Task.Phase+":"+ev.Task.TaskID+"@"+ev.ParentToolUseID)
+		tr.Task(contracts.SubagentTask{
+			Phase: ev.Task.Phase, TaskID: ev.Task.TaskID, ToolUseID: ev.Task.ToolUseID, Status: ev.Task.Status,
+			IsBackgrounded: ev.Task.IsBackgrounded, SpawnDepth: ev.Task.SpawnDepth, ParentToolUseID: ev.ParentToolUseID,
+		}, now)
+	}
+	want := []string{
+		"started:" + parentID + "@",
+		"started:" + childID + "@" + parentSpawn,
+		"notification:" + parentID + "@",
+		"notification:" + childID + "@",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("task events =\n%v\nwant\n%v", got, want)
+	}
+	// Read the child's record back through an Inspect that changes it.
+	ds := tr.Inspect(childID, delegates.Observation{TranscriptPath: "/x/agent-" + childID + ".jsonl"})
+	if len(ds) != 1 || ds[0].ParentHarnessID != parentID || ds[0].Depth != 2 {
+		t.Errorf("child record = %+v, want parent %s at depth 2", ds, parentID)
 	}
 }
