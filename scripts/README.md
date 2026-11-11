@@ -5,7 +5,7 @@
 `/usr/local/bin` when run as root), and places a `mads` binary there.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/drewkidwell/mads/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/DrewGitsIt/mads/main/scripts/install.sh | sh
 ```
 
 No release has been cut yet, so the download path is wired but untested — for
