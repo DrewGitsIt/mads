@@ -1,126 +1,130 @@
 # mads — Making Agents Do Stuff
 
-An agent orchestration platform with three goals: make agents easy for humans to use,
-give agents the tools to do their best work, and expose everything agents do through
-logging and data collection.
+**One desktop app for every coding agent you already pay for.**
 
-mads is a ground-up rebuild of its predecessor, tao, designed so that **agents can build
-and maintain it**: small, independently runnable services with clear boundaries and a
-test loop that never requires a live LLM.
+mads lets you work with Claude Code, Codex, Goose, Hermes, and Kiro from a
+single place. Chat with an agent, break the work into tasks, and have a
+team of agents build those tasks in parallel. You review the results and
+decide what merges.
 
-## Layout
+> **Status:** this is an early project under live development. There is no
+> packaged release yet, so for now you run mads from a source checkout (see
+> [Get started](#get-started)).
 
-| Path | What lives there |
-|---|---|
-| `docs/` | The canonical design docs: [REBUILD-SPEC.md](docs/REBUILD-SPEC.md) (the spec, §-references everywhere point here), [MADS-UX.md](docs/MADS-UX.md) (UX + data contracts), [MADS-WORK-ITEMS.md](docs/MADS-WORK-ITEMS.md) (the build plan), `ux-prototype.html` (clickable mockups 1–9) |
-| `pkg/contracts` | Shared boundary contracts: event envelope + type registry, task schema, API error shape. Both sides of every service boundary consume this package and its goldens. |
-| `pkg/golden` | Golden-file test helper (`-update` flag to regenerate) |
-| `services/data` | Data Service — sole owner of persistent state and the event log (spec §15) |
-| `services/router` | Router — always-on coordinator; supervision, SSE fan-out to the UI |
-| `services/session` | Session Service — one process per active session, owns the agent |
-| `services/pipeline` | Pipeline Engine — template execution over task graphs (spec §6) |
-| `providers/` | Provider layer: the abstraction + conformance suite, claude-code adapter, provider-fake, fast-model runner |
-| `cmd/mads` | The bootstrap CLI — see **mads builds mads** below |
-| `ui/` | Electron desktop app — wave 6 |
-| `scripts/` | `install.sh` (curl-to-shell installer) + its smoke test, `app.sh` (local dev loop) — see [scripts/README.md](scripts/README.md) |
+---
 
-## Working on mads
+## What is mads?
 
-```sh
-make check         # lint + test with -race; identical to CI
-make test          # tests only
-make build         # compiles everything and puts the mads CLI at bin/mads
-make e2e-smoke     # full topology (data + router + session children) over a
-                   # scripted fake-provider pipeline run; not part of `make
-                   # check` — real OS processes, takes longer than a unit test
-make release-gate  # cross-platform build matrix + install/update smokes
-                   # against the native candidate; not part of `make check`
-                   # — a multi-minute cross-compile
-```
+mads is an agent orchestration platform built around three ideas:
 
-### macOS
+- **Agents should be easy to use.** It shouldn't matter whether you're on
+  day one or year ten. Pick a goal, start talking, and mads chooses or
+  generates a suitable agent and gives it the tools it needs.
+- **Agents should have what they need to do good work.** That means skills,
+  MCP servers, an isolated workspace, and clear tasks with a definition of
+  done.
+- **You are close to your work.** Every message, tool call, file change,
+  commit, and dollar spent is recorded, and you can inspect all of it.
 
-mads builds and runs on macOS as well as Linux. Before the first `make build`:
+### Highlights
 
-- **Xcode Command Line Tools** (`xcode-select --install`): provides `git`, and
-  the C++ compiler `npm ci` needs to build `node-pty`.
-- **Go** at the version in `go.mod`.
-- **Node** at the version in `.nvmrc` (e.g. `nvm install`).
-- The **`claude`** CLI, for claude-code sessions and `mads run` agents.
-- Optionally **`goose`**, for goose sessions.
+- **Bring your own agent.** Claude Code, Codex, Goose, Hermes, and Kiro all
+  run behind one interface. Use whatever you're subscribed to, or mix them.
+- **Sessions.** Ever lost a session because you forgot which directory it
+  started from? Keep track of every session from every agent (plus
+  subagents) in one place. Run agents alone in a new worktree, or together
+  with linked sessions.
+- **Tasks and pipelines.** *(Tasks are under development.)* Turn a plan
+  into a task graph, then run it through a structured loop. Each task gets
+  its own worktree and branch and passes through user-defined gates.
+  Customize the checks and escalation paths to suit you and your repo.
+- **Retro.** Agents generate a lot of data but are bad at self-reflection.
+  Use Retro to have a different agent look for issues and suggest durable
+  fixes.
+- **Library.** Keep your agent system prompts, skills, MCP servers, and
+  pipeline templates in one place.
+- **Import your history.** Your existing agent sessions come with you when
+  you onboard.
 
-Platform differences and the port's open items are in
-[docs/MACOS-PORT-DESIGN.md](docs/MACOS-PORT-DESIGN.md).
+---
 
-### Rebuilding one piece while mads is running
+## Get started
 
-`make build` is the all-or-nothing gate. For the inner loop there is a target
-per component; all of them skip `npm ci` and are safe to run against a live
-instance (`go build` replaces the output file by unlink+write, so running
-processes keep the binary they started with).
+**You'll need:** Linux or macOS, [Go](https://go.dev) (version in `go.mod`),
+Node (version in `.nvmrc`), `git`, and at least one agent CLI installed and
+signed in (for example `claude`, `codex`, or `goose`). On macOS, also run
+`xcode-select --install`.
 
 ```sh
-make ui         # no restart at all — the Router serves ui/dist off disk and
-                # re-checks it per request; just reload the window
-                # (Ctrl+R / Cmd+R)
-make session    # next session spawn picks it up (-session-cmd is exec'd
-                # fresh); to move a live session onto it:
-                #   curl -sX POST localhost:17373/sessions/<id>/bounce
-make pipeline   # next pipeline run picks it up, same mechanism
-make data       # needs a restart, but a survivable one: state is in
-                # ~/.mads/mads.db and the Router's watchers reconnect
-make router     # needs a restart, and it terminates every session and
-                # pipeline child. SIGTERM only:
-                #   kill "$(cat ~/.mads/router.pid)"
-                # then relaunch from the repo root (-ui-dist is cwd-relative)
-make services   # all five Go binaries, no UI (~2s warm)
+git clone https://github.com/DrewGitsIt/mads.git
+cd mads
+make build        # builds the services and the desktop app
+scripts/app.sh    # starts mads and opens the app
 ```
 
-Each service also has `make -C services/<name> build`, alongside its existing
-`run` and `test`.
+On first launch, a short setup walks you through choosing a provider and a
+workspace: the folder(s) or repo(s) your agents will work in.
 
-## mads builds mads (the dogfood loop)
+### Your first session
 
-From Wave 4 on, work items are executed as mads tasks by the pipeline itself.
-This is **the** way mads builds mads:
+1. **Describe what you want** in the Launchpad, e.g. _"Add dark mode to the
+   settings page."_ mads picks an agent and starts a session.
+2. **Plan together.** For larger pieces of work, chat with the agent to
+   work out an approach. Ask it to break the work into tasks, or add tasks
+   yourself on the **Tasks** tab.
+3. **Run it.** Start a pipeline from the Tasks tab (a default loop ships
+   with mads). Agents work in parallel, each in its own isolated copy of
+   your repo, and you can watch any of them live.
+4. **Review and land.** Read the diffs on the **Changes** tab, then approve
+   them. mads merges the approved work back to your branch.
+5. **Look back.** Run a **Retro** on the session to find out what went well
+   and what to change next time.
 
-```sh
-make -C services/data run          # terminal 1: the Data Service (state + events)
+You stay in control the whole way. You can pause, cancel, or switch any
+agent at any point.
 
-make build                         # terminal 2:
-SES=$(bin/mads new-session -name "Wave 4")
-bin/mads seed -session $SES -file wave4-tasks.yaml   # titles + depends_on graph
-bin/mads run  -session $SES -workspace .             # claude-code agents, worktrees
+---
+
+## How it works
+
+```mermaid
+flowchart TB
+    UI["Desktop app<br/>(Electron)"]
+    Router["Router<br/>sessions · pipelines · live streams"]
+    Data[("Data Service<br/>tasks · sessions · files · metrics<br/>event log (SQLite)")]
+    S1["Session"]
+    S2["Session"]
+    P1["Pipeline run"]
+    Prov["Agent providers<br/>Claude Code · Codex · Goose · Hermes · Kiro"]
+
+    UI -- "HTTP + live events" --> Router
+    Router -- "starts / stops" --> S1 & S2 & P1
+    Router <--> Data
+    S1 & S2 & P1 -- "read / write" --> Data
+    S1 & S2 & P1 --> Prov
 ```
 
-`mads run` freezes the `default-implementation` template (architect → executor
-→ build → code review → merge → verify), gives every task its own worktree
-and `mads/<task>` branch, runs agent stages as `claude -p` one-shots in that
-worktree, loops review/build failures back to the executor with feedback,
-serializes merges back to the trunk (conflicts block loudly and keep the
-worktree), and tails every `pipeline.*`/`stage.*` event to the terminal.
-Commits report themselves to the Data Service through the installed
-post-commit hook and link to their tasks via the `Task:` trailer (spec §5).
+- The **desktop app** only displays state and sends your actions. It talks
+  to the Router and nothing else.
+- The **Router** is always running. It starts and stops sessions and
+  pipeline runs, and streams their output to the app live.
+- Each **Session** owns one running agent. Each **Pipeline run** carries a
+  task graph through its stages.
+- The **Data Service** is the single source of truth. Every change is
+  written together with an event describing it, which is what makes
+  everything observable and replayable.
+- **Providers** adapt each agent CLI to a common interface, so the rest of
+  mads doesn't care which agent you picked.
 
-`-provider fake -fake-scenario file.yaml` rehearses a run with scripted
-agents — no tokens spent; that is also how the CLI's own end-to-end test runs.
+Everything runs locally. Your data lives in `~/.mads`.
 
-Every service directory has its own `README.md` (the agent-maintainability contract:
-how to run it alone, how to test it, its API contract, its critical paths) and its own
-`Makefile` so it can be built and tested in isolation.
+---
 
-Rules that hold everywhere (spec §15):
+## Contributing
 
-- **No peer-to-peer service calls.** Services communicate through the Data Service
-  event log (control plane) or stream ephemeral output through the Router (data plane).
-- **State mutations and their events commit in one transaction** (transactional outbox).
-- **Tests are deterministic.** Agent behavior in tests comes from `provider-fake`,
-  never a live LLM. A flaky test is a defect: fix it or delete it within the week.
-- **`-race` is always on.**
+mads is built mostly by mads, using its own pipeline. Every service is
+small, runs on its own, and is tested without a live LLM.
 
-## How mads gets built
-
-The build order is [docs/MADS-WORK-ITEMS.md](docs/MADS-WORK-ITEMS.md): dependency waves,
-never priority labels. Waves 0–3 are built directly; after the dogfood milestone
-(`mads run`), remaining work items are imported as mads tasks and executed by mads's own
-pipeline.
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the dev loop, the build and
+test targets, how to rebuild one piece while mads is running, and the rules
+every change follows.

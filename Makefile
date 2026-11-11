@@ -101,7 +101,7 @@ e2e-smoke:
 # Playwright journey suite: real data/router/session binaries on ephemeral
 # ports, real UI build, chromium only. Separate from `make check`/CI's fast
 # test job and from `make e2e-smoke` (Go-only, no browser) — see
-# ui/e2e/HANDOFF.md and ui/README.md's "test layers" section. Browsers are
+# ui/README.md's "Test layers" section. Browsers are
 # cached at ~/.cache/ms-playwright on every OS: that is Playwright's Linux
 # default, and PLAYWRIGHT_BROWSERS_PATH pins macOS there too instead of its
 # ~/Library/Caches/ms-playwright default (an explicit PLAYWRIGHT_BROWSERS_PATH
