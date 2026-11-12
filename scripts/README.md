@@ -60,9 +60,12 @@ mads uninstall --keep-data   # binary only, no prompt
 mads uninstall --yes         # scripted/CI use — answers the prompt yes
 ```
 
-The binary is always removed. The data directory is only removed after
-explicit confirmation (an interactive `y`, or `--yes`); declining, or passing
-`--keep-data`, leaves it untouched. It always prints the exact paths it's
+The binary is always removed. The data directory (`~/.mads`) and the
+shadow-store root (`$XDG_DATA_HOME/mads/shadow`, default
+`~/.local/share/mads/shadow`: per-session diff history, usually the largest
+thing mads writes) are only removed after explicit confirmation (an
+interactive `y`, or `--yes`); declining, or passing `--keep-data`, leaves both
+untouched. It always prints the exact paths it's
 about to delete before deleting anything.
 
 ## Update

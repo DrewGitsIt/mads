@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/capability"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
@@ -41,6 +42,7 @@ import (
 	"github.com/drewkidwell/mads/services/router/internal/digestwatch"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/modelcatalog"
+	"github.com/drewkidwell/mads/services/router/internal/runlogs"
 	"github.com/drewkidwell/mads/services/router/internal/static"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 	"github.com/drewkidwell/mads/services/router/internal/synthwatch"
@@ -316,6 +318,7 @@ func main() {
 	// A launchpad draft that was attached to but never started leaves files
 	// no session will ever delete; a week is long enough to come back to it.
 	go attachmentStore.SweepDrafts(7 * 24 * time.Hour)
+	go sweepLocalState(data, *madsHome)
 	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), attachmentStore, *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist), guard)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -372,5 +375,48 @@ func main() {
 			log.Printf("router: HTTP shutdown: %v", err)
 		}
 		sup.Shutdown(shutdownCtx)
+	}
+}
+
+// sweepLocalState bounds two things under $MADS_HOME that otherwise only
+// grow: pipeline stage output logs (runs/, kept for Config.LogRetentionDays)
+// and pid files left by MCP capability processes that have exited (mcp/).
+// Once at boot, then hourly, like the Data Service's shadow-store sweep;
+// day-granularity retention needs nothing tighter. Shadow stores themselves
+// are the Data Service's job (store.Sessions.SweepExpiredShadows).
+func sweepLocalState(data *dataclient.Client, madsHome string) {
+	mcp := capability.NewRegistry(filepath.Join(madsHome, "mcp"))
+	runsDir := filepath.Join(madsHome, "runs")
+	sweep := func() {
+		// A minute is far longer than EnsureStarted's create-then-write-PID
+		// window, the only time a live claim looks dead.
+		if n, err := mcp.SweepStale(time.Minute); err != nil {
+			log.Printf("router: mcp pid sweep: %v", err)
+		} else if n > 0 {
+			log.Printf("router: mcp pid sweep removed %d stale pid file(s)", n)
+		}
+
+		// No config, no runs sweep: guessing the default while the Data
+		// Service is unreachable could delete logs a longer setting keeps.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cfg, err := data.Config(ctx)
+		cancel()
+		if err != nil {
+			log.Printf("router: run log sweep skipped: load config: %v", err)
+			return
+		}
+		if cfg.LogRetentionDays < 1 {
+			return
+		}
+		retention := time.Duration(cfg.LogRetentionDays) * 24 * time.Hour
+		if n, err := runlogs.Sweep(runsDir, retention, time.Now()); err != nil {
+			log.Printf("router: run log sweep: %v", err)
+		} else if n > 0 {
+			log.Printf("router: run log sweep removed %d run(s) older than %d day(s)", n, cfg.LogRetentionDays)
+		}
+	}
+	sweep()
+	for range time.Tick(time.Hour) {
+		sweep()
 	}
 }
