@@ -89,32 +89,40 @@ agent at any point.
 
 ```mermaid
 flowchart TB
-    UI["Desktop app<br/>(Electron)"]
-    Router["Router<br/>sessions · pipelines · live streams"]
-    Data[("Data Service<br/>tasks · sessions · files · metrics<br/>event log (SQLite)")]
-    S1["Session"]
-    S2["Session"]
-    P1["Pipeline run"]
-    Prov["Agent providers<br/>Claude Code · Codex · Goose · Hermes · Kiro"]
+    App["<b>Desktop app</b><br/>what you see and click"]
+    Router["<b>Router</b><br/>always on: starts work and<br/>streams it to the app live"]
+    Data[("<b>Data Service</b><br/>single source of truth;<br/>logs every change")]
 
-    UI -- "HTTP + live events" --> Router
-    Router -- "starts / stops" --> S1 & S2 & P1
-    Router <--> Data
-    S1 & S2 & P1 -- "read / write" --> Data
-    S1 & S2 & P1 --> Prov
+    subgraph Workers[" "]
+        direction TB
+        Sessions["<b>Sessions</b><br/>one per conversation,<br/>each running one agent"]
+        Pipelines["<b>Pipeline runs</b><br/>carry a task graph<br/>from ready to merged"]
+    end
+
+    subgraph Agents[" "]
+        direction TB
+        Claude["Claude Code"]
+        Codex["Codex"]
+        Goose["Goose"]
+        Hermes["Hermes"]
+        Kiro["Kiro"]
+    end
+
+    App -- "your actions / live updates" --> Router
+    Router -- "starts and stops" --> Workers
+    Router <-- "reads and writes" --> Data
+    Workers -- "reads and writes" --> Data
+    Workers -- "through provider adapters" --> Agents
 ```
 
-- The **desktop app** only displays state and sends your actions. It talks
-  to the Router and nothing else.
-- The **Router** is always running. It starts and stops sessions and
-  pipeline runs, and streams their output to the app live.
-- Each **Session** owns one running agent. Each **Pipeline run** carries a
-  task graph through its stages.
-- The **Data Service** is the single source of truth. Every change is
-  written together with an event describing it, which is what makes
-  everything observable and replayable.
-- **Providers** adapt each agent CLI to a common interface, so the rest of
-  mads doesn't care which agent you picked.
+| Part | Its job | Runs |
+|---|---|---|
+| **Desktop app** | Shows state and sends your actions. It talks to the Router and nothing else. | While the app is open |
+| **Router** | Starts and stops sessions and pipeline runs, and streams their output to the app as it happens. | Always |
+| **Session** | Owns one running agent and keeps track of the files it touches. | One per active session |
+| **Pipeline run** | Carries a task graph through its stages, each task in its own worktree and branch. | One per running pipeline |
+| **Data Service** | Owns everything mads saves. Each change is written together with an event describing it, which is what makes everything observable and replayable. | Always |
+| **Provider adapters** | Give every agent CLI the same interface, so the rest of mads doesn't care which agent you picked. | Inside each session and pipeline run |
 
 Everything runs locally. Your data lives in `~/.mads`.
 
