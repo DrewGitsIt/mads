@@ -344,9 +344,16 @@ export function Launchpad({
             onBlur={() => setFocused(false)}
           />
           {/* Outside the field, so it can never be sent: once the placeholder
-              is gone, the keys are a note under the text being written. */}
-          {focused && text !== "" && (
-            <div className={styles.keyHint} aria-hidden="true" data-testid="launchpad-key-hint">
+              is gone, the keys are a note under the text being written. It
+              keeps its line while the field has text and only fades with
+              focus, so clicking in and out never moves the box. */}
+          {text !== "" && (
+            <div
+              className={styles.keyHint}
+              aria-hidden="true"
+              data-testid="launchpad-key-hint"
+              data-shown={focused || undefined}
+            >
               <kbd>↵</kbd> to start, <kbd>⇧↵</kbd> for a new line
             </div>
           )}

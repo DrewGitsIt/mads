@@ -32,11 +32,16 @@ export interface RunwayInput {
   usable: number;
   /** Trim and settle lower the floor to this; null = not lowered. */
   cap: number | null;
+  /** Pages already turned since the anchor, and how far they went in all. */
+  pages?: number;
+  offset?: number;
 }
 
 export interface Runway {
   /** Pages turned since the anchor (0 = the first screen). */
   pages: number;
+  /** How far those pages went: each turn's distance, kept as it was when it turned. */
+  offset: number;
   /** Where the spacer ends: the bottom the lock pins to. */
   floor: number;
   spacer: number;
@@ -48,18 +53,23 @@ export function pageSize(usable: number): number {
 }
 
 /**
- * Depends only on where things are, not on what happened: a reader coming
- * back to the bottom after scrolling away lands on the page they'd be on had
- * they never left. At the bottom scrollTop = anchor − gap + pages × page,
- * which doesn't depend on `usable`, so a growing composer moves nothing.
+ * Pages turned stay turned, each by the distance it went at the time: at the
+ * bottom scrollTop = anchor − gap + offset, which doesn't depend on `usable`,
+ * so the pinned cluster growing or shrinking (a composer line, a running
+ * subagent's row) never moves the text — it only covers or uncovers the
+ * bottom of it. A cluster row that shows while a card is off screen would
+ * otherwise move the card back on screen, hide, and move it off again, every
+ * frame. Text reaching the bottom edge turns as many pages as it takes, so a
+ * burst lands where paging through it would.
  */
-export function runwayFor({ anchorTop, tail, usable, cap }: RunwayInput): Runway {
-  if (!(usable > 0)) return { pages: 0, floor: tail, spacer: 0 };
+export function runwayFor({ anchorTop, tail, usable, cap, pages = 0, offset = 0 }: RunwayInput): Runway {
+  if (!(usable > 0)) return { pages, offset, floor: tail, spacer: 0 };
   const top = anchorTop - ANCHOR_GAP_PX;
-  const over = tail - (top + usable - EDGE_PX);
-  const pages = over > 0 ? Math.ceil(over / pageSize(usable)) : 0;
-  const floor = Math.min(top + pages * pageSize(usable) + usable, cap ?? Infinity);
-  return { pages, floor, spacer: Math.max(0, Math.round(floor - tail)) };
+  const over = tail - (top + offset + usable - EDGE_PX);
+  const turns = over > 0 ? Math.ceil(over / pageSize(usable)) : 0;
+  const moved = offset + turns * pageSize(usable);
+  const floor = Math.min(top + moved + usable, cap ?? Infinity);
+  return { pages: pages + turns, offset: moved, floor, spacer: Math.max(0, Math.round(floor - tail)) };
 }
 
 /**

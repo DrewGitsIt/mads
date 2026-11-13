@@ -96,6 +96,7 @@ import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
 import { STREAM_REATTACH_EVENT, type StreamReattachDetail } from "./streamReattachSignal";
 import { useStickToBottom } from "./useStickToBottom";
 import { useRunway } from "./useRunway";
+import { useDoubleEnter } from "./useDoubleEnter";
 import { useOlderPages } from "./useOlderPages";
 import { FindBar, useFindBar } from "./Find/FindBar";
 import { useVisibleCards } from "./useVisibleCards";
@@ -1170,6 +1171,10 @@ export function ConversationTab({
     };
   }, [runway]);
 
+  // Enter twice on an empty composer (or nowhere in particular) does what
+  // Show all does: no aiming at a chip on a page that's moving.
+  useDoubleEnter(tabRef, reveal.behind, revealAll);
+
   // Ctrl/Cmd+↑/↓ hops between the user's own messages — anchored on the
   // [data-user-msg] elements ChatRenderer stamps on each user bubble.
   useEffect(() => {
@@ -1440,6 +1445,7 @@ export function ConversationTab({
     if (session.activity !== "active") setWaking(true);
     optimisticTurn.current = !turnLive;
     if (!turnLive) convDispatch({ type: "turn", turn: { active: true } });
+    convDispatch({ type: "sending", on: true });
   };
   const noteSendError = (msg: string) => {
     setWaking(false);
@@ -1447,10 +1453,12 @@ export function ConversationTab({
     setSendFailure(msg);
     if (optimisticTurn.current) convDispatch({ type: "turn", turn: { active: false } });
     optimisticTurn.current = false;
+    convDispatch({ type: "sending", on: false });
   };
   const noteQueued = (q: QueuedMessage) => {
     setWaking(false);
     optimisticTurn.current = false;
+    convDispatch({ type: "sending", on: false }); // it arrives later, as a delivery
     if (!queuedMessages.some((m) => m.id === q.id)) {
       convDispatch({ type: "queued", queued: [...queuedMessages, q] });
     }

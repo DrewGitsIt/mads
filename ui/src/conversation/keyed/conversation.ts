@@ -71,6 +71,14 @@ export interface ConvState {
   keyed: boolean;
   turn: TurnState;
   queued: QueuedMessage[];
+  /**
+   * A send from this tab is on its way: its user_message counts as live
+   * even if it comes back in a replay (a sleeping session's send wakes it,
+   * and the stream reconnects to a replay that holds it). `sentKey`: the
+   * replayed one taken as it so far — the replay's latest.
+   */
+  sending?: boolean;
+  sentKey?: string;
 }
 
 export function emptyConversation(): ConvState {
@@ -100,6 +108,8 @@ export type ConvAction =
   | { type: "queued"; queued: QueuedMessage[] }
   /** The turn state from outside the stream (Stop, the session record). */
   | { type: "turn"; turn: Partial<TurnState> }
+  /** This tab started a send (on) / it failed or was queued (off). */
+  | { type: "sending"; on: boolean }
   /** Another session: start over. */
   | { type: "reset" };
 
@@ -168,6 +178,8 @@ export function conversationReducer(s: ConvState, a: ConvAction): ConvState {
       return applyFrame(s, a.frame);
     case "queued":
       return { ...s, queued: a.queued };
+    case "sending":
+      return { ...s, sending: a.on, sentKey: undefined };
     case "turn": {
       const next = a.turn.active && !s.turn.active ? startTurn(s) : s;
       return { ...next, turn: { ...next.turn, ...a.turn } };
@@ -350,13 +362,23 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
     case "replay_end": {
       const rows = { ...s.rows };
       for (const k of s.tail) if (rows[k]?.stale) rows[k] = { ...rows[k], stale: false };
-      return { ...s, rows, replaying: false };
+      // The send was in the replay: it's arrived.
+      const sent = s.sentKey ? { sending: false, sentKey: undefined } : {};
+      return { ...s, ...sent, rows, replaying: false };
     }
     case "user_message": {
       if (!key || s.rows[key]) return s;
       // A send (a queue delivery too) opens its turn; a replayed one doesn't —
       // hello.turn already said whether a turn runs.
-      const base = s.replaying ? s : startTurn(s);
+      let base = s.replaying ? s : startTurn(s);
+      // This tab's send, replayed: the latest user message in the replay is
+      // taken as it (any before it were history after all).
+      const ours = s.replaying && !!s.sending;
+      if (ours) {
+        const prev = s.sentKey ? s.rows[s.sentKey] : undefined;
+        const rows = prev ? { ...s.rows, [s.sentKey!]: { ...prev, paced: false } } : s.rows;
+        base = { ...base, rows, sentKey: key };
+      } else if (!s.replaying) base = { ...base, sending: false, sentKey: undefined };
       return upsertLive(base, key, () => ({
         key,
         role: "user",
@@ -365,7 +387,7 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
         timestamp: str(d.ts),
         live: true,
         current: true,
-        paced,
+        paced: paced || ours,
       }));
     }
     case "item_start": {
