@@ -275,9 +275,12 @@ describe("Launchpad", () => {
     expect(hint()).toBeNull(); // the placeholder says it while empty
     fireEvent.change(textarea, { target: { value: "Fix the thing" } });
     expect(hint()?.textContent).toBe("↵ to start, ⇧↵ for a new line");
+    expect(hint()?.dataset.shown).toBeDefined();
     expect(textarea.value).toBe("Fix the thing");
+    // Blurred, it fades but keeps its line: the box doesn't move.
     fireEvent.blur(textarea);
-    expect(hint()).toBeNull();
+    expect(hint()).not.toBeNull();
+    expect(hint()?.dataset.shown).toBeUndefined();
   });
 
   it("labels the button Start, named Start session for assistive tech", () => {
