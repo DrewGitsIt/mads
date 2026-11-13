@@ -277,6 +277,9 @@ func Check(ctx context.Context, p provider.Provider, s Script) []Result {
 	// working declaration needs the DelegateInspector strategy, and an
 	// unsupported one must not quietly carry it.
 	c.add(provider.BehaviorDelegateTranscript, c.delegateInspector(), "structural: the strategy, not a live delegate")
+	// Background output: a scripted run starts no background process, so
+	// held structurally the same way.
+	c.add(provider.BehaviorBackgroundOutput, c.backgroundOutputReader(), "structural: the strategy, not a live process")
 	for _, b := range []provider.Behavior{
 		provider.BehaviorDelegateLifecycle, provider.BehaviorDelegateSteer, provider.BehaviorDelegateStop,
 	} {
@@ -325,6 +328,19 @@ func (c *checker) delegateInspector() error {
 		return errors.New("declared working but the provider doesn't implement DelegateInspector")
 	case !works && has:
 		return errors.New("declared unsupported but the provider implements DelegateInspector")
+	}
+	return nil
+}
+
+// backgroundOutputReader checks BehaviorBackgroundOutput against the
+// BackgroundOutputReader strategy: declared and implemented must agree.
+func (c *checker) backgroundOutputReader() error {
+	_, has := c.p.(provider.BackgroundOutputReader)
+	switch works := c.m[provider.BehaviorBackgroundOutput].Works(); {
+	case works && !has:
+		return errors.New("declared working but the provider doesn't implement BackgroundOutputReader")
+	case !works && has:
+		return errors.New("declared unsupported but the provider implements BackgroundOutputReader")
 	}
 	return nil
 }

@@ -43,6 +43,9 @@ type Scenario struct {
 	// exactly "a provider with no announcement mechanism" — the case the
 	// drill-in's raw-log fallback exists for.
 	AnnounceOneShotRef bool `yaml:"announce_one_shot_ref,omitempty"`
+	// BackgroundShapes replaces or adds to the built-in BackgroundShapes,
+	// by name, for this scenario's Background steps.
+	BackgroundShapes map[string]BackgroundShape `yaml:"background_shapes,omitempty"`
 }
 
 // RefAnnounceTiming selects when a fake session's ref becomes knowable.
@@ -155,6 +158,10 @@ type ToolStep struct {
 	Result string `yaml:"result,omitempty"`
 	// DurationMs is how long the tool runs before its result.
 	DurationMs int `yaml:"duration_ms,omitempty"`
+	// Background makes the step a background process (background.go): its
+	// shape names the call and writes its result, so Name, Input and
+	// Result are ignored. Trust treats it as a command.
+	Background *BackgroundStep `yaml:"background,omitempty"`
 }
 
 // Validate reports every problem at once (§10.3 ethos).
@@ -168,6 +175,16 @@ func (sc Scenario) Validate() error {
 			probs = append(probs, fmt.Sprintf("rule %d: rate_limit and rate_limit_times are mutually exclusive", i))
 		}
 		for j, ts := range r.Tools {
+			if ts.Background != nil {
+				if name := ts.Background.Shape; name != "" {
+					if _, ok := sc.BackgroundShapes[name]; !ok {
+						if _, ok := BackgroundShapes[name]; !ok {
+							probs = append(probs, fmt.Sprintf("rule %d tool %d: background shape %q is not defined", i, j, name))
+						}
+					}
+				}
+				continue
+			}
 			if ts.Name == "" {
 				probs = append(probs, fmt.Sprintf("rule %d tool %d: name is required", i, j))
 			}

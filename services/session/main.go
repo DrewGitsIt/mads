@@ -86,7 +86,7 @@ func resolveAgentEnv(cfg contracts.Config, parentEnv []string) (mode agentenv.Mo
 // fakeScenario, when set, scripts the fake provider (the YAML `mads run
 // -fake-scenario` and the pipeline service take), so a test driving a real
 // session child through the Router can script its turns too.
-func buildProviderRegistry(mode agentenv.Mode, passthrough, credEnv []string, fakeScenario string) (*provider.Registry, error) {
+func buildProviderRegistry(madsHome string, mode agentenv.Mode, passthrough, credEnv []string, fakeScenario string) (*provider.Registry, error) {
 	registry := provider.NewRegistry()
 	if err := registry.Register(claudecode.New(claudecode.Config{
 		EnvMode:        mode,
@@ -139,13 +139,15 @@ func buildProviderRegistry(mode agentenv.Mode, passthrough, credEnv []string, fa
 	})); err != nil {
 		return nil, fmt.Errorf("register codex provider: %w", err)
 	}
-	fakeProv := fake.New()
+	// The Router's own fake serves background output from the same dir.
+	bgOpt := fake.WithBackgroundDir(filepath.Join(madsHome, "fake-background"))
+	fakeProv := fake.New(bgOpt)
 	if fakeScenario != "" {
 		sc, err := fake.LoadScenario(fakeScenario)
 		if err != nil {
 			return nil, fmt.Errorf("fake scenario: %w", err)
 		}
-		if fakeProv, err = fake.NewWithScenario(sc); err != nil {
+		if fakeProv, err = fake.NewWithScenario(sc, bgOpt); err != nil {
 			return nil, fmt.Errorf("fake scenario: %w", err)
 		}
 	}
@@ -201,7 +203,7 @@ func main() {
 	}
 	mode, passthrough, credEnv := resolveAgentEnv(cfg, os.Environ())
 
-	registry, err := buildProviderRegistry(mode, passthrough, credEnv, *fakeScenario)
+	registry, err := buildProviderRegistry(*madsHome, mode, passthrough, credEnv, *fakeScenario)
 	if err != nil {
 		log.Fatalf("session: %v", err)
 	}

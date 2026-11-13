@@ -122,6 +122,13 @@ export interface RouterClient {
    */
   streamSessionV2(sessionId: string, after?: string): SessionEventSource;
   /**
+   * The output of a call that kept running as a background process
+   * (`/sessions/{id}/tools/{toolUseId}/output`), read from the harness's own
+   * file: "trimmed" (bytes skipped), unnamed base64 chunks, "reset", and
+   * "end" with "ended" | "gone" | "none". See backgroundOutput.ts.
+   */
+  streamToolOutput(sessionId: string, toolUseId: string): SessionEventSource;
+  /**
    * `queue: true` asks the session to hold a message sent mid-turn and
    * deliver it when the turn ends (resolving `{status: "queued"}`) rather
    * than refuse it with 409. The queue lives in the session process, so it
@@ -680,6 +687,12 @@ export class FetchRouterClient implements RouterClient {
   // so reattaching restores terminal scrollback.
   streamSession(sessionId: string): SessionEventSource {
     return new EventSource(`${this.baseUrl}/sessions/${sessionId}/output`);
+  }
+
+  streamToolOutput(sessionId: string, toolUseId: string): SessionEventSource {
+    return new EventSource(
+      `${this.baseUrl}/sessions/${sessionId}/tools/${encodeURIComponent(toolUseId)}/output`,
+    );
   }
 
   async sendMessage(

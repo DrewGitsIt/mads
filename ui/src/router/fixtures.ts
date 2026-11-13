@@ -624,6 +624,12 @@ export class FakeSessionEventSource implements SessionEventSource {
     this.listeners.get(event.kind)?.forEach((listener) => listener(data));
   }
 
+  /** Test-only: one SSE event with its data verbatim (`event: <type>`, `data: <data>`). */
+  emitRaw(type: string, data: string, id?: string): void {
+    const ev = { data, lastEventId: id ?? "" } as MessageEvent<string>;
+    this.listeners.get(type)?.forEach((listener) => listener(ev));
+  }
+
   /** Test-only: one `/output?v=2` frame (`event: <kind>`, `id:` when given). */
   emitFrame(kind: string, data: Record<string, unknown> = {}, id?: string): void {
     const ev = { data: JSON.stringify({ kind, ...data }), lastEventId: id ?? "" } as MessageEvent<string>;
@@ -1095,6 +1101,15 @@ export class FakeRouterClient implements RouterClient {
   streamSession(): SessionEventSource {
     const source = new FakeSessionEventSource();
     this.sessionEventSources.push(source);
+    return source;
+  }
+
+  /** Every streamToolOutput source, with the call it was opened for. */
+  readonly toolOutputSources: { source: FakeSessionEventSource; sessionId: string; toolUseId: string }[] = [];
+
+  streamToolOutput(sessionId: string, toolUseId: string): SessionEventSource {
+    const source = new FakeSessionEventSource();
+    this.toolOutputSources.push({ source, sessionId, toolUseId });
     return source;
   }
 

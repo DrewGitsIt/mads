@@ -189,6 +189,9 @@ func contractsToolUse(t *provider.ToolUse) *contracts.ToolUse {
 		Status: string(t.Status),
 		Server: t.Server,
 	}
+	if t.Background != nil {
+		out.Background = &contracts.ToolBackground{TaskID: t.Background.TaskID}
+	}
 	for _, loc := range t.Locations {
 		out.Locations = append(out.Locations, contracts.ToolLocation{Path: loc.Path, Line: loc.Line})
 	}

@@ -120,6 +120,26 @@ describe("conversationReducer", () => {
     expect(s.rows.t1.tool?.result?.text).toBe("out");
   });
 
+  it("a background call's result keeps its task id, stored and live", () => {
+    const stored = run(
+      emptyConversation(),
+      page([
+        { role: "tool", key: "t1", tool: { id: "t1", name: "Bash" } },
+        { role: "tool_result", key: "t1", text: "running", tool: { id: "t1", name: "", background: { task_id: "b1" } } },
+      ]),
+    );
+    expect(stored.rows.t1.tool?.result?.background).toEqual({ task_id: "b1" });
+
+    let live = run(emptyConversation(), hello(), f("replay_end"));
+    live = run(
+      live,
+      f("item_start", { key: "c", item: "tool_use" }),
+      f("tool_use", { key: "c", tool: { id: "c", name: "Bash" } }),
+      f("tool_result", { key: "c", text: "running", tool: { id: "c", name: "", background: { task_id: "b2" } } }),
+    );
+    expect(live.rows.c.tool?.result?.background).toEqual({ task_id: "b2" });
+  });
+
   it("unsaved keeps agent rows and marks a user send failed, in place", () => {
     let s = run(emptyConversation(), hello(), f("replay_end"), f("user_message", { key: "u1", text: "hi" }), ...textItem("a1", "partial"));
     s = run(s, f("unsaved", { keys: ["u1", "a1"] }));

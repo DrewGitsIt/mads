@@ -229,6 +229,9 @@ type transcriptLine struct {
 	// wrapper; the origin carries the sender and the bare body).
 	Origin  *wireOrigin  `json:"origin"`
 	Message *wireMessage `json:"message"`
+	// ToolUseResult is a tool_result line's structured result; only a
+	// background call's task id is read (background_output.go).
+	ToolUseResult json.RawMessage `json:"toolUseResult"`
 	// Attachment is an "attachment" line's payload. Only the queued_command
 	// kind is read: a peer message that arrived mid-turn is recorded as one
 	// (peerAttachment), and so are the human's own mid-turn send
@@ -708,7 +711,7 @@ func (st *transcriptState) add(line []byte, msgs []provider.Message) []provider.
 				msgs = append(msgs, provider.Message{
 					Role:      "tool_result",
 					Text:      toolResultText(b.Content),
-					Tool:      &provider.ToolUse{ID: b.ToolUseID},
+					Tool:      &provider.ToolUse{ID: b.ToolUseID, Background: backgroundOf(l.ToolUseResult, toolResultBlocks(l.Message))},
 					Timestamp: ts,
 					IsError:   b.IsError,
 					Key:       b.ToolUseID,

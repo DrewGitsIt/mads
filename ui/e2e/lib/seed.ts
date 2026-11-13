@@ -10,7 +10,13 @@ export interface SeedSession {
 
 export async function createSession(
   routerURL: string,
-  body: { name: string; provider?: string; workspace?: string; isolation?: "worktree" | "current_dir" },
+  body: {
+    name: string;
+    provider?: string;
+    workspace?: string;
+    isolation?: "worktree" | "current_dir";
+    trust?: "full" | "auto_review" | "limited" | "read_only";
+  },
 ): Promise<SeedSession> {
   const res = await fetch(`${routerURL}/sessions`, {
     method: "POST",

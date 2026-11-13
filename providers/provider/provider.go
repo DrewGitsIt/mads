@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 )
@@ -442,6 +443,39 @@ type DelegateInspector interface {
 	// ended — for a conversation mads never watched run (an import). None is
 	// an empty list, not an error.
 	DelegateHistory(ctx context.Context, ref string) ([]DelegateRecord, error)
+}
+
+// ErrNoBackgroundOutput: the call isn't one whose background output the
+// adapter can vouch for — not a background call of that session, or one
+// whose output file failed the adapter's checks (logged by the adapter, not
+// explained to the caller).
+var ErrNoBackgroundOutput = errors.New("provider: no background output for that call")
+
+// ErrBackgroundOutputGone: the call did run in the background, but its
+// output file has since been removed (the harness's scratch directory was
+// cleaned).
+var ErrBackgroundOutputGone = errors.New("provider: background output removed")
+
+// BackgroundOutputReader is the optional strategy for
+// BehaviorBackgroundOutput: the output of a tool call that kept running as a
+// background process, in the session whose provider-native ref is ref, found
+// by the call's own id — never by a path, which the adapter works out from
+// what it trusts. Errors are ErrNoBackgroundOutput, ErrBackgroundOutputGone,
+// or a failure reading the harness's store.
+type BackgroundOutputReader interface {
+	OpenBackgroundOutput(ctx context.Context, ref, toolUseID string) (*BackgroundOutput, error)
+}
+
+// BackgroundOutput is one background process's output file, open and
+// checked. The caller owns File and tails it from the descriptor, so the
+// file it reads is the one the adapter checked.
+type BackgroundOutput struct {
+	File *os.File
+	// Ended reports whether tail — the file's last bytes, up to 256 — shows
+	// the process has finished writing, so a reader can stop following it.
+	// False says nothing: a harness that ends without a marker leaves the
+	// reader following until it stops on its own.
+	Ended func(tail []byte) bool
 }
 
 // DelegateRecord is one delegate as a harness's history records it, start to

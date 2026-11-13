@@ -108,6 +108,9 @@ func normalizeTurns(msgs []provider.Message, src func(*provider.Inbound, time.Ti
 				Status: string(m.Tool.Status),
 				Server: m.Tool.Server,
 			}
+			if m.Tool.Background != nil {
+				tm.Tool.Background = &contracts.ToolBackground{TaskID: m.Tool.Background.TaskID}
+			}
 			for _, loc := range m.Tool.Locations {
 				tm.Tool.Locations = append(tm.Tool.Locations, contracts.ToolLocation{Path: loc.Path, Line: loc.Line})
 			}

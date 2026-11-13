@@ -14,6 +14,12 @@
 //	                    journey needs
 //	"slow"      → streams until interrupted
 //	"recall"    → replies with markers echoed earlier in the conversation
+//	"background [n] [ms] [shape] [gone|killed|silent|fail]"
+//	            → starts a background process writing n lines ("line 1"…,
+//	              default 5) every ms (default 200) in a harness's shape
+//	              (default claude-code; see background.go), then its
+//	              closing line; gone removes the file after, killed and
+//	              fail change the closing line, silent writes none
 //	"crash"     → dies mid-turn (event stream closes with no turn end)
 //	"ratelimit" → the turn fails with a rate-limit error
 //	"fail once <x>" → fails like "ratelimit" the first time it's sent in a
@@ -35,6 +41,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -95,6 +102,8 @@ type Fake struct {
 	// oneShotResumes records every OneShot's Resume ref, in order
 	// (ResumeCalls).
 	oneShotResumes []string
+	// backgroundDir holds background processes' output (background.go).
+	backgroundDir string
 }
 
 // Option configures a Fake at construction. The zero value of every Option
@@ -238,8 +247,11 @@ func (f *Fake) Matrix() provider.Matrix {
 		// this adapter's wire.
 		provider.BehaviorDelegateLifecycle:  provider.Unsupported,
 		provider.BehaviorDelegateTranscript: provider.Unsupported,
-		provider.BehaviorDelegateSteer:      provider.Unsupported,
-		provider.BehaviorDelegateStop:       provider.Unsupported,
+		// A Background tool step writes its output where OpenBackgroundOutput
+		// finds it, in a scripted harness's shape (background.go).
+		provider.BehaviorBackgroundOutput: provider.Native,
+		provider.BehaviorDelegateSteer:    provider.Unsupported,
+		provider.BehaviorDelegateStop:     provider.Unsupported,
 		// Every item is keyed live and in the in-memory store, and
 		// TranscriptSince reads the store by row index.
 		provider.BehaviorStableKeys: provider.Native,
@@ -695,6 +707,8 @@ func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) tur
 			blocks: [][]string{{"Looking. "}, {"One file."}},
 			tools:  []ToolStep{{Name: "ls", Result: "a.txt"}},
 		}
+	case prompt == "background" || strings.HasPrefix(prompt, "background "):
+		return turnPlan{tools: []ToolStep{{Background: backgroundFromPrompt(strings.TrimPrefix(prompt, "background"))}}, chunks: []string{"started it in the background"}}
 	case prompt == "attempt-command":
 		return turnPlan{
 			tools:  []ToolStep{{Name: "run_command", Command: true}},
@@ -836,6 +850,8 @@ type fakeSession struct {
 	mu        sync.Mutex
 	closed    bool
 	announced bool // see Start's construction comment
+
+	bgState // background processes (background.go)
 }
 
 // itemKey is the fake's native id for one item of a turn: unique within
@@ -863,13 +879,17 @@ func (s *fakeSession) SendKeyed(ctx context.Context, text, id string) error {
 // and the refusal reason to emit when it is not. TrustFull (and the zero
 // value, normalized to TrustFull in Start) always allows every tool.
 func (s *fakeSession) toolAllowed(ts ToolStep) (bool, string) {
+	if ts.Background != nil {
+		sh, _ := s.f.shape(ts.Background.Shape)
+		ts.Name = sh.ToolName
+	}
 	switch s.trust {
 	case provider.TrustLimited:
-		if ts.Command {
+		if ts.Command || ts.Background != nil {
 			return false, fmt.Sprintf("trust %s refuses tool %q", s.trust, ts.Name)
 		}
 	case provider.TrustReadOnly:
-		if ts.Command || (ts.Path != "" && ts.Content != "") {
+		if ts.Command || ts.Background != nil || (ts.Path != "" && ts.Content != "") {
 			return false, fmt.Sprintf("trust %s refuses tool %q", s.trust, ts.Name)
 		}
 	}
@@ -1114,6 +1134,9 @@ func (s *fakeSession) respond(prompt string, plan turnPlan, turn int, user provi
 // instead of storing them (hold_until_tool_done) and stores them all once
 // the result is in; false means the session closed.
 func (s *fakeSession) runTool(ts ToolStep, key string, held *[]provider.Message) bool {
+	if ts.Background != nil {
+		return s.runBackgroundTool(ts, key, held)
+	}
 	ev := toolEvent(ts)
 	ev.Key = key
 	call := provider.Message{Role: "tool", Tool: ev.Tool, Key: key}
@@ -1142,6 +1165,38 @@ func (s *fakeSession) runTool(ts ToolStep, key string, held *[]provider.Message)
 	} else {
 		s.store(result)
 	}
+	return true
+}
+
+// runBackgroundTool is runTool for a Background step: the call, then at
+// once its result (the process is still running), then the process itself
+// writing in the background. An unusable step is an error event, and the
+// turn carries on.
+func (s *fakeSession) runBackgroundTool(ts ToolStep, key string, held *[]provider.Message) bool {
+	call, result, text, path, rec, err := s.startBackground(ts, key)
+	if err != nil {
+		return s.emit(provider.Event{Kind: provider.EventError, Text: err.Error()})
+	}
+	rows := []provider.Message{
+		{Role: "tool", Tool: call, Key: key},
+		{Role: "tool_result", Text: text, Tool: result, Key: key},
+	}
+	if held != nil {
+		*held = append(*held, rows...)
+		for _, m := range *held {
+			s.store(m)
+		}
+		*held = nil
+	} else {
+		for _, m := range rows {
+			s.store(m)
+		}
+	}
+	if !s.emit(provider.Event{Kind: provider.EventToolUse, Key: key, Tool: call}) ||
+		!s.emit(provider.Event{Kind: provider.EventToolResult, Key: key, Text: text, Tool: result}) {
+		return false
+	}
+	s.runBackground(ts, key, path, rec)
 	return true
 }
 
@@ -1278,4 +1333,37 @@ func (lf *LocatingFake) LocateSession(ctx context.Context, cwd string, spawnedAf
 	case <-ctx.Done():
 		return "", false
 	}
+}
+
+// backgroundFromPrompt reads the "background" dialect's arguments.
+func backgroundFromPrompt(args string) *BackgroundStep {
+	bg := &BackgroundStep{LineMs: 200}
+	lines, seenCount := 5, false
+	for _, w := range strings.Fields(args) {
+		if n, err := strconv.Atoi(w); err == nil && n >= 0 {
+			if !seenCount {
+				lines, seenCount = n, true
+			} else {
+				bg.LineMs = n
+			}
+			continue
+		}
+		switch w {
+		case "gone":
+			bg.RemoveAfter = true
+		case "killed":
+			bg.Killed = true
+		case "silent":
+			bg.NoEndLine = true
+		case "fail":
+			bg.ExitCode = 1
+		default:
+			bg.Shape = w
+		}
+	}
+	for i := 1; i <= lines; i++ {
+		bg.Lines = append(bg.Lines, fmt.Sprintf("line %d", i))
+	}
+	bg.Command = strings.TrimSpace("background" + args)
+	return bg
 }

@@ -269,6 +269,7 @@ func (p *Provider) Matrix() provider.Matrix {
 		// this adapter's wire.
 		provider.BehaviorDelegateLifecycle:  provider.Unsupported,
 		provider.BehaviorDelegateTranscript: provider.Unsupported,
+		provider.BehaviorBackgroundOutput:   provider.Unsupported,
 		provider.BehaviorDelegateSteer:      provider.Unsupported,
 		provider.BehaviorDelegateStop:       provider.Unsupported,
 		// The live ids are the stored ones: text keyed

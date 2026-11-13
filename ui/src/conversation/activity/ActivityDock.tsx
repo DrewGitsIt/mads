@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Delegate, PermissionRequest, ToolDiff, ToolStatus, ToolUse } from "../../router/types";
+import type { SessionEventSource } from "../../router/client";
+import type { BackgroundTask, Delegate, PermissionRequest, ToolDiff, ToolStatus, ToolUse } from "../../router/types";
 import { ActivityGroup } from "./ActivityGroup";
+import { BackgroundElapsed } from "./Background";
+import { BackgroundOutputView } from "./BackgroundOutputView";
 import type { ActivityEntry, SubStreamItem, TaskModel } from "./conversationItems";
 import { DiffView } from "./DiffView";
 import { Markdown } from "../ChatRenderer/markdown";
@@ -35,9 +38,18 @@ export type DockView =
 export interface ActivityDockProps {
   view: DockView;
   sessionId: string;
-  /** Only the tool-diff read is needed — narrow so tests can stub a two-line object. */
-  client: { getToolDiff(sessionId: string, toolUseId: string): Promise<ToolDiff | null> };
+  /**
+   * Only the tool-diff read and the background output stream are needed —
+   * narrow so tests can stub a two-line object. Without streamToolOutput a
+   * background call shows its result text, as any other call does.
+   */
+  client: {
+    getToolDiff(sessionId: string, toolUseId: string): Promise<ToolDiff | null>;
+    streamToolOutput?(sessionId: string, toolUseId: string): SessionEventSource;
+  };
   statuses?: ReadonlyMap<string, ToolStatus>;
+  /** Calls still running as background processes, by tool_use id. */
+  background?: ReadonlyMap<string, BackgroundTask>;
   /** Permission requests by tool_use id — a subagent call's card renders under its row in the stream view. */
   permissions?: ReadonlyMap<string, PermissionRequest[]>;
   onResolvePermission?: (id: string, decision: "allow" | "deny") => Promise<void>;
@@ -60,6 +72,7 @@ export function ActivityDock({
   sessionId,
   client,
   statuses,
+  background,
   permissions,
   onResolvePermission,
   onClose,
@@ -99,6 +112,7 @@ export function ActivityDock({
           sessionId={sessionId}
           client={client}
           statuses={statuses}
+          background={view.tool.id ? background?.get(view.tool.id) : undefined}
           onClose={onClose}
         />
       ) : (
@@ -126,6 +140,7 @@ function ToolDetail({
   sessionId,
   client,
   statuses,
+  background,
   onClose,
 }: {
   tool: ToolUse;
@@ -133,6 +148,8 @@ function ToolDetail({
   sessionId: string;
   client: ActivityDockProps["client"];
   statuses?: ReadonlyMap<string, ToolStatus>;
+  /** Set while the call runs on as a background process. */
+  background?: BackgroundTask;
   onClose: () => void;
 }) {
   const kind = kindOf(tool);
@@ -176,8 +193,18 @@ function ToolDetail({
         <span className={styles.title}>{toolTitle(tool)}</span>
         {server && <McpBadge server={server} />}
         <span className={styles.meta}>
-          {duration && <span>{duration}</span>}
-          {status === "in_progress" ? <Spinner /> : <StatusGlyph status={status} />}
+          {/* A call still running in the background reads as its row does. */}
+          {background ? (
+            <>
+              <BackgroundElapsed since={background.started_at} />
+              <Spinner />
+            </>
+          ) : (
+            <>
+              {duration && <span>{duration}</span>}
+              {status === "in_progress" ? <Spinner /> : <StatusGlyph status={status} />}
+            </>
+          )}
         </span>
         <button type="button" className={styles.close} aria-label="Close detail" onClick={onClose}>
           ✕
@@ -205,11 +232,22 @@ function ToolDetail({
             </>
           )
         )}
-        {result && (
-          <div className={result.is_error ? styles.error : undefined}>
-            <div className={styles.lbl}>{resultLabel(result, status)}</div>
-            <pre className={styles.pre}>{result.text ?? ""}</pre>
-          </div>
+        {result?.background && tool.id && client.streamToolOutput ? (
+          <BackgroundOutputView
+            key={tool.id}
+            sessionId={sessionId}
+            toolUseId={tool.id}
+            result={result}
+            running={background !== undefined}
+            open={client.streamToolOutput.bind(client)}
+          />
+        ) : (
+          result && (
+            <div className={result.is_error ? styles.error : undefined}>
+              <div className={styles.lbl}>{resultLabel(result, status)}</div>
+              <pre className={styles.pre}>{result.text ?? ""}</pre>
+            </div>
+          )
         )}
         {!result && status === "interrupted" && (
           <>

@@ -1941,6 +1941,7 @@ export function ConversationTab({
               sessionId={sessionId}
               client={routerClient}
               statuses={toolStatuses}
+              background={backgroundByTool}
               permissions={permissionsByToolUse}
               onResolvePermission={resolvePermission}
               onClose={() => setDockTarget(null)}

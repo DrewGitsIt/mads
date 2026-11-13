@@ -135,7 +135,10 @@ export function keyPage(rows: TranscriptMessage[]): KeyedRow[] {
     if (m.role === "tool_result") {
       const call = byKey.get(key) ?? (m.tool?.id ? out.find((r) => r.role === "tool" && r.tool?.id === m.tool?.id) : undefined);
       if (call?.tool) {
-        call.tool = { ...call.tool, result: { text: m.text, is_error: m.is_error, timestamp: m.timestamp } };
+        call.tool = {
+          ...call.tool,
+          result: { text: m.text, is_error: m.is_error, timestamp: m.timestamp, background: m.tool?.background },
+        };
       }
       return; // an orphan result has nothing to attach to
     }
@@ -434,7 +437,12 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
           tool: {
             ...base,
             ...(tool && !prev?.tool ? tool : {}),
-            result: { text: str(d.text), is_error: !!d.is_error, timestamp: new Date().toISOString() },
+            result: {
+              text: str(d.text),
+              is_error: !!d.is_error,
+              timestamp: new Date().toISOString(),
+              background: tool?.background,
+            },
           },
         };
       });

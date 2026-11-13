@@ -44,6 +44,7 @@ const BEHAVIOR_LABELS: Record<string, string> = {
   delegate_transcript: "Subagent transcripts",
   delegate_steer: "Subagent messages",
   delegate_stop: "Stopping one subagent",
+  background_output: "Background process output",
 };
 
 /**

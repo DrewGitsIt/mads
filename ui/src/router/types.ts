@@ -532,6 +532,9 @@ export interface ToolUse {
   locations?: ToolLocation[];
   // MCP server name, set only when kind is "mcp".
   server?: string;
+  // Set on a tool_result's tool when the call kept running as a background
+  // process (contracts ToolBackground); folded onto result.background.
+  background?: ToolBackground;
   // result is attached client-side (toolPairing.ts's foldToolResults) by
   // correlating a "tool_result" TranscriptMessage back to this tool_use by
   // ID — never present on the wire shape itself.
@@ -542,6 +545,14 @@ export interface ToolResult {
   text?: string;
   is_error?: boolean;
   timestamp?: string; // RFC3339
+  // The call kept running as a background process: its output streams from
+  // GET /sessions/{id}/tools/{toolUseId}/output (RouterClient.streamToolOutput).
+  background?: ToolBackground;
+}
+
+// mirrors pkg/contracts/transcript.go ToolBackground
+export interface ToolBackground {
+  task_id: string;
 }
 
 // mirrors providers/provider/event.go Usage

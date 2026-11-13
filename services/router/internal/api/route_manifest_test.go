@@ -31,6 +31,7 @@ var routeManifest = []struct {
 	{"GET", "/delegates", "GET /delegates"},
 	{"GET", "/sessions/abc/delegates", "GET /sessions/{id}/delegates"},
 	{"GET", "/sessions/abc/delegates/a1/transcript", "GET /sessions/{id}/delegates/{harnessId}/transcript"},
+	{"GET", "/sessions/abc/tools/toolu_1/output", "GET /sessions/{id}/tools/{toolUseId}/output"},
 	{"GET", "/sessions/abc/export", "GET /sessions/{id}/export"},
 	{"GET", "/sessions/abc/export", "GET /sessions/{id}/export"},
 	{"GET", "/tasks", "GET /tasks"},

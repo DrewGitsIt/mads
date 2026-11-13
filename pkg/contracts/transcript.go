@@ -34,6 +34,16 @@ type ToolUse struct {
 	Locations []ToolLocation `json:"locations,omitempty"`
 	// Server is the MCP server name, set only when Kind is "mcp".
 	Server string `json:"server,omitempty"`
+	// Background is set on a tool_result's Tool when the call kept running
+	// as a background process; its output is served by GET
+	// /sessions/{id}/tools/{toolUseId}/output.
+	Background *ToolBackground `json:"background,omitempty"`
+}
+
+// ToolBackground mirrors providers/provider/event.go ToolBackground — the
+// background process a tool call started.
+type ToolBackground struct {
+	TaskID string `json:"task_id"`
 }
 
 // ToolLocation mirrors providers/provider/event.go ToolLocation — one file

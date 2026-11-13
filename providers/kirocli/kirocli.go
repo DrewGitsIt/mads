@@ -144,6 +144,7 @@ func (p *Provider) Matrix() provider.Matrix {
 		// this adapter's wire.
 		provider.BehaviorDelegateLifecycle:  provider.Unsupported,
 		provider.BehaviorDelegateTranscript: provider.Unsupported,
+		provider.BehaviorBackgroundOutput:   provider.Unsupported,
 		provider.BehaviorDelegateSteer:      provider.Unsupported,
 		provider.BehaviorDelegateStop:       provider.Unsupported,
 		// kiro-cli isn't installed anywhere a capture could be taken, so no

@@ -26,6 +26,7 @@ history.
 | MCPServers | **Native** | `--mcp-config <file> --strict-mcp-config` threads `StartOptions.MCPServers` into a real launch on both transports — see "MCP servers" below. |
 | RefAnnounce | **Emulated** | The structured transport's `system`/`init` line carries `session_id` at connect, before any turn (Native-strength). The terminal transport prints nothing, and a structured session's own announcement can itself be dropped or delayed past its window; either way the Runner falls back to `LocateSession` (`providers/provider.SessionLocator`), a weaker best-effort mechanism — see "Ref announcement, transport by transport" below. Emulated is the honest one-row summary across both. |
 | StableKeys | **Native** | Every item's key is an id claude writes the same on stdout and in the JSONL: `<message id>:<block index>` for text and thinking, the `tool_use` id for a call and its result, `user:<line uuid>` for a user message (mads's id, sent as the stdin `uuid` by `SendKeyed`). Settle hints and an incremental reader (`TranscriptSince`) come with it. See "Conversation keys" below. |
+| BackgroundOutput | **Native** | Claude Code only. A `run_in_background` Bash call's result carries the task id (`toolUseResult.backgroundTaskId`), set on the result as `ToolUse.Background`; `OpenBackgroundOutput` finds the CLI's per-session `.output` file and checks it before anything reads it. See "Background output" below. |
 
 ## Ref announcement, transport by transport
 
@@ -461,6 +462,25 @@ was replaced (different inode) is `ErrCursorStale`.
 the empty `EventError` it always has before the `Interrupted` turn end, so
 consumers are unchanged; the stable_keys probe tolerates an error after the
 interrupt it asked for.
+
+## Background output
+
+Claude Code only; every other adapter declares `background_output` Unsupported. A `run_in_background` Bash call returns at once, and the CLI keeps writing the command's stdout and stderr, then a closing `[exited with code N]` or `[killed]` line, to
+
+```
+<root>/claude-<uid>/<project key>/<session id>/tasks/<task id>.output
+```
+
+`<root>` is `$CLAUDE_CODE_TMPDIR`, else `/tmp`. The directory is 0700, and the file stays until the OS cleans the temp dir. mads keeps no copy: the router streams the file (`GET /sessions/{id}/tools/{toolUseId}/output`) into a read-only terminal in the tool dock.
+
+The call's result names the file only in its prose ("Output is being written to: …"), and that prose is never trusted on its own (`background_output.go`):
+
+1. The request names a tool_use id, never a path. The call must be found in the session's own transcript (or one of its subagents' files), and its structured result must carry `backgroundTaskId`. Otherwise the answer is "none".
+2. The path is rebuilt from the session id and task id. The project-key segment is globbed, as for subagent files, because the CLI shortens long cwds and a worktree session launches from another one. Exactly one match is required.
+3. The prose path must resolve, through symlinks (macOS `/tmp` is `/private/tmp`), to the same file. If it doesn't, the read is refused and the refusal logged.
+4. `<root>/claude-<uid>` must be a real directory this user owns that no other user can write to (`ownedfile.PrivateDir`). The file is opened with `O_NOFOLLOW|O_NONBLOCK` and must be a regular file this user owns (`ownedfile.Open`). This rejects a subagent's `.output`, which is a symlink into its transcript, as well as a planted FIFO or a swapped-in file.
+
+A call that checks out but whose file is gone answers `ErrBackgroundOutputGone`, which the dock shows as "process output file removed". The end marker only says a process finished. Some files never get one (the CLI exited first), so a reader keeps following a file without one until it closes.
 
 ## Testing without claude installed
 

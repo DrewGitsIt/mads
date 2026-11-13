@@ -455,6 +455,17 @@ type ToolUse struct {
 	Locations []ToolLocation `json:"locations,omitempty"`
 	// Server is the MCP server name, set only when Kind is ToolKindMCP.
 	Server string `json:"server,omitempty"`
+	// Background is set on a tool_result's Tool when the call kept running
+	// as a background process after its result came back (a
+	// run_in_background Bash): its output is then elsewhere, readable
+	// through BackgroundOutputReader. Nil on every other call.
+	Background *ToolBackground `json:"background,omitempty"`
+}
+
+// ToolBackground identifies the background process a tool call started.
+type ToolBackground struct {
+	// TaskID is the harness's id for the process.
+	TaskID string `json:"task_id"`
 }
 
 // Usage is token accounting for one turn or one-shot (event log → metrics

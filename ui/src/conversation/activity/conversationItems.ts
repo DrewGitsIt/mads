@@ -527,7 +527,12 @@ export function appendSubagentItem(
             ...owner.tool,
             // Preserve any enriched status/kind the result frame carries.
             ...(event.tool?.status ? { status: event.tool.status } : {}),
-            result: { text: event.text, is_error: event.is_error, timestamp: event.timestamp },
+            result: {
+              text: event.text,
+              is_error: event.is_error,
+              timestamp: event.timestamp,
+              background: event.tool?.background,
+            },
           },
         };
       }
