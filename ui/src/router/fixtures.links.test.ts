@@ -21,3 +21,15 @@ describe("FakeRouterClient.createLink", () => {
     expect(await client.getSessionLinks("b")).toHaveLength(1);
   });
 });
+
+describe("FakeRouterClient.listLinks", () => {
+  it("returns each link touching any listed session once, and records the call", async () => {
+    const client = new FakeRouterClient();
+    const ab = await client.createLink({ granting_session_id: "a", subject_session_id: "b", preset: "monitor" });
+    const bc = await client.createLink({ granting_session_id: "b", subject_session_id: "c", preset: "monitor" });
+    await client.createLink({ granting_session_id: "x", subject_session_id: "y", preset: "monitor" });
+    expect((await client.listLinks(["a", "b", "c"])).map((l) => l.id)).toEqual([ab.id, bc.id]);
+    expect(client.listLinksCalls).toEqual([["a", "b", "c"]]);
+    await expect(client.listLinks([])).rejects.toThrow();
+  });
+});

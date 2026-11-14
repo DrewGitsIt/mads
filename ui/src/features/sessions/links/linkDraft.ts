@@ -1,4 +1,5 @@
 import { RouterValidationError, type RouterClient } from "../../../router/client";
+import { fetchAllLinksFor } from "../../../router/fetchLinks";
 import { PRESET_GRANTS, type Link, type LinkCadence, type Session } from "../../../router/types";
 
 /**
@@ -458,8 +459,7 @@ export async function applyLinkDraft(client: RouterClient, ops: PlanOp[]): Promi
       const result: ApplyResult = { appliedCount: i, total: ops.length, failed: failureOf(ops[i], err) };
       const sessionIds = [...new Set(ops.flatMap(opSessions))];
       try {
-        const lists = await Promise.all(sessionIds.map((id) => client.getSessionLinks(id)));
-        result.fresh = { sessionIds, links: lists.flat() };
+        result.fresh = { sessionIds, links: await fetchAllLinksFor(client, sessionIds) };
       } catch {
         // The live link feed will catch up; the next plan just starts from it.
       }
