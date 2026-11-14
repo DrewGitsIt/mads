@@ -1764,3 +1764,24 @@ func TestStreamSessionSubagentUsage(t *testing.T) {
 		t.Errorf("%d subagent usage events, want 1 (the main agent's call isn't one)", n)
 	}
 }
+
+// A ref with no file under TranscriptDir reads as provider.ErrTranscriptMissing,
+// both forms, and the retention setting is the config dir's settings.json.
+func TestTranscriptMissingAndRetention(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".claude", "projects")
+	if err := os.MkdirAll(filepath.Join(root, "-"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := New(Config{TranscriptDir: root})
+	if _, err := p.Transcript(context.Background(), "gone-ref"); !errors.Is(err, provider.ErrTranscriptMissing) {
+		t.Fatalf("Transcript err = %v, want ErrTranscriptMissing", err)
+	}
+	if _, err := p.KeyedTranscript(context.Background(), "gone-ref"); !errors.Is(err, provider.ErrTranscriptMissing) {
+		t.Fatalf("KeyedTranscript err = %v, want ErrTranscriptMissing", err)
+	}
+	got := p.TranscriptRetention()
+	want := &provider.Retention{File: filepath.Join(filepath.Dir(root), "settings.json"), Setting: "cleanupPeriodDays", DefaultDays: 30}
+	if got == nil || *got != *want {
+		t.Fatalf("TranscriptRetention = %+v, want %+v", got, want)
+	}
+}

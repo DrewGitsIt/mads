@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/providers/provider"
 )
 
 // Query is a parsed paging request.
@@ -110,8 +111,9 @@ func Page(rows []contracts.TranscriptMessage, q Query) (contracts.TranscriptPage
 
 // Respond is a GET /transcript handler's answer for query q over rows: the
 // status and the value to encode as JSON. With no paging parameters it is
-// rows itself, the legacy bare array, unchanged.
-func Respond(q url.Values, rows []contracts.TranscriptMessage) (int, any) {
+// rows itself, the legacy bare array, unchanged. missing (Missing) rides the
+// page; the bare array has nowhere to put it.
+func Respond(q url.Values, rows []contracts.TranscriptMessage, missing *contracts.TranscriptMissing) (int, any) {
 	query, paged, err := ParseQuery(q)
 	if !paged {
 		return http.StatusOK, rows
@@ -119,10 +121,27 @@ func Respond(q url.Values, rows []contracts.TranscriptMessage) (int, any) {
 	if err == nil {
 		var page contracts.TranscriptPage
 		if page, err = Page(rows, query); err == nil {
+			page.Missing = missing
 			return http.StatusOK, page
 		}
 	}
 	return errorResponse(err)
+}
+
+// Missing is TranscriptPage.Missing for a read of p's store that failed
+// with err: nil unless err is provider.ErrTranscriptMissing, and then the
+// retention setting p reports, if any.
+func Missing(p any, err error) *contracts.TranscriptMissing {
+	if !errors.Is(err, provider.ErrTranscriptMissing) {
+		return nil
+	}
+	m := &contracts.TranscriptMissing{}
+	if r, ok := p.(provider.TranscriptRetainer); ok {
+		if ret := r.TranscriptRetention(); ret != nil {
+			m.Retention = &contracts.TranscriptRetention{File: ret.File, Setting: ret.Setting, DefaultDays: ret.DefaultDays}
+		}
+	}
+	return m
 }
 
 func errorResponse(err error) (int, any) {

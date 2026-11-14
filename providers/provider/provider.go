@@ -415,6 +415,32 @@ type KeyedTranscriptReader interface {
 // ErrCursorStale is IncrementalTranscriptReader's "start over" answer.
 var ErrCursorStale = errors.New("provider: transcript cursor stale")
 
+// ErrTranscriptMissing is a TranscriptReader's answer for a ref its agent's
+// store doesn't hold (any more): the store was read and the conversation
+// isn't in it — the agent pruned it, or someone deleted it. A store that
+// couldn't be read at all (locked, the CLI missing) is some other error, so
+// a caller never tells the user a transcript is gone when it's unreadable.
+// Adapters wrap it (errors.Is).
+var ErrTranscriptMissing = errors.New("provider: transcript not in the agent's store")
+
+// Retention is where an agent's own setting for deleting old transcripts
+// lives, for the "no longer on disk" notice to point at.
+type Retention struct {
+	// File is the absolute path of the config file holding the setting.
+	File string
+	// Setting names it as the user would find it in File
+	// ("cleanupPeriodDays", "sessions.retention_days").
+	Setting string
+	// DefaultDays is the agent's default when the setting is unset.
+	DefaultDays int
+}
+
+// TranscriptRetainer is the optional strategy of an adapter whose agent
+// deletes old transcripts on its own. Nil means it has no such setting.
+type TranscriptRetainer interface {
+	TranscriptRetention() *Retention
+}
+
 // KeyedSender is the optional strategy for a send whose user message the
 // agent stores under a caller-supplied id (claude-code's stdin uuid,
 // codex's clientUserMessageId): id is minted by mads (a UUID), and the

@@ -134,6 +134,26 @@ type TranscriptMessage struct {
 type TranscriptPage struct {
 	Rows    []TranscriptMessage `json:"rows"`
 	HasMore bool                `json:"has_more"`
+	// Missing is set when the agent's store was read and doesn't hold this
+	// conversation (provider.ErrTranscriptMissing): Rows is then empty. A
+	// session that hasn't had a turn yet can read this way too (the agent
+	// writes its store on the first turn), so a consumer weighs it against
+	// the session's own turn record.
+	Missing *TranscriptMissing `json:"missing,omitempty"`
+}
+
+// TranscriptMissing is TranscriptPage.Missing.
+type TranscriptMissing struct {
+	// Retention is the agent's own setting for deleting old transcripts,
+	// when it has one (provider.TranscriptRetainer).
+	Retention *TranscriptRetention `json:"retention,omitempty"`
+}
+
+// TranscriptRetention mirrors provider.Retention.
+type TranscriptRetention struct {
+	File        string `json:"file"`
+	Setting     string `json:"setting"`
+	DefaultDays int    `json:"default_days,omitempty"`
 }
 
 // TranscriptPage error codes (the "code" field of a paging error body).

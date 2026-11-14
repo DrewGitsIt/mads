@@ -124,8 +124,11 @@ reply is in neither — codex stores an item only once it completes.
 Before a new thread's first turn is written, codex answers
 `thread/items/list` with `-32601 "thread/items/list is not supported yet"`
 — the same answer it gives an unknown thread id: the thread isn't in its
-local store (probed 2026-10-21). The reader takes exactly that answer as
-"nothing stored yet": an empty transcript, no error.
+local store (probed 2026-10-21; 2026-11-14 an unknown well-formed id in an
+empty `CODEX_HOME`). `Transcript` and `KeyedTranscript` take exactly that
+answer as `provider.ErrTranscriptMissing`; `TranscriptSince` as nothing
+stored yet, an empty read. codex answers the same when its sessions dir
+can't be read, so that case reads as missing too.
 
 `TranscriptSince` reads incrementally on the live session's app-server only
 (no live session: `ErrUnsupported`; use `Transcript`). Its cursor is the last

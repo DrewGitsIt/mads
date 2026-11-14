@@ -1,6 +1,8 @@
 package transcriptpage
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -8,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/providers/provider"
 )
 
 // rows builds a transcript from "role:key" specs.
@@ -139,7 +142,7 @@ func TestRespond(t *testing.T) {
 	}
 	for _, tc := range cases {
 		q, _ := url.ParseQuery(tc.query)
-		status, body := Respond(q, conv)
+		status, body := Respond(q, conv, nil)
 		if status != tc.status {
 			t.Errorf("%q: status %d, want %d", tc.query, status, tc.status)
 		}
@@ -159,8 +162,41 @@ func TestRespond(t *testing.T) {
 		}
 	}
 	q, _ := url.ParseQuery("before=u1")
-	if status, body := Respond(q, rows("user:u1", "agent:")); status != http.StatusBadRequest ||
+	if status, body := Respond(q, rows("user:u1", "agent:"), nil); status != http.StatusBadRequest ||
 		body.(map[string]string)["code"] != contracts.TranscriptErrUnkeyed {
 		t.Errorf("unkeyed before: %d %v", status, body)
+	}
+}
+
+// retainer is a provider that reports a retention setting.
+type retainer struct{}
+
+func (retainer) TranscriptRetention() *provider.Retention {
+	return &provider.Retention{File: "/cfg/settings.json", Setting: "cleanupPeriodDays", DefaultDays: 30}
+}
+
+func TestMissing(t *testing.T) {
+	gone := fmt.Errorf("read: %w", provider.ErrTranscriptMissing)
+	if m := Missing(retainer{}, errors.New("db locked")); m != nil {
+		t.Errorf("unreadable store: %+v, want nil", m)
+	}
+	if m := Missing(struct{}{}, gone); m == nil || m.Retention != nil {
+		t.Errorf("no retainer: %+v, want missing without retention", m)
+	}
+	want := contracts.TranscriptRetention{File: "/cfg/settings.json", Setting: "cleanupPeriodDays", DefaultDays: 30}
+	if m := Missing(retainer{}, gone); m == nil || m.Retention == nil || *m.Retention != want {
+		t.Errorf("retainer: %+v, want retention %+v", m, want)
+	}
+}
+
+// missing rides the page and never the legacy bare array.
+func TestRespondCarriesMissing(t *testing.T) {
+	m := &contracts.TranscriptMissing{}
+	q, _ := url.ParseQuery("limit=2")
+	if _, body := Respond(q, nil, m); body.(contracts.TranscriptPage).Missing != m {
+		t.Errorf("page: %+v, want missing", body)
+	}
+	if _, body := Respond(url.Values{}, nil, m); body.([]contracts.TranscriptMessage) != nil {
+		t.Errorf("bare array: %+v", body)
 	}
 }

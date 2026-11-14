@@ -8,6 +8,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/linkwrap"
 	"github.com/drewkidwell/mads/pkg/toolstatus"
+	"github.com/drewkidwell/mads/pkg/transcriptpage"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -38,7 +39,8 @@ type transcripter interface {
 //     switch's full duration. There providerName never changes and the
 //     TranscriptReader only needs the ref string, not a live session object.
 func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
-	return r.transcript(ctx, false)
+	rows, _ := r.TranscriptPage(ctx, false)
+	return rows
 }
 
 // KeyedTranscript is Transcript as a keyed (v2) consumer reads it
@@ -49,14 +51,18 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 // carries itself, mostly without keys (docs/CHAT-STREAM-DESIGN.md §3,
 // "ACP"). Elsewhere it is Transcript.
 func (r *Runner) KeyedTranscript(ctx context.Context) []contracts.TranscriptMessage {
-	return r.transcript(ctx, true)
+	rows, _ := r.TranscriptPage(ctx, true)
+	return rows
 }
 
-func (r *Runner) transcript(ctx context.Context, keyed bool) []contracts.TranscriptMessage {
+// TranscriptPage is Transcript (keyed false) or KeyedTranscript plus, when
+// the provider's store doesn't hold the conversation, what GET
+// /transcript's page says about it (transcriptpage.Missing).
+func (r *Runner) TranscriptPage(ctx context.Context, keyed bool) ([]contracts.TranscriptMessage, *contracts.TranscriptMissing) {
 	out := []contracts.TranscriptMessage{}
 	ref, providerName, sess := r.transcriptRef()
 	if ref == "" {
-		return out // Start hasn't finished yet
+		return out, nil // Start hasn't finished yet
 	}
 	_, storeKeyed := r.chatReader()
 
@@ -66,7 +72,7 @@ func (r *Runner) transcript(ctx context.Context, keyed bool) []contracts.Transcr
 	if sess != nil && (!keyed || !storeKeyed) {
 		if lt, ok := sess.(transcripter); ok {
 			if msgs := lt.Transcript(); len(msgs) > 0 {
-				return r.renderRows(ctx, msgs, false)
+				return r.renderRows(ctx, msgs, false), nil
 			}
 		}
 	}
@@ -75,20 +81,20 @@ func (r *Runner) transcript(ctx context.Context, keyed bool) []contracts.Transcr
 	p, err := r.providers.Get(providerName)
 	if err != nil {
 		log.Printf("runner: transcript: provider %q: %v", providerName, err)
-		return out
+		return out, nil
 	}
 	reader, ok := p.(provider.TranscriptReader)
 	if !ok {
-		return out
+		return out, nil
 	}
 	// Only the keyed form settles the tail: thinking rows are in it.
 	fromStore := keyed && storeKeyed
 	msgs, err := readStore(ctx, reader, ref, fromStore)
 	if err != nil {
 		log.Printf("runner: transcript: read %s: %v", r.sessionID, err)
-		return out
+		return out, transcriptpage.Missing(p, err)
 	}
-	return r.renderRows(ctx, msgs, fromStore)
+	return r.renderRows(ctx, msgs, fromStore), nil
 }
 
 // renderRows renders a transcript read, which is also a settle point

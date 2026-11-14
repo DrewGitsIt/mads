@@ -32,18 +32,26 @@ import (
 // provider's KeyedTranscriptReader where it has one, so stored thinking
 // rows appear by key, exactly as the live child serves them.
 func (s *server) transcriptFor(ctx context.Context, sess contracts.Session, keyed bool) []contracts.TranscriptMessage {
+	rows, _ := s.readTranscript(ctx, sess, keyed)
+	return rows
+}
+
+// readTranscript is transcriptFor plus, when the provider's store doesn't
+// hold the conversation, what GET /transcript's page says about it
+// (transcriptpage.Missing).
+func (s *server) readTranscript(ctx context.Context, sess contracts.Session, keyed bool) ([]contracts.TranscriptMessage, *contracts.TranscriptMissing) {
 	out := []contracts.TranscriptMessage{}
 	if sess.ProviderRef == "" {
-		return out // pipeline-only session (e.g. "Wave 7"): no interactive conversation ever started
+		return out, nil // pipeline-only session (e.g. "Wave 7"): no interactive conversation ever started
 	}
 	p, err := s.providers.Get(sess.Provider)
 	if err != nil {
 		log.Printf("api: transcript: provider %q: %v", sess.Provider, err)
-		return out
+		return out, nil
 	}
 	reader, ok := p.(provider.TranscriptReader)
 	if !ok {
-		return out
+		return out, nil
 	}
 	var msgs []provider.Message
 	if kr, ok := reader.(provider.KeyedTranscriptReader); ok && keyed {
@@ -53,9 +61,9 @@ func (s *server) transcriptFor(ctx context.Context, sess contracts.Session, keye
 	}
 	if err != nil {
 		log.Printf("api: transcript: read session %s: %v", sess.ID, err)
-		return out
+		return out, transcriptpage.Missing(p, err)
 	}
-	return normalizeTurns(msgs, s.inboundSources(ctx, sess))
+	return normalizeTurns(msgs, s.inboundSources(ctx, sess)), nil
 }
 
 // inboundSources resolves the senders of inbound messages (Role "inbound")
@@ -138,6 +146,7 @@ func (s *server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	q := r.URL.Query()
-	status, body := transcriptpage.Respond(q, s.transcriptFor(r.Context(), sess, transcriptpage.Keyed(q)))
+	rows, missing := s.readTranscript(r.Context(), sess, transcriptpage.Keyed(q))
+	status, body := transcriptpage.Respond(q, rows, missing)
 	writeJSON(w, status, body)
 }

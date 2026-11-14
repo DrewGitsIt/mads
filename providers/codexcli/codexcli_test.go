@@ -577,14 +577,16 @@ func TestTranscriptPrefersTheLiveProcess(t *testing.T) {
 }
 
 // Before its first turn is written, codex answers thread/items/list with
-// -32601 "not supported yet": the transcript is empty, not an error, for
-// both the live session's reads and the incremental reader.
-func TestTranscriptOfAThreadNotStoredYetIsEmpty(t *testing.T) {
+// -32601 "not supported yet", as it answers an unknown id: the whole reads
+// say provider.ErrTranscriptMissing, the incremental reader reads empty.
+func TestTranscriptOfAThreadNotStoredYetIsMissing(t *testing.T) {
 	p := fakeProvider(t)
 	s := startSession(t, p, provider.StartOptions{})
-	msgs, err := p.Transcript(context.Background(), s.Ref())
-	if err != nil || len(msgs) != 0 {
-		t.Fatalf("Transcript before the first turn = %v, %v; want empty, no error", msgs, err)
+	if _, err := p.Transcript(context.Background(), s.Ref()); !errors.Is(err, provider.ErrTranscriptMissing) {
+		t.Fatalf("Transcript before the first turn = %v; want ErrTranscriptMissing", err)
+	}
+	if _, err := p.KeyedTranscript(context.Background(), s.Ref()); !errors.Is(err, provider.ErrTranscriptMissing) {
+		t.Fatalf("KeyedTranscript before the first turn = %v; want ErrTranscriptMissing", err)
 	}
 	rows, _, err := p.TranscriptSince(context.Background(), s.Ref(), nil)
 	if err != nil || len(rows) != 0 {
@@ -593,6 +595,21 @@ func TestTranscriptOfAThreadNotStoredYetIsEmpty(t *testing.T) {
 	sendTurn(t, s, "echo mk-after")
 	if msgs, err := p.Transcript(context.Background(), s.Ref()); err != nil || len(msgs) != 2 {
 		t.Fatalf("Transcript after a turn = %+v, %v", msgs, err)
+	}
+}
+
+// An id codex doesn't hold, read through a short-lived app-server, is
+// provider.ErrTranscriptMissing; an app-server that can't start is an
+// error that isn't.
+func TestTranscriptMissing(t *testing.T) {
+	const ref = "019a0000-0000-7000-8000-000000000000"
+	if _, err := fakeProvider(t).Transcript(context.Background(), ref); !errors.Is(err, provider.ErrTranscriptMissing) {
+		t.Fatalf("Transcript(unknown) = %v; want ErrTranscriptMissing", err)
+	}
+	env, _ := fakeEnv(t)
+	broken := New(Config{Bin: filepath.Join(t.TempDir(), "no-codex"), Env: env})
+	if _, err := broken.Transcript(context.Background(), ref); err == nil || errors.Is(err, provider.ErrTranscriptMissing) {
+		t.Fatalf("Transcript(no app-server) = %v; want an error that isn't ErrTranscriptMissing", err)
 	}
 }
 

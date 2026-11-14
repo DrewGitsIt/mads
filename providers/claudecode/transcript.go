@@ -46,9 +46,26 @@ func (p *Provider) transcriptPath(ref string) (string, error) {
 		return "", err
 	}
 	if len(matches) == 0 {
-		return "", fmt.Errorf("no transcript for session %s under %s", ref, p.cfg.TranscriptDir)
+		return "", fmt.Errorf("no transcript for session %s under %s: %w", ref, p.cfg.TranscriptDir, provider.ErrTranscriptMissing)
 	}
 	return matches[0], nil
+}
+
+// claudeCleanupDefaultDays is claude-code's cleanupPeriodDays when unset.
+const claudeCleanupDefaultDays = 30
+
+// TranscriptRetention implements provider.TranscriptRetainer: claude deletes
+// transcripts older than cleanupPeriodDays at startup. The setting lives in
+// the settings.json of the config dir the transcripts are read from.
+func (p *Provider) TranscriptRetention() *provider.Retention {
+	if p.cfg.TranscriptDir == "" {
+		return nil
+	}
+	return &provider.Retention{
+		File:        filepath.Join(filepath.Dir(p.cfg.TranscriptDir), "settings.json"),
+		Setting:     "cleanupPeriodDays",
+		DefaultDays: claudeCleanupDefaultDays,
+	}
 }
 
 // transcriptCursor is TranscriptSince's position in a session's JSONL: the

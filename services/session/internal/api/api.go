@@ -539,11 +539,8 @@ func (s *server) handleCommits(w http.ResponseWriter, r *http.Request) {
 // stored thinking included (runner.KeyedTranscript) — what a keyed v2 viewer
 // merges with the stream's tail. Either read settles the tail first.
 func (s *server) handleTranscript(w http.ResponseWriter, r *http.Request) {
-	rows := s.runner.Transcript
-	if transcriptpage.Keyed(r.URL.Query()) {
-		rows = s.runner.KeyedTranscript
-	}
-	status, body := transcriptpage.Respond(r.URL.Query(), rows(r.Context()))
+	rows, missing := s.runner.TranscriptPage(r.Context(), transcriptpage.Keyed(r.URL.Query()))
+	status, body := transcriptpage.Respond(r.URL.Query(), rows, missing)
 	writeJSON(w, status, body)
 }
 
