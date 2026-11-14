@@ -122,7 +122,9 @@ session's active task → heuristic candidates → orphan flag; `commit.created`
 always, `commit.linked` when a rung resolves.
 
 Link routes (`docs/LINKED-SESSIONS-DESIGN.md`, W1.7): `POST/GET/PUT/DELETE
-/links(/{id})`, `GET /sessions/{id}/links`. A `Link` is directed (granting
+/links(/{id})`, `GET /sessions/{id}/links`, and the bulk `GET
+/links?session_ids=a,b,c` (each link once; 1 to `contracts.MaxLinkSessionIDs`
+ids, else 422). A `Link` is directed (granting
 session → subject session) and always stores a grant *set* from
 `{read, inject, orchestrate}` — presets (`monitor`, `hand_raiser`, `leader`) are
 just named shorthands resolved to a grant set before storage, so new grant

@@ -576,6 +576,40 @@ func (l *Links) ForSession(ctx context.Context, sessionID string) ([]contracts.L
 	return out, errors.Join(rows.Err(), rows.Close())
 }
 
+// ForSessions is ForSession over many sessions in one query: every link
+// with any of sessionIDs on either side, ordered by creation. A link whose
+// two endpoints are both requested appears once. Like ForSession, unknown
+// ids contribute nothing. Always returns a non-nil slice; empty input runs
+// no query.
+func (l *Links) ForSessions(ctx context.Context, sessionIDs []string) ([]contracts.Link, error) {
+	out := []contracts.Link{}
+	if len(sessionIDs) == 0 {
+		return out, nil
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(sessionIDs)), ",")
+	args := make([]any, 0, 2*len(sessionIDs))
+	for _, id := range sessionIDs {
+		args = append(args, id)
+	}
+	args = append(args, args...)
+	rows, err := l.log.db.QueryContext(ctx,
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, orchestrate_error, created_at, updated_at
+		 FROM links WHERE granting_session_id IN (`+ph+`) OR subject_session_id IN (`+ph+`) ORDER BY created_at`,
+		args...)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		link, err := scanLinkRow(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		out = append(out, *link)
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
+}
+
 // CreateImplicitHandRaiser creates (or returns the existing) system-granted
 // self-referential hand-raiser link for sessionID
 // (docs/LINKED-SESSIONS-DESIGN.md decision 6): {read,inject} from sessionID

@@ -51,6 +51,8 @@ func TestLinkRoutes404WhenFlagOff(t *testing.T) {
 		{"PUT", "/links/lnk_nope", contracts.LinkRequest{Grants: []contracts.Grant{contracts.GrantRead}}},
 		{"DELETE", "/links/lnk_nope", nil},
 		{"GET", "/sessions/" + subject.ID + "/links", nil},
+		{"GET", "/links?session_ids=" + subject.ID, nil},
+		{"GET", "/links", nil}, // the gate answers before validation
 	}
 	for _, c := range cases {
 		var resp *http.Response

@@ -2,6 +2,8 @@ package contracts_test
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,5 +58,31 @@ func TestLinkConsumerParsesGolden(t *testing.T) {
 	wantJSON, _ := json.Marshal(want)
 	if string(gotJSON) != string(wantJSON) {
 		t.Errorf("golden round-trip mismatch:\ngot:  %s\nwant: %s", gotJSON, wantJSON)
+	}
+}
+
+func TestParseLinkSessionIDs(t *testing.T) {
+	ids, verr := contracts.ParseLinkSessionIDs(" ses_a ,,ses_b, ses_a ,")
+	if verr != nil || fmt.Sprint(ids) != "[ses_a ses_b]" {
+		t.Errorf("ParseLinkSessionIDs = %v, %v; want [ses_a ses_b]", ids, verr)
+	}
+
+	atCap := make([]string, contracts.MaxLinkSessionIDs)
+	for i := range atCap {
+		atCap[i] = fmt.Sprintf("ses_%d", i)
+	}
+	if ids, verr := contracts.ParseLinkSessionIDs(strings.Join(append(atCap, "ses_0"), ",")); verr != nil || len(ids) != contracts.MaxLinkSessionIDs {
+		t.Errorf("at cap (+ a dupe): %d ids, %v; want %d, nil", len(ids), verr, contracts.MaxLinkSessionIDs)
+	}
+
+	for raw, msg := range map[string]string{
+		"":                                  "required",
+		" , ,":                              "required",
+		strings.Join(atCap, ",") + ",ses_x": "at most 200 session ids",
+	} {
+		ids, verr := contracts.ParseLinkSessionIDs(raw)
+		if ids != nil || verr == nil || len(verr.Errors) != 1 || verr.Errors[0] != (contracts.FieldError{Field: "session_ids", Message: msg}) {
+			t.Errorf("ParseLinkSessionIDs(%.20q…) = %v, %v; want session_ids: %s", raw, ids, verr, msg)
+		}
 	}
 }

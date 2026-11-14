@@ -994,6 +994,20 @@ func (c *Client) LinksForSession(ctx context.Context, sessionID string) ([]contr
 	return out, err
 }
 
+// LinksForSessions lists links with any of sessionIDs on either side, each
+// link once, ordered by creation — the bulk form of LinksForSession. The
+// Data Service refuses more than contracts.MaxLinkSessionIDs ids; callers
+// chunk. An empty sessionIDs returns an empty list without a request.
+func (c *Client) LinksForSessions(ctx context.Context, sessionIDs []string) ([]contracts.Link, error) {
+	if len(sessionIDs) == 0 {
+		return []contracts.Link{}, nil
+	}
+	q := url.Values{"session_ids": {strings.Join(sessionIDs, ",")}}
+	var out []contracts.Link
+	err := c.do(ctx, http.MethodGet, "/links?"+q.Encode(), nil, &out)
+	return out, err
+}
+
 // AppendLinkDigest queues one compressed digest on an on_signal link's
 // mailbox (docs/LINKED-SESSIONS-DESIGN.md decision 4). Capped server-side;
 // oldest entries drop first.

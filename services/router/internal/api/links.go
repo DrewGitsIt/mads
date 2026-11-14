@@ -271,6 +271,28 @@ func (s *server) handleDeleteLink(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// handleListLinks is the bulk links read: GET /links?session_ids=a,b,c
+// returns every link with any listed session on either side, each once,
+// ordered by creation. Ids are comma-separated, trimmed and deduped; none,
+// or more than contracts.MaxLinkSessionIDs, is a 400. The UI's rail uses it
+// in place of one GET /sessions/{id}/links per visible session.
+func (s *server) handleListLinks(w http.ResponseWriter, r *http.Request) {
+	ids, verr := contracts.ParseLinkSessionIDs(r.URL.Query().Get("session_ids"))
+	if verr != nil {
+		writeJSON(w, http.StatusBadRequest, verr)
+		return
+	}
+	list, err := s.data.LinksForSessions(r.Context(), ids)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if list == nil {
+		list = []contracts.Link{}
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
 func (s *server) handleListSessionLinks(w http.ResponseWriter, r *http.Request) {
 	list, err := s.data.LinksForSession(r.Context(), r.PathValue("id"))
 	if err != nil {

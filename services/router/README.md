@@ -243,9 +243,11 @@ never called peer-to-peer.
   `pkg/githook`/the watcher talking to the Data Service directly, never through the
   Router.
 - `GET /sessions/{id}` — the session record (proxies `dataclient.Session`); 404 if unknown.
-- `POST /links`, `GET/PUT/DELETE /links/{id}`, `GET /sessions/{id}/links` — thin
+- `POST /links`, `GET/PUT/DELETE /links/{id}`, `GET /sessions/{id}/links`, and the
+  bulk `GET /links?session_ids=a,b,c` (comma-separated, trimmed, deduped; none or
+  more than `contracts.MaxLinkSessionIDs` is a 400 `ValidationError`) — thin
   proxies over `pkg/dataclient`'s link methods (`docs/LINKED-SESSIONS-DESIGN.md`).
-  All five routes 404 unless `Config.FeatureFlags.LinkedSessions` is set — checked
+  All six routes 404 unless `Config.FeatureFlags.LinkedSessions` is set — checked
   per-request (`requireLinkedSessions`), not baked into the mux at startup, so
   toggling the flag takes effect without a restart.
 - `GET /sessions/{id}/transcript` — the session's conversation history. Proxied through the

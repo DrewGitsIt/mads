@@ -1,6 +1,10 @@
 package contracts
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // Grant is one capability a link conveys from its granting session onto its
 // subject session (docs/LINKED-SESSIONS-DESIGN.md).
@@ -124,6 +128,39 @@ func (s OrchestrateStatus) Valid() bool {
 		}
 	}
 	return false
+}
+
+// MaxLinkSessionIDs caps the session ids per bulk links read (GET
+// /links?session_ids=…); keeps the GET URL around 4 KB. Clients chunk.
+const MaxLinkSessionIDs = 200
+
+// ParseLinkSessionIDs normalises a bulk links read's comma-separated
+// session_ids query value — trimmed, empties dropped, deduped in first-seen
+// order — and validates it: at least one id, at most MaxLinkSessionIDs
+// distinct ones. Shared by the Router and the Data Service so both refuse
+// the same inputs; each picks its own status code for the error.
+func ParseLinkSessionIDs(raw string) ([]string, *ValidationError) {
+	var ids []string
+	seen := map[string]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		id := strings.TrimSpace(part)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	var v ValidationError
+	switch {
+	case len(ids) == 0:
+		v.Add("session_ids", "required")
+	case len(ids) > MaxLinkSessionIDs:
+		v.Add("session_ids", fmt.Sprintf("at most %d session ids", MaxLinkSessionIDs))
+	}
+	if !v.Empty() {
+		return nil, &v
+	}
+	return ids, nil
 }
 
 // Link is a directed grant set from GrantingSessionID to SubjectSessionID
