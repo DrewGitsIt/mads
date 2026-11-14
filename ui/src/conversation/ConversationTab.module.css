@@ -69,6 +69,15 @@
   font: var(--fs-body) var(--sans);
 }
 
+.missingText {
+  margin: 0 0 var(--space-3);
+}
+
+.missingText code {
+  font-family: var(--mono);
+  color: var(--text2);
+}
+
 .provisioningWrap {
   margin: 0 var(--space-4) var(--space-2);
 }
