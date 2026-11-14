@@ -732,6 +732,29 @@ export interface TranscriptMessage {
 export interface TranscriptPage {
   rows: TranscriptMessage[];
   has_more: boolean;
+  /**
+   * Set when the agent's store was read and doesn't hold this conversation:
+   * rows is then empty. A session that hasn't had a turn yet reads this way
+   * too (the agent writes its store on the first turn), so weigh it against
+   * the session's own turn record.
+   */
+  missing?: TranscriptMissing;
+}
+
+// mirrors pkg/contracts/transcript.go TranscriptMissing
+export interface TranscriptMissing {
+  /** The agent's own setting for deleting old transcripts, when it has one. */
+  retention?: TranscriptRetention;
+}
+
+// mirrors pkg/contracts/transcript.go TranscriptRetention
+export interface TranscriptRetention {
+  /** The agent's settings file, absolute. */
+  file: string;
+  /** The setting's key in that file. */
+  setting: string;
+  /** Absent when the agent's default isn't known. */
+  default_days?: number;
 }
 
 // mirrors pkg/contracts/transcript.go CompactMarker. Zero/absent fields mean

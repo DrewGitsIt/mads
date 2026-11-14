@@ -113,7 +113,8 @@ func fgSessionMain(args []string) {
 // shapes): `session list --format json` replays the fixture file named by
 // MADS_FAKE_SESSION_LIST, `session export --session-id <id> --format json`
 // replays MADS_FAKE_EXPORT_DIR/<id>.json — a missing export fixture
-// exits 1 with goose's "Session not found" stderr shape.
+// exits 1 with goose's "Session not found" stderr shape (goose 1.48
+// handle_session_export over get_session).
 func fgSessionQuery(args []string) {
 	switch {
 	case len(args) == 3 && args[0] == "list" && args[1] == "--format" && args[2] == "json":
@@ -131,7 +132,7 @@ func fgSessionQuery(args []string) {
 		}
 		path := filepath.Join(dir, args[2]+".json")
 		if _, err := os.Stat(path); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: Session not found: %s\n", args[2])
+			fmt.Fprintf(os.Stderr, "Error: Session '%s' not found or failed to read: Session not found\n", args[2])
 			os.Exit(1)
 		}
 		fgReplayFile(path)

@@ -318,3 +318,66 @@ func TestSessionTranscriptV2ThinkingProxyAndFallbackAlike(t *testing.T) {
 		}
 	}
 }
+
+// retainingFake is the fake with a retention setting, as claude-code has.
+type retainingFake struct{ *fake.Fake }
+
+func (retainingFake) TranscriptRetention() *provider.Retention {
+	return &provider.Retention{File: "/home/u/.claude/settings.json", Setting: "cleanupPeriodDays", DefaultDays: 30}
+}
+
+// A dormant session whose ref the agent's store no longer holds pages as
+// empty with missing set, carrying the provider's retention setting when
+// it has one; a ref the store holds carries no missing, and the legacy
+// bare array is unchanged ([]).
+func TestSessionTranscriptFallbackReportsMissing(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		p         provider.Provider
+		retention *contracts.TranscriptRetention
+	}{
+		{"no retention", fake.New(), nil},
+		{"retention", retainingFake{fake.New()}, &contracts.TranscriptRetention{
+			File: "/home/u/.claude/settings.json", Setting: "cleanupPeriodDays", DefaultDays: 30}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := datatest.Start(t)
+			data := dataclient.New(base, "router")
+			sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
+			t.Cleanup(func() { sup.Shutdown(context.Background()) })
+			reg := provider.NewRegistry()
+			if err := reg.Register(tc.p); err != nil {
+				t.Fatal(err)
+			}
+			opts := testOptions(t, data, sup)
+			opts.Providers = reg
+			srv := httptest.NewServer(api.New(opts))
+			t.Cleanup(srv.Close)
+
+			id := createSessionDirect(t, base, contracts.Session{Name: "gone", Provider: "fake", ProviderRef: "pruned-ref"})
+			status, b := getRaw(t, srv.URL+"/sessions/"+id+"/transcript?v=2&limit=50")
+			var p contracts.TranscriptPage
+			if err := json.Unmarshal(b, &p); err != nil || status != http.StatusOK {
+				t.Fatalf("%d %v: %s", status, err, b)
+			}
+			if len(p.Rows) != 0 || p.Missing == nil {
+				t.Fatalf("page = %s, want no rows and missing", b)
+			}
+			if (p.Missing.Retention == nil) != (tc.retention == nil) ||
+				(tc.retention != nil && *p.Missing.Retention != *tc.retention) {
+				t.Errorf("retention = %+v, want %+v", p.Missing.Retention, tc.retention)
+			}
+			if status, b := getRaw(t, srv.URL+"/sessions/"+id+"/transcript"); status != http.StatusOK || string(b) != "[]\n" {
+				t.Errorf("legacy = %d %s, want []", status, b)
+			}
+		})
+	}
+
+	fp := fake.New()
+	srv, base := newTestServerWithFake(t, fp)
+	id := createSessionDirect(t, base, contracts.Session{Name: "kept", Provider: "fake", ProviderRef: driveConversation(t, fp)})
+	_, b := getRaw(t, srv.URL+"/sessions/"+id+"/transcript?v=2&limit=50")
+	if bytes.Contains(b, []byte(`"missing"`)) {
+		t.Errorf("held transcript carries missing: %s", b)
+	}
+}

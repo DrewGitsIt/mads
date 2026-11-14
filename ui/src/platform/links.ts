@@ -39,8 +39,17 @@ const browserOpener: LinkOpener = {
   },
 };
 
+function linksBridge() {
+  return typeof window !== "undefined" ? window.mads?.links : undefined;
+}
+
+/** Whether openFile can open anything: only Electron's main can. */
+export function canOpenFiles(): boolean {
+  return !!linksBridge();
+}
+
 export function getLinkOpener(): LinkOpener {
-  const bridge = typeof window !== "undefined" ? window.mads?.links : undefined;
+  const bridge = linksBridge();
   if (!bridge) return browserOpener;
   return {
     open: (href, baseDir) => bridge.open(href, baseDir) as Promise<OpenOutcome>,

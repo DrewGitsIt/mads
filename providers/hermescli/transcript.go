@@ -107,7 +107,7 @@ func (p *Provider) KeyedTranscript(ctx context.Context, ref string) ([]provider.
 }
 
 func (p *Provider) transcript(ctx context.Context, ref string, thinking bool) ([]provider.Message, error) {
-	rows, err := p.readRows(ctx, ref)
+	rows, err := p.readStoredRows(ctx, ref)
 	if err != nil {
 		return nil, fmt.Errorf("transcript: %w", err)
 	}
@@ -156,12 +156,25 @@ func (p *Provider) TranscriptSince(ctx context.Context, ref string, cursor provi
 // with the first prompt — has no rows, which is not an error: the session
 // child reads the store as soon as it starts.
 func (p *Provider) readRows(ctx context.Context, ref string) ([]storedRow, error) {
+	rows, err := p.readStoredRows(ctx, ref)
+	if errors.Is(err, provider.ErrTranscriptMissing) {
+		return nil, nil
+	}
+	return rows, err
+}
+
+// readStoredRows is readRows with a session hermes doesn't hold — not
+// stored yet, or pruned since (TranscriptRetention) — as
+// provider.ErrTranscriptMissing: the whole reads (Transcript,
+// KeyedTranscript) report it; the session child's own reads take it as no
+// rows yet.
+func (p *Provider) readStoredRows(ctx context.Context, ref string) ([]storedRow, error) {
 	if ref == "" {
 		return nil, fmt.Errorf("empty session ref")
 	}
 	db, path, err := p.openStore()
 	if errors.Is(err, errNoStore) {
-		return nil, nil
+		return nil, fmt.Errorf("%s: %w: %w", ref, err, provider.ErrTranscriptMissing)
 	}
 	if err != nil {
 		return nil, err
@@ -169,12 +182,28 @@ func (p *Provider) readRows(ctx context.Context, ref string) ([]storedRow, error
 	defer func() { _ = db.Close() }()
 	rows, err := readDisplayRows(ctx, db, ref)
 	if errors.Is(err, errSessionNotFound) {
-		return nil, nil
+		return nil, fmt.Errorf("%s in %s: %w: %w", ref, path, err, provider.ErrTranscriptMissing)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%s in %s: %w", ref, path, err)
 	}
 	return rows, nil
+}
+
+// hermesRetentionDefaultDays is hermes's sessions.retention_days when unset
+// (hermes_cli/config_defaults.py "sessions", cli_auto_maintenance.py).
+const hermesRetentionDefaultDays = 90
+
+// TranscriptRetention implements provider.TranscriptRetainer: with
+// sessions.auto_prune (default true) hermes deletes ended sessions inactive
+// for sessions.retention_days at startup. The setting lives in the
+// config.yaml of the HERMES_HOME the transcripts are read from.
+func (p *Provider) TranscriptRetention() *provider.Retention {
+	return &provider.Retention{
+		File:        filepath.Join(p.home(), "config.yaml"),
+		Setting:     "sessions.retention_days",
+		DefaultDays: hermesRetentionDefaultDays,
+	}
 }
 
 // storedSession is the slice of a sessions row the lineage walk needs.

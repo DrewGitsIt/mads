@@ -35,8 +35,10 @@ package fake
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -565,7 +567,7 @@ func (f *Fake) KeyedTranscript(_ context.Context, ref string) ([]provider.Messag
 		return append([]provider.Message{}, msgs...), nil
 	}
 	if dir == "" {
-		return nil, fmt.Errorf("unknown session ref %q", ref)
+		return nil, fmt.Errorf("unknown session ref %q: %w", ref, provider.ErrTranscriptMissing)
 	}
 	return readTranscriptFile(dir, ref)
 }
@@ -765,8 +767,11 @@ func writeTranscriptFile(dir, ref string, msgs []provider.Message) {
 // instance that never ran ref's turns itself.
 func readTranscriptFile(dir, ref string) ([]provider.Message, error) {
 	raw, err := os.ReadFile(transcriptFilePath(dir, ref))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("unknown session ref %q: %w", ref, provider.ErrTranscriptMissing)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("unknown session ref %q", ref)
+		return nil, fmt.Errorf("transcript %s: %w", ref, err)
 	}
 	var msgs []provider.Message
 	if err := json.Unmarshal(raw, &msgs); err != nil {

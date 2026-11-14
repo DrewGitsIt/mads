@@ -29,6 +29,7 @@ import type {
   ToolStatus,
   ToolStatusChange,
   ToolUse,
+  TranscriptMissing,
   Usage,
 } from "../router/types";
 import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
@@ -79,6 +80,7 @@ import { Composer } from "./Composer/Composer";
 import { ExpandedComposer } from "./Composer/ExpandedComposer";
 import { QueuedMessages } from "./Composer/QueuedMessages";
 import { matches } from "../platform/hotkeys";
+import { canOpenFiles, getLinkOpener } from "../platform/links";
 import { ProvisioningStrip } from "./ProvisioningStrip";
 import { SignInDialog } from "./SignIn/SignInDialog";
 import { useSessionAuth } from "./SignIn/useSessionAuth";
@@ -1658,11 +1660,15 @@ export function ConversationTab({
                   )}
                   {conv.rows.length === 0 && worktree.cards.length === 0 && !inChatTurn ? (
                     <>
-                      <div className={styles.emptyTranscript}>
-                        {leaderId
-                          ? `Waiting for ${linkName(leaderId) ?? "its leader"} to send the first message`
-                          : "No conversation yet"}
-                      </div>
+                      {conv.missing && session && (session.last_turn_at || session.last_usage) ? (
+                        <MissingTranscript missing={conv.missing} provider={session.provider} />
+                      ) : (
+                        <div className={styles.emptyTranscript}>
+                          {leaderId
+                            ? `Waiting for ${linkName(leaderId) ?? "its leader"} to send the first message`
+                            : "No conversation yet"}
+                        </div>
+                      )}
                       {/* No rows to anchor to — every card is a fallback one. */}
                       {livePermissionRequests.map((req) => (
                         <PermissionCard key={req.id} request={req} onResolve={resolvePermission} />
@@ -1995,6 +2001,47 @@ export function ConversationTab({
         </div>
       </LinkBaseProvider>
     </LinkNamesProvider>
+  );
+}
+
+/**
+ * The empty pane of a session that has had turns but whose agent no longer
+ * holds the conversation — most likely its own retention setting deleted it.
+ */
+function MissingTranscript({ missing, provider }: { missing: TranscriptMissing; provider?: string }) {
+  const label = provider ? providerLabel(provider) : undefined;
+  const retention = missing.retention;
+  // The settings file isn't there (the agent's defaults apply): like
+  // DiffViewer's "Open in editor", the button says so instead.
+  const [notOnDisk, setNotOnDisk] = useState(false);
+  const openSettings = async () => {
+    if (!retention) return;
+    if ((await getLinkOpener().openFile(retention.file)) === "missing") setNotOnDisk(true);
+  };
+  return (
+    <div className={styles.emptyTranscript} data-testid="transcript-missing">
+      <p className={styles.missingText}>
+        This conversation&apos;s transcript is no longer on disk.
+        {retention && (
+          <>
+            {" "}
+            {label ?? "The agent"} deletes transcripts older than its <code>{retention.setting}</code> setting
+            {retention.default_days !== undefined && ` (${retention.default_days} days by default)`}.
+          </>
+        )}
+      </p>
+      {retention && canOpenFiles() && (
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={notOnDisk}
+          title={notOnDisk ? `${retention.file} isn't on disk` : retention.file}
+          onClick={() => void openSettings()}
+        >
+          {notOnDisk ? "Not on disk" : `Open ${label ?? "agent"} settings`}
+        </Button>
+      )}
+    </div>
   );
 }
 

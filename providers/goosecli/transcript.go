@@ -55,9 +55,14 @@ func (p *Provider) TranscriptSince(ctx context.Context, ref string, cursor provi
 }
 
 // exportTranscript is the fallback reader: goose's own export, one spawn
-// that re-serialises the whole session.
+// that re-serialises the whole session. An export goose answers "Session
+// not found" is provider.ErrTranscriptMissing (exportNotFound); any other
+// failure — goose missing, its store unreadable — is just an error.
 func (p *Provider) exportTranscript(ctx context.Context, ref string) ([]provider.Message, error) {
 	out, err := p.gooseQuery(ctx, "session", "export", "--session-id", ref, "--format", "json")
+	if exportNotFound(err) {
+		return nil, fmt.Errorf("transcript: %w: %w", err, provider.ErrTranscriptMissing)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("transcript: %w", err)
 	}
@@ -66,6 +71,18 @@ func (p *Provider) exportTranscript(ctx context.Context, ref string) ([]provider
 		return nil, fmt.Errorf("transcript: parse export for %s: %w", ref, err)
 	}
 	return normalizeExport(doc.Conversation), nil
+}
+
+// exportNotFound reports whether a `goose session export` failure is goose
+// not holding the session: it exited non-zero with the session store's own
+// "Session not found" on stderr. goose 1.48 handle_session_export prints
+// "Session '<id>' not found or failed to read: <cause>", the cause being
+// get_session's "Session not found" only when the sessions row is absent
+// (session_manager.rs get_session); a store goose couldn't read carries
+// its sqlx error there instead.
+func exportNotFound(err error) bool {
+	var ee *exec.ExitError
+	return errors.As(err, &ee) && strings.Contains(string(ee.Stderr), "Session not found")
 }
 
 // gooseQuery execs a goose CLI bookkeeping subcommand (`session export`,

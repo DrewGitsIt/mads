@@ -3,6 +3,8 @@ package hermescli
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -257,20 +259,43 @@ func TestTranscriptErrors(t *testing.T) {
 	if _, err := p.Transcript(context.Background(), ""); err == nil {
 		t.Error("empty ref: want error")
 	}
-	// hermes writes state.db and the sessions row with the first prompt: a
-	// session not stored yet reads as empty, quietly (the session child
-	// reads the store as soon as it starts).
-	if msgs, err := p.Transcript(context.Background(), "nope"); err != nil || len(msgs) != 0 {
-		t.Errorf("session not stored yet = %v, %v; want empty, no error", msgs, err)
+	// hermes writes state.db and the sessions row with the first prompt, and
+	// prunes ended sessions: a whole read of a session it doesn't hold is
+	// provider.ErrTranscriptMissing, both forms.
+	if _, err := p.Transcript(context.Background(), "nope"); !errors.Is(err, provider.ErrTranscriptMissing) {
+		t.Errorf("Transcript, session not stored = %v; want ErrTranscriptMissing", err)
 	}
+	if _, err := p.KeyedTranscript(context.Background(), "nope"); !errors.Is(err, provider.ErrTranscriptMissing) {
+		t.Errorf("KeyedTranscript, session not stored = %v; want ErrTranscriptMissing", err)
+	}
+	if _, err := New(Config{Home: t.TempDir()}).Transcript(context.Background(), "s1"); !errors.Is(err, provider.ErrTranscriptMissing) {
+		t.Errorf("no store yet = %v; want ErrTranscriptMissing", err)
+	}
+	// The session child's own read takes it as no rows yet, quietly (it
+	// reads the store as soon as it starts).
 	if rows, _, err := p.TranscriptSince(context.Background(), "nope", nil); err != nil || len(rows) != 0 {
 		t.Errorf("TranscriptSince, session not stored yet = %v, %v; want empty, no error", rows, err)
 	}
 	if msgs, err := p.Transcript(context.Background(), "s1"); err != nil || len(msgs) != 0 {
 		t.Errorf("empty session = %v, %v", msgs, err)
 	}
-	if msgs, err := New(Config{Home: t.TempDir()}).Transcript(context.Background(), "s1"); err != nil || len(msgs) != 0 {
-		t.Errorf("no store yet = %v, %v; want empty, no error", msgs, err)
+	// A state.db that can't be read is an error, but not a missing transcript.
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "state.db"), []byte("not a sqlite database, not at all"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(Config{Home: home}).Transcript(context.Background(), "s1"); err == nil || errors.Is(err, provider.ErrTranscriptMissing) {
+		t.Errorf("unreadable store = %v; want an error that isn't ErrTranscriptMissing", err)
+	}
+}
+
+// Retention points at sessions.retention_days in the read home's config.yaml.
+func TestTranscriptRetention(t *testing.T) {
+	home := t.TempDir()
+	got := New(Config{Home: home}).TranscriptRetention()
+	want := &provider.Retention{File: filepath.Join(home, "config.yaml"), Setting: "sessions.retention_days", DefaultDays: 90}
+	if got == nil || *got != *want {
+		t.Fatalf("TranscriptRetention = %+v, want %+v", got, want)
 	}
 }
 
