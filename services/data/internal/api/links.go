@@ -149,6 +149,23 @@ func linkRoutes(mux *http.ServeMux, log *store.Log) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 	})
 
+	// GET /links?session_ids=a,b,c is the bulk form of GET
+	// /sessions/{id}/links: every link with any listed session on either
+	// side, each once. Same id rules as the Router's handleListLinks.
+	mux.HandleFunc("GET /links", func(w http.ResponseWriter, r *http.Request) {
+		ids, verr := contracts.ParseLinkSessionIDs(r.URL.Query().Get("session_ids"))
+		if verr != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, verr)
+			return
+		}
+		list, err := links.ForSessions(r.Context(), ids)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
+	})
+
 	mux.HandleFunc("GET /sessions/{id}/links", func(w http.ResponseWriter, r *http.Request) {
 		list, err := links.ForSession(r.Context(), r.PathValue("id"))
 		if err != nil {

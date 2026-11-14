@@ -436,6 +436,14 @@ export interface RouterClient {
 
   // --- Linked sessions (flag-gated, docs/LINKED-SESSIONS-DESIGN.md) ---
   getSessionLinks(sessionId: string): Promise<Link[]>;
+  /**
+   * Every link where any of `sessionIds` grants or is the subject, each once,
+   * oldest first — one `GET /links?session_ids=` request. Takes at most
+   * MAX_LINK_SESSION_IDS ids; callers chunk (see fetchLinksFor) so call
+   * counts stay visible. Rejects an empty or oversized list without sending
+   * it, since the server would only answer 400.
+   */
+  listLinks(sessionIds: string[]): Promise<Link[]>;
   createLink(req: LinkRequest): Promise<Link>;
   updateLink(id: string, req: LinkRequest): Promise<Link>;
   deleteLink(id: string): Promise<void>;
@@ -465,6 +473,20 @@ export interface RouterClient {
 export class RouterValidationError extends Error {
   constructor(public readonly errors: { field: string; message: string }[]) {
     super(errors.map((e) => `${e.field}: ${e.message}`).join("; "));
+  }
+}
+
+/**
+ * readJSON's error for a non-ok response without a field-error body: the
+ * same "router request failed: <status> <text>" message as before, plus the
+ * status, so a caller can tell a missing route (404/405) from an outage.
+ */
+export class RouterHTTPError extends Error {
+  constructor(
+    readonly status: number,
+    text: string,
+  ) {
+    super(`router request failed: ${status} ${text}`);
   }
 }
 
@@ -561,6 +583,23 @@ async function readCommitJSON<T>(res: Response): Promise<T> {
   return readJSON<T>(res);
 }
 
+/** Most ids one `GET /links?session_ids=` takes; mirrors pkg/contracts.MaxLinkSessionIDs. */
+export const MAX_LINK_SESSION_IDS = 200;
+
+/**
+ * listLinks' precondition, shared with the fake: 1..MAX_LINK_SESSION_IDS
+ * distinct ids, returned deduped. Throwing beats sending a request the
+ * server can only answer 400.
+ */
+export function checkLinkSessionIds(sessionIds: string[]): string[] {
+  const ids = [...new Set(sessionIds)];
+  if (ids.length === 0) throw new Error("listLinks needs at least one session id");
+  if (ids.length > MAX_LINK_SESSION_IDS) {
+    throw new Error(`listLinks takes at most ${MAX_LINK_SESSION_IDS} session ids, got ${ids.length}`);
+  }
+  return ids;
+}
+
 // Thin fetch wrapper shared by every surface — no ad-hoc fetches in
 // components. The Router's address is exposed via VITE_ROUTER_URL; the
 // default matches the Router's own `-addr` flag default (localhost:17373).
@@ -569,7 +608,7 @@ export const ROUTER_BASE =
 
 /**
  * On failure, a {errors:[{field,message}]} body throws RouterValidationError;
- * any other non-ok status throws a generic Error. 204 decodes to undefined.
+ * any other non-ok status throws RouterHTTPError. 204 decodes to undefined.
  */
 async function readJSON<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -578,8 +617,7 @@ async function readJSON<T>(res: Response): Promise<T> {
       .json()
       .catch(() => null)) as { errors?: { field: string; message: string }[] } | null;
     if (body?.errors) throw new RouterValidationError(body.errors);
-    const text = await res.text();
-    throw new Error(`router request failed: ${res.status} ${text}`);
+    throw new RouterHTTPError(res.status, await res.text());
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -1486,6 +1524,12 @@ export class FetchRouterClient implements RouterClient {
 
   async getSessionLinks(sessionId: string): Promise<Link[]> {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/links`);
+  }
+
+  async listLinks(sessionIds: string[]): Promise<Link[]> {
+    const ids = checkLinkSessionIds(sessionIds);
+    const res = await routerGet<Link[] | null>(this.baseUrl, `/links?session_ids=${encodeURIComponent(ids.join(","))}`);
+    return res ?? [];
   }
 
   async createLink(req: LinkRequest): Promise<Link> {

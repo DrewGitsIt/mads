@@ -1,7 +1,7 @@
 import type { RouterClient, SessionEventSource } from "./client";
 import { EVENTS_BATCH_LIMIT } from "./eventPages";
 import { isLiveDelegate } from "./delegateLive";
-import { CommitRefusedError, MoveRefusedError, RouterValidationError } from "./client";
+import { checkLinkSessionIds, CommitRefusedError, MoveRefusedError, RouterValidationError } from "./client";
 import type {
   Attachment,
   HeldUpdate,
@@ -2166,6 +2166,16 @@ export class FakeRouterClient implements RouterClient {
     return [...this.links.values()].filter(
       (l) => l.granting_session_id === sessionId || l.subject_session_id === sessionId,
     );
+  }
+
+  /** Every listLinks call's ids, in call order. */
+  readonly listLinksCalls: string[][] = [];
+
+  async listLinks(sessionIds: string[]): Promise<Link[]> {
+    this.listLinksCalls.push([...sessionIds]);
+    const ids = new Set(checkLinkSessionIds(sessionIds));
+    // Each link once, in insertion order, like getSessionLinks.
+    return [...this.links.values()].filter((l) => ids.has(l.granting_session_id) || ids.has(l.subject_session_id));
   }
 
   async createLink(req: LinkRequest): Promise<Link> {

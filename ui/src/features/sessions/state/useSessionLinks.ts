@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { router } from "../../../router/client";
+import { fetchLinksFor, type LinkChunk } from "../../../router/fetchLinks";
 import { subscribeToEvents } from "../../../router/events";
 import { FLAGS, subscribeFlags } from "../../../featureFlags";
 import type { Envelope, Link } from "../../../router/types";
@@ -16,22 +17,24 @@ export const LINK_REFETCH_COALESCE_MS = 100;
 export const LINK_REFETCH_MAX_WAIT_MS = 500;
 
 /**
- * Keeps every link touching a visible session. No bulk `GET /links` route
- * exists (docs/linked-sessions-mockup.html / ui/src/features/sessions/HANDOFF.md
- * decision D2) — only `GET /sessions/{id}/links`, which returns links where
- * that session is on either side. So for a link event between G and S,
- * refetching G and S, dropping every cached link touching either, and
- * inserting the results is exactly a full refetch — and link events fire
- * constantly (pipeline start/stop hand-raiser links, leader tool loads), so
- * refetching all N sessions per event is not affordable.
+ * Keeps every link touching a visible session, read through the bulk
+ * `GET /links?session_ids=` route: every link where any listed session is
+ * on either side, each once. One request per MAX_LINK_SESSION_IDS ids
+ * (fetchLinksFor), so a normal rail is one request at load and one per
+ * flush. For a link event between G and S, refetching G and S, dropping
+ * every cached link touching either, and inserting the results is exactly a
+ * full refetch. Links stay out of `GET /sessions` on purpose: link events
+ * fire constantly (pipeline start/stop hand-raiser links, leader tool
+ * loads), and each would refetch the whole session list.
  *
  * Strategy: events add their in-set endpoints to a pending set, flushed
- * after a trailing quiet window (capped by a max wait) as one fetch per id,
- * one merge, one setLinks. Single-flight: events during a flight wait for
- * it to land, so responses apply in request order. A generation counter
- * drops results from before unmount or a flag flip; results for ids that
- * left the set mid-flight are skipped. Full refetch only on mount, flag-on,
- * and an unreadable event payload. Fetch errors keep the cache as is.
+ * after a trailing quiet window (capped by a max wait) as one request per
+ * chunk, one merge, one setLinks. Single-flight: events during a flight
+ * wait for it to land, so responses apply in request order. A generation
+ * counter drops results from before unmount or a flag flip; results for ids
+ * that left the set mid-flight are skipped. Full refetch only on mount,
+ * flag-on, and an unreadable event payload. A failed chunk keeps the cache
+ * for its ids.
  */
 export function useSessionLinks(sessionIds: string[]): Link[] {
   const [links, setLinks] = useState<Link[]>([]);
@@ -115,7 +118,7 @@ class LinkSync {
 
   // Never a full refetch: added ids are fetched, and cached links that no
   // longer touch any visible id are dropped. A link between a kept and a
-  // removed session stays — the kept session's GET returns it too.
+  // removed session stays — the kept session's read returns it too.
   setIds(next: Set<string>): void {
     const added = [...next].filter((id) => !this.ids.has(id));
     this.ids = next;
@@ -186,28 +189,28 @@ class LinkSync {
     if (targets.length === 0) return;
     this.inFlight = true;
     const generation = this.generation;
-    void Promise.allSettled(targets.map((id) => router.getSessionLinks(id))).then((results) => {
+    void fetchLinksFor(router, targets).then((chunks) => {
       if (generation !== this.generation) return;
       this.inFlight = false;
-      this.apply(targets, results);
+      this.apply(chunks);
       if ((this.pendingFull || this.pendingIds.size > 0) && !this.timer) this.flush();
     });
   }
 
-  private apply(targets: string[], results: PromiseSettledResult<Link[]>[]): void {
+  private apply(chunks: LinkChunk[]): void {
     const fetched = new Set<string>();
     const incoming: Link[] = [];
-    targets.forEach((id, i) => {
-      const result = results[i];
-      // A failed fetch leaves that id's cached links alone; an id that left
-      // the set mid-flight was already pruned by setIds.
-      if (result.status !== "fulfilled" || !this.ids.has(id)) return;
-      fetched.add(id);
+    for (const { ids, result } of chunks) {
+      // A failed chunk leaves its ids' cached links alone.
+      if (result.status !== "fulfilled") continue;
+      // An id that left the set mid-flight was already pruned by setIds.
+      for (const id of ids) if (this.ids.has(id)) fetched.add(id);
       incoming.push(...result.value);
-    });
+    }
     if (fetched.size === 0) return;
     for (const [id, link] of this.cache) if (touches(link, fetched)) this.cache.delete(id);
-    for (const link of incoming) this.cache.set(link.id, link);
+    // Keyed by id, so a link spanning two chunks lands once.
+    for (const link of incoming) if (touches(link, fetched)) this.cache.set(link.id, link);
     this.emit();
   }
 

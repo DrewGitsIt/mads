@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CommitRefusedError, FetchRouterClient, MoveRefusedError, RouterValidationError, SessionWakeError } from "./client";
+import { CommitRefusedError, FetchRouterClient, MAX_LINK_SESSION_IDS, MoveRefusedError, RouterHTTPError, RouterValidationError, SessionWakeError } from "./client";
 import type { Agent } from "./types";
 
 function mockFetchOnce(body: unknown, ok = true, status = 200) {
@@ -37,6 +37,37 @@ describe("FetchRouterClient", () => {
     const report = await client.getSessionReport("s1");
     expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/report");
     expect(report.billing.mode).toBe("unknown");
+  });
+
+  it("listLinks reads /links with the session ids comma-joined, encoded, and deduped", async () => {
+    const fetchMock = mockFetchOnce([{ id: "l1" }]);
+    const client = new FetchRouterClient("http://router.local");
+    const links = await client.listLinks(["s1", "a b&c", "s1"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/links?session_ids=s1%2Ca%20b%26c");
+    expect(links).toEqual([{ id: "l1" }]);
+  });
+
+  it("listLinks reads a null body as no links", async () => {
+    mockFetchOnce(null);
+    expect(await new FetchRouterClient("http://router.local").listLinks(["s1"])).toEqual([]);
+  });
+
+  it("listLinks surfaces a missing route's status", async () => {
+    mockFetchOnce("404 page not found", false, 404);
+    const err = await new FetchRouterClient("http://router.local").listLinks(["s1"]).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RouterHTTPError);
+    expect(err).toMatchObject({ status: 404 });
+    expect((err as Error).message).toMatch(/^router request failed: 404 /);
+  });
+
+  it("listLinks rejects an empty or oversized list without a request", async () => {
+    const fetchMock = mockFetchOnce([]);
+    const client = new FetchRouterClient("http://router.local");
+    await expect(client.listLinks([])).rejects.toThrow("at least one session id");
+    const tooMany = Array.from({ length: MAX_LINK_SESSION_IDS + 1 }, (_, i) => `s${i}`);
+    await expect(client.listLinks(tooMany)).rejects.toThrow(`at most ${MAX_LINK_SESSION_IDS}`);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("compactSession sends instructions only when there are some", async () => {

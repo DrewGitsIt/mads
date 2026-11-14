@@ -541,3 +541,39 @@ func TestClientDelegateWireRoundTrip(t *testing.T) {
 		t.Errorf("DelegatesEndedAfter(just after the end) = %v, %v; want only the running one", ids(got), err)
 	}
 }
+
+// LinksForSessions over the wire: ids are query-escaped (an id carrying
+// '&', '+' or '#' still reaches the Data Service whole), a link between two
+// requested sessions comes back once, and no ids means no request.
+func TestClientLinksForSessions(t *testing.T) {
+	base := datatest.Start(t)
+	ctx := context.Background()
+	c := dataclient.New(base, "router")
+
+	a := contracts.Session{Name: "a"}
+	b := contracts.Session{Name: "b"}
+	for _, s := range []*contracts.Session{&a, &b} {
+		if err := c.CreateSession(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link, err := c.CreateLink(ctx, contracts.LinkRequest{
+		GrantingSessionID: a.ID, SubjectSessionID: b.ID, Preset: contracts.PresetMonitor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := c.LinksForSessions(ctx, []string{"ses_odd&x=1+2#", a.ID, b.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != link.ID {
+		t.Errorf("LinksForSessions = %+v, want [%s]", got, link.ID)
+	}
+
+	none, err := dataclient.New("http://127.0.0.1:1", "router").LinksForSessions(ctx, nil)
+	if err != nil || none == nil || len(none) != 0 {
+		t.Errorf("LinksForSessions(nil) = %#v, %v; want empty, no request", none, err)
+	}
+}

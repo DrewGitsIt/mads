@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { RouterValidationError, type RouterClient } from "../../../router/client";
+import { RouterHTTPError, RouterValidationError, type RouterClient } from "../../../router/client";
+import { resetBulkLinksSupport } from "../../../router/fetchLinks";
 import { FakeRouterClient } from "../../../router/fixtures";
 import type { Link, LinkCadence, Session } from "../../../router/types";
 import {
@@ -349,7 +350,8 @@ describe("applyLinkDraft", () => {
       deleteLink: vi.fn(() => Promise.resolve()),
       updateLink: vi.fn((id: string) => Promise.resolve({ id } as Link)),
       createLink: vi.fn(() => Promise.resolve({ id: "new" } as Link)),
-      getSessionLinks: vi.fn(() => Promise.resolve([] as Link[])),
+      listLinks: vi.fn(() => Promise.resolve([] as Link[])),
+      getSessionLinks: vi.fn(() => Promise.reject(new Error("use listLinks"))),
       ...over,
     } as unknown as RouterClient;
   }
@@ -364,14 +366,14 @@ describe("applyLinkDraft", () => {
   it("runs every op in order when nothing fails", async () => {
     const client = mockClient({});
     expect(await applyLinkDraft(client, ops())).toEqual({ appliedCount: 3, total: 3 });
-    expect(client.getSessionLinks).not.toHaveBeenCalled();
+    expect(client.listLinks).not.toHaveBeenCalled();
   });
 
   it("stops at the first failure, marks it transient, and hands back fresh links", async () => {
     const fresh = [link("p", "a", "leader")];
     const client = mockClient({
       updateLink: vi.fn(() => Promise.reject(new Error("router request failed: 502 bad gateway"))),
-      getSessionLinks: vi.fn((id: string) => Promise.resolve(id === "a" ? fresh : [])),
+      listLinks: vi.fn((ids: string[]) => Promise.resolve(ids.includes("a") ? fresh : [])),
     });
     const r = await applyLinkDraft(client, ops());
     expect(r.appliedCount).toBe(1);
@@ -381,6 +383,10 @@ describe("applyLinkDraft", () => {
     expect(client.createLink).not.toHaveBeenCalled();
     expect(r.fresh!.sessionIds.sort()).toEqual(["a", "b", "m", "x"]);
     expect(r.fresh!.links).toEqual(fresh);
+    // One bulk read for every session the plan touches, never one per session.
+    expect(client.listLinks).toHaveBeenCalledTimes(1);
+    expect([...vi.mocked(client.listLinks).mock.calls[0][0]].sort()).toEqual(["a", "b", "m", "x"]);
+    expect(client.getSessionLinks).not.toHaveBeenCalled();
   });
 
   it("marks a ValidationError as refused, with the server's sentence", async () => {
@@ -402,13 +408,31 @@ describe("applyLinkDraft", () => {
     expect(await applyLinkDraft(client, ops())).toEqual({ appliedCount: 3, total: 3 });
   });
 
+  it("refetches per session when the bulk route is missing", async () => {
+    const fresh = [link("p", "a", "leader")];
+    const client = mockClient({
+      updateLink: vi.fn(() => Promise.reject(new Error("router request failed: 502 bad gateway"))),
+      listLinks: vi.fn(() => Promise.reject(new RouterHTTPError(404, "404 page not found"))),
+      getSessionLinks: vi.fn((id: string) => Promise.resolve(id === "a" || id === "p" ? fresh : [])),
+    });
+    try {
+      const r = await applyLinkDraft(client, ops());
+      expect(r.fresh!.links).toEqual(fresh);
+      expect(client.getSessionLinks).toHaveBeenCalledTimes(4);
+    } finally {
+      resetBulkLinksSupport();
+    }
+  });
+
   it("still reports the failure when the refetch fails too", async () => {
     const client = mockClient({
       deleteLink: vi.fn(() => Promise.reject(new Error("offline"))),
-      getSessionLinks: vi.fn(() => Promise.reject(new Error("offline"))),
+      listLinks: vi.fn(() => Promise.reject(new Error("offline"))),
     });
     const r = await applyLinkDraft(client, ops());
     expect(r.appliedCount).toBe(0);
+    expect(r.failed).toMatchObject({ message: "offline" });
+    expect(client.listLinks).toHaveBeenCalledTimes(1);
     expect(r.fresh).toBeUndefined();
   });
 });
