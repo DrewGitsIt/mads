@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"context"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
@@ -17,6 +18,7 @@ import (
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/kirocli"
 	"github.com/drewkidwell/mads/providers/provider"
+	"github.com/drewkidwell/mads/services/data/datatest"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
@@ -34,7 +36,7 @@ func TestHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", nil)))
+	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", nil), nil))
 	defer srv.Close()
 
 	resp, err := srv.Client().Get(srv.URL + "/health")
@@ -68,7 +70,7 @@ func TestGuardRefusesForgedRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", localguard.DevServerOrigins)))
+	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", localguard.DevServerOrigins), nil))
 	defer srv.Close()
 
 	post := func(host string, headers map[string]string) int {
@@ -145,7 +147,7 @@ func TestProvidersEndpointListsGoose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", nil)))
+	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", nil), nil))
 	defer srv.Close()
 
 	resp, err := srv.Client().Get(srv.URL + "/providers")
@@ -297,5 +299,23 @@ func TestFastModelDynamicConfigUnsetModePreservesFlagOnlyEndpoint(t *testing.T) 
 	want := fastmodel.DynamicConfig{Model: "flag-model", BaseURL: "https://flag.example.com", APIKeyEnv: "FLAG_KEY"}
 	if got != want {
 		t.Errorf("got %+v, want %+v (flag-only endpoint must still win over the provider default)", got, want)
+	}
+}
+
+// A repo change is announced as one stored repo.changed, with no session,
+// naming the main checkout and the git dir.
+func TestAnnounceRepoChange(t *testing.T) {
+	data := dataclient.New(datatest.Start(t), "router")
+	announceRepoChange(data)("/work/mads/.git")
+	events, err := data.Events(context.Background(), 0, "", []string{string(contracts.RepoChanged)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].SessionID != "" {
+		t.Fatalf("events = %+v, want one session-less repo.changed", events)
+	}
+	var p contracts.RepoChangedPayload
+	if err := json.Unmarshal(events[0].Payload, &p); err != nil || p.Repo != "/work/mads" || p.GitDir != "/work/mads/.git" {
+		t.Errorf("payload = %+v, %v", p, err)
 	}
 }

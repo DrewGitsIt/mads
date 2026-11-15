@@ -205,9 +205,8 @@ func TestPushIsolatedBranchThenBase(t *testing.T) {
 	if _, err := s.ops.Land(ctx, s.store.sess.ID, Gates{}); err != nil {
 		t.Fatal(err)
 	}
-	c, err := countTarget(ctx, Target{SessionID: s.store.sess.ID, Folder: s.folder, Primary: s.primary, Branch: branch, Base: "main"}, nil)
-	if err != nil || c.Unpushed != 2 {
-		t.Fatalf("base unpushed after Land = %+v, %v; want 2 (the commit and the merge)", c, err)
+	if n, err := CountUnpushed(ctx, s.primary, "main"); err != nil || n != 2 {
+		t.Fatalf("base unpushed after Land = %d, %v; want 2 (the commit and the merge)", n, err)
 	}
 	res, err = s.ops.Push(ctx, s.store.sess.ID, contracts.PushRequest{Target: contracts.PushBase}, Gates{})
 	if err != nil || res.Outcome != contracts.PushPushed || res.Branch != "main" {

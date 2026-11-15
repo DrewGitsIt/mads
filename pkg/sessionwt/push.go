@@ -141,20 +141,6 @@ func countRange(ctx context.Context, dir string, revs ...string) (int, error) {
 	return strconv.Atoi(strings.TrimSpace(out))
 }
 
-// unpushedOf is a target's header count: what its next push publishes —
-// the base for an isolated session (what Land moved), else the branch it
-// works on.
-func unpushedOf(ctx context.Context, t Target) (int, error) {
-	if t.Isolated() {
-		return CountUnpushed(ctx, t.Primary, t.Base)
-	}
-	branch, err := CurrentBranch(ctx, t.Folder)
-	if err != nil {
-		return 0, nil // detached: nothing to push
-	}
-	return CountUnpushed(ctx, t.Folder, branch)
-}
-
 // netGit is userGit for commands that reach a remote: bounded by timeout,
 // and with every way of asking for credentials closed — no terminal
 // prompt, no credential manager dialog, ssh in batch mode unless the user

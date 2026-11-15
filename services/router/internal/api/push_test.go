@@ -39,8 +39,8 @@ func TestPushRoutes(t *testing.T) {
 	if resp := postJSON(t, base+"/worktree/refresh", struct{}{}); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("refresh: %d", resp.StatusCode)
 	}
-	if rec, _ := data.Session(ctx, sess.ID); rec.UnpushedCount != 1 {
-		t.Errorf("unpushed_count = %d, want 1", rec.UnpushedCount)
+	if ahead := sessionAhead(t, srv.URL, sess.ID); ahead != 1 {
+		t.Errorf("to push = %d, want 1", ahead)
 	}
 
 	preview := func() contracts.PushPreview {
@@ -86,7 +86,54 @@ func TestPushRoutes(t *testing.T) {
 	if wtGit(t, bare, "rev-parse", "main") != wtGit(t, repo, "rev-parse", "HEAD") {
 		t.Error("origin/main isn't the pushed commit")
 	}
-	if rec, _ := data.Session(ctx, sess.ID); rec.UnpushedCount != 0 {
-		t.Errorf("unpushed_count after the push = %d, want 0", rec.UnpushedCount)
+	if ahead := sessionAhead(t, srv.URL, sess.ID); ahead != 0 {
+		t.Errorf("to push after the push = %d, want 0", ahead)
+	}
+}
+
+// sessionAhead is what GET /sessions/{id}/repos says the session's only
+// repo has to push.
+func sessionAhead(t *testing.T, base, id string) int {
+	t.Helper()
+	resp, err := http.Get(base + "/sessions/" + id + "/repos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repos := decodeJSON[[]contracts.SessionRepoState](t, resp)
+	if len(repos) != 1 {
+		t.Fatalf("repos = %+v, want one", repos)
+	}
+	return repos[0].Worktree.Ahead
+}
+
+// An isolated session's repo comes with its own branch's facts and, for
+// the push after Land, its base in the user's checkout.
+func TestSessionReposIsolated(t *testing.T) {
+	srv, data := newWorktreeServer(t)
+	sess, repo := isolatedRecord(t, data, "Isolated repos")
+	bare := filepath.Join(t.TempDir(), "origin.git")
+	wtGit(t, filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	wtGit(t, repo, "remote", "add", "origin", bare)
+	wtGit(t, repo, "push", "-q", "-u", "origin", "main")
+	if err := os.WriteFile(filepath.Join(repo, "local.txt"), []byte("l\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wtGit(t, repo, "add", "local.txt")
+	wtGit(t, repo, "commit", "-q", "-m", "local")
+
+	resp, err := http.Get(srv.URL + "/sessions/" + sess.ID + "/repos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repos := decodeJSON[[]contracts.SessionRepoState](t, resp)
+	if len(repos) != 1 {
+		t.Fatalf("repos = %+v", repos)
+	}
+	r := repos[0]
+	if !r.Primary || !r.Isolated || r.Base != "main" || r.Worktree.Branch != sess.WorktreeBranch || r.Worktree.Main {
+		t.Errorf("repo = %+v", r)
+	}
+	if r.BaseWorktree == nil || r.BaseWorktree.Branch != "main" || !r.BaseWorktree.Main || r.BaseWorktree.Ahead != 1 {
+		t.Errorf("base = %+v, want main in the user's checkout, 1 to push", r.BaseWorktree)
 	}
 }
