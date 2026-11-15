@@ -8,6 +8,7 @@ import { CommitRefusedError, TransportSwitchError } from "../router/client";
 import { coalesce, type Coalescer } from "../router/coalesce";
 import { subscribeToEvents } from "../router/events";
 import { getAllEvents } from "../router/eventPages";
+import { refreshSessionRepos, useSessionRepos } from "../router/repoStateStore";
 import { contextWindowForModel, countsTokens } from "../router/modelDisplay";
 import {
   SESSION_SHELL_REFETCH_EVENT_TYPES,
@@ -92,7 +93,7 @@ import { CommitDialog } from "./Worktree/CommitDialog";
 import { PushDialog } from "./Worktree/PushDialog";
 import { pushedCopy } from "./Worktree/worktreeCopy";
 import { useCommitSettings } from "./Worktree/useCommitSettings";
-import { uncommittedRepos } from "./Worktree/workState";
+import { pushFacts, uncommittedRepos } from "./Worktree/workState";
 import { useWorktreeCards } from "./Worktree/useWorktreeCards";
 import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
 import { STREAM_REATTACH_EVENT, type StreamReattachDetail } from "./streamReattachSignal";
@@ -302,6 +303,10 @@ export function ConversationTab({
   const { commitAll, land } = worktree;
   const loadWorktreeStatus = useCallback(() => routerClient.getWorktreeStatus(sessionId), [routerClient, sessionId]);
   const commitSettings = useCommitSettings(routerClient);
+  // Branch facts shared with other sessions (COMMIT-LAND-PUSH D10): what a
+  // push would send comes from the window's repo state, kept current by
+  // repo.changed, never from this session's record.
+  const sessionRepos = useSessionRepos(routerClient, sessionId);
   // The Commit dialog, optionally opened on a one-click Commit's refusal
   // (no Fast Model after all, a failing hook) so the user can see why and
   // write the message themselves.
@@ -1563,6 +1568,7 @@ export function ConversationTab({
       loadStatus: loadWorktreeStatus,
       onPush: (target: PushTarget) => setPushDialog({ target }),
       pushed,
+      push: pushFacts(session, sessionRepos.repos),
     },
     landOutcome: latestLandOutcome(worktree.cards),
   };
@@ -1631,6 +1637,8 @@ export function ConversationTab({
                 setPushed(true);
                 setCommandToast({ tone: "ok", message: pushedCopy(result) });
                 refetchSession();
+                // Its repo.changed follows within a second or so; don't wait to drop the count.
+                refreshSessionRepos(sessionId);
               }}
               onAskAgent={!showHistory && terminalBridge ? askInCompose : worktreeActions.onAskAgent}
             />

@@ -22,6 +22,8 @@ import type {
   MoveRequest,
   MoveResult,
   PushPreview,
+  RepoWorktree,
+  SessionRepoState,
   PushRequest,
   PushResult,
   PushTarget,
@@ -274,6 +276,10 @@ export interface RouterClient {
   getMoveFolders(sessionId: string, repo: string, ext?: string): Promise<MoveFolder[]>;
   /** What a Push would send (COMMIT-LAND-PUSH D5). Fetches the remote first: call when the confirmation opens. */
   getPushPreview(sessionId: string, opts?: { repo?: string; target?: PushTarget }): Promise<PushPreview>;
+  /** Every repo in the session's set with its branch facts (COMMIT-LAND-PUSH D10). Served from the Router's cache; read through router/repoStateStore. */
+  getSessionRepos(sessionId: string): Promise<SessionRepoState[]>;
+  /** One checkout's branch facts, by any path inside it. */
+  getRepoState(path: string): Promise<RepoWorktree>;
   /** Pushed, refused and conflicted all resolve; only an unexpected failure throws. */
   pushSession(sessionId: string, req: PushRequest): Promise<PushResult>;
 
@@ -1133,6 +1139,14 @@ export class FetchRouterClient implements RouterClient {
       repo: opts.repo || undefined,
       target: opts.target,
     });
+  }
+
+  async getSessionRepos(sessionId: string): Promise<SessionRepoState[]> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/repos`);
+  }
+
+  async getRepoState(path: string): Promise<RepoWorktree> {
+    return routerGet(this.baseUrl, "/repos/state", { path });
   }
 
   async pushSession(sessionId: string, req: PushRequest): Promise<PushResult> {

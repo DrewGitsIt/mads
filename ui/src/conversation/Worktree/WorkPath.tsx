@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { PushTarget, Session } from "../../router/types";
 import { plural, uncommittedCopy } from "./worktreeCopy";
-import { isIsolated, uncommittedRepos, unpushedRepos, workState, type WorkState } from "./workState";
+import { isIsolated, uncommittedRepos, workState, type PushFacts, type WorkState } from "./workState";
 import styles from "./WorkPath.module.css";
 
 export interface WorkPathProps {
@@ -14,11 +14,13 @@ export interface WorkPathProps {
   landing?: boolean;
   /** Opens the push confirmation for a target. Unset: the Push step has no button. */
   onPush?: (target: PushTarget) => void;
+  /** What a push would send, from the repo state store (pushFacts). Undefined: not known yet. */
+  push?: PushFacts;
   pushing?: boolean;
   /**
-   * A push from here went through, so 0 unpushed means pushed. The record
-   * can't tell that from a repo with no remote (0 either way), so without it
-   * the step stays quiet rather than claim ✓.
+   * A push from here went through, so 0 to push means pushed. Repo state
+   * says 0 for a repo with no remote too, so without it the step stays
+   * quiet rather than claim ✓.
    */
   pushed?: boolean;
 }
@@ -41,8 +43,9 @@ export function landHeldTitle(state: WorkState): string {
  * Where this session's work goes (docs/COMMIT-LAND-PUSH-DESIGN.md D3,
  * mockup commit-land-push.html §3): Commit, then Land for an isolated
  * session, then Push, each step with its state in words and its own button.
- * Read off the session record's counts, like the dock's WorkButton, so the
- * dock's ⎇ popover and the Changes tab's ▾ say the same thing. Before Land,
+ * Read off the session record's counts and the repo state's (Push), like the
+ * dock's WorkButton, so the dock's ⎇ popover and the Changes tab's ▾ say
+ * the same thing. Before Land,
  * an isolated session's Push step offers its own branch (for a PR); after,
  * the base Land moved.
  */
@@ -53,11 +56,12 @@ export function WorkPath({
   committing,
   landing,
   onPush,
+  push,
   pushing,
   pushed,
 }: WorkPathProps) {
   const isolated = isIsolated(session);
-  const state = workState(session);
+  const state = workState(session, push);
   const uncommitted = session.uncommitted_count ?? 0;
   const unlanded = isolated ? (session.unlanded_count ?? 0) : 0;
   const outside = isolated ? (session.outside_count ?? 0) : 0;
@@ -65,12 +69,18 @@ export function WorkPath({
 
   const commitState: StepState = uncommitted > 0 ? "next" : "done";
   const landState: StepState = unlanded === 0 ? "done" : state?.kind === "land" ? "next" : "wait";
-  const unpushed = session.unpushed_count ?? 0;
+  const unpushed = push?.commits ?? 0;
   const beforeLand = isolated && unlanded > 0;
   const pushState: StepState =
-    beforeLand || unpushed > 0 ? (state?.kind === "push" ? "next" : "wait") : pushed ? "done" : "idle";
+    beforeLand || unpushed > 0
+      ? state?.kind === "push"
+        ? "next"
+        : "wait"
+      : pushed && push
+        ? "done"
+        : "idle";
   const pushTarget: PushTarget = isolated ? "base" : "branch";
-  const unpushedIn = unpushedRepos(session);
+  const unpushedIn = push?.repos.length ?? 0;
 
   let pushDetail: ReactNode;
   if (beforeLand) {
@@ -83,6 +93,9 @@ export function WorkPath({
     );
   } else if (unpushed > 0) {
     pushDetail = `${unpushed} to push${unpushedIn > 1 ? ` in ${unpushedIn} repos` : ""}${isolated ? ` · pushes ${base}` : ""}`;
+  } else if (!push) {
+    // The repo state hasn't answered: say nothing rather than 0, then N.
+    pushDetail = "checking…";
   } else {
     pushDetail = pushed ? "pushed" : "nothing to push";
   }

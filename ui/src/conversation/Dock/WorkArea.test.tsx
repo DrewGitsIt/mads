@@ -7,6 +7,13 @@ import { resetProviderInfoCache } from "../../router/useProviderInfos";
 import { OPEN_SESSION_EVENT } from "../../appNavigation";
 import type { Session, WorktreeStatus } from "../../router/types";
 import type { LandCardModel } from "../Worktree/worktreeCards";
+import type { PushFacts } from "../Worktree/workState";
+
+/** The repo state store's answer for one repo with `commits` to push (pushFacts). */
+const toPush = (commits: number, target: "branch" | "base" = "branch"): PushFacts => ({
+  commits,
+  repos: commits > 0 ? [{ root: "/r", primary: true, target, commits }] : [],
+});
 
 function dock(session: Session, work: Partial<DockWork> = {}, landOutcome?: LandCardModel) {
   return (
@@ -219,7 +226,7 @@ describe("dock Commit / Land control (D4)", () => {
 
   it("offers Push ↑N once everything is committed, and opens the confirmation on its target", () => {
     const onPush = vi.fn();
-    renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 0, unpushed_count: 2 }, { onPush });
+    renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 0 }, { onPush, push: toPush(2) });
     const button = control()!;
     expect(button.getAttribute("data-work-state")).toBe("push");
     expect(button.textContent).toBe("Push ↑2");
@@ -230,15 +237,39 @@ describe("dock Commit / Land control (D4)", () => {
 
   it("pushes an isolated session's base after Land", () => {
     const onPush = vi.fn();
-    renderDock({ ...clean, unlanded_count: 0, unpushed_count: 1 }, { onPush });
+    renderDock({ ...clean, unlanded_count: 0 }, { onPush, push: toPush(1, "base") });
     expect(control()!.getAttribute("title")).toBe("Push 1 commit");
     fireEvent.click(control()!);
     expect(onPush).toHaveBeenCalledWith("base");
   });
 
   it("has no Push without a push handler", () => {
-    renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 0, unpushed_count: 2 });
+    renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 0 }, { push: toPush(2) });
     expect(control()).toBeNull();
+  });
+
+  it("offers no Push while the repo state is unknown, rather than 0 then N", () => {
+    renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 0 }, { onPush: vi.fn() });
+    expect(control()).toBeNull();
+  });
+
+  it("shows Commit and Push side by side when both apply (D11), Commit first", () => {
+    const onPush = vi.fn();
+    const { onCommit } = renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 2 }, { onPush, push: toPush(3) });
+    const controls = [...screen.getByTestId("dock-status").querySelectorAll<HTMLButtonElement>("[data-work-state]")];
+    expect(controls.map((b) => b.getAttribute("data-work-state"))).toEqual(["commit", "push"]);
+    expect(controls[0].textContent).toBe("Commit… 2");
+    expect(controls[1].textContent).toBe("Push ↑3");
+    expect(controls[1].getAttribute("aria-label")).toBe("Push 3 commits");
+    fireEvent.click(controls[0]);
+    expect(onCommit).toHaveBeenCalled();
+    fireEvent.click(controls[1]);
+    expect(onPush).toHaveBeenCalledWith("branch");
+  });
+
+  it("offers no Push beside Commit while commits wait to land: that push comes after Land", () => {
+    renderDock({ ...fixtureIsolatedSession, uncommitted_count: 1, unlanded_count: 2 }, { onPush: vi.fn(), push: toPush(3, "base") });
+    expect(screen.getByTestId("dock-status").querySelector('[data-work-state="push"]')).toBeNull();
   });
 
   it("re-renders from a live record update", () => {

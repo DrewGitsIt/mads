@@ -1,13 +1,13 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "../../components/Button/Button";
 import type { RouterClient } from "../../router/client";
+import { useSessionRepos } from "../../router/repoStateStore";
 import type {
   PushCommit,
   PushPreview,
   PushResult,
   PushTarget,
   Session,
-  SessionRepo,
 } from "../../router/types";
 import { displayPath } from "../../files/displayPath";
 import {
@@ -19,6 +19,7 @@ import {
   repoName,
   shortHash,
 } from "./worktreeCopy";
+import { isIsolated, pushFacts, type PushRepo } from "./workState";
 import shell from "./CommitDialog.module.css";
 import styles from "./PushDialog.module.css";
 
@@ -26,7 +27,7 @@ export interface PushDialogProps {
   open: boolean;
   sessionId: string;
   routerClient: RouterClient;
-  /** Its repos say which have commits to push (a repo list, when more than one does). */
+  /** With the repo state store, says which repos have commits to push (a repo list, when more than one does). */
   session: Session;
   /** What to push in the session's own repo; any other repo pushes its branch. */
   target: PushTarget;
@@ -41,11 +42,6 @@ function cx(...names: (string | false | undefined)[]): string {
   return names.filter(Boolean).join(" ");
 }
 
-/** The push confirmation's repos: those the record says have commits to push. */
-function pushableRepos(session: Session): SessionRepo[] {
-  return (session.repos ?? []).filter((r) => (r.unpushed_count ?? 0) > 0);
-}
-
 /**
  * Confirm a push (docs/COMMIT-LAND-PUSH-DESIGN.md D5, mockup
  * commit-land-push.html §3 "Push main to origin?"). Every push asks: the
@@ -58,11 +54,20 @@ function pushableRepos(session: Session): SessionRepo[] {
  * at a time (D5 "Several repos").
  */
 export function PushDialog(props: PushDialogProps) {
-  const { open, session, onClose } = props;
-  // The layout is chosen as the dialog opens: a record refetch after the
-  // first push mustn't fold a repo list into a single pane mid-run.
-  const [openedWith, setOpenedWith] = useState<SessionRepo[] | null>(null);
-  if (open && openedWith === null) setOpenedWith(pushableRepos(session));
+  const { open, session, sessionId, routerClient, target, onClose } = props;
+  // Which repos have commits to push: the repo state store's counts (D10),
+  // the same ones the dock and the chip show.
+  const { repos } = useSessionRepos(routerClient, sessionId);
+  const facts = pushFacts(session, repos);
+  // The layout is chosen as the dialog opens (once the counts are known): a
+  // refetch after the first push mustn't fold a repo list into a single
+  // pane mid-run. An isolated session's "Push branch" (for a PR, before
+  // Land) is that one branch, whatever else has commits.
+  const [openedWith, setOpenedWith] = useState<PushRepo[] | null>(null);
+  if (open && openedWith === null && facts) {
+    const forPR = isIsolated(session) && target === "branch" && (session.unlanded_count ?? 0) > 0;
+    setOpenedWith(forPR ? [] : facts.repos);
+  }
   if (!open && openedWith !== null) setOpenedWith(null);
 
   useEffect(() => {
@@ -276,33 +281,22 @@ const DOT: Record<PushStatus, string> = {
   failed: shell.dot_failed,
 };
 
-/**
- * The session's own repo pushes its base once nothing is left to land
- * (isolated), else what the opener asked; any other repo works in place and
- * pushes its branch.
- */
-function targetFor(repo: SessionRepo, asked: PushTarget): PushTarget {
-  if (!repo.primary && !repo.isolated) return "branch";
-  if (repo.isolated && (repo.unlanded_count ?? 0) === 0) return "base";
-  return asked;
-}
-
 /** Several repos (layout B, as CommitDialog's): a list on the left, the selected repo's push on the right. */
 function MultiPush({
   sessionId,
   routerClient,
-  target,
   onClose,
   onPushed,
   onAskAgent,
   repos,
-}: PushDialogProps & { repos: SessionRepo[] }) {
+}: PushDialogProps & { repos: PushRepo[] }) {
   const titleId = useId();
   const [pushes, setPushes] = useState<Record<string, RepoPush>>(() =>
     Object.fromEntries(
       repos.map((r) => [
         r.root,
-        { target: targetFor(r, target), rebase: false, pushing: false },
+        // Per repo, from pushFacts: an isolated session's own repo its base, every other repo its branch.
+        { target: r.target, rebase: false, pushing: false },
       ]),
     ),
   );
@@ -338,7 +332,7 @@ function MultiPush({
 
   useEffect(() => {
     // Every listed repo at once, when the dialog opens.
-    for (const r of repos) load(r.root, targetFor(r, target));
+    for (const r of repos) load(r.root, r.target);
     // Mounted per opening; the list is the one it opened with.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -470,7 +464,7 @@ function PushItem({
   on,
   onSelect,
 }: {
-  repo: SessionRepo;
+  repo: PushRepo;
   push: RepoPush | undefined;
   on: boolean;
   onSelect: () => void;
@@ -484,7 +478,7 @@ function PushItem({
   else if (status === "failed") sub = "didn't push · see why";
   else
     sub = [
-      `↑${p?.ahead ?? repo.unpushed_count ?? 0}`,
+      `↑${p?.ahead ?? repo.commits}`,
       p && p.behind > 0 && `↓${p.behind}`,
       p?.branch,
     ]
@@ -516,7 +510,7 @@ function RepoPushPane({
   onRebase,
   onAskAgent,
 }: {
-  repo: SessionRepo;
+  repo: PushRepo;
   push: RepoPush | undefined;
   disabled: boolean;
   onRebase: (rebase: boolean) => void;

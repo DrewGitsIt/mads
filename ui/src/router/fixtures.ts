@@ -2,6 +2,7 @@ import type { RouterClient, SessionEventSource } from "./client";
 import { EVENTS_BATCH_LIMIT } from "./eventPages";
 import { isLiveDelegate } from "./delegateLive";
 import { checkLinkSessionIds, CommitRefusedError, MoveRefusedError, RouterValidationError } from "./client";
+import { FakeEventSource } from "./testFakeEventSource";
 import type {
   Attachment,
   HeldUpdate,
@@ -28,6 +29,8 @@ import type {
   MoveRequest,
   MoveResult,
   PushPreview,
+  RepoWorktree,
+  SessionRepoState,
   PushRequest,
   PushResult,
   PushTarget,
@@ -958,6 +961,64 @@ export const fixturePushPreview: PushPreview = {
   incoming: [],
 };
 
+// emitRepoChanged's seqs: above any a test seeds, and rising (the bus drops a repeated seq).
+let repoChangedSeq = 1_000_000_000;
+
+/** A checkout's branch facts for fixtures: on main at origin, nothing to push. */
+export function fixtureRepoWorktree(over: Partial<RepoWorktree> & { path: string }): RepoWorktree {
+  return {
+    git_dir: `${over.path}/.git`,
+    branch: "main",
+    remote: "origin",
+    remote_branch: over.branch ?? "main",
+    upstream: true,
+    ahead: 0,
+    behind: 0,
+    computed_at: "2026-11-15T00:00:00Z",
+    ...over,
+  };
+}
+
+/** The isolated session's repo: its worktree on its own branch, and the user's checkout on its base. */
+export const fixtureIsolatedRepoState: SessionRepoState = {
+  root: "/home/user/.mads/session-worktrees/session-isolated",
+  primary: true,
+  isolated: true,
+  base: "main",
+  worktree: fixtureRepoWorktree({
+    path: "/home/user/.mads/session-worktrees/session-isolated",
+    git_dir: "/home/user/repo/mads/.git",
+    branch: "mads/session/session-isolated",
+    upstream: false,
+    new_branch: true,
+  }),
+  base_worktree: fixtureRepoWorktree({ path: "/home/user/repo/mads", main: true, git_dir: "/home/user/repo/mads/.git" }),
+};
+
+/** A session's repo set as the fixture Router derives it from the record (FakeRouterClient.sessionRepos unset). */
+export function fixtureReposFor(session: Session): SessionRepoState[] {
+  if (session.worktree_dir && session.worktree_branch && session.worktree_base) {
+    const main = session.dir ?? "/home/user/repo/mads";
+    return [
+      {
+        ...structuredClone(fixtureIsolatedRepoState),
+        root: session.worktree_dir,
+        base: session.worktree_base,
+        worktree: fixtureRepoWorktree({
+          path: session.worktree_dir,
+          git_dir: `${main}/.git`,
+          branch: session.worktree_branch,
+          upstream: false,
+          new_branch: true,
+        }),
+        base_worktree: fixtureRepoWorktree({ path: main, main: true, git_dir: `${main}/.git`, branch: session.worktree_base }),
+      },
+    ];
+  }
+  const dir = session.cwd ?? session.dir;
+  return dir ? [{ root: dir, primary: true, worktree: fixtureRepoWorktree({ path: dir, main: true }) }] : [];
+}
+
 /**
  * The /usage card's three cases (docs/mockups/session-commands.html,
  * section 1; the same sessions pkg/contracts/testdata/session_report_*.json
@@ -1687,7 +1748,7 @@ export class FakeRouterClient implements RouterClient {
   pushPreview: PushPreview | ((opts: { repo?: string; target?: PushTarget }) => PushPreview) =
     structuredClone(fixturePushPreview);
   readonly pushPreviewCalls: { sessionId: string; repo?: string; target?: PushTarget }[] = [];
-  /** Unset, the push goes through: every commit the preview listed, and the session's unpushed counts drop to 0. */
+  /** Unset, the push goes through: every commit the preview listed, and the pushed checkout's `ahead` drops to 0. */
   pushOutcome?: PushResult | ((req: PushRequest) => PushResult);
   readonly pushCalls: { sessionId: string; req: PushRequest }[] = [];
 
@@ -1704,10 +1765,11 @@ export class FakeRouterClient implements RouterClient {
     const out = typeof this.pushOutcome === "function" ? this.pushOutcome(req) : this.pushOutcome;
     if (out) return structuredClone(out);
     const preview = typeof this.pushPreview === "function" ? this.pushPreview(req) : this.pushPreview;
-    const session = this.sessions.get(sessionId);
-    if (session) {
-      session.unpushed_count = 0;
-      session.repos = session.repos?.map((r) => ({ ...r, unpushed_count: 0 }));
+    const repos = this.sessionRepos[sessionId];
+    const pushed = repos?.find((r) => (req.repo ? r.root === req.repo : r.primary)) ?? repos?.[0];
+    if (pushed) {
+      const wt = req.target === "base" ? pushed.base_worktree : pushed.worktree;
+      if (wt) wt.ahead = 0;
     }
     return {
       outcome: "pushed",
@@ -1718,6 +1780,50 @@ export class FakeRouterClient implements RouterClient {
       rebased: req.rebase || undefined,
       pushed: preview.ahead,
     };
+  }
+
+  // --- Repo state (COMMIT-LAND-PUSH D10) ---
+  /**
+   * GET /sessions/{id}/repos, by session. Unset for a session, it's derived
+   * from the record: an isolated session's worktree and its base checkout,
+   * else its folder's checkout on main — nothing to push either way.
+   */
+  sessionRepos: Record<string, SessionRepoState[]> = {};
+  readonly sessionReposCalls: string[] = [];
+
+  async getSessionRepos(sessionId: string): Promise<SessionRepoState[]> {
+    this.sessionReposCalls.push(sessionId);
+    const set = this.sessionRepos[sessionId];
+    if (set) return structuredClone(set);
+    const session = this.sessions.get(sessionId);
+    return session ? fixtureReposFor(session) : [];
+  }
+
+  async getRepoState(path: string): Promise<RepoWorktree> {
+    for (const set of Object.values(this.sessionRepos)) {
+      for (const r of set) {
+        for (const wt of [r.worktree, r.base_worktree]) if (wt?.path === path) return structuredClone(wt);
+      }
+    }
+    throw new Error(`fixture repo state not found: ${path}`);
+  }
+
+  /**
+   * Test hook: delivers a session-less repo.changed on the stubbed event
+   * bus (tests stub EventSource with FakeEventSource), as the Router does
+   * once a repo's ref files settle.
+   */
+  static emitRepoChanged(gitDir: string, repo = gitDir.replace(/\/\.git\/?$/, ""), seq = ++repoChangedSeq): void {
+    const data = JSON.stringify({
+      seq,
+      type: "repo.changed",
+      actor: "system",
+      timestamp: new Date().toISOString(),
+      payload: { repo, git_dir: gitDir },
+    });
+    for (const source of FakeEventSource.instances) {
+      if (!source.closed && source.url.includes("repo.changed")) source.emit("repo.changed", data);
+    }
   }
 
   async getMoveFolders(sessionId: string, repo: string, ext?: string): Promise<MoveFolder[]> {

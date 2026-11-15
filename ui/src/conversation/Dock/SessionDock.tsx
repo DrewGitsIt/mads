@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { AgentIndex } from "../../router/agentRef";
 import type { PushTarget, Session, SessionTrust, Usage, WorktreeStatus } from "../../router/types";
 import type { LandCardModel } from "../Worktree/worktreeCards";
+import type { PushFacts } from "../Worktree/workState";
 import { ContextRim } from "./ContextRim";
 import { StatusLine } from "./StatusLine";
 import styles from "./SessionDock.module.css";
@@ -26,8 +27,14 @@ export interface DockWork {
   committing?: boolean;
   /** Opens the push confirmation for a target (COMMIT-LAND-PUSH D5). Unset: no Push. */
   onPush?: (target: PushTarget) => void;
-  /** A push from this view went through: 0 unpushed then means pushed, not "no remote". */
+  /** A push from this view went through: 0 to push then means pushed, not "no remote". */
   pushed?: boolean;
+  /**
+   * What Push would send, from the repo state store (pushFacts,
+   * COMMIT-LAND-PUSH D10) — never the record's counts. Undefined until the
+   * store answers: no Push is offered meanwhile.
+   */
+  push?: PushFacts;
   /**
    * GET /sessions/{id}/worktree. Runs git, so the ⎇ popover calls it only on
    * opening, and only for a session working in place — to say why there's no

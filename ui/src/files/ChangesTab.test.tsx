@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { useState, type ReactNode } from "react";
 import { ChangesTab, LIST_HIDDEN_KEY } from "./ChangesTab";
 import { FullWidthContext } from "../features/sessions/fullWidth";
-import { FakeRouterClient, fixtureIsolatedSession, fixtureSessions } from "../router/fixtures";
+import { FakeRouterClient, fixtureIsolatedSession, fixtureRepoWorktree, fixtureSessions } from "../router/fixtures";
 import { FetchRouterClient } from "../router/client";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import type { ChangeSet, LandResult, Session } from "../router/types";
@@ -707,26 +707,58 @@ describe("ChangesTab status chip (COMMIT-LAND-PUSH D3, G3)", () => {
     expect(within(path).queryByTestId("work-step-land")).toBeNull();
   });
 
+  /** The session's checkout, `ahead` of origin by that many (repo state, D10). */
+  function ahead(client: FakeRouterClient, n: number) {
+    client.sessionRepos[SID] = [{ root: "/r/mads", primary: true, worktree: fixtureRepoWorktree({ path: "/r/mads", main: true, ahead: n }) }];
+  }
+
   it("says committed · N to push, and Push confirms then says committed and pushed", async () => {
     const client = new FakeRouterClient();
-    const session: Session = { ...inPlace, unpushed_count: 2 };
-    const { rerender } = render(<ChangesTab sessionId={SID} routerClient={client} session={session} />);
+    ahead(client, 2);
+    render(<ChangesTab sessionId={SID} routerClient={client} session={inPlace} />);
     await (await inList()).findByText("Source");
-    expect(chip()!.getAttribute("data-state")).toBe("push");
+    await waitFor(() => expect(chip()!.getAttribute("data-state")).toBe("push"));
     expect(stateText()).toBe("committed · 2 to push");
     fireEvent.click(within(chip()!).getByRole("button", { name: "Push" }));
     const dialog = await screen.findByRole("alertdialog", { name: "Push mads/session/session-isolated to origin?" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Push" }));
     expect(await screen.findByText("Pushed 2 commits to origin/mads/session/session-isolated")).toBeTruthy();
     expect(client.pushCalls[0].req.target).toBe("branch");
-    // The record catches up: nothing left to push, and this chip saw it go.
-    rerender(<ChangesTab sessionId={SID} routerClient={client} session={{ ...inPlace, unpushed_count: 0 }} />);
-    expect(stateText()).toBe("committed and pushed");
+    // The repo state catches up: nothing left to push, and this chip saw it go.
+    await waitFor(() => expect(stateText()).toBe("committed and pushed"));
   });
 
   it("says just committed when it can't tell whether anything was pushed", async () => {
-    await renderChip({ ...inPlace, unpushed_count: 0 });
+    await renderChip(inPlace);
     expect(stateText()).toBe("committed");
+  });
+
+  it("shows N uncommitted · M to push with both buttons when both apply (D11)", async () => {
+    const client = new FakeRouterClient();
+    ahead(client, 3);
+    await renderChip({ ...inPlace, uncommitted_count: 4 }, client);
+    await waitFor(() => expect(stateText()).toBe("4 uncommitted · 3 to push"));
+    expect(chip()!.getAttribute("data-state")).toBe("commit");
+    const buttons = within(chip()!).getAllByRole("button").map((b) => b.textContent);
+    expect(buttons).toEqual(["Commit", "Push", "▾"]);
+    fireEvent.click(within(chip()!).getByRole("button", { name: "Push" }));
+    expect(await screen.findByRole("alertdialog", { name: "Push mads/session/session-isolated to origin?" })).toBeTruthy();
+  });
+
+  it("refetches its files when one of the session's repos changed, through the same debounce (D10)", async () => {
+    const client = new FakeRouterClient();
+    ahead(client, 0);
+    const getChangeSet = vi.spyOn(client, "getChangeSet");
+    await renderChip(inPlace, client);
+    await waitFor(() => expect(client.sessionReposCalls.length).toBeGreaterThan(0));
+    const before = getChangeSet.mock.calls.length;
+    act(() => {
+      FakeRouterClient.emitRepoChanged("/r/other/.git");
+      FakeRouterClient.emitRepoChanged("/r/mads/.git");
+      FakeRouterClient.emitRepoChanged("/r/mads/.git");
+    });
+    expect(getChangeSet.mock.calls.length).toBe(before);
+    await waitFor(() => expect(getChangeSet.mock.calls.length).toBe(before + 1), { timeout: 3000 });
   });
 
   it("opens the Commit dialog when Land is refused over uncommitted files (D6)", async () => {

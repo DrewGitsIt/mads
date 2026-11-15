@@ -18,7 +18,7 @@ import {
   tidyOutsidePrompt,
 } from "../Worktree/worktreeCopy";
 import { WorkPath } from "../Worktree/WorkPath";
-import { isIsolated, workState, type WorkState } from "../Worktree/workState";
+import { isIsolated, workState, type PushNext, type WorkState } from "../Worktree/workState";
 import { landOutcomeKey, shortBranch } from "./dockLabels";
 import { UPWARD_RIGHT, cx } from "./Pickers";
 import type { DockWork } from "./SessionDock";
@@ -75,7 +75,7 @@ export function WorkArea({
   const isolated = isIsolated(session);
   const branch = isolated ? session.worktree_branch : session.worktree_branch || checkoutBranch;
   const base = isolated ? session.worktree_base : undefined;
-  const state = workState(session);
+  const state = workState(session, work?.push);
   const landing = Boolean(work?.landing);
 
   // An in-place session never offers Land; on opening, the popover asks the
@@ -186,7 +186,11 @@ export function WorkArea({
   // The path needs git: an isolated session, a branch, or counts the
   // record has for some repo (a session started in a non-repo folder).
   const inGit =
-    isolated || Boolean(branch) || (session.uncommitted_count ?? 0) > 0 || (session.repos?.length ?? 0) > 0;
+    isolated ||
+    Boolean(branch) ||
+    (session.uncommitted_count ?? 0) > 0 ||
+    (session.repos?.length ?? 0) > 0 ||
+    (work?.push?.repos.length ?? 0) > 0;
 
   // Where the agent actually runs: an isolated session's own worktree, else
   // the folder it works in place.
@@ -238,6 +242,7 @@ export function WorkArea({
                 })
               }
               pushed={work?.pushed}
+              push={work?.push}
             />
           )}
           {note && (note.detail || owner) && (
@@ -409,6 +414,7 @@ function WorkButton({
       </button>
     );
   }
+  const pushTitle = (p: PushNext) => `Push ${plural(p.commits, "commit")}${p.repos > 1 ? ` in ${p.repos} repos` : ""}`;
   if (state.kind === "push") {
     if (!onPush) return null;
     return (
@@ -416,7 +422,7 @@ function WorkButton({
         type="button"
         className={styles.work}
         onClick={() => onPush(state.target)}
-        title={`Push ${plural(state.commits, "commit")}${state.repos > 1 ? ` in ${state.repos} repos` : ""}`}
+        title={pushTitle(state)}
         data-work-state="push"
       >
         Push
@@ -438,7 +444,24 @@ function WorkButton({
       </button>
     );
   }
-  return (
+  // Commits to push beside the files to commit (D11): "Commit… 4" then
+  // "Push ↑3". Push's word drops first as the dock narrows, leaving "↑3";
+  // its count never does — it's all that says what the button would send.
+  const push = state.push;
+  const alongside = push && onPush && (
+    <button
+      type="button"
+      className={styles.work}
+      onClick={() => onPush(push.target)}
+      title={pushTitle(push)}
+      aria-label={pushTitle(push)}
+      data-work-state="push"
+    >
+      <span className={line.vFull}>Push </span>
+      <span className={styles.count}>↑{push.commits}</span>
+    </button>
+  );
+  const commit = (
     <button
       type="button"
       className={styles.work}
@@ -458,6 +481,14 @@ function WorkButton({
         {state.repos > 1 && ` · ${state.repos} repos`}
       </span>
     </button>
+  );
+  return alongside ? (
+    <>
+      {commit}
+      {alongside}
+    </>
+  ) : (
+    commit
   );
 }
 

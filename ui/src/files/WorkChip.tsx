@@ -7,7 +7,8 @@ import { PushDialog } from "../conversation/Worktree/PushDialog";
 import { useCommitSettings } from "../conversation/Worktree/useCommitSettings";
 import { WorkPath } from "../conversation/Worktree/WorkPath";
 import { plural, pushedCopy, uncommittedCopy } from "../conversation/Worktree/worktreeCopy";
-import { workState } from "../conversation/Worktree/workState";
+import { pushFacts, workState } from "../conversation/Worktree/workState";
+import { refreshSessionRepos, useSessionRepos } from "../router/repoStateStore";
 import styles from "./WorkChip.module.css";
 
 export interface WorkChipProps {
@@ -47,9 +48,12 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
   // A push from here went through: only then is 0 unpushed "pushed" — the
   // record says 0 for a repo with no remote too.
   const [pushed, setPushed] = useState(false);
-  const state = workState(session);
+  // What a push would send: the window's repo state (COMMIT-LAND-PUSH D10).
+  const { repos } = useSessionRepos(routerClient, session.id);
+  const push = pushFacts(session, repos);
+  const state = workState(session, push);
 
-  function push(target: PushTarget) {
+  function startPush(target: PushTarget) {
     setPathOpen(false);
     setPushTarget(target);
   }
@@ -75,7 +79,8 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
   let text: string;
   switch (state?.kind) {
     case "commit":
-      text = uncommittedCopy(state.files, state.repos);
+      // Both at once (D11): "4 uncommitted · 3 to push".
+      text = uncommittedCopy(state.files, state.repos) + (state.push ? ` · ${state.push.commits} to push` : "");
       break;
     case "land":
       text = `${plural(state.commits, "commit")} to land`;
@@ -91,6 +96,7 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
   }
   // Committed: the chip goes quiet, Push or not (mockup G3).
   const done = state === null || state.kind === "push";
+  const alsoPush = state?.kind === "commit" ? state.push : undefined;
 
   const chip = (
     <span className={cx(styles.chip, done && styles.done)} data-testid="changes-workchip" data-state={state?.kind ?? "done"}>
@@ -104,6 +110,16 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
       {state?.kind === "commit" && (
         <button type="button" className={styles.btn} onClick={commit}>
           Commit
+        </button>
+      )}
+      {alsoPush && (
+        <button
+          type="button"
+          className={styles.btn}
+          title={`Push ${plural(alsoPush.commits, "commit")}`}
+          onClick={() => startPush(alsoPush.target)}
+        >
+          Push
         </button>
       )}
       {state?.kind === "land" && (
@@ -132,7 +148,7 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
           type="button"
           className={styles.btn}
           title={`Push ${plural(state.commits, "commit")}`}
-          onClick={() => push(state.target)}
+          onClick={() => startPush(state.target)}
         >
           Push
         </button>
@@ -159,7 +175,8 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
             landing={landing}
             onCommit={commit}
             onLand={land}
-            onPush={push}
+            onPush={startPush}
+            push={push}
             pushed={pushed}
           />
         </div>
@@ -183,6 +200,8 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
         onPushed={(result) => {
           setPushed(true);
           onPushed?.(pushedCopy(result));
+          // Its repo.changed follows within a second or so; don't wait to drop the count.
+          refreshSessionRepos(session.id);
         }}
       />
     </>

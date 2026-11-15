@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { SessionRail } from "./SessionRail";
 import { FakeRouterClient } from "../../../router/fixtures";
@@ -52,10 +52,13 @@ describe("SessionRail — work note", () => {
     expect(screen.queryByLabelText("uncommitted changes")).toBeNull();
   });
 
-  it("doesn't note commits waiting to be pushed: they're the checkout's, shared by its sessions", () => {
-    renderRail(isolated({ unlanded_count: 0, unpushed_count: 2 }));
+  it("doesn't note commits waiting to be pushed: they're the checkout's, so it never reads repo state", () => {
+    const client = new FakeRouterClient();
+    const reads = vi.spyOn(client, "getSessionRepos");
+    renderRail(isolated({ unlanded_count: 0 }), client);
     expect(note()).toBeNull();
     expect(screen.queryByText(/to push/)).toBeNull();
+    expect(reads).not.toHaveBeenCalled();
   });
 
   it("is absent when there's no work waiting", () => {

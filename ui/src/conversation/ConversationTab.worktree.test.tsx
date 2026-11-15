@@ -9,7 +9,13 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
-import { FakeRouterClient, fixtureConfig, fixtureIsolatedSession, fixturePushPreview } from "../router/fixtures";
+import {
+  FakeRouterClient,
+  fixtureConfig,
+  fixtureIsolatedRepoState,
+  fixtureIsolatedSession,
+  fixturePushPreview,
+} from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import type { Envelope, LandResult, TranscriptMessage } from "../router/types";
 import { tidyOutsidePrompt } from "./Worktree/worktreeCopy";
@@ -65,6 +71,13 @@ function emitControl(type: string, payload: unknown) {
 
 function makeClient(session = fixtureIsolatedSession) {
   return new FakeRouterClient({ [SID]: session }, { [SID]: transcript });
+}
+
+/** The isolated session's repo state with its base `ahead` of origin: what Push would send after Land (D10). */
+function baseAhead(client: FakeRouterClient, ahead: number) {
+  const own = structuredClone(fixtureIsolatedRepoState);
+  own.base_worktree!.ahead = ahead;
+  client.sessionRepos[SID] = [own];
 }
 
 async function mount(client: FakeRouterClient) {
@@ -159,9 +172,10 @@ describe("ConversationTab — Commit and Land", () => {
   });
 
   it("Push from the dock confirms, pushes, and says so in a toast", async () => {
-    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0, unpushed_count: 2 });
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0 });
+    baseAhead(client, 2);
     await mount(client);
-    fireEvent.click(workControl("push")!);
+    fireEvent.click(await waitFor(() => workControl("push")!));
     const dialog = await screen.findByRole("alertdialog", { name: "Push mads/session/session-isolated to origin?" });
     expect(client.pushPreviewCalls[0]).toEqual({ sessionId: SID, repo: undefined, target: "base" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Push" }));
@@ -170,13 +184,41 @@ describe("ConversationTab — Commit and Land", () => {
     expect(client.pushCalls[0].req).toEqual({ target: "base", expect: "c0ffee1234" });
   });
 
+  it("reads Push's count from the repo state and follows repo.changed, not the record (D10)", async () => {
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0 });
+    baseAhead(client, 3);
+    await mount(client);
+    expect((await waitFor(() => workControl("push")!)).textContent).toBe("Push ↑3");
+
+    // Another session pushed one of them: the Router announces the repo moved.
+    baseAhead(client, 2);
+    act(() => FakeRouterClient.emitRepoChanged("/home/user/repo/mads/.git"));
+    await waitFor(() => expect(workControl("push")!.textContent).toBe("Push ↑2"));
+
+    // Everything pushed elsewhere: no Push at all.
+    baseAhead(client, 0);
+    act(() => FakeRouterClient.emitRepoChanged("/home/user/repo/mads/.git"));
+    await waitFor(() => expect(workControl("push")).toBeNull());
+  });
+
+  it("shows Commit and Push together when both apply (D11)", async () => {
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 2, unlanded_count: 0 });
+    baseAhead(client, 3);
+    await mount(client);
+    await waitFor(() => expect(workControl("push")).toBeTruthy());
+    expect(workControl("commit")!.textContent).toContain("Commit… 2");
+    fireEvent.click(workControl("push")!);
+    expect(await screen.findByRole("alertdialog", { name: "Push mads/session/session-isolated to origin?" })).toBeTruthy();
+  });
+
   it("a conflicted rebase's Ask the agent drafts the rebase in the composer", async () => {
-    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0, unpushed_count: 1 });
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0 });
+    baseAhead(client, 1);
     client.pushPreview = { ...fixturePushPreview, remote_branch: "main", behind: 1, incoming: [] };
     client.pushOutcome = { outcome: "conflicted", files: ["scripts/deploy.sh"] };
     const send = vi.spyOn(client, "sendMessage");
     await mount(client);
-    fireEvent.click(workControl("push")!);
+    fireEvent.click(await waitFor(() => workControl("push")!));
     fireEvent.click(await screen.findByRole("button", { name: "Rebase onto origin and push" }));
     fireEvent.click(await screen.findByRole("button", { name: "Ask the agent to rebase" }));
     const composer = screen.getByPlaceholderText(/message the agent/i) as HTMLTextAreaElement;

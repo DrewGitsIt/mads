@@ -55,4 +55,6 @@ afterEach(async () => {
   // calls register, so a static import here would pull router/events past
   // the tests that mock it.
   (await import("./router/sessionsStore")).resetSessionsStoreForTests?.();
+  // And the window-wide repo state (COMMIT-LAND-PUSH D10), lazily for the same reason.
+  (await import("./router/repoStateStore")).resetRepoStateStoreForTests?.();
 });

@@ -1,10 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { FakeRouterClient, fixtureIsolatedSession, fixturePushPreview } from "../../router/fixtures";
-import type { PushPreview, Session } from "../../router/types";
+import {
+  FakeRouterClient,
+  fixtureIsolatedRepoState,
+  fixturePushPreview,
+  fixtureIsolatedSession,
+  fixtureRepoWorktree,
+} from "../../router/fixtures";
+import type { PushPreview, Session, SessionRepoState } from "../../router/types";
+import { FakeEventSource } from "../../router/testFakeEventSource";
 import { PushDialog } from "./PushDialog";
 
 const SID = fixtureIsolatedSession.id;
+
+// The dialog reads the repo state store, which listens on the event bus.
+beforeEach(() => {
+  FakeEventSource.instances = [];
+  vi.stubGlobal("EventSource", FakeEventSource);
+});
+afterEach(() => vi.unstubAllGlobals());
 
 function open(
   client: FakeRouterClient,
@@ -40,7 +54,8 @@ describe("PushDialog (D5, mockup §3)", () => {
     client.pushPreview = () => preview({});
     vi.spyOn(client, "getPushPreview").mockReturnValueOnce(new Promise((r) => (answer = r)));
     open(client);
-    expect(screen.getByRole("status").textContent).toBe("Fetching the remote…");
+    // The repo state answers first (which repos have commits), then the preview fetches.
+    expect((await screen.findByRole("status")).textContent).toBe("Fetching the remote…");
     expect(primary().disabled).toBe(true);
     await act(async () => answer(preview({ ahead: 60 })));
 
@@ -201,11 +216,10 @@ describe("PushDialog — one repo listed", () => {
   it("keeps the single layout and its own rebase button when only one repo has commits to push", async () => {
     const client = new FakeRouterClient();
     client.pushPreview = preview({ behind: 1, incoming: [{ hash: "aaaaaaa111", subject: "fix" }] });
-    open(client, {}, {
-      ...fixtureIsolatedSession,
-      uncommitted_count: 0,
-      repos: [{ root: "/home/user/.mads/session-worktrees/session-isolated", primary: true, unpushed_count: 2 }],
-    });
+    const own = structuredClone(fixtureIsolatedRepoState);
+    own.base_worktree!.ahead = 2;
+    client.sessionRepos[SID] = [own];
+    open(client, {}, { ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0 });
     expect(await screen.findByText("Push mads/session/session-isolated to origin?")).toBeTruthy();
     expect(screen.queryByRole("group", { name: "Repos" })).toBeNull();
     expect(screen.queryByRole("checkbox")).toBeNull();
@@ -222,13 +236,18 @@ describe("PushDialog — several repos (D5 \"Several repos\", layout B)", () => 
     ...fixtureIsolatedSession,
     uncommitted_count: 0,
     unlanded_count: 0,
-    unpushed_count: 6,
-    repos: [
-      { root: WT, primary: true, isolated: true, unpushed_count: 3 },
-      { root: LEARN, unpushed_count: 1 },
-      { root: NOTES, unpushed_count: 2 },
-    ],
+    repos: [{ root: WT, primary: true, isolated: true }, { root: LEARN }, { root: NOTES }],
   };
+  // The counts come from the repo state store (D10): the base after Land, the others' branches.
+  function repoStates(): SessionRepoState[] {
+    const own = structuredClone(fixtureIsolatedRepoState);
+    own.base_worktree!.ahead = 3;
+    return [
+      own,
+      { root: LEARN, worktree: fixtureRepoWorktree({ path: LEARN, main: true, branch: "ios-port", ahead: 1, behind: 2 }) },
+      { root: NOTES, worktree: fixtureRepoWorktree({ path: NOTES, main: true, ahead: 2 }) },
+    ];
+  }
   const previews: Record<string, PushPreview> = {
     [WT]: preview({ repo: WT, target: "base", branch: "main", remote_branch: "main", head: "aaa0000001", ahead: 3 }),
     [LEARN]: preview({
@@ -246,6 +265,7 @@ describe("PushDialog — several repos (D5 \"Several repos\", layout B)", () => 
 
   function multiClient() {
     const client = new FakeRouterClient();
+    client.sessionRepos[SID] = repoStates();
     client.pushPreview = (opts) => structuredClone(previews[opts.repo!]);
     return client;
   }
@@ -260,8 +280,10 @@ describe("PushDialog — several repos (D5 \"Several repos\", layout B)", () => 
       (_sid, opts) => new Promise((r) => answers.set(opts!.repo!, r)),
     );
     open(client, { target: "base" }, session);
-    expect(screen.getByText("Push this session's repos?")).toBeTruthy();
+    expect(await screen.findByText("Push this session's repos?")).toBeTruthy();
     expect(answers.size).toBe(3);
+    // Before its preview, an item shows the repo state's count.
+    expect(item("notes").textContent).toBe("notesFetching…");
     expect(item("learnanywhere").textContent).toContain("Fetching…");
     expect(pushButton().disabled).toBe(true);
 
@@ -397,5 +419,25 @@ describe("PushDialog — several repos (D5 \"Several repos\", layout B)", () => 
     expect(onAskAgent).toHaveBeenCalledWith(
       "Please rebase ios-port onto origin/ios-port and resolve the conflicts in: Settings.swift.",
     );
+  });
+
+  it("lists only the repos the repo state says have commits to push, whatever the record says", async () => {
+    const client = multiClient();
+    client.sessionRepos[SID][2].worktree.ahead = 0; // notes: pushed elsewhere since
+    open(client, { target: "base" }, session);
+    await screen.findByText("Push this session's repos?");
+    const names = within(screen.getByRole("group", { name: "Repos" }))
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("title"));
+    expect(names).toEqual([WT, LEARN]);
+  });
+
+  it("opens one pane for an isolated session's Push branch, whatever else has commits", async () => {
+    const client = multiClient();
+    client.pushPreview = preview({});
+    open(client, { target: "branch" }, { ...session, unlanded_count: 2 });
+    expect(await screen.findByText("Push mads/session/session-isolated to origin?")).toBeTruthy();
+    await waitFor(() => expect(client.pushPreviewCalls).toEqual([{ sessionId: SID, repo: undefined, target: "branch" }]));
+    expect(screen.queryByRole("group", { name: "Repos" })).toBeNull();
   });
 });
