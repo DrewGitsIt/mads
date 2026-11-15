@@ -61,7 +61,7 @@ const (
 	ReasonRoster        = "roster"         // left the roster, no report within Grace
 	ReasonTurnEnd       = "turn_end"       // foreground, still running when its parent's turn ended
 	ReasonProcessExit   = "process_exit"   // the harness process ended under it
-	ReasonRunnerRestart = "runner_restart" // found running when a runner started
+	ReasonRunnerRestart = "runner_restart" // found running with no runner left to run it (a runner starting, or the router after an exit)
 	ReasonNoEnding      = "no_ending"      // imported: its harness's history records no ending
 )
 

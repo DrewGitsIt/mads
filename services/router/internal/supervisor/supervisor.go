@@ -306,6 +306,9 @@ func (s *Supervisor) reconcileInactiveSession(ctx context.Context, sessionID str
 // a tracked child is running, so without this a session could be stuck
 // inactive, dead-ending its lifecycle controls, for as long as that child
 // stays up.
+//
+// Last, it concludes the delegates a dead harness process left recorded
+// running, in every session without a live child (concludeAllStrandedDelegates).
 func (s *Supervisor) ReconcileOrphanedSessions(ctx context.Context) {
 	sessions, err := s.data.Sessions(ctx, string(contracts.SessionActive))
 	if err != nil {
@@ -346,6 +349,7 @@ func (s *Supervisor) ReconcileOrphanedSessions(ctx context.Context) {
 			log.Printf("supervisor: boot sweep: heal stale-inactive session %s: %v", id, err)
 		}
 	}
+	s.concludeAllStrandedDelegates(ctx)
 }
 
 // reconcileActiveSession is reconcileInactiveSession's mirror: sessionID is
@@ -483,6 +487,9 @@ func (s *Supervisor) onSessionExit(sessionID string, expected bool, exitErr erro
 		log.Printf("supervisor: release leases for session %s: %v", sessionID, err)
 	}
 	s.forgetSession(sessionID)
+	// Its delegates ran inside the harness process; any the runner didn't
+	// get to conclude on the way out are concluded here.
+	s.concludeStrandedDelegates(ctx, sessionID)
 	if !expected {
 		// Terminate/Bounce already emits its own event and the Session
 		// Service child sets Activity = Inactive itself before exiting
