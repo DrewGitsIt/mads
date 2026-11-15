@@ -1,6 +1,6 @@
 # Commit, Land, Push: multi-repo sessions and Commit from Changes
 
-**Status:** Slices 1–5 built and on main (2026-11-09). Slices 6–8 (D10–D12) agreed 2026-11-15; building on `repo-state`.
+**Status:** Slices 1–5 on main (2026-11-09). Slices 6–7 (D10, D11) built on `repo-state` (2026-11-15); slice 8 (D12) next.
 **Date:** 2026-11-05. **Driver:** Drew started a session in `~/repo` by accident.
 Its agent did real work in `~/repo/mads`. Changes showed most of it, but Commit
 and Land refused it, and there was no way to recover without re-rooting.
@@ -485,3 +485,23 @@ of hiding Push behind Commit. A trial: revisit after use.
   and the Changes chip's "changes outside" controls; the popover offers
   "Commit them…". In practice the popover already holds Land back while
   such files exist, so the refusal mostly matters when counts are stale.
+
+### Slices 6–7 (2026-11-15, branch `repo-state`)
+
+- **D10, as built:** `pkg/repostate` (Compute, Cache, Watcher, Service);
+  the Router lists active sessions' checkouts every 30 s (plus any a view
+  asked about in the last 30 minutes) and watches their repos with
+  fsnotify. Endpoints `GET /repos/state?path=` and `GET
+  /sessions/{id}/repos`. `unpushed_count` is gone from session records.
+- **Also on a repo change:** before announcing it, the Router recounts the
+  session-owned counts of active sessions working in that repo — someone
+  may have committed their files. Found in the end-to-end check: without
+  it, a session kept "Commit… 1" after another committed its file.
+- **Measured end to end** (two sessions in one repo, commits and a push
+  made outside either): the other session's dock updated within 1.3–1.8 s
+  with no turn of its own; one stored `repo.changed` per settled change
+  (a commit and a push within the settling window were one).
+- **D11:** the dock and the Changes chip show Commit and Push side by side
+  when both apply; an isolated session with commits left to land shows
+  Commit then Land, as before. At narrow widths the word "Push" drops
+  before its count.
