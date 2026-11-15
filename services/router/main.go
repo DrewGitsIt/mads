@@ -221,6 +221,51 @@ func activeCheckouts(data *dataclient.Client) repostate.Lister {
 	}
 }
 
+// onRepoChange is what a settled change to a repo's branches sets off:
+// recount the session-owned counts (uncommitted files) of active sessions
+// working in that repo — anyone may have just committed their files — then
+// announce the change. A recount only writes a record, and so only sends
+// session.updated, for a session whose counts actually moved.
+func onRepoChange(data *dataclient.Client) func(gitDir string) {
+	announce := announceRepoChange(data)
+	return func(gitDir string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		recountSessionsIn(ctx, data, gitDir)
+		announce(gitDir)
+	}
+}
+
+// recountSessionsIn refreshes the header counts of active sessions with a
+// checkout in the repo whose shared git dir is gitDir.
+func recountSessionsIn(ctx context.Context, data *dataclient.Client, gitDir string) {
+	sessions, err := data.Sessions(ctx, string(contracts.SessionActive))
+	if err != nil {
+		log.Printf("router: recount sessions in %s: %v", gitDir, err)
+		return
+	}
+	ops := sessionwt.Ops{Store: data}
+	for _, sess := range sessions {
+		_, all, _, err := ops.Repos(ctx, sess.ID)
+		if err != nil {
+			continue
+		}
+		in := false
+		for _, t := range all {
+			for _, p := range []string{t.Folder, t.Primary} {
+				if g, err := repostate.GitDir(ctx, p); err == nil && g == gitDir {
+					in = true
+				}
+			}
+		}
+		if in {
+			if err := sessionwt.RefreshCounts(ctx, data, sess.ID); err != nil {
+				log.Printf("router: recount %s after a repo change: %v", sess.ID, err)
+			}
+		}
+	}
+}
+
 // announceRepoChange appends repo.changed for a repo whose branches moved,
 // so every view of it reads its state again.
 func announceRepoChange(data *dataclient.Client) func(gitDir string) {
@@ -370,7 +415,7 @@ func main() {
 	// (docs/COMMIT-LAND-PUSH-DESIGN.md D10); stopped at shutdown.
 	repoCtx, repoCancel := context.WithCancel(context.Background())
 	defer repoCancel()
-	repoState := repostate.NewService(repoCtx, activeCheckouts(data), announceRepoChange(data))
+	repoState := repostate.NewService(repoCtx, activeCheckouts(data), onRepoChange(data))
 	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), attachmentStore, *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist), guard, repoState)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

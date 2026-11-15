@@ -14,11 +14,11 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
-	"github.com/drewkidwell/mads/pkg/repostate"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/preflight"
 	"github.com/drewkidwell/mads/pkg/registryclient"
+	"github.com/drewkidwell/mads/pkg/repostate"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/router/internal/attachments"
