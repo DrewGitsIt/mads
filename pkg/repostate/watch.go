@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -243,7 +244,7 @@ func (w *Watcher) events() {
 			if !ok {
 				return
 			}
-			w.handle(ev)
+			guard("handling a file event", func() { w.handle(ev) })
 		}
 	}
 }
@@ -294,12 +295,12 @@ func (w *Watcher) scheduleLocked(gitDir string, r *watched) {
 	now := time.Now()
 	if r.timer == nil {
 		r.first = now
-		r.timer = time.AfterFunc(w.opts.Quiet, func() { w.fire(gitDir) })
+		r.timer = time.AfterFunc(w.opts.Quiet, func() { guard("reporting a change", func() { w.fire(gitDir) }) })
 		return
 	}
 	if now.Sub(r.first) >= w.opts.MaxWait {
 		r.timer.Stop()
-		go w.fire(gitDir)
+		go guard("reporting a change", func() { w.fire(gitDir) })
 		return
 	}
 	r.timer.Reset(w.opts.Quiet)
@@ -321,7 +322,20 @@ func (w *Watcher) fire(gitDir string) {
 		r.sig, r.lastPoll = sig, time.Now()
 	}
 	w.mu.Unlock()
-	w.onChange(gitDir)
+	guard("the change callback", func() { w.onChange(gitDir) })
+}
+
+// guard runs fn, turning a panic into a log line: a bug here must never
+// take down the process it runs in — the Router, which every session's
+// connection goes through. Whatever a dropped event missed, the poll
+// catches.
+func guard(what string, fn func()) {
+	defer func() {
+		if p := recover(); p != nil {
+			log.Printf("repostate: %s panicked: %v\n%s", what, p, debug.Stack())
+		}
+	}()
+	fn()
 }
 
 // polls checks repos the watch can't cover every Poll, and every repo
@@ -355,7 +369,7 @@ func (w *Watcher) polls() {
 			}
 			w.mu.Unlock()
 			if changed {
-				w.onChange(spec.GitDir)
+				guard("the change callback", func() { w.onChange(spec.GitDir) })
 			}
 		}
 	}

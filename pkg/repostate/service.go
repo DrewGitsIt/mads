@@ -90,7 +90,7 @@ func (s *Service) reconcileLoop(ctx context.Context) {
 	t := time.NewTicker(s.every)
 	defer t.Stop()
 	for {
-		s.reconcile(ctx)
+		guard("reconciling watched repos", func() { s.reconcile(ctx) })
 		select {
 		case <-ctx.Done():
 			return

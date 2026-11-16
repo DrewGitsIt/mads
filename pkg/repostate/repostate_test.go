@@ -234,3 +234,23 @@ func TestService(t *testing.T) {
 		t.Error("RepoOf didn't give the main checkout")
 	}
 }
+
+// A panicking callback is logged, not fatal, and later changes are still
+// reported.
+func TestWatcherSurvivesAPanickingCallback(t *testing.T) {
+	repo, _ := fixture(t)
+	gitDir := filepath.Join(repo, ".git")
+	r := &reports{n: map[string]int{}}
+	var once sync.Once
+	w := NewWatcher(func(g string) {
+		r.add(g)
+		once.Do(func() { panic("boom") })
+	}, Options{Quiet: 100 * time.Millisecond, MaxWait: time.Second, Poll: time.Hour, Safety: time.Hour})
+	t.Cleanup(w.Close)
+	w.Set([]Spec{{GitDir: gitDir}})
+
+	commit(t, repo, "one.txt")
+	r.waitFor(t, gitDir, 1, "the change whose callback panics")
+	commit(t, repo, "two.txt")
+	r.waitFor(t, gitDir, 2, "the next change")
+}
