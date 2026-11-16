@@ -285,6 +285,10 @@ const (
 	// Another operation held the session's folder or the user's checkout
 	// past the Router's short wait; try again.
 	LandLocked = "locked"
+	// No landing message: Land squashes the branch into one commit on the
+	// base, whose message the user writes (docs/COMMIT-LAND-PUSH-DESIGN.md
+	// D12).
+	LandMessageRequired = "message_required"
 )
 
 // LandRefusal is why Land won't (or didn't) run.
@@ -472,4 +476,48 @@ type PushResult struct {
 	// Detail is human text, or git's output verbatim.
 	Detail string   `json:"detail,omitempty"`
 	Files  []string `json:"files,omitempty"`
+}
+
+// LandRequest is POST /sessions/{id}/land (D12): squash a branch's work
+// into one commit on its base.
+type LandRequest struct {
+	// Repo is the worktree to land (SessionRepoState.Root); empty is the
+	// session's own isolated worktree.
+	Repo string `json:"repo,omitempty"`
+	// Base overrides the inferred base branch; a chosen base is kept as
+	// confirmed for the branch's next Land.
+	Base string `json:"base,omitempty"`
+	// Message is the landing commit's message, written by the user (with
+	// a draft from POST /sessions/{id}/land/draft if they like). The
+	// Session: trailer is added. Required.
+	Message string `json:"message"`
+}
+
+// LandPreview is GET /sessions/{id}/land?repo=&base=: what the Land
+// confirmation shows.
+type LandPreview struct {
+	Repo   string `json:"repo"`
+	Branch string `json:"branch,omitempty"`
+	Base   string `json:"base,omitempty"`
+	// BaseSource says how Base was worked out: recorded (mads saw the
+	// branch made), confirmed (chosen in a Land before), reflog (the
+	// branch's creation names it), default (the repo's default branch),
+	// chosen (asked for in this request), or session (an isolated
+	// session's own base).
+	BaseSource string `json:"base_source,omitempty"`
+	Fork       string `json:"fork,omitempty"`
+	// Bases are the local branches the user may land into instead.
+	Bases []string `json:"bases"`
+	// Commits are the branch's commits the base doesn't have yet, copies
+	// left out, newest first (at most 50; ToLand counts all of them).
+	Commits []PushCommit `json:"commits"`
+	ToLand  int          `json:"to_land"`
+	// Blocked says why Land would be refused right now.
+	Blocked *LandRefusal `json:"blocked,omitempty"`
+}
+
+// LandDraftRequest is POST /sessions/{id}/land/draft.
+type LandDraftRequest struct {
+	Repo string `json:"repo,omitempty"`
+	Base string `json:"base,omitempty"`
 }

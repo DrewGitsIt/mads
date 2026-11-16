@@ -191,6 +191,7 @@ func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runne
 		StartedAt:            ident.startedAt,
 		OriginAllowed:        guard.OriginAllowed,
 		RepoState:            repoState,
+		Home:                 filepath.Dir(runsDir),
 	}))
 }
 

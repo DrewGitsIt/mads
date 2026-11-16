@@ -202,11 +202,11 @@ func TestPushIsolatedBranchThenBase(t *testing.T) {
 		t.Errorf("upstream remote = %q, want origin", got)
 	}
 
-	if _, err := s.ops.Land(ctx, s.store.sess.ID, Gates{}); err != nil {
+	if _, err := s.ops.Land(ctx, s.store.sess.ID, contracts.LandRequest{Message: "Land fix the thing"}, Gates{}); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := CountUnpushed(ctx, s.primary, "main"); err != nil || n != 2 {
-		t.Fatalf("base unpushed after Land = %d, %v; want 2 (the commit and the merge)", n, err)
+	if n, err := CountUnpushed(ctx, s.primary, "main"); err != nil || n != 1 {
+		t.Fatalf("base unpushed after Land = %d, %v; want 1 (the squash)", n, err)
 	}
 	res, err = s.ops.Push(ctx, s.store.sess.ID, contracts.PushRequest{Target: contracts.PushBase}, Gates{})
 	if err != nil || res.Outcome != contracts.PushPushed || res.Branch != "main" {

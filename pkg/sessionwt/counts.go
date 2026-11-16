@@ -138,6 +138,11 @@ func CountUnlanded(ctx context.Context, dir, base, branch string) (int, error) {
 			dir = main
 		}
 	}
+	if from != "HEAD" {
+		// Copies of commits the base already has (after a rebase there, or a
+		// squash Land) don't count: a Land wouldn't bring them.
+		return CountToLand(ctx, dir, base, branch)
+	}
 	out, err := Git(ctx, dir, "rev-list", "--count", from+"..refs/heads/"+branch)
 	if err != nil {
 		return 0, err

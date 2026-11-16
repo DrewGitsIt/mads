@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"path/filepath"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
@@ -18,7 +19,11 @@ import (
 var landHook func()
 
 func (r *Runner) worktreeOps() sessionwt.Ops {
-	return sessionwt.Ops{Store: r.data, Refresh: r.RefreshWorktreeCounts}
+	ops := sessionwt.Ops{Store: r.data, Refresh: r.RefreshWorktreeCounts}
+	if r.WorktreeRoot != "" {
+		ops.Home = filepath.Dir(r.WorktreeRoot) // $MADS_HOME/session-worktrees
+	}
+	return ops
 }
 
 // WorktreeStatus is the header/dialog state, with the busy gate filled in
@@ -49,16 +54,16 @@ func (r *Runner) UndoCommit(ctx context.Context, repo, hash string) (contracts.U
 // end even if the caller goes away: stopping git half-way through a merge
 // is the one outcome worse than either result, so Shutdown waits for it
 // too.
-func (r *Runner) Land(ctx context.Context, pipeline bool) (contracts.LandResult, error) {
+func (r *Runner) Land(ctx context.Context, req contracts.LandRequest, pipeline bool) (contracts.LandResult, error) {
 	ctx = context.WithoutCancel(ctx)
 	if !r.beginLanding() {
-		return r.worktreeOps().Land(ctx, r.sessionID, sessionwt.Gates{Busy: true, Pipeline: pipeline})
+		return r.worktreeOps().Land(ctx, r.sessionID, req, sessionwt.Gates{Busy: true, Pipeline: pipeline})
 	}
 	defer r.endLanding()
 	if landHook != nil {
 		landHook()
 	}
-	return r.worktreeOps().Land(ctx, r.sessionID, sessionwt.Gates{Pipeline: pipeline})
+	return r.worktreeOps().Land(ctx, r.sessionID, req, sessionwt.Gates{Pipeline: pipeline})
 }
 
 // beginLanding sets the landing flag unless a turn is in flight (or

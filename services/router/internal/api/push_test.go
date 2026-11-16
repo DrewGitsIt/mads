@@ -137,3 +137,52 @@ func TestSessionReposIsolated(t *testing.T) {
 		t.Errorf("base = %+v, want main in the user's checkout, 1 to push", r.BaseWorktree)
 	}
 }
+
+// Landing a worktree the agent made: the preview infers the base, the
+// draft writes a message, and the Land squashes onto main.
+func TestLandLinkedWorktreeRoutes(t *testing.T) {
+	srv, data := newWorktreeServer(t)
+	ctx := context.Background()
+	repo := wtRepo(t)
+	wt := filepath.Join(t.TempDir(), "wt")
+	wtGit(t, repo, "worktree", "add", "-q", "-b", "feature", wt)
+	wt = wtGit(t, wt, "rev-parse", "--show-toplevel")
+	sess := contracts.Session{Name: "Agent worktree", Provider: "fake", Dir: repo, Isolation: contracts.IsolationCurrentDir}
+	if err := data.CreateSession(ctx, &sess); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(wt, "feature.txt")
+	if err := os.WriteFile(file, []byte("f\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wtGit(t, wt, "add", "feature.txt")
+	wtGit(t, wt, "commit", "-q", "-m", "Add feature")
+	if err := data.RecordFileChange(ctx, &contracts.FileChange{SessionID: sess.ID, Path: file, Change: "added", Origin: contracts.OriginToolUse}); err != nil {
+		t.Fatal(err)
+	}
+	base := srv.URL + "/sessions/" + sess.ID
+
+	resp, err := http.Get(base + "/land?" + url.Values{"repo": {wt}}.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := decodeJSON[contracts.LandPreview](t, resp)
+	if p.Blocked != nil || p.Branch != "feature" || p.Base != "main" || p.ToLand != 1 {
+		t.Fatalf("preview = %+v", p)
+	}
+	resp = postJSON(t, base+"/land/draft", contracts.LandDraftRequest{Repo: wt})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("draft: status %d", resp.StatusCode)
+	}
+	if d := decodeJSON[contracts.CommitDraft](t, resp); d.Message == "" {
+		t.Error("empty draft")
+	}
+	resp = postJSON(t, base+"/land", contracts.LandRequest{Repo: wt, Message: "Add the feature"})
+	res := decodeJSON[contracts.LandResult](t, resp)
+	if res.Outcome != contracts.LandLanded || wtGit(t, repo, "rev-parse", "main") != res.MergeCommit {
+		t.Fatalf("land = %+v", res)
+	}
+	if subject := wtGit(t, repo, "log", "-1", "--format=%s", "main"); subject != "Add the feature" {
+		t.Errorf("main's subject = %q", subject)
+	}
+}

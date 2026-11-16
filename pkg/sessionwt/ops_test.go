@@ -498,24 +498,25 @@ func TestUndoRefusesPushedCommit(t *testing.T) {
 	}
 }
 
-// Land: a --no-ff merge commit in the user's checkout with the user's
-// identity and the trailer, recorded; the session branch fast-forwards
-// after, so nothing is left unlanded.
+// Land: one squash commit on the base (D12) — the branch's final tree, the
+// base's tip as its only parent, the user's message and identity and the
+// trailer — fast-forwarded into the user's checkout and recorded; the
+// session branch moves to it after, so nothing is left unlanded.
 func TestLandHappyPath(t *testing.T) {
 	s := newIsolated(t)
 	s.work(t, map[string]string{"feature.txt": "f\n"})
 	s.commit(t, contracts.CommitRequest{Message: "Feature"})
 	commitFile(t, s.primary, "elsewhere.txt", "base moved on\n")
 
-	res, err := s.ops.Land(context.Background(), "ses_test", Gates{})
+	res, err := s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Outcome != contracts.LandLanded || res.MergeCommit != head(t, s.primary, "main") || !res.FastForwarded {
 		t.Fatalf("result = %+v", res)
 	}
-	if parents := strings.Fields(gitOut(t, s.primary, "log", "-1", "--format=%P")); len(parents) != 2 {
-		t.Errorf("merge commit has parents %v, want 2 (--no-ff)", parents)
+	if parents := strings.Fields(gitOut(t, s.primary, "log", "-1", "--format=%P")); len(parents) != 1 {
+		t.Errorf("landing commit has parents %v, want 1 (a squash)", parents)
 	}
 	if body := gitOut(t, s.primary, "log", "-1", "--format=%B"); !strings.HasPrefix(body, "Land fix the thing\n\nSession: ses_test") {
 		t.Errorf("merge message = %q", body)
@@ -560,7 +561,7 @@ func TestLandConflictInStep1(t *testing.T) {
 	primaryBefore := cleanTree(t, s.primary)
 	folderBefore := head(t, s.folder, "HEAD")
 
-	res, err := s.ops.Land(context.Background(), "ses_test", Gates{})
+	res, err := s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -593,7 +594,7 @@ func TestLandBaseMovedBetweenSteps(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() { afterStep1 = nil })
-	res, err := s.ops.Land(context.Background(), "ses_test", Gates{})
+	res, err := s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -611,7 +612,7 @@ func TestLandBaseMovedBetweenSteps(t *testing.T) {
 		n++
 		commitFile(t, s.primary, "racer.txt", strings.Repeat("x", n)+"\n")
 	}
-	res, err = s.ops.Land(context.Background(), "ses_test", Gates{})
+	res, err = s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil || res.Outcome != contracts.LandRefused || res.Reason != contracts.LandBaseMoving || n != landTries {
 		t.Fatalf("ever-moving base = %+v, %v after %d tries", res, err, n)
 	}
@@ -635,30 +636,11 @@ func TestLandPrimaryRefusals(t *testing.T) {
 			reason: contracts.LandPrimaryDirty, files: []string{"README.md"},
 		},
 		{
-			name: "staged, unrelated",
-			setup: func(t *testing.T, s *isolated) {
-				writeFile(t, filepath.Join(s.primary, "notes.txt"), "user's own\n")
-				gitRun(t, s.primary, "add", "notes.txt")
-			},
-			reason: contracts.LandPrimaryDirty, files: []string{"notes.txt"}, detail: "staged or uncommitted",
-		},
-		{
 			name: "untracked in the way",
 			setup: func(t *testing.T, s *isolated) {
 				writeFile(t, filepath.Join(s.primary, "feature.txt"), "user's scratch\n")
 			},
 			reason: contracts.LandPrimaryUntracked, files: []string{"feature.txt"},
-		},
-		{
-			name: "pre-merge-commit hook",
-			setup: func(t *testing.T, s *isolated) {
-				hook := filepath.Join(s.primary, ".git", "hooks", "pre-merge-commit")
-				writeFile(t, hook, "#!/bin/sh\necho 'no merges on fridays' >&2\nexit 1\n")
-				if err := os.Chmod(hook, 0o755); err != nil {
-					t.Fatal(err)
-				}
-			},
-			reason: contracts.LandPrimaryRefused, detail: "no merges on fridays",
 		},
 	}
 	for _, tc := range cases {
@@ -669,7 +651,7 @@ func TestLandPrimaryRefusals(t *testing.T) {
 			tc.setup(t, s)
 			before := cleanTree(t, s.primary)
 
-			res, err := s.ops.Land(context.Background(), "ses_test", Gates{})
+			res, err := s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -713,8 +695,9 @@ func TestLandGates(t *testing.T) {
 		{name: "dirty", reason: contracts.LandDirty, setup: func(t *testing.T, s *isolated) {
 			writeFile(t, filepath.Join(s.folder, "scratch.txt"), "untracked\n")
 		}},
-		{name: "base not checked out", reason: contracts.LandBaseNotCheckedOut, setup: func(t *testing.T, s *isolated) {
+		{name: "base gone", reason: contracts.LandBaseNotCheckedOut, setup: func(t *testing.T, s *isolated) {
 			gitRun(t, s.primary, "checkout", "-q", "-b", "other")
+			gitRun(t, s.primary, "branch", "-D", "main")
 		}},
 		{name: "primary mid merge", reason: contracts.LandPrimaryMidMerge, setup: func(t *testing.T, s *isolated) {
 			gitRun(t, s.primary, "checkout", "-q", "-b", "theirs")
@@ -733,7 +716,7 @@ func TestLandGates(t *testing.T) {
 				tc.setup(t, s)
 			}
 			before := cleanTree(t, s.primary)
-			res, err := s.ops.Land(context.Background(), "ses_test", tc.gates)
+			res, err := s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, tc.gates)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -756,7 +739,7 @@ func TestLandGates(t *testing.T) {
 
 	t.Run("nothing to land", func(t *testing.T) {
 		s := newIsolated(t)
-		res, _ := s.ops.Land(context.Background(), "ses_test", Gates{})
+		res, _ := s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 		if res.Reason != contracts.LandNothingToLand {
 			t.Errorf("result = %+v", res)
 		}
@@ -769,7 +752,7 @@ func TestLandGates(t *testing.T) {
 		s.commit(t, contracts.CommitRequest{Message: "Work"})
 		s.work(t, map[string]string{"mine.txt": "pending\n"})
 		writeFile(t, filepath.Join(s.folder, "shell.txt"), "made by a shell\n")
-		res, err := s.ops.Land(context.Background(), "ses_test", Gates{})
+		res, err := s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -792,7 +775,7 @@ func TestLandGates(t *testing.T) {
 	})
 	t.Run("not isolated", func(t *testing.T) {
 		st := &memStore{sess: contracts.Session{ID: "ses_inplace", Dir: initRepo(t)}}
-		res, _ := Ops{Store: st}.Land(context.Background(), "ses_inplace", Gates{})
+		res, _ := Ops{Store: st}.Land(context.Background(), "ses_inplace", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 		if res.Reason != contracts.LandNotIsolated {
 			t.Errorf("result = %+v", res)
 		}
@@ -807,7 +790,7 @@ func TestLandEnsuresLostFolder(t *testing.T) {
 	if err := os.RemoveAll(s.folder); err != nil {
 		t.Fatal(err)
 	}
-	res, err := s.ops.Land(context.Background(), "ses_test", Gates{})
+	res, err := s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil || res.Outcome != contracts.LandLanded {
 		t.Fatalf("land = %+v, %v", res, err)
 	}
@@ -906,7 +889,7 @@ func TestOpsLockWaitRefusesLocked(t *testing.T) {
 	if undo, err := ops.Undo(ctx, "ses_test", "", first.Hash); err != nil || undo.Undone || undo.Reason != "locked" {
 		t.Errorf("undo under a held session lock = %+v, %v", undo, err)
 	}
-	res, err := ops.Land(ctx, "ses_test", Gates{})
+	res, err := ops.Land(ctx, "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil || res.Outcome != contracts.LandRefused || res.Reason != contracts.LandLocked {
 		t.Errorf("land under a held session lock = %+v, %v", res, err)
 	}
@@ -919,7 +902,7 @@ func TestOpsLockWaitRefusesLocked(t *testing.T) {
 	}
 	defer releaseRepo()
 	before := cleanTree(t, s.primary)
-	res, err = ops.Land(ctx, "ses_test", Gates{})
+	res, err = ops.Land(ctx, "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil || res.Outcome != contracts.LandRefused || res.Reason != contracts.LandLocked {
 		t.Errorf("land under a held repo lock = %+v, %v", res, err)
 	}
@@ -1012,7 +995,7 @@ func TestNothingToDoRefusalsRecount(t *testing.T) {
 
 	gitRun(t, s.primary, "merge", "--no-ff", "-m", "merge by hand", s.store.sess.WorktreeBranch)
 	s.store.patches = nil
-	res, err := s.ops.Land(ctx, s.store.sess.ID, Gates{})
+	res, err := s.ops.Land(ctx, s.store.sess.ID, contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1021,5 +1004,47 @@ func TestNothingToDoRefusalsRecount(t *testing.T) {
 	}
 	if u, l := s.store.lastCounts(t); u != 0 || l != 0 {
 		t.Errorf("after land refusal: counts = %d, %d; want 0, 0", u, l)
+	}
+}
+
+// The squash lands wherever the base is: fast-forwarded where it's checked
+// out (an unrelated staged file there stays staged), else moved in place
+// when nothing has it checked out.
+func TestLandWhereTheBaseIs(t *testing.T) {
+	ctx := context.Background()
+	s := newIsolated(t)
+	s.work(t, map[string]string{"feature.txt": "f\n"})
+	s.commit(t, contracts.CommitRequest{Message: "Feature"})
+	writeFile(t, filepath.Join(s.primary, "notes.txt"), "user's own\n")
+	gitRun(t, s.primary, "add", "notes.txt")
+	res, err := s.ops.Land(ctx, "ses_test", contracts.LandRequest{Message: "Land one"}, Gates{})
+	if err != nil || res.Outcome != contracts.LandLanded {
+		t.Fatalf("land with an unrelated staged file = %+v, %v", res, err)
+	}
+	if st := gitOut(t, s.primary, "status", "--porcelain"); !strings.Contains(st, "A  notes.txt") {
+		t.Errorf("the user's staged file = %q, want still staged", st)
+	}
+
+	gitRun(t, s.primary, "reset", "-q", "notes.txt")
+	gitRun(t, s.primary, "checkout", "-q", "-b", "elsewhere")
+	s.work(t, map[string]string{"more.txt": "m\n"})
+	s.commit(t, contracts.CommitRequest{Message: "More"})
+	res, err = s.ops.Land(ctx, "ses_test", contracts.LandRequest{Message: "Land two"}, Gates{})
+	if err != nil || res.Outcome != contracts.LandLanded || head(t, s.primary, "main") != res.MergeCommit {
+		t.Fatalf("land with main checked out nowhere = %+v, %v", res, err)
+	}
+	if on, _ := CurrentBranch(ctx, s.primary); on != "elsewhere" {
+		t.Errorf("the checkout moved to %q", on)
+	}
+}
+
+// No message, no Land.
+func TestLandNeedsAMessage(t *testing.T) {
+	s := newIsolated(t)
+	s.work(t, map[string]string{"feature.txt": "f\n"})
+	s.commit(t, contracts.CommitRequest{Message: "Feature"})
+	res, err := s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "  "}, Gates{})
+	if err != nil || res.Outcome != contracts.LandRefused || res.Reason != contracts.LandMessageRequired {
+		t.Fatalf("land without a message = %+v, %v", res, err)
 	}
 }

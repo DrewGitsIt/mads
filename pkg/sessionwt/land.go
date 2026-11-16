@@ -41,15 +41,15 @@ var afterStep1 func()
 // The caller holds the session lock and must not hold the repo lock
 // (LandSteps takes it); it records the merge commit. Only unexpected git
 // failures are errors.
-func LandSteps(ctx context.Context, t Target) (contracts.LandResult, error) {
-	return landSteps(ctx, t, 0)
+func LandSteps(ctx context.Context, t Target, message string) (contracts.LandResult, error) {
+	return landSteps(ctx, t, 0, message)
 }
 
 // landSteps is LandSteps, waiting no longer than lockWait (zero: as long
 // as ctx allows) for the repo lock: a wait that runs out is a "locked"
 // refusal. Step 1 may have merged the base into the session branch by
 // then, which is harmless — the session carries on from it.
-func landSteps(ctx context.Context, t Target, lockWait time.Duration) (contracts.LandResult, error) {
+func landSteps(ctx context.Context, t Target, lockWait time.Duration, message string) (contracts.LandResult, error) {
 	res := contracts.LandResult{Branch: t.Branch, Base: t.Base}
 	refuse := func(reason, detail string, files []string) (contracts.LandResult, error) {
 		res.Outcome, res.Reason, res.Detail, res.Files = contracts.LandRefused, reason, detail, files
@@ -100,7 +100,7 @@ func landSteps(ctx context.Context, t Target, lockWait time.Duration) (contracts
 			afterStep1()
 		}
 		// Step 2, in the user's checkout, under the repo lock.
-		landed, result, err := landInPrimary(ctx, t, b, lockWait)
+		landed, result, err := landInPrimary(ctx, t, b, lockWait, message)
 		if err != nil {
 			return contracts.LandResult{}, err
 		}
@@ -111,7 +111,10 @@ func landSteps(ctx context.Context, t Target, lockWait time.Duration) (contracts
 			return result, nil
 		}
 		res = result
-		if _, err := userGit(ctx, t.Folder, "merge", "--ff-only", "-q", baseRef); err == nil {
+		// The branch's files are the landing's, so moving it there changes
+		// nothing in the folder; its old commits stay in its reflog. The
+		// next Land then counts from here.
+		if _, err := userGit(ctx, t.Folder, "reset", "--keep", "-q", res.MergeCommit); err == nil {
 			res.FastForwarded = true
 		}
 		return res, nil
@@ -119,9 +122,14 @@ func landSteps(ctx context.Context, t Target, lockWait time.Duration) (contracts
 	return refuse(contracts.LandBaseMoving, t.Base+" kept moving while landing. Try Land again.", nil)
 }
 
-// landInPrimary is step 2. landed false with an empty Outcome means the
-// base moved off b and step 1 must run again.
-func landInPrimary(ctx context.Context, t Target, b string, lockWait time.Duration) (landed bool, res contracts.LandResult, err error) {
+// landInPrimary is step 2 (D12): one commit — the branch's final tree,
+// with the base's tip b as its only parent, carrying the user's message —
+// and the base moved to it: fast-forwarded where it's checked out (which
+// refuses only where it would overwrite local changes, and can't
+// conflict), else updated in place, compare-and-swap on b. landed false
+// with an empty Outcome means the base moved off b and step 1 must run
+// again.
+func landInPrimary(ctx context.Context, t Target, b string, lockWait time.Duration, message string) (landed bool, res contracts.LandResult, err error) {
 	res = contracts.LandResult{Branch: t.Branch, Base: t.Base}
 	release, err := acquireWithin(ctx, lockWait, func(ctx context.Context) (func(), error) {
 		return AcquireLock(ctx, t.Primary)
@@ -139,36 +147,38 @@ func landInPrimary(ctx context.Context, t Target, b string, lockWait time.Durati
 	if err != nil || strings.TrimSpace(cur) != b {
 		return false, res, nil
 	}
-	// The gate checked these before step 1; the user may have acted since,
-	// and a merge --abort must only ever abort this merge, not theirs.
-	if branch, err := CurrentBranch(ctx, t.Primary); err != nil || branch != t.Base {
-		res.Outcome, res.Reason = contracts.LandRefused, contracts.LandBaseNotCheckedOut
-		res.Detail = "Your checkout at " + t.Primary + " is no longer on " + t.Base + ". Check it out there to land."
-		return false, res, nil
-	}
-	if op := midOperation(ctx, t.Primary); op != "" {
-		res.Outcome, res.Reason = contracts.LandRefused, contracts.LandPrimaryMidMerge
-		res.Detail = "Your checkout at " + t.Primary + " is in the middle of a " + op + ". Finish or abort it, then land."
-		return false, res, nil
+	holder := checkoutOf(ctx, t.Primary, t.Base)
+	// The gate checked this before step 1; the user may have acted since.
+	if holder != "" {
+		if op := midOperation(ctx, holder); op != "" {
+			res.Outcome, res.Reason = contracts.LandRefused, contracts.LandPrimaryMidMerge
+			res.Detail = holder + " (where " + t.Base + " is checked out) is in the middle of a " + op + ". Finish or abort it, then land."
+			return false, res, nil
+		}
 	}
 
-	// Step 1 already merged the base, so git has nothing for a merge
-	// driver to do here; mergiraf goes along all the same, so every merge
-	// Land makes is the same kind.
-	merge := append(mergirafArgs(ctx, t, t.Primary), "merge", "--no-ff", "--no-edit",
-		"-m", "Land "+landName(t), "-m", trailer(t.SessionID), "refs/heads/"+t.Branch)
-	out, err := landGit(ctx, t.Primary, merge...)
-	if err != nil {
-		abortMerge(ctx, t.Primary)
-		res.Outcome = contracts.LandRefused
-		res.Reason, res.Detail, res.Files = classifyPrimaryRefusal(gitOutput(out, err))
-		return false, res, nil
-	}
-	head, err := Git(ctx, t.Primary, "rev-parse", "HEAD")
+	tree, err := Git(ctx, t.Folder, "rev-parse", "refs/heads/"+t.Branch+"^{tree}")
 	if err != nil {
 		return false, res, err
 	}
-	res.Outcome, res.MergeCommit = contracts.LandLanded, strings.TrimSpace(head)
+	out, err := userGit(ctx, t.Folder, "commit-tree", strings.TrimSpace(tree), "-p", b,
+		"-m", strings.TrimSpace(message), "-m", trailer(t.SessionID))
+	if err != nil {
+		res.Outcome, res.Reason, res.Detail = contracts.LandRefused, contracts.LandPrimaryRefused, gitOutput(out, err)
+		return false, res, nil
+	}
+	landing := strings.TrimSpace(out)
+
+	if holder != "" {
+		if out, err := landGit(ctx, holder, "merge", "--ff-only", "-q", landing); err != nil {
+			res.Outcome = contracts.LandRefused
+			res.Reason, res.Detail, res.Files = classifyPrimaryRefusal(gitOutput(out, err))
+			return false, res, nil
+		}
+	} else if _, err := Git(ctx, t.Primary, "update-ref", "-m", "Land "+landName(t), "refs/heads/"+t.Base, landing, b); err != nil {
+		return false, res, nil // the base moved under us: step 1 again
+	}
+	res.Outcome, res.MergeCommit = contracts.LandLanded, landing
 	return true, res, nil
 }
 

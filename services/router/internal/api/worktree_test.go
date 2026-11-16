@@ -124,7 +124,7 @@ func TestWorktreeRoutesForwardToLiveChild(t *testing.T) {
 	if got.Route != "POST /commit/undo" || !strings.Contains(got.Body, `"abc"`) {
 		t.Errorf("undo = %+v", got)
 	}
-	got = decodeJSON[marker](t, postJSON(t, srv.URL+"/sessions/"+sess.ID+"/land", struct{}{}))
+	got = decodeJSON[marker](t, postJSON(t, srv.URL+"/sessions/"+sess.ID+"/land", contracts.LandRequest{Message: "Land it"}))
 	if got.Via != "child" || got.Route != "POST /land" || got.Query != "" {
 		t.Errorf("land = %+v, want forwarded with no pipeline gate", got)
 	}
@@ -188,7 +188,7 @@ func TestWorktreeRoutesRunDirectlyWhenInactive(t *testing.T) {
 		t.Errorf("one-click commit = %+v", auto)
 	}
 
-	resp = postJSON(t, url+"/land", struct{}{})
+	resp = postJSON(t, url+"/land", contracts.LandRequest{Message: "Land it"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("land: status %d", resp.StatusCode)
 	}
@@ -449,7 +449,7 @@ func TestWorktreeRoutesDirectLandRefusesLocked(t *testing.T) {
 
 	landed := make(chan contracts.LandResult, 1)
 	go func() {
-		resp := postJSON(t, url+"/land", struct{}{})
+		resp := postJSON(t, url+"/land", contracts.LandRequest{Message: "Land it"})
 		landed <- decodeJSON[contracts.LandResult](t, resp)
 	}()
 	time.Sleep(200 * time.Millisecond) // Land is waiting on the lock, holding the wake lock

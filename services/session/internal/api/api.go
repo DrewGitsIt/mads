@@ -233,7 +233,11 @@ func (s *server) handleUndoCommit(w http.ResponseWriter, r *http.Request) {
 // handleLand answers 200 for every outcome — landed, conflicted, refused —
 // since each is a card, not a failure; only an unexpected error isn't.
 func (s *server) handleLand(w http.ResponseWriter, r *http.Request) {
-	res, err := s.runner.Land(r.Context(), pipelineActive(r))
+	var req contracts.LandRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	res, err := s.runner.Land(r.Context(), req, pipelineActive(r))
 	if err != nil {
 		writeRunnerError(w, err)
 		return

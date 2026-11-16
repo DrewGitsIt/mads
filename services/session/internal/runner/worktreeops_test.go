@@ -117,7 +117,7 @@ func TestRunnerCommitAndLand(t *testing.T) {
 	if _, err := r.Commit(ctx, contracts.CommitRequest{Message: "Feature"}); err != nil {
 		t.Fatal(err)
 	}
-	res, err := r.Land(ctx, false)
+	res, err := r.Land(ctx, contracts.LandRequest{Message: "Land it"}, false)
 	if err != nil || res.Outcome != contracts.LandLanded {
 		t.Fatalf("land = %+v, %v", res, err)
 	}
@@ -155,7 +155,7 @@ func TestLandQueuesMessagesAndRefusesMidTurn(t *testing.T) {
 	r.mu.Lock()
 	r.busy = true
 	r.mu.Unlock()
-	if res, err := r.Land(ctx, false); err != nil || res.Reason != contracts.LandBusy {
+	if res, err := r.Land(ctx, contracts.LandRequest{Message: "Land it"}, false); err != nil || res.Reason != contracts.LandBusy {
 		t.Fatalf("land mid-turn = %+v, %v; want refused busy", res, err)
 	}
 	r.mu.Lock()
@@ -175,7 +175,7 @@ func TestLandQueuesMessagesAndRefusesMidTurn(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() { landHook = nil })
-	res, err := r.Land(ctx, false)
+	res, err := r.Land(ctx, contracts.LandRequest{Message: "Land it"}, false)
 	if err != nil || res.Outcome != contracts.LandLanded {
 		t.Fatalf("land = %+v, %v", res, err)
 	}
@@ -226,7 +226,7 @@ func TestShutdownWaitsForLand(t *testing.T) {
 			t.Cleanup(func() { landHook = nil })
 			landed := make(chan contracts.LandResult, 1)
 			go func() {
-				res, _ := r.Land(ctx, false)
+				res, _ := r.Land(ctx, contracts.LandRequest{Message: "Land it"}, false)
 				landed <- res
 			}()
 			<-inLand
