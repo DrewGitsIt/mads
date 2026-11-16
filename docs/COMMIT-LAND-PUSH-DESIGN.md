@@ -1,6 +1,6 @@
 # Commit, Land, Push: multi-repo sessions and Commit from Changes
 
-**Status:** Slices 1–5 on main (2026-11-09). Slices 6–7 (D10, D11) built on `repo-state` (2026-11-15); slice 8 (D12) next.
+**Status:** Slices 1–5 on main (2026-11-09). Slices 6–8 (D10–D12) built on `repo-state` (2026-11-16), not merged.
 **Date:** 2026-11-05. **Driver:** Drew started a session in `~/repo` by accident.
 Its agent did real work in `~/repo/mads`. Changes showed most of it, but Commit
 and Land refused it, and there was no way to recover without re-rooting.
@@ -505,3 +505,32 @@ of hiding Push behind Commit. A trial: revisit after use.
   when both apply; an isolated session with commits left to land shows
   Commit then Land, as before. At narrow widths the word "Push" drops
   before its count.
+
+### Slice 8 (2026-11-16, branch `repo-state`)
+
+- **D12, as built:** `sessionwt.BaseOf` (recorded/confirmed config →
+  reflog "Created from <branch>" → default branch; fork from the record,
+  the reflog's first entry, or `merge-base --fork-point`); repo state
+  reports `base`, `base_source`, `fork`, `to_land` for linked worktrees.
+  Shell tracking records a base when it sees `git worktree add -b` /
+  `checkout -b` / `switch -c` (`shellwatch.Creations`, run after the
+  command, never over a confirmed base).
+- **Squash Land:** step 2 is `commit-tree` of the branch's tree on the
+  base's tip, then the base moves to it — `merge --ff-only` where it's
+  checked out, else `update-ref` with compare-and-swap — and the work
+  branch `reset --keep`s to it. The base no longer has to be checked out
+  in the user's checkout. An unrelated staged file there stays staged.
+- **Endpoints:** `GET /sessions/{id}/land?repo=&base=` (preview), `POST
+  /sessions/{id}/land/draft`, `POST /sessions/{id}/land {repo, base,
+  message}` (refuses `message_required`). The Router refuses a Land while
+  any agent works in the session's repos.
+- **Hooks:** the landing commit is made with `commit-tree`, so no commit
+  hooks run on it (the old `--no-ff` merge ran `pre-merge-commit`); the
+  branch's own commits ran them when made. Open: whether the landing
+  commit should run them.
+- **UI:** `LandDialog` everywhere Land was a click; the ⎇ popover no
+  longer shows Land outcomes (the confirmation and the cards do).
+- **Verified end to end:** the isolated-session journey (8 steps) through
+  the confirmation; a worktree made outside mads landing as one squash
+  commit with the user's message, its branch moved, its base kept as
+  confirmed.
