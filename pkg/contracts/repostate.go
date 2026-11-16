@@ -36,6 +36,15 @@ type RepoWorktree struct {
 	// lacks. Both as of the last fetch.
 	Ahead  int `json:"ahead"`
 	Behind int `json:"behind"`
+	// For a linked worktree (not Main) on a branch: where Land puts its
+	// work (Base) and how that was worked out (BaseSource: recorded,
+	// confirmed, reflog or default — docs/COMMIT-LAND-PUSH-DESIGN.md D12),
+	// the commit it started from (Fork, when known), and how many of its
+	// commits Base doesn't have yet, copies left out (ToLand).
+	Base       string `json:"base,omitempty"`
+	BaseSource string `json:"base_source,omitempty"`
+	Fork       string `json:"fork,omitempty"`
+	ToLand     int    `json:"to_land,omitempty"`
 	// ComputedAt is when these were read.
 	ComputedAt time.Time `json:"computed_at"`
 }

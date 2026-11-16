@@ -76,7 +76,8 @@ func TestCompute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w.Main || w.Branch != "feature" || !w.NewBranch || w.Ahead != 2 || w.GitDir != filepath.Join(repo, ".git") {
+	if w.Main || w.Branch != "feature" || !w.NewBranch || w.Ahead != 2 || w.GitDir != filepath.Join(repo, ".git") ||
+		w.Base != "main" || w.BaseSource != "default" || w.ToLand != 1 || w.Fork == "" {
 		// Ahead 2: a.txt (not on origin) and f.txt, against origin's main.
 		t.Errorf("linked worktree = %+v", w)
 	}

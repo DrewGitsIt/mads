@@ -61,7 +61,18 @@ func Compute(ctx context.Context, path string) (contracts.RepoWorktree, error) {
 		w.Detached = true
 		return w, nil
 	}
-	return w, branchFacts(ctx, top, branch, &w)
+	if err := branchFacts(ctx, top, branch, &w); err != nil {
+		return contracts.RepoWorktree{}, err
+	}
+	if !w.Main {
+		if b, ok := sessionwt.BaseOf(ctx, top, branch); ok {
+			w.Base, w.BaseSource, w.Fork = b.Base, b.Source, b.Fork
+			if w.ToLand, err = sessionwt.CountToLand(ctx, top, b.Base, branch); err != nil {
+				return contracts.RepoWorktree{}, err
+			}
+		}
+	}
+	return w, nil
 }
 
 // ComputeBranch is Compute for branch in the repo holding path, whether or
