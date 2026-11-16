@@ -67,10 +67,16 @@ func (r *Runner) observeShell(ev provider.Event, at time.Time) {
 			if names := shellwatch.Named(ev.Tool.Input); len(names) > 0 {
 				r.shell.adopt(names, ev.Tool.ID, at, delegate)
 			}
+			if made := shellwatch.Creations(ev.Tool.Input); len(made) > 0 {
+				r.shell.noteCreations(ev.Tool.ID, made)
+			}
 		}
 	case provider.EventToolResult:
 		if ev.Tool != nil {
 			r.shell.Finished(ev.Tool.ID, at)
+			if made := r.shell.takeCreations(ev.Tool.ID); len(made) > 0 {
+				go r.recordCreations(made)
+			}
 		}
 	case provider.EventTurnEnd:
 		r.shell.TurnEnded(at)
@@ -87,11 +93,12 @@ type shellSet struct {
 	exclude string // an isolated session's worktree: never followed
 
 	mu        sync.Mutex
-	trackers  map[string]*shellwatch.Tracker // repo top → its tracker
-	adopted   map[string]bool                // tops found through commands
-	baselined map[string]bool                // adopted tops given a shadow baseline
-	dirRoot   map[string]string              // named dir → its repo top ("" none)
-	finished  map[string]time.Time           // call id → its result's time, for late adoptions
+	trackers  map[string]*shellwatch.Tracker   // repo top → its tracker
+	adopted   map[string]bool                  // tops found through commands
+	baselined map[string]bool                  // adopted tops given a shadow baseline
+	dirRoot   map[string]string                // named dir → its repo top ("" none)
+	finished  map[string]time.Time             // call id → its result's time, for late adoptions
+	creations map[string][]shellwatch.Creation // call id → branches its command creates
 	stopped   bool
 	wg        sync.WaitGroup // adoptions in flight
 }
@@ -142,6 +149,25 @@ func (s *shellSet) Stop(ctx context.Context) {
 	s.mu.Unlock()
 	s.wg.Wait()
 	s.each(func(t *shellwatch.Tracker) { t.Stop(ctx) })
+}
+
+// noteCreations remembers the branches a call's command creates, for
+// recordCreations once it has run.
+func (s *shellSet) noteCreations(id string, made []shellwatch.Creation) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.creations == nil {
+		s.creations = map[string][]shellwatch.Creation{}
+	}
+	s.creations[id] = made
+}
+
+func (s *shellSet) takeCreations(id string) []shellwatch.Creation {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	made := s.creations[id]
+	delete(s.creations, id)
+	return made
 }
 
 // adopt resolves the places a call named to their repos, off the pump,
@@ -311,5 +337,36 @@ func (r *Runner) recordShellChanges(ctx context.Context, top string, changes []s
 	r.mu.Unlock()
 	if len(res.Recorded) > 0 {
 		r.refreshCountsAsync()
+	}
+}
+
+// recordCreations records the base of each branch a finished command
+// created, in the repo's own config (docs/COMMIT-LAND-PUSH-DESIGN.md D12):
+// what mads saw happen is the base a later Land trusts most. A base the
+// user already confirmed is never replaced.
+func (r *Runner) recordCreations(made []shellwatch.Creation) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r.mu.Lock()
+	cwd := r.touchBaseLocked()
+	r.mu.Unlock()
+	home, _ := os.UserHomeDir()
+	for _, c := range made {
+		dir := c.Dir
+		switch {
+		case dir == "":
+			dir = cwd
+		case strings.HasPrefix(dir, "~/") && home != "":
+			dir = filepath.Join(home, dir[2:])
+		case !filepath.IsAbs(dir):
+			dir = filepath.Join(cwd, dir)
+		}
+		base := sessionwt.BaseFromCreation(ctx, dir, c.Branch, c.Start, c.Worktree)
+		if base == "" {
+			continue
+		}
+		if err := sessionwt.RecordBase(ctx, dir, c.Branch, sessionwt.LandBase{Base: base, Source: sessionwt.BaseRecorded}); err != nil {
+			log.Printf("runner: record %s's base: %v", c.Branch, err)
+		}
 	}
 }

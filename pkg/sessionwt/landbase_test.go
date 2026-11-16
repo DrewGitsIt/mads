@@ -48,3 +48,34 @@ func TestBaseOf(t *testing.T) {
 		t.Errorf("to land after a copy reached dev = %d, want 0", n)
 	}
 }
+
+func TestBaseFromCreation(t *testing.T) {
+	ctx := context.Background()
+	repo := initRepo(t)
+	gitRun(t, repo, "branch", "dev")
+	gitRun(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+	gitRun(t, repo, "branch", "named", "dev")
+	if b := BaseFromCreation(ctx, repo, "named", "dev", true); b != "dev" {
+		t.Errorf("start dev = %q", b)
+	}
+	gitRun(t, repo, "branch", "tracking", "origin/main")
+	if b := BaseFromCreation(ctx, repo, "tracking", "origin/main", true); b != "main" {
+		t.Errorf("start origin/main = %q, want main", b)
+	}
+	gitRun(t, repo, "checkout", "-q", "dev")
+	gitRun(t, repo, "branch", "fromhere")
+	if b := BaseFromCreation(ctx, repo, "fromhere", "", true); b != "dev" {
+		t.Errorf("worktree add from a checkout on dev = %q, want dev", b)
+	}
+	gitRun(t, repo, "checkout", "-q", "-b", "switched")
+	if b := BaseFromCreation(ctx, repo, "switched", "", false); b != "dev" {
+		t.Errorf("checkout -b from dev = %q, want dev", b)
+	}
+	if err := RecordBase(ctx, repo, "named", LandBase{Base: "main", Source: BaseConfirmed}); err != nil {
+		t.Fatal(err)
+	}
+	if b := BaseFromCreation(ctx, repo, "named", "dev", true); b != "" {
+		t.Errorf("a branch with a kept base = %q, want left alone", b)
+	}
+}

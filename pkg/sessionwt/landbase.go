@@ -171,3 +171,42 @@ func CountToLand(ctx context.Context, dir, base, branch string) (int, error) {
 func ToLand(ctx context.Context, dir, base, branch string, limit int) []contracts.PushCommit {
 	return commitsIn(ctx, dir, limit, "--cherry-pick", "--right-only", "refs/heads/"+base+"...refs/heads/"+branch)
 }
+
+// BaseFromCreation is the base a branch just created by a shell command
+// should record (BaseRecorded), "" when it can't say or one is already
+// kept: the start point the command named, as a local branch (origin/main
+// → main); else, for `git worktree add`, the branch checked out where the
+// command ran (that checkout's HEAD doesn't move); else, for `checkout -b`
+// or `switch -c`, the branch that checkout moved from, from HEAD's reflog.
+func BaseFromCreation(ctx context.Context, dir, branch, start string, worktree bool) string {
+	if !refExists(ctx, dir, "refs/heads/"+branch) || gitConfig(ctx, dir, baseKey(branch)) != "" {
+		return ""
+	}
+	base := ""
+	switch {
+	case start != "":
+		if refExists(ctx, dir, "refs/heads/"+start) {
+			base = start
+		} else if _, rest, ok := strings.Cut(start, "/"); ok && refExists(ctx, dir, "refs/remotes/"+start) && refExists(ctx, dir, "refs/heads/"+rest) {
+			base = rest
+		}
+	case worktree:
+		base, _ = CurrentBranch(ctx, dir)
+	default:
+		out, err := Git(ctx, dir, "reflog", "show", "-n", "20", "--format=%gs", "HEAD")
+		if err == nil {
+			for _, l := range lines(out) {
+				if rest, ok := strings.CutPrefix(l, "checkout: moving from "); ok {
+					if from, to, ok := strings.Cut(rest, " to "); ok && to == branch {
+						base = from
+						break
+					}
+				}
+			}
+		}
+	}
+	if base == branch || base == "" || !refExists(ctx, dir, "refs/heads/"+base) {
+		return ""
+	}
+	return base
+}
