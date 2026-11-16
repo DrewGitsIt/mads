@@ -1403,6 +1403,14 @@ export interface RepoWorktree {
   ahead: number;
   /** The remote branch's commits this branch lacks. As of the last fetch. */
   behind: number;
+  /** A linked worktree on a branch: where Land puts its work (COMMIT-LAND-PUSH D12). */
+  base?: string;
+  /** How `base` was worked out. */
+  base_source?: LandBaseSource | string;
+  /** The commit the branch started from, when known. */
+  fork?: string;
+  /** Its commits `base` doesn't have yet, copies left out. */
+  to_land?: number;
   computed_at: string;
 }
 
@@ -1673,7 +1681,45 @@ export type LandRefusalReason =
   | "primary_dirty"
   | "primary_untracked"
   | "primary_refused"
-  | "locked";
+  | "locked"
+  /** No landing message: the user writes it (D12). */
+  | "message_required";
+
+/**
+ * How a branch's base was worked out (D12): recorded (mads saw the agent
+ * create the branch), confirmed (chosen in an earlier Land), reflog (the
+ * branch's creation names it), default (the repo's default branch, a
+ * guess), chosen (asked for in this request), session (an isolated
+ * session's own base).
+ */
+export type LandBaseSource = "recorded" | "confirmed" | "reflog" | "default" | "chosen" | "session";
+
+/** POST /sessions/{id}/land (D12): squash a branch's work into one commit on its base. */
+export interface LandRequest {
+  /** The worktree to land (SessionRepoState.root); empty is the session's own isolated worktree. */
+  repo?: string;
+  /** Overrides the inferred base; kept as confirmed for the branch's next Land. */
+  base?: string;
+  /** The landing commit's message, written by the user (a draft from draftLandMessage if they like). Required. */
+  message: string;
+}
+
+/** GET /sessions/{id}/land — what the Land confirmation shows. */
+export interface LandPreview {
+  repo: string;
+  branch?: string;
+  base?: string;
+  base_source?: LandBaseSource | string;
+  fork?: string;
+  /** Other local branches it could land into. */
+  bases: string[];
+  /** The branch's commits the base doesn't have yet, copies left out, newest first (at most 50). */
+  commits: PushCommit[];
+  /** All of them. */
+  to_land: number;
+  /** Why Land would be refused right now. */
+  blocked?: LandRefusal;
+}
 
 /** POST /sessions/{id}/land — HTTP 200 for every outcome. */
 export interface LandResult {

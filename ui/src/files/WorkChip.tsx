@@ -1,13 +1,14 @@
 import { useState, type ReactNode } from "react";
 import { Popover } from "../components/Popover/Popover";
 import type { RouterClient } from "../router/client";
-import type { CommitResult, PushTarget, Session } from "../router/types";
+import type { CommitResult, LandResult, PushTarget, Session } from "../router/types";
 import { CommitDialog } from "../conversation/Worktree/CommitDialog";
+import { LandDialog } from "../conversation/Worktree/LandDialog";
 import { PushDialog } from "../conversation/Worktree/PushDialog";
 import { useCommitSettings } from "../conversation/Worktree/useCommitSettings";
 import { WorkPath } from "../conversation/Worktree/WorkPath";
-import { plural, pushedCopy, uncommittedCopy } from "../conversation/Worktree/worktreeCopy";
-import { pushFacts, workState } from "../conversation/Worktree/workState";
+import { autoResolvedCopy, plural, pushedCopy, uncommittedCopy } from "../conversation/Worktree/worktreeCopy";
+import { landRepos, pushFacts, workState, type LandRepo } from "../conversation/Worktree/workState";
 import { refreshSessionRepos, useSessionRepos } from "../router/repoStateStore";
 import styles from "./WorkChip.module.css";
 
@@ -18,10 +19,16 @@ export interface WorkChipProps {
   children: ReactNode;
   /** A commit was made from here — refetch what Changes shows. */
   onCommitted: (result: CommitResult) => void;
-  /** Land failed without an outcome (no card is coming). */
-  onError: (message: string) => void;
-  /** A push went through: say so ("Pushed 3 commits to origin/main"). */
-  onPushed?: (message: string) => void;
+  /** Say what a Land or Push from here did ("Pushed 3 commits to origin/main"): this tab has no cards. */
+  onNotice?: (tone: "ok" | "warn", title: string) => void;
+}
+
+/** A Land's outcome in one line, for the Changes tab's toast (the conversation's card says the rest). */
+function landNotice(result: LandResult): string {
+  const base = result.base ?? "its base";
+  if (result.outcome === "landed") return `Landed into ${base}`;
+  if (result.outcome === "auto_resolved") return autoResolvedCopy(result.base, result.files ?? []).title;
+  return `${base} moved on: ${plural(result.files?.length ?? 0, "file")} conflict — see the conversation`;
 }
 
 function cx(...names: (string | false | undefined)[]): string {
@@ -34,16 +41,16 @@ function cx(...names: (string | false | undefined)[]): string {
  * its next step, and ▾ for where the work goes. The state and the next step
  * come from the session record's counts, never from the Compare to choice —
  * switching baselines changes the totals, not "Commit". Commit opens the
- * same dialog as the dock; Land's outcome is a card in the conversation, so
- * here it only shows that it's running — and a Land refused over
- * uncommitted files opens Commit, as does the "changed outside" state (D6).
- * Push opens the same confirmation as the dock (D5).
+ * same dialog as the dock, as do Land (its confirmation, D12) and Push (D5).
+ * The "changed outside" state opens Commit (D6). What a Land did is a card
+ * in the conversation; here, a toast.
  */
-export function WorkChip({ session, routerClient, children, onCommitted, onError, onPushed }: WorkChipProps) {
+export function WorkChip({ session, routerClient, children, onCommitted, onNotice }: WorkChipProps) {
   const commitSettings = useCommitSettings(routerClient);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [pathOpen, setPathOpen] = useState(false);
-  const [landing, setLanding] = useState(false);
+  // The Land confirmation, open on a branch (undefined root: the first landable).
+  const [landFor, setLandFor] = useState<{ root?: string } | null>(null);
   const [pushTarget, setPushTarget] = useState<PushTarget | null>(null);
   // A push from here went through: only then is 0 unpushed "pushed" — the
   // record says 0 for a repo with no remote too.
@@ -51,7 +58,8 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
   // What a push would send: the window's repo state (COMMIT-LAND-PUSH D10).
   const { repos } = useSessionRepos(routerClient, session.id);
   const push = pushFacts(session, repos);
-  const state = workState(session, push);
+  const land = landRepos(session, repos);
+  const state = workState(session, { push, land });
 
   function startPush(target: PushTarget) {
     setPathOpen(false);
@@ -63,17 +71,9 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
     setDialogOpen(true);
   }
 
-  function land() {
-    if (landing) return;
-    setLanding(true);
-    routerClient
-      .landSession(session.id)
-      .then((result) => {
-        // Refused over uncommitted files: they're Commit's to take (D6).
-        if (result.outcome === "refused" && result.reason === "dirty") commit();
-      })
-      .catch((err: unknown) => onError(err instanceof Error ? err.message : "Couldn't land."))
-      .finally(() => setLanding(false));
+  function startLand(repo?: LandRepo) {
+    setPathOpen(false);
+    setLandFor({ root: repo?.root });
   }
 
   let text: string;
@@ -126,11 +126,10 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
         <button
           type="button"
           className={styles.btn}
-          disabled={landing}
-          title={`Land ${plural(state.commits, "commit")} into ${state.base}`}
-          onClick={land}
+          title={`Land ${plural(state.commits, "commit")}${state.base ? ` into ${state.base}` : ""}`}
+          onClick={() => startLand()}
         >
-          {landing ? "Landing…" : "Land"}
+          Land
         </button>
       )}
       {state?.kind === "outside" && (
@@ -172,9 +171,9 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
         <div role="dialog" aria-label="Where this session's work goes">
           <WorkPath
             session={session}
-            landing={landing}
             onCommit={commit}
-            onLand={land}
+            onLand={startLand}
+            land={land}
             onPush={startPush}
             push={push}
             pushed={pushed}
@@ -189,6 +188,21 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
         onClose={() => setDialogOpen(false)}
         onCommitted={onCommitted}
       />
+      <LandDialog
+        open={landFor !== null}
+        sessionId={session.id}
+        routerClient={routerClient}
+        session={session}
+        fastModel={commitSettings.fastModel}
+        initialRoot={landFor?.root}
+        onClose={() => setLandFor(null)}
+        onLanded={(result) => {
+          onNotice?.("ok", landNotice(result));
+          refreshSessionRepos(session.id);
+        }}
+        onResult={(result) => onNotice?.("warn", landNotice(result))}
+        onCommitDialog={commit}
+      />
       {/* No "Ask the agent to rebase" here: this tab has no composer to draft into. */}
       <PushDialog
         open={pushTarget !== null}
@@ -199,7 +213,7 @@ export function WorkChip({ session, routerClient, children, onCommitted, onError
         onClose={() => setPushTarget(null)}
         onPushed={(result) => {
           setPushed(true);
-          onPushed?.(pushedCopy(result));
+          onNotice?.("ok", pushedCopy(result));
           // Its repo.changed follows within a second or so; don't wait to drop the count.
           refreshSessionRepos(session.id);
         }}

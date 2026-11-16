@@ -29,6 +29,8 @@ import type {
   MoveRequest,
   MoveResult,
   PushPreview,
+  LandPreview,
+  LandRequest,
   RepoWorktree,
   SessionRepoState,
   PushRequest,
@@ -964,6 +966,21 @@ export const fixturePushPreview: PushPreview = {
 // emitRepoChanged's seqs: above any a test seeds, and rising (the bus drops a repeated seq).
 let repoChangedSeq = 1_000_000_000;
 
+/** The isolated session's Land confirmation: three commits onto main, its own base. */
+export const fixtureLandPreview: LandPreview = {
+  repo: "/home/user/.mads/session-worktrees/session-isolated",
+  branch: "mads/session/session-isolated",
+  base: "main",
+  base_source: "session",
+  bases: ["main", "release"],
+  commits: [
+    { hash: "c0ffee1234", subject: "deploy: detect Ubuntu 24.04 runners by codename" },
+    { hash: "b0a7ed5678", subject: "deploy: add runner_detect.sh" },
+    { hash: "a11ce90123", subject: "deploy: drop old_detect.sh" },
+  ],
+  to_land: 3,
+};
+
 /** A checkout's branch facts for fixtures: on main at origin, nothing to push. */
 export function fixtureRepoWorktree(over: Partial<RepoWorktree> & { path: string }): RepoWorktree {
   return {
@@ -1681,8 +1698,8 @@ export class FakeRouterClient implements RouterClient {
   readonly undoCalls: { sessionId: string; hash: string; repo?: string }[] = [];
   draftOutcome: CommitDraft | CommitError = { message: "deploy: detect Ubuntu 24.04 runners by codename" };
   readonly draftCalls: { sessionId: string; paths?: string[]; repo?: string }[] = [];
-  /** A function lets a test hold the answer back (Landing… stays up until it resolves). */
-  landOutcome: LandResult | (() => Promise<LandResult>) = {
+  /** A function answers per request, and lets a test hold the answer back (Landing… stays up until it resolves). */
+  landOutcome: LandResult | ((req: LandRequest) => LandResult | Promise<LandResult>) = {
     outcome: "landed",
     branch: "mads/session/session-isolated",
     base: "main",
@@ -1690,6 +1707,13 @@ export class FakeRouterClient implements RouterClient {
     fast_forwarded: true,
   };
   readonly landCalls: string[] = [];
+  /** Every landSession request, with its session (landCalls keeps the bare ids older tests read). */
+  readonly landRequests: { sessionId: string; req: LandRequest }[] = [];
+  /** What getLandPreview answers; a function answers per request (a changed base reloads it). */
+  landPreview: LandPreview | ((opts: { repo?: string; base?: string }) => LandPreview) = structuredClone(fixtureLandPreview);
+  readonly landPreviewCalls: { sessionId: string; repo?: string; base?: string }[] = [];
+  landDraftOutcome: CommitDraft | CommitError = { message: "deploy: detect Ubuntu runners by codename" };
+  readonly landDraftCalls: { sessionId: string; repo?: string; base?: string }[] = [];
 
   async getWorktreeStatus(_sessionId: string, _repo?: string): Promise<WorktreeStatus> {
     return structuredClone(this.worktreeStatus);
@@ -1887,10 +1911,30 @@ export class FakeRouterClient implements RouterClient {
     return out;
   }
 
-  async landSession(sessionId: string): Promise<LandResult> {
+  async landSession(sessionId: string, req: LandRequest): Promise<LandResult> {
     this.landCalls.push(sessionId);
+    this.landRequests.push({ sessionId, req });
     const out = this.landOutcome;
-    return typeof out === "function" ? out() : out;
+    return typeof out === "function" ? out(req) : out;
+  }
+
+  async getLandPreview(sessionId: string, opts: { repo?: string; base?: string } = {}): Promise<LandPreview> {
+    this.landPreviewCalls.push({ sessionId, ...opts });
+    const out = typeof this.landPreview === "function" ? this.landPreview(opts) : this.landPreview;
+    const preview = structuredClone(out);
+    // A base asked for is the one the preview is about, as the Router answers.
+    if (opts.base && typeof this.landPreview !== "function") {
+      preview.base = opts.base;
+      preview.base_source = "chosen";
+    }
+    return preview;
+  }
+
+  async draftLandMessage(sessionId: string, opts: { repo?: string; base?: string } = {}): Promise<CommitDraft> {
+    this.landDraftCalls.push({ sessionId, ...opts });
+    const out = this.landDraftOutcome;
+    if ("code" in out) throw new CommitRefusedError(out, 409);
+    return out;
   }
 
   /** Seeded control-plane event log — empty by default so the Conversation tab's history-merge fetch (T17) is a no-op unless a test seeds envelopes via seedEvent. */

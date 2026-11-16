@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { SessionSleepPrompt, useSessionSleep, type DoneRequestNotices, type SleepVerb } from "./useSessionSleep";
 import { FakeRouterClient } from "../../../router/fixtures";
 import type { LandResult, Session } from "../../../router/types";
+import { FakeEventSource } from "../../../router/testFakeEventSource";
 
 // The one sleep/wake path, tested once. Every control that sleeps — the
 // workspace kebab's "Sleep now" and the rail's ✓ (Done + sleep) — calls
@@ -125,36 +126,83 @@ describe("useSessionSleep — sleeping", () => {
     expect(client.landCalls).toEqual([]);
   });
 
-  it("lands, then sleeps", async () => {
-    const { client } = renderHost(isolated());
-    const terminate = vi.spyOn(client, "closeSession");
+  describe("through the Land confirmation (COMMIT-LAND-PUSH D12)", () => {
+    // The confirmation reads the repo state and Commit settings, which listen on the bus.
+    afterEach(() => vi.unstubAllGlobals());
+    function stubBus() {
+      FakeEventSource.instances = [];
+      vi.stubGlobal("EventSource", FakeEventSource);
+    }
 
-    clickSleep();
-    fireEvent.click(screen.getByRole("button", { name: "Land into main and sleep" }));
+    async function landWith(message: string) {
+      fireEvent.click(screen.getByRole("button", { name: "Land into main and sleep…" }));
+      const confirm = await screen.findByRole("alertdialog", { name: "Land mads/session/session-isolated into main?" });
+      fireEvent.change(within(confirm).getByLabelText("Landing message"), { target: { value: message } });
+      fireEvent.click(within(confirm).getByRole("button", { name: "Land into main" }));
+    }
 
-    await waitFor(() => expect(terminate).toHaveBeenCalledWith("s1"));
-    expect(client.landCalls).toEqual(["s1"]);
-  });
+    it("lands with the message the user wrote, then sleeps", async () => {
+      stubBus();
+      const { client } = renderHost(isolated());
+      const terminate = vi.spyOn(client, "closeSession");
 
-  it("stays open and says why when Land doesn't land", async () => {
-    const client = new FakeRouterClient();
-    client.landOutcome = {
-      outcome: "refused",
-      reason: "primary_dirty",
-      base: "main",
-      files: ["a.go"],
-    } as LandResult;
-    renderHost(isolated(), client);
-    const terminate = vi.spyOn(client, "closeSession");
+      clickSleep();
+      // Nothing lands from the prompt itself.
+      fireEvent.click(screen.getByRole("button", { name: "Land into main and sleep…" }));
+      expect(client.landCalls).toEqual([]);
+      const confirm = await screen.findByRole("alertdialog", { name: "Land mads/session/session-isolated into main?" });
+      fireEvent.change(within(confirm).getByLabelText("Landing message"), { target: { value: "deploy: Ubuntu runners" } });
+      fireEvent.click(within(confirm).getByRole("button", { name: "Land into main" }));
 
-    clickSleep();
-    fireEvent.click(screen.getByRole("button", { name: "Land into main and sleep" }));
+      await waitFor(() => expect(terminate).toHaveBeenCalledWith("s1"));
+      expect(client.landRequests).toEqual([{ sessionId: "s1", req: { message: "deploy: Ubuntu runners" } }]);
+    });
 
-    expect(await screen.findByText(/Didn't land — still open/)).toBeTruthy();
-    expect(screen.getByRole("alert").textContent).toContain(
-      "Git won't land over a.go in your checkout.",
-    );
-    expect(terminate).not.toHaveBeenCalled();
+    it("cancelling the Land cancels the close", async () => {
+      stubBus();
+      const { client } = renderHost(isolated());
+      const terminate = vi.spyOn(client, "closeSession");
+
+      clickSleep();
+      fireEvent.click(screen.getByRole("button", { name: "Land into main and sleep…" }));
+      const confirm = await screen.findByRole("alertdialog", { name: "Land mads/session/session-isolated into main?" });
+      fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
+
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(terminate).not.toHaveBeenCalled();
+      expect(client.landCalls).toEqual([]);
+    });
+
+    it("keeps a refused Land in its confirmation, and the session open", async () => {
+      stubBus();
+      const client = new FakeRouterClient();
+      client.landOutcome = { outcome: "refused", reason: "primary_dirty", base: "main", files: ["a.go"] } as LandResult;
+      renderHost(isolated(), client);
+      const terminate = vi.spyOn(client, "closeSession");
+
+      clickSleep();
+      await landWith("deploy");
+
+      expect(await screen.findByText(/Git won't land over a.go in your checkout\./)).toBeTruthy();
+      expect(screen.getByRole("alertdialog", { name: "Land mads/session/session-isolated into main?" })).toBeTruthy();
+      expect(terminate).not.toHaveBeenCalled();
+    });
+
+    it("comes back to the prompt, still open, saying why, when the Land conflicts", async () => {
+      stubBus();
+      const client = new FakeRouterClient();
+      client.landOutcome = { outcome: "conflicted", base: "main", files: ["a.go"] } as LandResult;
+      renderHost(isolated(), client);
+      const terminate = vi.spyOn(client, "closeSession");
+
+      clickSleep();
+      await landWith("deploy");
+
+      expect(await screen.findByText(/Didn't land — still open/)).toBeTruthy();
+      expect(screen.getByRole("alert").textContent).toContain("main moved on and a.go conflict.");
+      expect(within(screen.getByRole("alertdialog")).getByText("Sleep “Fix the deploy script”?")).toBeTruthy();
+      expect(terminate).not.toHaveBeenCalled();
+    });
   });
 
   it("reports a failed terminate to the caller, naming the session", async () => {

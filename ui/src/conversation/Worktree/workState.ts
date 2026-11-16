@@ -26,6 +26,28 @@ export interface PushFacts {
   branchAhead?: number;
 }
 
+/**
+ * One branch Land would squash onto its base (COMMIT-LAND-PUSH D12): the
+ * session's own isolated worktree (from the record), or a linked worktree
+ * an agent made (from the repo state).
+ */
+export interface LandRepo {
+  /** LandRequest.repo: the worktree's root; undefined for the session's own isolated worktree. */
+  repo?: string;
+  root: string;
+  branch?: string;
+  base?: string;
+  /** Commits to land, copies of commits already on the base left out. */
+  commits: number;
+}
+
+/** What the repo state says beyond the record: what Push and Land would act on. */
+export interface RepoFacts {
+  push?: PushFacts;
+  /** landRepos(); left out, only the isolated session's own branch (the record's count). */
+  land?: LandRepo[];
+}
+
 /** What Push would send next, alone or beside Commit (D11). */
 export interface PushNext {
   commits: number;
@@ -56,7 +78,8 @@ export type WorkState =
        */
       push?: PushNext;
     }
-  | { kind: "land"; commits: number; base: string }
+  /** Commits to land over every landable branch; `base` when they all land into the same one. */
+  | { kind: "land"; commits: number; base?: string; repos: number }
   /** Files off the session's change list are changed in its folder: Commit can't take them, Land would refuse. */
   | { kind: "outside"; files: number }
   /**
@@ -117,6 +140,31 @@ export function pushFacts(session: Session, repos: SessionRepoState[] | null | u
   return { commits: out.reduce((n, r) => n + r.commits, 0), repos: out, branchAhead };
 }
 
+/**
+ * The branches Land would act on, the session's own first: an isolated
+ * session's branch with commits its base lacks (the record's unlanded
+ * count), then each linked worktree in its repo set — not a main checkout,
+ * on a branch — with work to land. `repos` unknown: the first only.
+ */
+export function landRepos(session: Session, repos: SessionRepoState[] | null | undefined): LandRepo[] {
+  const out: LandRepo[] = [];
+  const own = isIsolated(session) ? (session.unlanded_count ?? 0) : 0;
+  if (own > 0) {
+    out.push({
+      root: session.worktree_dir!,
+      branch: session.worktree_branch,
+      base: session.worktree_base,
+      commits: own,
+    });
+  }
+  for (const r of repos ?? []) {
+    const wt = r.worktree;
+    if (r.isolated || wt.main || wt.detached || !wt.branch || (wt.to_land ?? 0) === 0) continue;
+    out.push({ repo: r.root, root: r.root, branch: wt.branch, base: wt.base, commits: wt.to_land! });
+  }
+  return out;
+}
+
 function pushNext(push: PushFacts | undefined): PushNext | undefined {
   if (!push || push.commits === 0) return undefined;
   const own = push.repos.find((r) => r.primary) ?? push.repos[0];
@@ -124,14 +172,17 @@ function pushNext(push: PushFacts | undefined): PushNext | undefined {
 }
 
 /**
- * The next step. `push` comes from the repo state store (pushFacts); left
- * out (the rail), or unknown while the store loads, Push is never offered.
+ * The next step: Commit, then Land, then Push. `facts` come from the repo
+ * state store (pushFacts, landRepos); left out (the rail), or unknown while
+ * the store loads, Push is never offered and Land is the isolated session's
+ * own branch only.
  */
-export function workState(session: Session, push?: PushFacts): WorkState {
+export function workState(session: Session, facts: RepoFacts = {}): WorkState {
   const uncommitted = session.uncommitted_count ?? 0;
-  const unlanded = isIsolated(session) ? (session.unlanded_count ?? 0) : 0;
+  const land = facts.land ?? landRepos(session, null);
+  const unlanded = land.reduce((n, r) => n + r.commits, 0);
   const outside = isIsolated(session) ? (session.outside_count ?? 0) : 0;
-  const next = pushNext(push);
+  const next = pushNext(facts.push);
   if (uncommitted > 0) {
     return {
       kind: "commit",
@@ -144,7 +195,15 @@ export function workState(session: Session, push?: PushFacts): WorkState {
   // Land's gate is the whole folder's git status, not just the session's
   // files: offering Land over changes Commit can't take only earns a refusal.
   if (outside > 0) return { kind: "outside", files: outside };
-  if (unlanded > 0) return { kind: "land", commits: unlanded, base: session.worktree_base! };
+  if (unlanded > 0) {
+    const bases = new Set(land.map((r) => r.base));
+    return {
+      kind: "land",
+      commits: unlanded,
+      base: bases.size === 1 ? land[0].base : undefined,
+      repos: land.length,
+    };
+  }
   // Push is last: what it sends is what Commit and Land made.
   if (next) return { kind: "push", ...next };
   return null;

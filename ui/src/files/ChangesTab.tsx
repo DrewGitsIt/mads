@@ -545,8 +545,7 @@ export function ChangesTab({
             session={session}
             routerClient={routerClient}
             onCommitted={refetch}
-            onError={(message) => setToast({ tone: "bad", title: "Couldn't land", description: message })}
-            onPushed={(message) => setToast({ tone: "ok", title: message })}
+            onNotice={(tone, title) => setToast({ tone, title })}
           >
             {totals}
           </WorkChip>

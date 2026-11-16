@@ -561,11 +561,12 @@ function newBranchNote(p: PushPreview): string {
   return `${p.remote} has no ${p.branch} yet: the push creates it and tracks it.`;
 }
 
-function Fetching({ remote }: { remote: string | undefined }) {
+/** The spinner line while a preview loads; `text` replaces "Fetching <remote>…" (Land's confirmation). */
+export function Fetching({ remote, text }: { remote: string | undefined; text?: string }) {
   return (
     <div className={styles.loading} role="status">
       <span className={styles.spinner} aria-hidden="true" />
-      Fetching {remote ?? "the remote"}…
+      {text ?? `Fetching ${remote ?? "the remote"}…`}
     </div>
   );
 }
@@ -677,7 +678,7 @@ function PreviewBody({
 }
 
 /** Short hash and subject, newest first; "and N more" past what the Router listed. */
-function CommitList({
+export function CommitList({
   commits,
   total,
   label,

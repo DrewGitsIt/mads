@@ -369,12 +369,34 @@ describe("FetchRouterClient", () => {
   it("landSession POSTs to /sessions/:id/land and resolves every outcome", async () => {
     const fetchMock = mockFetchOnce({ outcome: "refused", reason: "busy", base: "main" });
     const client = new FetchRouterClient("http://router.local");
-    const res = await client.landSession("s1");
+    const req = { repo: "/repo/mads-nested", base: "main", message: "nested delegates" };
+    const res = await client.landSession("s1", req);
     expect(fetchMock).toHaveBeenCalledWith(
       "http://router.local/sessions/s1/land",
-      expect.objectContaining({ method: "POST" }),
+      expect.objectContaining({ method: "POST", body: JSON.stringify(req) }),
     );
     expect(res.reason).toBe("busy");
+  });
+
+  it("getLandPreview GETs /sessions/:id/land for a worktree and base", async () => {
+    const fetchMock = mockFetchOnce({ repo: "/repo/mads-nested", bases: [], commits: [], to_land: 0 });
+    const client = new FetchRouterClient("http://router.local");
+    await client.getLandPreview("s1", { repo: "/repo/mads-nested", base: "release" });
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/land?repo=%2Frepo%2Fmads-nested&base=release");
+    mockFetchOnce({ repo: "", bases: [], commits: [], to_land: 0 });
+    await client.getLandPreview("s1");
+  });
+
+  it("draftLandMessage POSTs to /sessions/:id/land/draft and throws a refusal", async () => {
+    const fetchMock = mockFetchOnce({ message: "Land it" });
+    const client = new FetchRouterClient("http://router.local");
+    expect(await client.draftLandMessage("s1", { repo: "/repo/x" })).toEqual({ message: "Land it" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/land/draft",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ repo: "/repo/x" }) }),
+    );
+    mockFetchOnce({ code: "no_fast_model", error: "No Fast Model is set up." }, false, 409);
+    await expect(client.draftLandMessage("s1")).rejects.toBeInstanceOf(CommitRefusedError);
   });
 
   it("getEvents GETs /events with session_id, since, and types query params, no Accept header", async () => {

@@ -4,22 +4,10 @@ import { Popover } from "../../components/Popover/Popover";
 import type { PushTarget, Session, WorktreeTenant } from "../../router/types";
 import { sessionLocation } from "../../router/sessionLocation";
 import { useElectronClipboardBridge } from "../TerminalRenderer/ptyBridge";
-import type { LandCardModel } from "../Worktree/worktreeCards";
-import {
-  autoResolvedCopy,
-  checkResolutionsPrompt,
-  nameFiles,
-  outsideControlTitle,
-  plural,
-  refusalCopy,
-  refusalDetailIsGit,
-  resolveConflictPrompt,
-  shortHash,
-  tidyOutsidePrompt,
-} from "../Worktree/worktreeCopy";
+import { outsideControlTitle, plural, tidyOutsidePrompt } from "../Worktree/worktreeCopy";
 import { WorkPath } from "../Worktree/WorkPath";
-import { isIsolated, workState, type PushNext, type WorkState } from "../Worktree/workState";
-import { landOutcomeKey, shortBranch } from "./dockLabels";
+import { isIsolated, workState, type LandRepo, type PushNext, type WorkState } from "../Worktree/workState";
+import { shortBranch } from "./dockLabels";
 import { UPWARD_RIGHT, cx } from "./Pickers";
 import type { DockWork } from "./SessionDock";
 import line from "./StatusLine.module.css";
@@ -30,7 +18,6 @@ export interface WorkAreaProps {
   workspaceName?: string;
   checkoutBranch?: string;
   work?: DockWork;
-  landOutcome?: LandCardModel;
   open: boolean;
   onOpen: () => void;
   onClose: () => void;
@@ -52,30 +39,24 @@ interface NoLandNote {
  * The status line's right end: the `⎇ {workspace} / {branch} → {base}`
  * segment, then the Commit/Land control, sharing one upward popover that
  * says where the session works and where its work goes (WorkPath: Commit,
- * then Land, then Push, each with its button). A Land click
- * opens the popover and its outcome (landed, conflicted, refused — with the
- * refusal's own fix, e.g. "Ask the agent" for changes outside the session)
- * renders there, at the button, as well as in the transcript.
+ * then Land, then Push, each with its button). Land opens its confirmation
+ * (COMMIT-LAND-PUSH D12, LandDialog), where its refusals show; what it
+ * did is a card in the transcript.
  */
 export function WorkArea({
   session,
   workspaceName,
   checkoutBranch,
   work,
-  landOutcome,
   open,
   onOpen,
   onClose,
 }: WorkAreaProps) {
-  // Set by a Land click: the outcome key at that moment. Any other key that
-  // shows up afterwards is this click's answer.
-  const [awaiting, setAwaiting] = useState<{ before?: string } | null>(null);
-
   const where = sessionLocation(session, workspaceName);
   const isolated = isIsolated(session);
   const branch = isolated ? session.worktree_branch : session.worktree_branch || checkoutBranch;
   const base = isolated ? session.worktree_base : undefined;
-  const state = workState(session, work?.push);
+  const state = workState(session, { push: work?.push, land: work?.land });
   const landing = Boolean(work?.landing);
 
   // An in-place session never offers Land; on opening, the popover asks the
@@ -115,22 +96,17 @@ export function WorkArea({
   if (!locText && !showControl) return null;
 
   function close() {
-    setAwaiting(null);
     onClose();
   }
   function toggleFresh() {
-    if (open) {
-      close();
-    } else {
-      setAwaiting(null);
-      onOpen();
-    }
+    if (open) close();
+    else onOpen();
   }
-  function land() {
+  // Land always asks (D12): its confirmation opens, on that branch or the first landable one.
+  function land(repo?: LandRepo) {
     if (!work || landing) return;
-    setAwaiting({ before: landOutcomeKey(landOutcome) });
-    onOpen();
-    work.onLand();
+    close();
+    work.onLand(repo);
   }
   function ask(text: string) {
     work?.onAskAgent?.(text);
@@ -140,8 +116,6 @@ export function WorkArea({
     close();
     work?.onCommitDialog?.();
   }
-
-  const fresh = awaiting && landOutcomeKey(landOutcome) !== awaiting.before ? landOutcome : undefined;
 
   const anchor = (
     <>
@@ -174,7 +148,7 @@ export function WorkArea({
           landing={landing}
           committing={work.committing}
           onCommit={work.onCommit}
-          onLand={land}
+          onLand={() => land()}
           onOutside={work.onCommitDialog ?? toggleFresh}
           outsideOpensCommit={Boolean(work.onCommitDialog)}
           onPush={work.onPush}
@@ -190,7 +164,8 @@ export function WorkArea({
     Boolean(branch) ||
     (session.uncommitted_count ?? 0) > 0 ||
     (session.repos?.length ?? 0) > 0 ||
-    (work?.push?.repos.length ?? 0) > 0;
+    (work?.push?.repos.length ?? 0) > 0 ||
+    (work?.land?.length ?? 0) > 0;
 
   // Where the agent actually runs: an isolated session's own worktree, else
   // the folder it works in place.
@@ -234,6 +209,7 @@ export function WorkArea({
                 })
               }
               onLand={work && land}
+              land={work?.land}
               onPush={
                 work?.onPush &&
                 ((target) => {
@@ -264,7 +240,7 @@ export function WorkArea({
               )}
             </div>
           )}
-          {state?.kind === "outside" && !fresh && (
+          {state?.kind === "outside" && (
             <div className={cx(styles.outcome, styles.tone_warn)} data-testid="outside-explainer">
               <b>Changes outside this session are holding Land back.</b> {outsideWhy(state.files)}
               {(work?.onCommitDialog || work?.onAskAgent) && (
@@ -286,20 +262,6 @@ export function WorkArea({
                 </div>
               )}
             </div>
-          )}
-          {awaiting && !fresh && landing && (
-            <div className={cx(styles.outcome, styles.tone_quiet)} data-testid="land-outcome" data-kind="landing">
-              Landing into {base}…
-            </div>
-          )}
-          {fresh && (
-            <LandOutcome
-              card={fresh}
-              landing={landing}
-              onAskAgent={work?.onAskAgent ? ask : undefined}
-              onLandAgain={work ? land : undefined}
-              onCommitDialog={work?.onCommitDialog ? commitDialog : undefined}
-            />
           )}
         </div>
       </Popover>
@@ -436,10 +398,14 @@ function WorkButton({
         type="button"
         className={styles.work}
         onClick={onLand}
-        title={`Land ${plural(state.commits, "commit")} into ${state.base}`}
+        title={
+          `Land ${plural(state.commits, "commit")}` +
+          (state.repos > 1 ? ` from ${state.repos} branches` : "") +
+          (state.base ? ` into ${state.base}` : "")
+        }
         data-work-state="land"
       >
-        Land<span className={line.vFull}> into {state.base}</span>
+        Land{state.base && <span className={line.vFull}> into {state.base}</span>}
         <span className={cx(styles.count, line.lblFull)}> ↑{state.commits}</span>
       </button>
     );
@@ -490,124 +456,4 @@ function WorkButton({
   ) : (
     commit
   );
-}
-
-/** One Land outcome, in worktreeCopy's words, with the fix it offers. */
-function LandOutcome({
-  card,
-  landing,
-  onAskAgent,
-  onLandAgain,
-  onCommitDialog,
-}: {
-  card: LandCardModel;
-  landing: boolean;
-  onAskAgent?: (text: string) => void;
-  onLandAgain?: () => void;
-  /** A dirty refusal's files are Commit's to take (D6). */
-  onCommitDialog?: () => void;
-}) {
-  const again = onLandAgain && (
-    <button type="button" className={line.btn} disabled={landing} onClick={onLandAgain}>
-      {landing ? "Landing…" : "Land again"}
-    </button>
-  );
-  switch (card.kind) {
-    case "landed":
-      return (
-        <div className={cx(styles.outcome, styles.tone_ok)} data-testid="land-outcome" data-kind="landed">
-          <b>Landed into {card.base ?? "its base"}.</b>
-          {card.mergeCommit && (
-            <>
-              {" "}
-              Merge commit <code>{shortHash(card.mergeCommit)}</code>.
-            </>
-          )}
-          {card.fastForwarded && " This session keeps going on top of it."}
-        </div>
-      );
-    case "conflicted": {
-      const base = card.base ?? "The base branch";
-      return (
-        <div className={cx(styles.outcome, styles.tone_warn)} data-testid="land-outcome" data-kind="conflicted">
-          <b>
-            {base} moved on: {plural(card.files.length, "file")} conflict{card.files.length === 1 ? "s" : ""}.
-          </b>{" "}
-          {card.files.length > 0 && (
-            <>
-              <code>{nameFiles(card.files, 4)}</code> changed on {base} too.{" "}
-            </>
-          )}
-          Nothing was merged, and your checkout is untouched.
-          {onAskAgent && (
-            <div className={styles.outcomeActs}>
-              <button
-                type="button"
-                className={cx(line.btn, line.btnPrimary)}
-                onClick={() => onAskAgent(resolveConflictPrompt(card.base, card.files))}
-              >
-                Ask the agent to resolve
-              </button>
-            </div>
-          )}
-        </div>
-      );
-    }
-    case "autoResolved": {
-      const copy = autoResolvedCopy(card.base, card.files);
-      return (
-        <div className={cx(styles.outcome, styles.tone_warn)} data-testid="land-outcome" data-kind="autoResolved">
-          <b>{copy.title}.</b> {copy.body}
-          <div className={styles.outcomeActs}>
-            {onAskAgent && (
-              <button
-                type="button"
-                className={cx(line.btn, line.btnPrimary)}
-                onClick={() => onAskAgent(checkResolutionsPrompt(card.base, card.files))}
-              >
-                Ask the agent to check
-              </button>
-            )}
-            {again}
-          </div>
-        </div>
-      );
-    }
-    case "refused": {
-      const copy = refusalCopy(card.reason, card.base, card.files, card.outside);
-      const showDetail = Boolean(card.detail) && (refusalDetailIsGit(card.reason) || copy.title === "Land didn't run");
-      const tidy = card.reason === "dirty" && card.outside?.length ? card.outside : undefined;
-      const commit = card.reason === "dirty" ? onCommitDialog : undefined;
-      return (
-        <div
-          className={cx(styles.outcome, styles[`tone_${copy.tone}`])}
-          data-testid="land-outcome"
-          data-kind="refused"
-          data-reason={card.reason}
-        >
-          <b>{copy.title}.</b> {copy.body}
-          {showDetail && <pre className={styles.detail}>{card.detail}</pre>}
-          {(commit || (tidy && onAskAgent) || (copy.retry && again)) && (
-            <div className={styles.outcomeActs}>
-              {commit && (
-                <button type="button" className={cx(line.btn, line.btnPrimary)} onClick={commit}>
-                  Commit them…
-                </button>
-              )}
-              {tidy && onAskAgent && (
-                <button
-                  type="button"
-                  className={cx(line.btn, !commit && line.btnPrimary)}
-                  onClick={() => onAskAgent(tidyOutsidePrompt(tidy))}
-                >
-                  Ask the agent
-                </button>
-              )}
-              {copy.retry && again}
-            </div>
-          )}
-        </div>
-      );
-    }
-  }
 }
