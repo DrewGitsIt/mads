@@ -87,15 +87,23 @@ func TestNestedWorktreesRootOf(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(folder, "inner", ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// A linked worktree's .git file points into worktrees/.
-	writeFile(t, filepath.Join(folder, "tools", "wt", ".git"), "gitdir: /elsewhere/repo/.git/worktrees/wt\n")
+	// A linked worktree of the folder's repo: its .git file points into the
+	// repo's .git/worktrees/ (relative here, as worktree.useRelativePaths
+	// writes it). One of another repo's isn't the session's subagent's.
+	if err := os.MkdirAll(filepath.Join(folder, ".git", "worktrees", "wt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	n = newNestedWorktrees(folder)
+	writeFile(t, filepath.Join(folder, "tools", "wt", ".git"), "gitdir: ../../.git/worktrees/wt\n")
+	writeFile(t, filepath.Join(folder, "tools", "other-repo", ".git"), "gitdir: /elsewhere/repo/.git/worktrees/other-repo\n")
 	cases := map[string]string{
-		"sub/f.go":          "",
-		"inner/f.go":        "",
-		"tools/wt/f.go":     filepath.Join(folder, "tools", "wt"),
-		"tools/wt/a/b.go":   filepath.Join(folder, "tools", "wt"),
-		"tools/other.go":    "",
-		"plain/dir/file.go": "",
+		"sub/f.go":              "",
+		"inner/f.go":            "",
+		"tools/wt/f.go":         filepath.Join(folder, "tools", "wt"),
+		"tools/wt/a/b.go":       filepath.Join(folder, "tools", "wt"),
+		"tools/other.go":        "",
+		"tools/other-repo/a.go": "",
+		"plain/dir/file.go":     "",
 	}
 	for rel, want := range cases {
 		if got := n.rootOf(filepath.Join(folder, rel)); got != want {
@@ -108,5 +116,42 @@ func TestNestedWorktreesRootOf(t *testing.T) {
 	}
 	if got := newNestedWorktrees("").rootOf(filepath.Join(folder, ".claude/worktrees/a/x.go")); got != "" {
 		t.Errorf("no folder = %q", got)
+	}
+}
+
+// A session whose folder isn't a repo (/, ~/repo) keeps the edits it made
+// in its own worktrees: only the folder's repo's worktrees can be a
+// subagent's scratch copy. A session in / had every edit in ~/repo/x-wt
+// dropped as "subagent worktree" work.
+func TestNestedWorktreesOtherReposKept(t *testing.T) {
+	parent := tempDir(t)
+	repo := filepath.Join(parent, "proj")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "init", "-q", "-b", "main")
+	git(t, repo, "commit", "-q", "--allow-empty", "-m", "seed")
+	wt := filepath.Join(parent, "proj-feature")
+	git(t, repo, "worktree", "add", "-q", "-b", "feature", wt)
+	nested := filepath.Join(repo, "wt", "live")
+	git(t, repo, "worktree", "add", "-q", "-b", "nested", nested)
+
+	// Folder above the repo: nothing under it is a subagent worktree.
+	n := newNestedWorktrees(parent)
+	for _, p := range []string{filepath.Join(wt, "docs", "x.md"), filepath.Join(nested, "a.go")} {
+		if got := n.rootOf(p); got != "" {
+			t.Errorf("folder %s: rootOf(%s) = %q, want \"\"", parent, p, got)
+		}
+	}
+	// Folder is the repo: its live worktree inside is.
+	if got := newNestedWorktrees(repo).rootOf(filepath.Join(nested, "a.go")); got != nested {
+		t.Errorf("folder %s: rootOf = %q, want %q", repo, got, nested)
+	}
+	// Folder is itself a linked worktree of the repo: a sibling worktree
+	// nested inside it shares the common git dir, so it counts too.
+	inWt := filepath.Join(wt, ".wt", "sub")
+	git(t, repo, "worktree", "add", "-q", "-b", "sub", inWt)
+	if got := newNestedWorktrees(wt).rootOf(filepath.Join(inWt, "a.go")); got != inWt {
+		t.Errorf("folder %s: rootOf = %q, want %q", wt, got, inWt)
 	}
 }

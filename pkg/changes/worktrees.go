@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/drewkidwell/mads/services/session/shadow"
 )
 
 // Agent harnesses give subagents their own worktree inside the session's
@@ -37,21 +39,30 @@ var worktreeDirs = []worktreeDir{
 
 // nestedWorktrees finds the subagent worktrees under a session folder.
 type nestedWorktrees struct {
-	folder string
-	linked map[string]bool // dir → is a live linked worktree
+	folder    string
+	commonDir string          // the folder's repo's git dir, "" when the folder isn't in a repo
+	linked    map[string]bool // dir → is a live linked worktree of the folder's repo
 }
 
 func newNestedWorktrees(folder string) *nestedWorktrees {
-	return &nestedWorktrees{folder: folder, linked: map[string]bool{}}
+	n := &nestedWorktrees{folder: folder, linked: map[string]bool{}}
+	if folder != "" {
+		if root := repoRootOf(folder, map[string]string{}); root != "" {
+			n.commonDir = gitCommonDir(root)
+		}
+	}
+	return n
 }
 
 // rootOf is the root of the nested worktree p is in (p itself when p is
 // that root), "" when p isn't in one. A nested worktree is a directory
 // strictly under the session folder that is either at a known harness
 // location (matched by path, so a removed one still counts) or a live
-// linked worktree (.git is a file pointing into some repo's worktrees/).
-// Nested repos and submodules don't count, so a session started in a
-// parent of several repos keeps them all.
+// linked worktree of the folder's own repo (.git is a file pointing into
+// that repo's worktrees/). Nested repos and submodules don't count, so a
+// session started in a parent of several repos keeps them all — and so do
+// worktrees of other repos: a session in / or ~/repo that makes its own
+// worktrees is doing its own work there, not a subagent's.
 func (n *nestedWorktrees) rootOf(p string) string {
 	if n == nil || n.folder == "" {
 		return ""
@@ -90,17 +101,61 @@ func (n *nestedWorktrees) isLinkedWorktree(dir string) bool {
 		return v
 	}
 	v := false
-	if b, err := os.ReadFile(filepath.Join(dir, ".git")); err == nil {
-		// "gitdir: /repo/.git/worktrees/<name>" — a submodule's points
-		// into .git/modules/ instead.
-		line := strings.TrimSpace(string(b))
-		if gitdir, ok := strings.CutPrefix(line, "gitdir:"); ok {
-			gitdir = filepath.ToSlash(strings.TrimSpace(gitdir))
-			v = strings.Contains(gitdir, "/worktrees/")
+	// "gitdir: /repo/.git/worktrees/<name>" — a submodule's points into
+	// .git/modules/ instead.
+	if n.commonDir != "" {
+		if gitdir := readGitFile(dir); gitdir != "" {
+			v = filepath.Dir(gitdir) == filepath.Join(n.commonDir, "worktrees")
 		}
 	}
 	n.linked[dir] = v
 	return v
+}
+
+// gitCommonDir is the git dir shared by root's repo and all its worktrees:
+// root/.git for a main checkout, or the main repo's .git when root is
+// itself a linked worktree (its gitdir's commondir file says where). ""
+// when it can't tell.
+func gitCommonDir(root string) string {
+	dotGit := filepath.Join(root, ".git")
+	fi, err := os.Stat(dotGit)
+	if err != nil {
+		return ""
+	}
+	if fi.IsDir() {
+		return shadow.RealPath(dotGit)
+	}
+	gitdir := readGitFile(root)
+	if gitdir == "" {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join(gitdir, "commondir"))
+	if err != nil {
+		return gitdir // a submodule: its own git dir is the common one
+	}
+	common := strings.TrimSpace(string(b))
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(gitdir, common)
+	}
+	return shadow.RealPath(common)
+}
+
+// readGitFile is the gitdir a .git file in dir points to, absolute and
+// symlink-free; "" when dir/.git isn't such a file.
+func readGitFile(dir string) string {
+	b, err := os.ReadFile(filepath.Join(dir, ".git"))
+	if err != nil {
+		return ""
+	}
+	gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
+	if !ok {
+		return ""
+	}
+	gitdir = strings.TrimSpace(gitdir)
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(dir, gitdir)
+	}
+	return shadow.RealPath(gitdir)
 }
 
 // dropNestedWorktrees removes ledger paths inside nested worktrees,

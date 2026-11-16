@@ -132,8 +132,10 @@ user edits mixed in unattributed.
   the only "before" was a mid-session pre-image, because the worktree didn't
   exist at session start. `pkg/changes/worktrees.go` drops any file under the
   session folder that's in a known harness worktree location (matched by
-  path, so removed ones count) or a live linked worktree. Nested repos and
-  submodules aren't affected. A note gives the count. The work shows once it
+  path, so removed ones count) or a live linked worktree of the folder's own
+  repo. Nested repos, submodules and other repos' worktrees aren't affected:
+  a session in `/` or `~/repo` that makes its own worktrees is doing its own
+  work there *(2026-11-16)*. A note gives the count. The work shows once it
   lands in the folder. Delegates may later get their own changes view.
 - **Only the session's own changes, in a shared folder** *(agreed
   2026-11-09)*. A session working in place shares its folder with the user
