@@ -516,6 +516,13 @@ const (
 )
 
 // EventTypes is the full registry, for validation and enumeration.
+// RepoChanged fires when a repo's branches moved — a commit, merge,
+// reset, rebase, fetch or push, from mads or anything else — once per
+// settled burst (docs/COMMIT-LAND-PUSH-DESIGN.md D10). No session id: the
+// repo is shared. Payload: RepoChangedPayload. Readers refetch repo state
+// (GET /repos/state, GET /sessions/{id}/repos) for repos they show.
+const RepoChanged EventType = "repo.changed"
+
 var EventTypes = []EventType{
 	SessionCreated, SessionProvisioning, SessionRenamed, SessionActivityChanged, SessionUpdated, SessionDeleted, SessionCrashed,
 	SessionPermissionRequested, SessionPermissionResolved,
@@ -538,7 +545,7 @@ var EventTypes = []EventType{
 	ProfileCreated, ProfileUpdated, ProfileDeleted, ConfigUpdated,
 	AttachmentAdded, AccountAuthChanged,
 	MergeAttempted, MergeConflicted, MergeCompleted, MergeRefused, MergeAutoResolved, LandRetried, LandAutofixed,
-	WorktreeEnsured,
+	WorktreeEnsured, RepoChanged,
 	UsageRecorded, CapabilityInvoked,
 	StageAttemptRef, StageCapabilitiesMounted,
 	SynthesisProposalCreated, SynthesisProposalApproved, SynthesisProposalDismissed,

@@ -22,6 +22,10 @@ import type {
   MoveRequest,
   MoveResult,
   PushPreview,
+  LandPreview,
+  LandRequest,
+  RepoWorktree,
+  SessionRepoState,
   PushRequest,
   PushResult,
   PushTarget,
@@ -267,13 +271,21 @@ export interface RouterClient {
   /** Throws CommitRefusedError (no_fast_model, draft_failed, …). `repo` as CommitRequest.repo. */
   draftCommitMessage(sessionId: string, paths?: string[], repo?: string): Promise<CommitDraft>;
   /** Landed, conflicted and refused all resolve — each is a card. */
-  landSession(sessionId: string): Promise<LandResult>;
+  landSession(sessionId: string, req: LandRequest): Promise<LandResult>;
+  /** What the Land confirmation shows (COMMIT-LAND-PUSH D12): the base and where it came from, the commits to squash, why it can't run. */
+  getLandPreview(sessionId: string, opts?: { repo?: string; base?: string }): Promise<LandPreview>;
+  /** A Fast Model draft of the landing message. Throws CommitRefusedError (no_fast_model, draft_failed, …). */
+  draftLandMessage(sessionId: string, opts?: { repo?: string; base?: string }): Promise<CommitDraft>;
   /** Moves a file from the commit plan's `outside` into a repo (COMMIT-LAND-PUSH D4). Throws MoveRefusedError for a refusal (exists, ignored, …). */
   moveFile(sessionId: string, req: MoveRequest): Promise<MoveResult>;
   /** Folders in `repo` a file could move into, those already holding `ext` files first. Runs git: fetch once per picker. */
   getMoveFolders(sessionId: string, repo: string, ext?: string): Promise<MoveFolder[]>;
   /** What a Push would send (COMMIT-LAND-PUSH D5). Fetches the remote first: call when the confirmation opens. */
   getPushPreview(sessionId: string, opts?: { repo?: string; target?: PushTarget }): Promise<PushPreview>;
+  /** Every repo in the session's set with its branch facts (COMMIT-LAND-PUSH D10). Served from the Router's cache; read through router/repoStateStore. */
+  getSessionRepos(sessionId: string): Promise<SessionRepoState[]>;
+  /** One checkout's branch facts, by any path inside it. */
+  getRepoState(path: string): Promise<RepoWorktree>;
   /** Pushed, refused and conflicted all resolve; only an unexpected failure throws. */
   pushSession(sessionId: string, req: PushRequest): Promise<PushResult>;
 
@@ -1108,8 +1120,24 @@ export class FetchRouterClient implements RouterClient {
     return readCommitJSON<CommitDraft>(res);
   }
 
-  async landSession(sessionId: string): Promise<LandResult> {
-    return routerPost(this.baseUrl, `/sessions/${sessionId}/land`, {});
+  async landSession(sessionId: string, req: LandRequest): Promise<LandResult> {
+    return routerPost(this.baseUrl, `/sessions/${sessionId}/land`, req);
+  }
+
+  async getLandPreview(sessionId: string, opts: { repo?: string; base?: string } = {}): Promise<LandPreview> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/land`, {
+      repo: opts.repo || undefined,
+      base: opts.base || undefined,
+    });
+  }
+
+  async draftLandMessage(sessionId: string, opts: { repo?: string; base?: string } = {}): Promise<CommitDraft> {
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/land/draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...(opts.repo ? { repo: opts.repo } : {}), ...(opts.base ? { base: opts.base } : {}) }),
+    });
+    return readCommitJSON<CommitDraft>(res);
   }
 
   async moveFile(sessionId: string, req: MoveRequest): Promise<MoveResult> {
@@ -1133,6 +1161,14 @@ export class FetchRouterClient implements RouterClient {
       repo: opts.repo || undefined,
       target: opts.target,
     });
+  }
+
+  async getSessionRepos(sessionId: string): Promise<SessionRepoState[]> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/repos`);
+  }
+
+  async getRepoState(path: string): Promise<RepoWorktree> {
+    return routerGet(this.baseUrl, "/repos/state", { path });
   }
 
   async pushSession(sessionId: string, req: PushRequest): Promise<PushResult> {

@@ -8,6 +8,7 @@ import { CommitRefusedError, TransportSwitchError } from "../router/client";
 import { coalesce, type Coalescer } from "../router/coalesce";
 import { subscribeToEvents } from "../router/events";
 import { getAllEvents } from "../router/eventPages";
+import { refreshSessionRepos, useSessionRepos } from "../router/repoStateStore";
 import { contextWindowForModel, countsTokens } from "../router/modelDisplay";
 import {
   SESSION_SHELL_REFETCH_EVENT_TYPES,
@@ -23,6 +24,7 @@ import type {
   CompactStatus,
   PermissionRequest,
   PushTarget,
+  LandRequest,
   Session,
   SessionAuth,
   StreamEvent,
@@ -36,7 +38,7 @@ import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
 import { leaderLink } from "./Composer/commands/useLinkCommandState";
 import { useWorkspaceForRef } from "../tasks/useSessionWorkspace";
 import { SessionTerminalBridge } from "./TerminalRenderer/sessionTerminalBridge";
-import { SessionDock, latestLandOutcome } from "./Dock";
+import { SessionDock } from "./Dock";
 import { useCheckoutBranch } from "./Dock/useCheckoutBranch";
 import { useAgentIndex } from "../router/useAgentIndex";
 import { useCompactionSupport } from "../router/compaction";
@@ -89,10 +91,11 @@ import { ShellDock } from "./ShellDock/ShellDock";
 import { ShellBridge, type ShellDockBridge } from "./ShellDock/shellBridge";
 import { getShellDockState, setShellDockState, useShellDockState } from "./ShellDock/dockState";
 import { CommitDialog } from "./Worktree/CommitDialog";
+import { LandDialog } from "./Worktree/LandDialog";
 import { PushDialog } from "./Worktree/PushDialog";
 import { pushedCopy } from "./Worktree/worktreeCopy";
 import { useCommitSettings } from "./Worktree/useCommitSettings";
-import { uncommittedRepos } from "./Worktree/workState";
+import { landRepos, pushFacts, uncommittedRepos, type LandRepo } from "./Worktree/workState";
 import { useWorktreeCards } from "./Worktree/useWorktreeCards";
 import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
 import { STREAM_REATTACH_EVENT, type StreamReattachDetail } from "./streamReattachSignal";
@@ -302,6 +305,10 @@ export function ConversationTab({
   const { commitAll, land } = worktree;
   const loadWorktreeStatus = useCallback(() => routerClient.getWorktreeStatus(sessionId), [routerClient, sessionId]);
   const commitSettings = useCommitSettings(routerClient);
+  // Branch facts shared with other sessions (COMMIT-LAND-PUSH D10): what a
+  // push would send comes from the window's repo state, kept current by
+  // repo.changed, never from this session's record.
+  const sessionRepos = useSessionRepos(routerClient, sessionId);
   // The Commit dialog, optionally opened on a one-click Commit's refusal
   // (no Fast Model after all, a failing hook) so the user can see why and
   // write the message themselves.
@@ -310,6 +317,9 @@ export function ConversationTab({
   // a push from this tab went through, so the path can say "pushed" — the
   // record's 0 alone can't tell that from a repo with no remote.
   const [pushDialog, setPushDialog] = useState<{ target: PushTarget } | null>(null);
+  // The Land confirmation (COMMIT-LAND-PUSH D12), open on a branch
+  // (undefined root: the first landable). Every Land goes through it.
+  const [landDialog, setLandDialog] = useState<{ root?: string } | null>(null);
   const [pushed, setPushed] = useState(false);
   // Stop asked while subagents or processes run — what it would end. Unset: no dialog.
   const [stopConfirm, setStopConfirm] = useState<{ subagents: number; processes: number }>();
@@ -434,6 +444,7 @@ export function ConversationTab({
     setCurrentActivity(undefined);
     setDockTarget(null);
     setPushDialog(null);
+    setLandDialog(null);
     setPushed(false);
     // Reset to the chat default up front — the mode lookup below is async,
     // so a stale mode carried over from whatever session was mounted before
@@ -726,32 +737,25 @@ export function ConversationTab({
     });
   }, [commitSettings, commitAll, stick, multiRepo]);
 
-  // The dock's Land / a card's "Land again". The outcome is a card either
-  // way (and the dock's ⎇ popover shows it at the button); only an unexpected
-  // failure (no card coming) is a toast. The user asked for this outcome, so
-  // the tail follows it into view even if they had scrolled up.
-  // A Land refused over uncommitted files also opens the Commit dialog
-  // (COMMIT-LAND-PUSH D6): it lists the session's files checked and the
-  // refusal's others under "Changed by someone else". The card stays.
-  const handleLand = useCallback(() => {
-    stick.follow();
-    land()
-      .then((result) => {
-        if (result?.outcome === "refused" && result.reason === "dirty") setCommitDialog({});
-      })
-      .catch((err: unknown) => {
-        setCommandToast({
-          tone: "bad",
-          message: err instanceof Error ? err.message : "Couldn't land.",
-        });
-      });
-  }, [land, stick]);
+  // The dock's Land, a path step's, a card's "Land again": each opens the
+  // Land confirmation (D12) — nothing lands from a click. The confirmation
+  // runs `confirmLand`; its outcome is a card either way, and the user asked
+  // for it, so the tail follows it into view even if they had scrolled up.
+  // Refusals stay in the dialog (a dirty one offers Commit them…).
+  const handleLand = useCallback((repo?: LandRepo) => setLandDialog({ root: repo?.root }), []);
+  const confirmLand = useCallback(
+    (req: LandRequest) => {
+      stick.follow();
+      return land(req);
+    },
+    [land, stick],
+  );
 
   const worktreeActions = useMemo(
     () => ({
       onUndo: worktree.undo,
       onAskAgent: (text: string) => setComposerPrefill((p) => ({ text, nonce: (p?.nonce ?? 0) + 1 })),
-      onLandAgain: handleLand,
+      onLandAgain: () => handleLand(),
       landing: worktree.landing,
       onOpenCommitFile,
     }),
@@ -1563,8 +1567,9 @@ export function ConversationTab({
       loadStatus: loadWorktreeStatus,
       onPush: (target: PushTarget) => setPushDialog({ target }),
       pushed,
+      push: pushFacts(session, sessionRepos.repos),
+      land: landRepos(session, sessionRepos.repos),
     },
-    landOutcome: latestLandOutcome(worktree.cards),
   };
   // Terminal compose: a draft survives closing the sheet (an accidental Esc
   // never loses a long prompt); only a paste clears it.
@@ -1631,8 +1636,25 @@ export function ConversationTab({
                 setPushed(true);
                 setCommandToast({ tone: "ok", message: pushedCopy(result) });
                 refetchSession();
+                // Its repo.changed follows within a second or so; don't wait to drop the count.
+                refreshSessionRepos(sessionId);
               }}
               onAskAgent={!showHistory && terminalBridge ? askInCompose : worktreeActions.onAskAgent}
+            />
+          )}
+          {session && (
+            <LandDialog
+              open={landDialog !== null}
+              sessionId={sessionId}
+              routerClient={routerClient}
+              session={session}
+              fastModel={commitSettings.fastModel}
+              initialRoot={landDialog?.root}
+              land={confirmLand}
+              onClose={() => setLandDialog(null)}
+              // What it did is a card at the tail (the land echo, then its event).
+              onLanded={() => refreshSessionRepos(sessionId)}
+              onCommitDialog={() => setCommitDialog({})}
             />
           )}
 

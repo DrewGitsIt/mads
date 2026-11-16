@@ -19,8 +19,6 @@ type Counts struct {
 	Uncommitted int `json:"uncommitted_count"`
 	Unlanded    int `json:"unlanded_count"`
 	Outside     int `json:"outside_count"`
-	// Unpushed is what the next push would publish (D5, unpushedOf).
-	Unpushed int `json:"unpushed_count"`
 }
 
 // CountTarget says where to count. For an isolated session Dir is its
@@ -139,6 +137,11 @@ func CountUnlanded(ctx context.Context, dir, base, branch string) (int, error) {
 		if main, err := mainWorktree(ctx, dir); err == nil {
 			dir = main
 		}
+	}
+	if from != "HEAD" {
+		// Copies of commits the base already has (after a rebase there, or a
+		// squash Land) don't count: a Land wouldn't bring them.
+		return CountToLand(ctx, dir, base, branch)
 	}
 	out, err := Git(ctx, dir, "rev-list", "--count", from+"..refs/heads/"+branch)
 	if err != nil {

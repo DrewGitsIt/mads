@@ -1104,6 +1104,8 @@ function SessionRow({
   // checkout's, shared by every session working in it, so it would show on
   // all of them. (There was a dot by the name too; it said the same thing,
   // less precisely, and was dropped.)
+  // workState without repo state never offers Push, so the rail needn't
+  // load any; the filter keeps the type honest.
   const next = workState(session);
   const work = next?.kind === "push" ? null : next;
   // last_turn_at, not updated_at: the stamp says "last reply", and only a turn

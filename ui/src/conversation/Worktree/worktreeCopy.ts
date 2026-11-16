@@ -184,6 +184,13 @@ export function refusalCopy(
         tone: "bad",
         retry: true,
       };
+    case "message_required":
+      return {
+        title: "Land needs a message",
+        body: "Land makes one commit on the base, and you write its message. Nothing changed.",
+        tone: "warn",
+        retry: true,
+      };
     default:
       return {
         title: "Land didn't run",
@@ -197,6 +204,26 @@ export function refusalCopy(
 /** The reasons whose detail is git talking — shown verbatim, monospace. */
 export function refusalDetailIsGit(reason: string): boolean {
   return reason === "merge_failed" || reason === "primary_refused";
+}
+
+/** Where a Land confirmation's base came from (LandPreview.base_source, D12), in words. */
+export function baseSourceCopy(source: string | undefined): string {
+  switch (source) {
+    case "recorded":
+      return "from the git worktree add this session ran";
+    case "confirmed":
+      return "chosen in an earlier Land";
+    case "reflog":
+      return "from the branch's creation";
+    case "default":
+      return "the repo's default branch — check it's right";
+    case "session":
+      return "this session's base";
+    case "chosen":
+      return "your choice";
+    default:
+      return "";
+  }
 }
 
 /** Why Undo didn't happen (POST /commit/undo's refusal reasons). */

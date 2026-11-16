@@ -54,10 +54,14 @@ func cleanupMergeDriver(ctx context.Context, primary string) {
 // name lives in $MADS_HOME/mergiraf; t.Root is $MADS_HOME/session-worktrees.
 func mergirafArgs(ctx context.Context, t Target, dir string) []string {
 	path := findMergiraf()
-	if path == "" || t.Root == "" {
+	home := t.Home
+	if t.Root != "" {
+		home = filepath.Dir(t.Root)
+	}
+	if path == "" || home == "" {
 		return nil
 	}
-	args, err := mergedriver.Args(ctx, dir, mergedriver.StateDir(filepath.Dir(t.Root)), path)
+	args, err := mergedriver.Args(ctx, dir, mergedriver.StateDir(home), path)
 	if err != nil {
 		log.Printf("sessionwt: merging in %s without mergiraf: %v", dir, err)
 		return nil

@@ -8,7 +8,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
-import { FakeRouterClient, fixtureIsolatedSession } from "../router/fixtures";
+import { FakeRouterClient, fixtureIsolatedRepoState, fixtureIsolatedSession } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import type { Session, TranscriptMessage } from "../router/types";
 
@@ -64,6 +64,13 @@ function makeClient(session: Session = fixtureIsolatedSession) {
   return new FakeRouterClient({ [SID]: session }, { [SID]: transcript });
 }
 
+/** The isolated session's repo state with its base `ahead` of origin: what Push would send after Land (D10). */
+function baseAhead(client: FakeRouterClient, ahead: number) {
+  const own = structuredClone(fixtureIsolatedRepoState);
+  own.base_worktree!.ahead = ahead;
+  client.sessionRepos[SID] = [own];
+}
+
 async function mount(client: FakeRouterClient) {
   render(<ConversationTab sessionId={SID} routerClient={client} />);
   await screen.findByText("Done — the detection works on both runners.");
@@ -97,13 +104,26 @@ describe("ConversationTab — session refetch", () => {
   });
 
   it("an event-driven refetch still lands the new record", async () => {
-    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0, unpushed_count: 0 });
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 1, unlanded_count: 0 });
     const getSession = vi.spyOn(client, "getSession");
+    await mount(client);
+    await quiet(100);
+    expect(screen.getByTestId("dock-status").querySelector('[data-work-state="commit"]')).toBeTruthy();
+
+    getSession.mockResolvedValue({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 2 });
+    act(() => emitSessionUpdated());
+    await waitFor(() =>
+      expect(screen.getByTestId("dock-status").querySelector('[data-work-state="land"]')).toBeTruthy(),
+    );
+  });
+
+  it("the session's own session.updated refetches its repo state too", async () => {
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0 });
     await mount(client);
     await quiet(100);
     expect(screen.getByTestId("dock-status").querySelector('[data-work-state="push"]')).toBeNull();
 
-    getSession.mockResolvedValue({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0, unpushed_count: 2 });
+    baseAhead(client, 2);
     act(() => emitSessionUpdated());
     await waitFor(() =>
       expect(screen.getByTestId("dock-status").querySelector('[data-work-state="push"]')).toBeTruthy(),
@@ -111,7 +131,8 @@ describe("ConversationTab — session refetch", () => {
   });
 
   it("the refetch after a push is immediate, not debounced", async () => {
-    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0, unpushed_count: 2 });
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0 });
+    baseAhead(client, 2);
     const getSession = vi.spyOn(client, "getSession");
     await mount(client);
     await quiet(100);

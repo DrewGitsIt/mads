@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { AgentIndex } from "../../router/agentRef";
 import type { PushTarget, Session, SessionTrust, Usage, WorktreeStatus } from "../../router/types";
-import type { LandCardModel } from "../Worktree/worktreeCards";
+import type { LandRepo, PushFacts } from "../Worktree/workState";
 import { ContextRim } from "./ContextRim";
 import { StatusLine } from "./StatusLine";
 import styles from "./SessionDock.module.css";
@@ -16,8 +16,13 @@ export interface DockWork {
    * (COMMIT-LAND-PUSH D6). Unset: those fixes fall back to the ⎇ popover.
    */
   onCommitDialog?: () => void;
-  /** Runs Land. Fire and forget: the outcome comes back through `landOutcome`. */
-  onLand: () => void;
+  /**
+   * Opens the Land confirmation (COMMIT-LAND-PUSH D12) — on that branch, or
+   * the first landable one. Land always asks; nothing lands from a click.
+   */
+  onLand: (repo?: LandRepo) => void;
+  /** The branches Land would act on (landRepos): the isolated session's own, linked worktrees from repo state. */
+  land?: LandRepo[];
   /** Puts an editable message in the composer (tidy up / resolve / check). Never sends on its own. */
   onAskAgent?: (text: string) => void;
   /** A Land is in flight (useWorktreeCards().landing). */
@@ -26,8 +31,14 @@ export interface DockWork {
   committing?: boolean;
   /** Opens the push confirmation for a target (COMMIT-LAND-PUSH D5). Unset: no Push. */
   onPush?: (target: PushTarget) => void;
-  /** A push from this view went through: 0 unpushed then means pushed, not "no remote". */
+  /** A push from this view went through: 0 to push then means pushed, not "no remote". */
   pushed?: boolean;
+  /**
+   * What Push would send, from the repo state store (pushFacts,
+   * COMMIT-LAND-PUSH D10) — never the record's counts. Undefined until the
+   * store answers: no Push is offered meanwhile.
+   */
+  push?: PushFacts;
   /**
    * GET /sessions/{id}/worktree. Runs git, so the ⎇ popover calls it only on
    * opening, and only for a session working in place — to say why there's no
@@ -81,13 +92,6 @@ export interface SessionDockProps {
 
   /** Commit/Land control and the ⎇ popover's buttons. Absent → no control (the ⎇ segment still shows). */
   work?: DockWork;
-  /**
-   * The newest Land outcome — latestLandOutcome(useWorktreeCards().cards).
-   * After a Land click the ⎇ popover shows the first outcome that differs
-   * from the one current at the click (a repeated identical refusal counts
-   * as different: its `repeats` grows).
-   */
-  landOutcome?: LandCardModel;
 
   /** The input region (chat: chips + composer row / expanded editor). Terminal: usually nothing. */
   children?: ReactNode;

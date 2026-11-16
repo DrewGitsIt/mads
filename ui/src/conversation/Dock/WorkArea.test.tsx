@@ -6,9 +6,15 @@ import { resetProviderModelCache } from "../../router/useProviderModels";
 import { resetProviderInfoCache } from "../../router/useProviderInfos";
 import { OPEN_SESSION_EVENT } from "../../appNavigation";
 import type { Session, WorktreeStatus } from "../../router/types";
-import type { LandCardModel } from "../Worktree/worktreeCards";
+import type { LandRepo, PushFacts } from "../Worktree/workState";
 
-function dock(session: Session, work: Partial<DockWork> = {}, landOutcome?: LandCardModel) {
+/** The repo state store's answer for one repo with `commits` to push (pushFacts). */
+const toPush = (commits: number, target: "branch" | "base" = "branch"): PushFacts => ({
+  commits,
+  repos: commits > 0 ? [{ root: "/r", primary: true, target, commits }] : [],
+});
+
+function dock(session: Session, work: Partial<DockWork> = {}) {
   return (
     <SessionDock
       session={session}
@@ -16,15 +22,14 @@ function dock(session: Session, work: Partial<DockWork> = {}, landOutcome?: Land
       mode="chat"
       onModeChange={vi.fn()}
       work={{ onCommit: work.onCommit ?? vi.fn(), onLand: work.onLand ?? vi.fn(), ...work }}
-      landOutcome={landOutcome}
     />
   );
 }
 
-function renderDock(session: Session, work: Partial<DockWork> = {}, landOutcome?: LandCardModel) {
+function renderDock(session: Session, work: Partial<DockWork> = {}) {
   const onCommit = work.onCommit ?? vi.fn();
   const onLand = work.onLand ?? vi.fn();
-  const utils = render(dock(session, { ...work, onCommit, onLand }, landOutcome));
+  const utils = render(dock(session, { ...work, onCommit, onLand }));
   return { ...utils, onCommit, onLand };
 }
 
@@ -45,17 +50,6 @@ function inPlaceStatus(overrides: Partial<WorktreeStatus> = {}): WorktreeStatus 
   };
 }
 const clean = { ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 1 };
-
-const refusedOutside: LandCardModel = {
-  kind: "refused",
-  id: "wt-9",
-  seq: 9,
-  base: "main",
-  reason: "dirty",
-  files: ["ui/e2e/sessions.spec.ts", "setup_dock.sh"],
-  outside: ["ui/e2e/sessions.spec.ts", "setup_dock.sh"],
-  latest: true,
-};
 
 describe("dock Commit / Land control (D4)", () => {
   beforeEach(() => {
@@ -219,7 +213,7 @@ describe("dock Commit / Land control (D4)", () => {
 
   it("offers Push ↑N once everything is committed, and opens the confirmation on its target", () => {
     const onPush = vi.fn();
-    renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 0, unpushed_count: 2 }, { onPush });
+    renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 0 }, { onPush, push: toPush(2) });
     const button = control()!;
     expect(button.getAttribute("data-work-state")).toBe("push");
     expect(button.textContent).toBe("Push ↑2");
@@ -230,15 +224,39 @@ describe("dock Commit / Land control (D4)", () => {
 
   it("pushes an isolated session's base after Land", () => {
     const onPush = vi.fn();
-    renderDock({ ...clean, unlanded_count: 0, unpushed_count: 1 }, { onPush });
+    renderDock({ ...clean, unlanded_count: 0 }, { onPush, push: toPush(1, "base") });
     expect(control()!.getAttribute("title")).toBe("Push 1 commit");
     fireEvent.click(control()!);
     expect(onPush).toHaveBeenCalledWith("base");
   });
 
   it("has no Push without a push handler", () => {
-    renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 0, unpushed_count: 2 });
+    renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 0 }, { push: toPush(2) });
     expect(control()).toBeNull();
+  });
+
+  it("offers no Push while the repo state is unknown, rather than 0 then N", () => {
+    renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 0 }, { onPush: vi.fn() });
+    expect(control()).toBeNull();
+  });
+
+  it("shows Commit and Push side by side when both apply (D11), Commit first", () => {
+    const onPush = vi.fn();
+    const { onCommit } = renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 2 }, { onPush, push: toPush(3) });
+    const controls = [...screen.getByTestId("dock-status").querySelectorAll<HTMLButtonElement>("[data-work-state]")];
+    expect(controls.map((b) => b.getAttribute("data-work-state"))).toEqual(["commit", "push"]);
+    expect(controls[0].textContent).toBe("Commit… 2");
+    expect(controls[1].textContent).toBe("Push ↑3");
+    expect(controls[1].getAttribute("aria-label")).toBe("Push 3 commits");
+    fireEvent.click(controls[0]);
+    expect(onCommit).toHaveBeenCalled();
+    fireEvent.click(controls[1]);
+    expect(onPush).toHaveBeenCalledWith("branch");
+  });
+
+  it("offers no Push beside Commit while commits wait to land: that push comes after Land", () => {
+    renderDock({ ...fixtureIsolatedSession, uncommitted_count: 1, unlanded_count: 2 }, { onPush: vi.fn(), push: toPush(3, "base") });
+    expect(screen.getByTestId("dock-status").querySelector('[data-work-state="push"]')).toBeNull();
   });
 
   it("re-renders from a live record update", () => {
@@ -274,7 +292,7 @@ describe("dock ⎇ popover", () => {
     const landStep = within(path).getByTestId("work-step-land");
     expect(landStep.getAttribute("data-state")).toBe("wait");
     expect(landStep.textContent).toContain("Land into main");
-    expect(landStep.textContent).toContain("3 commits on mads/session/session-isolated · merges into main");
+    expect(landStep.textContent).toContain("3 commits on mads/session/session-isolated · lands as one commit on main");
 
     // Land would only be refused over uncommitted files: held, with why.
     const land = within(landStep).getByRole("button", { name: "Land" }) as HTMLButtonElement;
@@ -387,105 +405,40 @@ describe("dock ⎇ popover", () => {
     expect(screen.queryByTestId("no-land-note")).toBeNull();
   });
 
-  it("opens on a status-line Land click and shows that Land's refusal there, with Ask the agent", () => {
-    const onAskAgent = vi.fn();
-    const work = { onCommit: vi.fn(), onLand: vi.fn(), onAskAgent };
-    const { rerender } = render(dock(clean, work));
+  it("opens the Land confirmation from the status line, never landing on the click (D12)", () => {
+    const { onLand } = renderDock(clean);
     fireEvent.click(screen.getByRole("button", { name: /Land into main/ }));
-    expect(work.onLand).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId("work-popover")).toBeTruthy();
-    expect(screen.queryByTestId("land-outcome")).toBeNull();
-
-    rerender(dock(clean, { ...work, landing: true }));
-    expect(screen.getByTestId("land-outcome").getAttribute("data-kind")).toBe("landing");
-
-    rerender(dock(clean, work, refusedOutside));
-    const outcome = screen.getByTestId("land-outcome");
-    expect(outcome.getAttribute("data-kind")).toBe("refused");
-    expect(outcome.getAttribute("data-reason")).toBe("dirty");
-    expect(outcome.textContent).toContain("Changes outside this session are holding Land back");
-    expect(outcome.textContent).toContain("ui/e2e/sessions.spec.ts and setup_dock.sh");
-
-    fireEvent.click(within(outcome).getByRole("button", { name: "Ask the agent" }));
-    expect(onAskAgent).toHaveBeenCalledWith(
-      expect.stringContaining("These files changed outside this session's change list: ui/e2e/sessions.spec.ts, setup_dock.sh."),
-    );
-  });
-
-  it("offers Commit them… on a dirty refusal when it can open the Commit dialog", () => {
-    const onCommitDialog = vi.fn();
-    const work = { onCommit: vi.fn(), onLand: vi.fn(), onCommitDialog };
-    const { rerender } = render(dock(clean, work));
-    fireEvent.click(screen.getByRole("button", { name: /Land into main/ }));
-    rerender(dock(clean, work, refusedOutside));
-    const outcome = screen.getByTestId("land-outcome");
-    fireEvent.click(within(outcome).getByRole("button", { name: "Commit them…" }));
-    expect(onCommitDialog).toHaveBeenCalled();
+    expect(onLand).toHaveBeenCalledTimes(1);
+    expect(onLand).toHaveBeenCalledWith(undefined);
+    // The confirmation is the caller's dialog; the popover stays shut.
     expect(screen.queryByTestId("work-popover")).toBeNull();
   });
 
-  it("doesn't pass off the previous Land's outcome as this one's, but counts an identical repeat", () => {
-    const work = { onCommit: vi.fn(), onLand: vi.fn() };
-    const { rerender } = render(dock(clean, work, refusedOutside));
-    fireEvent.click(screen.getByRole("button", { name: /Land into main/ }));
-    expect(screen.queryByTestId("land-outcome")).toBeNull();
-
-    rerender(dock(clean, work, { ...refusedOutside, repeats: 2 }));
-    expect(screen.getByTestId("land-outcome").getAttribute("data-kind")).toBe("refused");
-    // A retryable refusal offers Land again from the popover.
-    fireEvent.click(within(screen.getByTestId("land-outcome")).getByRole("button", { name: "Land again" }));
-    expect(work.onLand).toHaveBeenCalledTimes(2);
-  });
-
-  it("shows nothing about old outcomes when opened from the ⎇ segment", () => {
-    renderDock(clean, {}, refusedOutside);
+  it("gives a linked worktree with work to land its own Land step, and lands it from there", () => {
+    const nested: LandRepo = { repo: "/home/user/repo/mads-nested", root: "/home/user/repo/mads-nested", branch: "nested-delegates", base: "main", commits: 1 };
+    const inPlace = { ...fixtureSessions["session-active"], uncommitted_count: 0 };
+    const { onLand } = renderDock(inPlace, { land: [nested] });
+    // The status line's next step is Land too.
+    const control = screen.getByTestId("dock-status").querySelector<HTMLButtonElement>('[data-work-state="land"]')!;
+    expect(control.textContent).toBe("Land into main ↑1");
     fireEvent.click(screen.getByTestId("dock-location"));
-    expect(screen.getByTestId("work-popover")).toBeTruthy();
-    expect(screen.queryByTestId("land-outcome")).toBeNull();
+    const step = screen
+      .getAllByTestId("work-step-land")
+      .find((s) => s.getAttribute("data-branch") === "nested-delegates")!;
+    expect(step.textContent).toContain("Land nested-delegates into main");
+    expect(step.textContent).toContain("1 commit");
+    expect(step.getAttribute("data-state")).toBe("next");
+    fireEvent.click(within(step).getByRole("button", { name: "Land" }));
+    expect(onLand).toHaveBeenCalledWith(nested);
+    expect(screen.queryByTestId("work-popover")).toBeNull();
   });
 
-  it("renders a conflict with Ask the agent to resolve", () => {
-    const onAskAgent = vi.fn();
-    const work = { onCommit: vi.fn(), onLand: vi.fn(), onAskAgent };
-    const { rerender } = render(dock(clean, work));
-    fireEvent.click(screen.getByRole("button", { name: /Land into main/ }));
-    rerender(
-      dock(clean, work, { kind: "conflicted", id: "wt-3", seq: 3, base: "main", files: ["a.go"], latest: true }),
-    );
-    const outcome = screen.getByTestId("land-outcome");
-    expect(outcome.textContent).toContain("main moved on: 1 file conflicts.");
-    fireEvent.click(within(outcome).getByRole("button", { name: "Ask the agent to resolve" }));
-    expect(onAskAgent).toHaveBeenCalledWith(expect.stringContaining("Merge main into this branch"));
-  });
-
-  it("renders a successful Land", () => {
-    const work = { onCommit: vi.fn(), onLand: vi.fn() };
-    const { rerender } = render(dock(clean, work));
-    fireEvent.click(screen.getByRole("button", { name: /Land into main/ }));
-    rerender(
-      dock({ ...clean, unlanded_count: 0 }, work, {
-        kind: "landed",
-        id: "land-echo-x",
-        seq: Number.POSITIVE_INFINITY,
-        base: "main",
-        mergeCommit: "abcdef1234567",
-        fastForwarded: true,
-      }),
-    );
-    const outcome = screen.getByTestId("land-outcome");
-    expect(outcome.getAttribute("data-kind")).toBe("landed");
-    expect(outcome.textContent).toBe("Landed into main. Merge commit abcdef1. This session keeps going on top of it.");
-  });
-
-  it("words a busy refusal from worktreeCopy, without Land again", () => {
-    const work = { onCommit: vi.fn(), onLand: vi.fn() };
-    const { rerender } = render(dock(clean, work));
-    fireEvent.click(screen.getByRole("button", { name: /Land into main/ }));
-    rerender(
-      dock(clean, work, { kind: "refused", id: "wt-4", seq: 4, base: "main", reason: "busy", latest: true }),
-    );
-    const outcome = screen.getByTestId("land-outcome");
-    expect(outcome.textContent).toContain("Can't land while the agent is working");
-    expect(within(outcome).queryByRole("button", { name: "Land again" })).toBeNull();
+  it("sums every branch's work to land, without a base when they land into different ones", () => {
+    const a: LandRepo = { repo: "/r/a", root: "/r/a", branch: "a", base: "main", commits: 2 };
+    const b: LandRepo = { repo: "/r/b", root: "/r/b", branch: "b", base: "release", commits: 1 };
+    renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 0 }, { land: [a, b] });
+    const control = screen.getByTestId("dock-status").querySelector<HTMLButtonElement>('[data-work-state="land"]')!;
+    expect(control.textContent).toBe("Land ↑3");
+    expect(control.getAttribute("title")).toBe("Land 3 commits from 2 branches");
   });
 });

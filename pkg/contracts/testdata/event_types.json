@@ -96,6 +96,7 @@
   "land.retried",
   "land.autofixed",
   "worktree.ensured",
+  "repo.changed",
   "usage.recorded",
   "capability.invoked",
   "stage.attempt_ref",

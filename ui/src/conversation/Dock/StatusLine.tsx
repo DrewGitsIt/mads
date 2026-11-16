@@ -30,7 +30,6 @@ export function StatusLine({
   onChangeModel,
   onChangeTrust,
   work,
-  landOutcome,
 }: StatusLineProps) {
   const [openSeg, setOpenSeg] = useState<OpenSegment | null>(null);
   const modelsByProvider = useProviderModels();
@@ -109,7 +108,6 @@ export function StatusLine({
         workspaceName={workspaceName}
         checkoutBranch={checkoutBranch}
         work={work}
-        landOutcome={landOutcome}
         open={openSeg === "work"}
         onOpen={() => setOpenSeg("work")}
         onClose={close}

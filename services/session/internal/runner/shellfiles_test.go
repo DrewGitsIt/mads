@@ -11,6 +11,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/data/datatest"
@@ -288,4 +289,52 @@ func TestShellFollowsANamedRepo(t *testing.T) {
 	if !ok || got != string(head) {
 		t.Errorf("baseline README.md = (%q, %v), want HEAD's %q", got, ok, head)
 	}
+}
+
+// An agent's `git worktree add -b` is seen, and the branch's base recorded
+// in the repo's config as the branch checked out where it ran — not the
+// default branch a later guess would pick.
+func TestShellRecordsACreatedBranchsBase(t *testing.T) {
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	initRepo(t, repo)
+	gitRun(t, repo, "checkout", "-q", "-b", "dev")
+	wt := filepath.Join(filepath.Dir(repo), "wt-"+filepath.Base(repo))
+	command := "cd " + repo + " && git worktree add -b feat " + wt
+	prov := &shellScriptProvider{steps: []shellStep{{id: "toolu_wt", command: command, effect: func() {
+		gitRun(t, repo, "worktree", "add", "-q", "-b", "feat", wt)
+	}}}}
+	reg := provider.NewRegistry()
+	if err := reg.Register(prov); err != nil {
+		t.Fatal(err)
+	}
+	base := datatest.Start(t)
+	sess := createSession(t, base, contracts.Session{Name: "agent", Provider: prov.Name(), Dir: repo, Isolation: contracts.IsolationCurrentDir})
+	r := New(sess.ID, dataclient.New(base, sess.ID), reg)
+	r.WorktreeRoot = t.TempDir()
+	if err := r.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(context.Background()) })
+	ch, unsub := r.Subscribe()
+	defer unsub()
+	if err := r.Send(context.Background(), "make a worktree"); err != nil {
+		t.Fatal(err)
+	}
+	drainText(t, ch)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if b, ok := sessionwt.BaseOf(context.Background(), wt, "feat"); ok && b.Source == sessionwt.BaseRecorded {
+			if b.Base != "dev" {
+				t.Fatalf("recorded base = %+v, want dev", b)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	b, _ := sessionwt.BaseOf(context.Background(), wt, "feat")
+	t.Fatalf("base never recorded; inferred %+v", b)
 }

@@ -55,13 +55,6 @@ export interface Session {
    */
   outside_count?: number;
   /**
-   * Commits the session's next Push would publish (docs/COMMIT-LAND-PUSH-DESIGN.md
-   * D5): in place, the checked-out branch ahead of its remote branch; isolated,
-   * its base in the user's checkout ahead of origin — what Land moved. 0 with
-   * no remote. As of the last fetch; same writers and moments as the others.
-   */
-  unpushed_count?: number;
-  /**
    * The counts above by repo, when the session's work spans more than
    * its folder's repo or its folder isn't one (docs/COMMIT-LAND-PUSH-DESIGN.md
    * D1): one entry per repo with uncommitted or unlanded work, the counts
@@ -1381,7 +1374,65 @@ export interface SessionRepo {
   uncommitted_count?: number;
   unlanded_count?: number;
   outside_count?: number;
-  unpushed_count?: number;
+}
+
+/**
+ * One checkout of a repo and the branch it's on (docs/COMMIT-LAND-PUSH-DESIGN.md
+ * D10) — branch facts several sessions share, kept by the Router per repo and
+ * refreshed as git's ref files change. mirrors pkg/contracts/repostate.go
+ */
+export interface RepoWorktree {
+  /** The top of this checkout. */
+  path: string;
+  /** The repo's main checkout; the others are linked worktrees. */
+  main?: boolean;
+  /** The repo's shared git dir — what repo.changed names. */
+  git_dir: string;
+  branch?: string;
+  head?: string;
+  /** No branch checked out: nothing to push. */
+  detached?: boolean;
+  /** Where the branch pushes; empty: no remote. */
+  remote?: string;
+  remote_branch?: string;
+  /** The branch tracks a remote branch. */
+  upstream?: boolean;
+  /** The remote has no such branch yet. */
+  new_branch?: boolean;
+  /** Commits a push would publish, copies of commits already on the remote left out. As of the last fetch. */
+  ahead: number;
+  /** The remote branch's commits this branch lacks. As of the last fetch. */
+  behind: number;
+  /** A linked worktree on a branch: where Land puts its work (COMMIT-LAND-PUSH D12). */
+  base?: string;
+  /** How `base` was worked out. */
+  base_source?: LandBaseSource | string;
+  /** The commit the branch started from, when known. */
+  fork?: string;
+  /** Its commits `base` doesn't have yet, copies left out. */
+  to_land?: number;
+  computed_at: string;
+}
+
+/** GET /sessions/{id}/repos — every repo in the session's set, with its branch facts. */
+export interface SessionRepoState {
+  /** The checkout the session works in (CommitRequest.repo). */
+  root: string;
+  primary?: boolean;
+  isolated?: boolean;
+  /** An isolated session's base branch. */
+  base?: string;
+  worktree: RepoWorktree;
+  /** Isolated: the user's checkout with the base — what a push after Land publishes. */
+  base_worktree?: RepoWorktree;
+}
+
+/** repo.changed's payload: a repo's branches moved (a commit, merge, fetch or push, by anyone). Session-less. */
+export interface RepoChangedPayload {
+  /** The repo's main checkout. */
+  repo: string;
+  /** Its shared git dir: match against RepoWorktree.git_dir. */
+  git_dir: string;
 }
 
 /** When a file the session didn't change was changed: during this session, or already uncommitted before it. */
@@ -1630,7 +1681,45 @@ export type LandRefusalReason =
   | "primary_dirty"
   | "primary_untracked"
   | "primary_refused"
-  | "locked";
+  | "locked"
+  /** No landing message: the user writes it (D12). */
+  | "message_required";
+
+/**
+ * How a branch's base was worked out (D12): recorded (mads saw the agent
+ * create the branch), confirmed (chosen in an earlier Land), reflog (the
+ * branch's creation names it), default (the repo's default branch, a
+ * guess), chosen (asked for in this request), session (an isolated
+ * session's own base).
+ */
+export type LandBaseSource = "recorded" | "confirmed" | "reflog" | "default" | "chosen" | "session";
+
+/** POST /sessions/{id}/land (D12): squash a branch's work into one commit on its base. */
+export interface LandRequest {
+  /** The worktree to land (SessionRepoState.root); empty is the session's own isolated worktree. */
+  repo?: string;
+  /** Overrides the inferred base; kept as confirmed for the branch's next Land. */
+  base?: string;
+  /** The landing commit's message, written by the user (a draft from draftLandMessage if they like). Required. */
+  message: string;
+}
+
+/** GET /sessions/{id}/land — what the Land confirmation shows. */
+export interface LandPreview {
+  repo: string;
+  branch?: string;
+  base?: string;
+  base_source?: LandBaseSource | string;
+  fork?: string;
+  /** Other local branches it could land into. */
+  bases: string[];
+  /** The branch's commits the base doesn't have yet, copies left out, newest first (at most 50). */
+  commits: PushCommit[];
+  /** All of them. */
+  to_land: number;
+  /** Why Land would be refused right now. */
+  blocked?: LandRefusal;
+}
 
 /** POST /sessions/{id}/land — HTTP 200 for every outcome. */
 export interface LandResult {

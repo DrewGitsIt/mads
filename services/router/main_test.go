@@ -7,18 +7,24 @@ import (
 	"strings"
 	"testing"
 
+	"context"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/localguard"
 	"github.com/drewkidwell/mads/pkg/registryclient"
+	"github.com/drewkidwell/mads/pkg/repostate"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/kirocli"
 	"github.com/drewkidwell/mads/providers/provider"
+	"github.com/drewkidwell/mads/services/data/datatest"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
+	"os"
+	"os/exec"
+	"path/filepath"
 )
 
 func TestHealth(t *testing.T) {
@@ -34,7 +40,7 @@ func TestHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", nil)))
+	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", nil), nil))
 	defer srv.Close()
 
 	resp, err := srv.Client().Get(srv.URL + "/health")
@@ -68,7 +74,7 @@ func TestGuardRefusesForgedRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", localguard.DevServerOrigins)))
+	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", localguard.DevServerOrigins), nil))
 	defer srv.Close()
 
 	post := func(host string, headers map[string]string) int {
@@ -145,7 +151,7 @@ func TestProvidersEndpointListsGoose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", nil)))
+	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", nil), nil))
 	defer srv.Close()
 
 	resp, err := srv.Client().Get(srv.URL + "/providers")
@@ -297,5 +303,71 @@ func TestFastModelDynamicConfigUnsetModePreservesFlagOnlyEndpoint(t *testing.T) 
 	want := fastmodel.DynamicConfig{Model: "flag-model", BaseURL: "https://flag.example.com", APIKeyEnv: "FLAG_KEY"}
 	if got != want {
 		t.Errorf("got %+v, want %+v (flag-only endpoint must still win over the provider default)", got, want)
+	}
+}
+
+// A repo change is announced as one stored repo.changed, with no session,
+// naming the main checkout and the git dir.
+func TestAnnounceRepoChange(t *testing.T) {
+	data := dataclient.New(datatest.Start(t), "router")
+	announceRepoChange(data)("/work/mads/.git")
+	events, err := data.Events(context.Background(), 0, "", []string{string(contracts.RepoChanged)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].SessionID != "" {
+		t.Fatalf("events = %+v, want one session-less repo.changed", events)
+	}
+	var p contracts.RepoChangedPayload
+	if err := json.Unmarshal(events[0].Payload, &p); err != nil || p.Repo != "/work/mads" || p.GitDir != "/work/mads/.git" {
+		t.Errorf("payload = %+v, %v", p, err)
+	}
+}
+
+// A repo change recounts the sessions working in it: a session whose file
+// someone else committed stops counting it, without a turn of its own.
+func TestRecountSessionsIn(t *testing.T) {
+	ctx := context.Background()
+	data := dataclient.New(datatest.Start(t), "router")
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init", "-q", "-b", "main", "."}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	sess := contracts.Session{Name: "B", Provider: "fake", Dir: repo, Isolation: contracts.IsolationCurrentDir}
+	if err := data.CreateSession(ctx, &sess); err != nil {
+		t.Fatal(err)
+	}
+	if err := data.SetSessionActivity(ctx, sess.ID, contracts.SessionActive); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(repo, "scratch.md")
+	if err := os.WriteFile(file, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := data.RecordFileChange(ctx, &contracts.FileChange{SessionID: sess.ID, Path: file, Change: "added", Origin: contracts.OriginToolUse}); err != nil {
+		t.Fatal(err)
+	}
+	gitDir, err := repostate.GitDir(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recountSessionsIn(ctx, data, gitDir)
+	if rec, _ := data.Session(ctx, sess.ID); rec.UncommittedCount != 1 {
+		t.Fatalf("before: uncommitted = %d, want 1", rec.UncommittedCount)
+	}
+	for _, args := range [][]string{{"add", "scratch.md"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "someone else"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	recountSessionsIn(ctx, data, gitDir)
+	if rec, _ := data.Session(ctx, sess.ID); rec.UncommittedCount != 0 {
+		t.Errorf("after someone else's commit: uncommitted = %d, want 0", rec.UncommittedCount)
 	}
 }

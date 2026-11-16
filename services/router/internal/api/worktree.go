@@ -50,7 +50,7 @@ const routerLockWait = 5 * time.Second
 // worktreeOps is sessionwt.Ops over the Router's own Data Service client:
 // the inactive-session path.
 func (s *server) worktreeOps() sessionwt.Ops {
-	return sessionwt.Ops{Store: s.data, LockWait: routerLockWait}
+	return sessionwt.Ops{Store: s.data, LockWait: routerLockWait, Home: s.home}
 }
 
 // worktreeRoute runs a worktree route against the live child when there is
@@ -332,10 +332,26 @@ func (s *server) handleSessionUndoCommit(w http.ResponseWriter, r *http.Request)
 // runs to the end even if the request goes away.
 func (s *server) handleSessionLand(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	var req contracts.LandRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	sess, err := s.data.Session(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	// A Land rewrites a worktree, which another session's agent may be
+	// working in: only the Router sees across sessions (D12).
+	if g := s.pushGates(r.Context(), sess); g.Busy {
+		writeJSON(w, http.StatusOK, contracts.LandResult{Outcome: contracts.LandRefused, Reason: contracts.LandBusy,
+			Detail: "An agent is working in this session's repos. Land when it finishes its turn."})
+		return
+	}
 	s.worktreeRoute(w, r, func(addr string) {
-		s.forwardToChild(w, r, addr, http.MethodPost, s.childPath(id, "/land"), struct{}{})
+		s.forwardToChild(w, r, addr, http.MethodPost, s.childPath(id, "/land"), req)
 	}, func() {
-		res, err := s.worktreeOps().Land(context.WithoutCancel(r.Context()), id, sessionwt.Gates{Pipeline: s.sup.HasPipeline(id)})
+		res, err := s.worktreeOps().Land(context.WithoutCancel(r.Context()), id, req, sessionwt.Gates{Pipeline: s.sup.HasPipeline(id)})
 		if err != nil {
 			writeErrMsg(w, http.StatusInternalServerError, "land: ", err)
 			return

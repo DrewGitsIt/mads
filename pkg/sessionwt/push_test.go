@@ -202,12 +202,11 @@ func TestPushIsolatedBranchThenBase(t *testing.T) {
 		t.Errorf("upstream remote = %q, want origin", got)
 	}
 
-	if _, err := s.ops.Land(ctx, s.store.sess.ID, Gates{}); err != nil {
+	if _, err := s.ops.Land(ctx, s.store.sess.ID, contracts.LandRequest{Message: "Land fix the thing"}, Gates{}); err != nil {
 		t.Fatal(err)
 	}
-	c, err := countTarget(ctx, Target{SessionID: s.store.sess.ID, Folder: s.folder, Primary: s.primary, Branch: branch, Base: "main"}, nil)
-	if err != nil || c.Unpushed != 2 {
-		t.Fatalf("base unpushed after Land = %+v, %v; want 2 (the commit and the merge)", c, err)
+	if n, err := CountUnpushed(ctx, s.primary, "main"); err != nil || n != 1 {
+		t.Fatalf("base unpushed after Land = %d, %v; want 1 (the squash)", n, err)
 	}
 	res, err = s.ops.Push(ctx, s.store.sess.ID, contracts.PushRequest{Target: contracts.PushBase}, Gates{})
 	if err != nil || res.Outcome != contracts.PushPushed || res.Branch != "main" {
@@ -215,5 +214,36 @@ func TestPushIsolatedBranchThenBase(t *testing.T) {
 	}
 	if head(t, bare, "main") != head(t, s.primary, "main") {
 		t.Error("main isn't on origin after the base push")
+	}
+}
+
+// A branch whose commits the remote already has under other hashes (the
+// remote's main was rebased after the branch was cut) has nothing to push:
+// copies don't count, against the remote branch or, for a branch the
+// remote doesn't have, against its default branch.
+func TestUnpushedLeavesCopiesOut(t *testing.T) {
+	ctx := context.Background()
+	repo, _, other, _, _ := inPlace(t)
+	gitRun(t, repo, "checkout", "-q", "-b", "feature")
+	commitFile(t, repo, "f1.txt", "one\n")
+	commitFile(t, repo, "f2.txt", "two\n")
+	if n, err := CountUnpushed(ctx, repo, "feature"); err != nil || n != 2 {
+		t.Fatalf("before the copies land: unpushed = %d, %v; want 2", n, err)
+	}
+
+	// Someone lands the same changes on origin's main, as new commits.
+	theyPush(t, other, "unrelated.txt", "u\n")
+	commitFile(t, other, "f1.txt", "one\n")
+	commitFile(t, other, "f2.txt", "two\n")
+	gitRun(t, other, "push", "-q", "origin", "main")
+	gitRun(t, repo, "fetch", "-q", "origin")
+	gitRun(t, repo, "remote", "set-head", "origin", "main")
+
+	if n, err := CountUnpushed(ctx, repo, "feature"); err != nil || n != 0 {
+		t.Errorf("new branch, copies on origin/main: unpushed = %d, %v; want 0", n, err)
+	}
+	commitFile(t, repo, "f3.txt", "three\n")
+	if n, err := CountUnpushed(ctx, repo, "feature"); err != nil || n != 1 {
+		t.Errorf("one real commit on top: unpushed = %d, %v; want 1", n, err)
 	}
 }

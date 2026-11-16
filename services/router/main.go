@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -28,6 +29,8 @@ import (
 	"github.com/drewkidwell/mads/pkg/localguard"
 	"github.com/drewkidwell/mads/pkg/preflight"
 	"github.com/drewkidwell/mads/pkg/registryclient"
+	"github.com/drewkidwell/mads/pkg/repostate"
+	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/codexcli"
@@ -165,7 +168,7 @@ func buildProviderRegistry(madsHome string) (*provider.Registry, error) {
 	return providers, nil
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, attachmentStore *attachments.Store, fastModelFlagBaseURL string, models *modelcatalog.Catalog, routerURL string, ident identity, guard *localguard.Guard) http.Handler {
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, attachmentStore *attachments.Store, fastModelFlagBaseURL string, models *modelcatalog.Catalog, routerURL string, ident identity, guard *localguard.Guard, repoState *repostate.Service) http.Handler {
 	return guard.Wrap(api.New(api.Options{
 		Data:                 data,
 		Sup:                  sup,
@@ -187,7 +190,94 @@ func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runne
 		UIDist:               ident.uiDist,
 		StartedAt:            ident.startedAt,
 		OriginAllowed:        guard.OriginAllowed,
+		RepoState:            repoState,
+		Home:                 filepath.Dir(runsDir),
 	}))
+}
+
+// activeCheckouts lists the checkouts active sessions work in — every repo
+// of each one's set, and an isolated session's user checkout too — for
+// repo state to keep current.
+func activeCheckouts(data *dataclient.Client) repostate.Lister {
+	return func(ctx context.Context) ([]string, error) {
+		sessions, err := data.Sessions(ctx, string(contracts.SessionActive))
+		if err != nil {
+			return nil, err
+		}
+		ops := sessionwt.Ops{Store: data}
+		var paths []string
+		for _, sess := range sessions {
+			_, all, _, err := ops.Repos(ctx, sess.ID)
+			if err != nil {
+				continue
+			}
+			for _, t := range all {
+				paths = append(paths, t.Folder)
+				if t.Isolated() {
+					paths = append(paths, t.Primary)
+				}
+			}
+		}
+		return paths, nil
+	}
+}
+
+// onRepoChange is what a settled change to a repo's branches sets off:
+// recount the session-owned counts (uncommitted files) of active sessions
+// working in that repo — anyone may have just committed their files — then
+// announce the change. A recount only writes a record, and so only sends
+// session.updated, for a session whose counts actually moved.
+func onRepoChange(data *dataclient.Client) func(gitDir string) {
+	announce := announceRepoChange(data)
+	return func(gitDir string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		recountSessionsIn(ctx, data, gitDir)
+		announce(gitDir)
+	}
+}
+
+// recountSessionsIn refreshes the header counts of active sessions with a
+// checkout in the repo whose shared git dir is gitDir.
+func recountSessionsIn(ctx context.Context, data *dataclient.Client, gitDir string) {
+	sessions, err := data.Sessions(ctx, string(contracts.SessionActive))
+	if err != nil {
+		log.Printf("router: recount sessions in %s: %v", gitDir, err)
+		return
+	}
+	ops := sessionwt.Ops{Store: data}
+	for _, sess := range sessions {
+		_, all, _, err := ops.Repos(ctx, sess.ID)
+		if err != nil {
+			continue
+		}
+		in := false
+		for _, t := range all {
+			for _, p := range []string{t.Folder, t.Primary} {
+				if g, err := repostate.GitDir(ctx, p); err == nil && g == gitDir {
+					in = true
+				}
+			}
+		}
+		if in {
+			if err := sessionwt.RefreshCounts(ctx, data, sess.ID); err != nil {
+				log.Printf("router: recount %s after a repo change: %v", sess.ID, err)
+			}
+		}
+	}
+}
+
+// announceRepoChange appends repo.changed for a repo whose branches moved,
+// so every view of it reads its state again.
+func announceRepoChange(data *dataclient.Client) func(gitDir string) {
+	return func(gitDir string) {
+		payload, _ := json.Marshal(contracts.RepoChangedPayload{Repo: repostate.RepoOf(gitDir), GitDir: gitDir})
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := data.Append(ctx, &contracts.Envelope{Type: contracts.RepoChanged, Payload: payload}); err != nil {
+			log.Printf("router: announce repo change in %s: %v", gitDir, err)
+		}
+	}
 }
 
 // identity is what GET /health reports about this process's origin (see
@@ -322,7 +412,12 @@ func main() {
 	// no session will ever delete; a week is long enough to come back to it.
 	go attachmentStore.SweepDrafts(7 * 24 * time.Hour)
 	go sweepLocalState(data, *madsHome)
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), attachmentStore, *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist), guard)}
+	// Branch facts per repo, kept current by watching git's ref files
+	// (docs/COMMIT-LAND-PUSH-DESIGN.md D10); stopped at shutdown.
+	repoCtx, repoCancel := context.WithCancel(context.Background())
+	defer repoCancel()
+	repoState := repostate.NewService(repoCtx, activeCheckouts(data), onRepoChange(data))
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), attachmentStore, *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist), guard, repoState)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

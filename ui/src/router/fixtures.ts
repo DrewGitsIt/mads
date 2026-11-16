@@ -2,6 +2,7 @@ import type { RouterClient, SessionEventSource } from "./client";
 import { EVENTS_BATCH_LIMIT } from "./eventPages";
 import { isLiveDelegate } from "./delegateLive";
 import { checkLinkSessionIds, CommitRefusedError, MoveRefusedError, RouterValidationError } from "./client";
+import { FakeEventSource } from "./testFakeEventSource";
 import type {
   Attachment,
   HeldUpdate,
@@ -28,6 +29,10 @@ import type {
   MoveRequest,
   MoveResult,
   PushPreview,
+  LandPreview,
+  LandRequest,
+  RepoWorktree,
+  SessionRepoState,
   PushRequest,
   PushResult,
   PushTarget,
@@ -958,6 +963,79 @@ export const fixturePushPreview: PushPreview = {
   incoming: [],
 };
 
+// emitRepoChanged's seqs: above any a test seeds, and rising (the bus drops a repeated seq).
+let repoChangedSeq = 1_000_000_000;
+
+/** The isolated session's Land confirmation: three commits onto main, its own base. */
+export const fixtureLandPreview: LandPreview = {
+  repo: "/home/user/.mads/session-worktrees/session-isolated",
+  branch: "mads/session/session-isolated",
+  base: "main",
+  base_source: "session",
+  bases: ["main", "release"],
+  commits: [
+    { hash: "c0ffee1234", subject: "deploy: detect Ubuntu 24.04 runners by codename" },
+    { hash: "b0a7ed5678", subject: "deploy: add runner_detect.sh" },
+    { hash: "a11ce90123", subject: "deploy: drop old_detect.sh" },
+  ],
+  to_land: 3,
+};
+
+/** A checkout's branch facts for fixtures: on main at origin, nothing to push. */
+export function fixtureRepoWorktree(over: Partial<RepoWorktree> & { path: string }): RepoWorktree {
+  return {
+    git_dir: `${over.path}/.git`,
+    branch: "main",
+    remote: "origin",
+    remote_branch: over.branch ?? "main",
+    upstream: true,
+    ahead: 0,
+    behind: 0,
+    computed_at: "2026-11-15T00:00:00Z",
+    ...over,
+  };
+}
+
+/** The isolated session's repo: its worktree on its own branch, and the user's checkout on its base. */
+export const fixtureIsolatedRepoState: SessionRepoState = {
+  root: "/home/user/.mads/session-worktrees/session-isolated",
+  primary: true,
+  isolated: true,
+  base: "main",
+  worktree: fixtureRepoWorktree({
+    path: "/home/user/.mads/session-worktrees/session-isolated",
+    git_dir: "/home/user/repo/mads/.git",
+    branch: "mads/session/session-isolated",
+    upstream: false,
+    new_branch: true,
+  }),
+  base_worktree: fixtureRepoWorktree({ path: "/home/user/repo/mads", main: true, git_dir: "/home/user/repo/mads/.git" }),
+};
+
+/** A session's repo set as the fixture Router derives it from the record (FakeRouterClient.sessionRepos unset). */
+export function fixtureReposFor(session: Session): SessionRepoState[] {
+  if (session.worktree_dir && session.worktree_branch && session.worktree_base) {
+    const main = session.dir ?? "/home/user/repo/mads";
+    return [
+      {
+        ...structuredClone(fixtureIsolatedRepoState),
+        root: session.worktree_dir,
+        base: session.worktree_base,
+        worktree: fixtureRepoWorktree({
+          path: session.worktree_dir,
+          git_dir: `${main}/.git`,
+          branch: session.worktree_branch,
+          upstream: false,
+          new_branch: true,
+        }),
+        base_worktree: fixtureRepoWorktree({ path: main, main: true, git_dir: `${main}/.git`, branch: session.worktree_base }),
+      },
+    ];
+  }
+  const dir = session.cwd ?? session.dir;
+  return dir ? [{ root: dir, primary: true, worktree: fixtureRepoWorktree({ path: dir, main: true }) }] : [];
+}
+
 /**
  * The /usage card's three cases (docs/mockups/session-commands.html,
  * section 1; the same sessions pkg/contracts/testdata/session_report_*.json
@@ -1620,8 +1698,8 @@ export class FakeRouterClient implements RouterClient {
   readonly undoCalls: { sessionId: string; hash: string; repo?: string }[] = [];
   draftOutcome: CommitDraft | CommitError = { message: "deploy: detect Ubuntu 24.04 runners by codename" };
   readonly draftCalls: { sessionId: string; paths?: string[]; repo?: string }[] = [];
-  /** A function lets a test hold the answer back (Landing… stays up until it resolves). */
-  landOutcome: LandResult | (() => Promise<LandResult>) = {
+  /** A function answers per request, and lets a test hold the answer back (Landing… stays up until it resolves). */
+  landOutcome: LandResult | ((req: LandRequest) => LandResult | Promise<LandResult>) = {
     outcome: "landed",
     branch: "mads/session/session-isolated",
     base: "main",
@@ -1629,6 +1707,13 @@ export class FakeRouterClient implements RouterClient {
     fast_forwarded: true,
   };
   readonly landCalls: string[] = [];
+  /** Every landSession request, with its session (landCalls keeps the bare ids older tests read). */
+  readonly landRequests: { sessionId: string; req: LandRequest }[] = [];
+  /** What getLandPreview answers; a function answers per request (a changed base reloads it). */
+  landPreview: LandPreview | ((opts: { repo?: string; base?: string }) => LandPreview) = structuredClone(fixtureLandPreview);
+  readonly landPreviewCalls: { sessionId: string; repo?: string; base?: string }[] = [];
+  landDraftOutcome: CommitDraft | CommitError = { message: "deploy: detect Ubuntu runners by codename" };
+  readonly landDraftCalls: { sessionId: string; repo?: string; base?: string }[] = [];
 
   async getWorktreeStatus(_sessionId: string, _repo?: string): Promise<WorktreeStatus> {
     return structuredClone(this.worktreeStatus);
@@ -1687,7 +1772,7 @@ export class FakeRouterClient implements RouterClient {
   pushPreview: PushPreview | ((opts: { repo?: string; target?: PushTarget }) => PushPreview) =
     structuredClone(fixturePushPreview);
   readonly pushPreviewCalls: { sessionId: string; repo?: string; target?: PushTarget }[] = [];
-  /** Unset, the push goes through: every commit the preview listed, and the session's unpushed counts drop to 0. */
+  /** Unset, the push goes through: every commit the preview listed, and the pushed checkout's `ahead` drops to 0. */
   pushOutcome?: PushResult | ((req: PushRequest) => PushResult);
   readonly pushCalls: { sessionId: string; req: PushRequest }[] = [];
 
@@ -1704,10 +1789,11 @@ export class FakeRouterClient implements RouterClient {
     const out = typeof this.pushOutcome === "function" ? this.pushOutcome(req) : this.pushOutcome;
     if (out) return structuredClone(out);
     const preview = typeof this.pushPreview === "function" ? this.pushPreview(req) : this.pushPreview;
-    const session = this.sessions.get(sessionId);
-    if (session) {
-      session.unpushed_count = 0;
-      session.repos = session.repos?.map((r) => ({ ...r, unpushed_count: 0 }));
+    const repos = this.sessionRepos[sessionId];
+    const pushed = repos?.find((r) => (req.repo ? r.root === req.repo : r.primary)) ?? repos?.[0];
+    if (pushed) {
+      const wt = req.target === "base" ? pushed.base_worktree : pushed.worktree;
+      if (wt) wt.ahead = 0;
     }
     return {
       outcome: "pushed",
@@ -1718,6 +1804,50 @@ export class FakeRouterClient implements RouterClient {
       rebased: req.rebase || undefined,
       pushed: preview.ahead,
     };
+  }
+
+  // --- Repo state (COMMIT-LAND-PUSH D10) ---
+  /**
+   * GET /sessions/{id}/repos, by session. Unset for a session, it's derived
+   * from the record: an isolated session's worktree and its base checkout,
+   * else its folder's checkout on main — nothing to push either way.
+   */
+  sessionRepos: Record<string, SessionRepoState[]> = {};
+  readonly sessionReposCalls: string[] = [];
+
+  async getSessionRepos(sessionId: string): Promise<SessionRepoState[]> {
+    this.sessionReposCalls.push(sessionId);
+    const set = this.sessionRepos[sessionId];
+    if (set) return structuredClone(set);
+    const session = this.sessions.get(sessionId);
+    return session ? fixtureReposFor(session) : [];
+  }
+
+  async getRepoState(path: string): Promise<RepoWorktree> {
+    for (const set of Object.values(this.sessionRepos)) {
+      for (const r of set) {
+        for (const wt of [r.worktree, r.base_worktree]) if (wt?.path === path) return structuredClone(wt);
+      }
+    }
+    throw new Error(`fixture repo state not found: ${path}`);
+  }
+
+  /**
+   * Test hook: delivers a session-less repo.changed on the stubbed event
+   * bus (tests stub EventSource with FakeEventSource), as the Router does
+   * once a repo's ref files settle.
+   */
+  static emitRepoChanged(gitDir: string, repo = gitDir.replace(/\/\.git\/?$/, ""), seq = ++repoChangedSeq): void {
+    const data = JSON.stringify({
+      seq,
+      type: "repo.changed",
+      actor: "system",
+      timestamp: new Date().toISOString(),
+      payload: { repo, git_dir: gitDir },
+    });
+    for (const source of FakeEventSource.instances) {
+      if (!source.closed && source.url.includes("repo.changed")) source.emit("repo.changed", data);
+    }
   }
 
   async getMoveFolders(sessionId: string, repo: string, ext?: string): Promise<MoveFolder[]> {
@@ -1781,10 +1911,30 @@ export class FakeRouterClient implements RouterClient {
     return out;
   }
 
-  async landSession(sessionId: string): Promise<LandResult> {
+  async landSession(sessionId: string, req: LandRequest): Promise<LandResult> {
     this.landCalls.push(sessionId);
+    this.landRequests.push({ sessionId, req });
     const out = this.landOutcome;
-    return typeof out === "function" ? out() : out;
+    return typeof out === "function" ? out(req) : out;
+  }
+
+  async getLandPreview(sessionId: string, opts: { repo?: string; base?: string } = {}): Promise<LandPreview> {
+    this.landPreviewCalls.push({ sessionId, ...opts });
+    const out = typeof this.landPreview === "function" ? this.landPreview(opts) : this.landPreview;
+    const preview = structuredClone(out);
+    // A base asked for is the one the preview is about, as the Router answers.
+    if (opts.base && typeof this.landPreview !== "function") {
+      preview.base = opts.base;
+      preview.base_source = "chosen";
+    }
+    return preview;
+  }
+
+  async draftLandMessage(sessionId: string, opts: { repo?: string; base?: string } = {}): Promise<CommitDraft> {
+    this.landDraftCalls.push({ sessionId, ...opts });
+    const out = this.landDraftOutcome;
+    if ("code" in out) throw new CommitRefusedError(out, 409);
+    return out;
   }
 
   /** Seeded control-plane event log — empty by default so the Conversation tab's history-merge fetch (T17) is a no-op unless a test seeds envelopes via seedEvent. */

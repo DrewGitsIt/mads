@@ -18,6 +18,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/preflight"
 	"github.com/drewkidwell/mads/pkg/registryclient"
+	"github.com/drewkidwell/mads/pkg/repostate"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/router/internal/attachments"
@@ -27,6 +28,8 @@ import (
 )
 
 type server struct {
+	home                 string
+	repoState            *repostate.Service
 	data                 *dataclient.Client
 	sup                  *supervisor.Supervisor
 	jobs                 *job.Runner
@@ -115,6 +118,14 @@ type Options struct {
 	UIDist    string
 	StartedAt time.Time
 
+	// RepoState keeps branch facts per repo current (pkg/repostate,
+	// docs/COMMIT-LAND-PUSH-DESIGN.md D10). Nil computes them on every
+	// request and watches nothing.
+	RepoState *repostate.Service
+	// Home is $MADS_HOME, for mergiraf's state when landing a worktree mads
+	// didn't make. Empty lands without mergiraf there.
+	Home string
+
 	// OriginAllowed says which browser pages CORS lets call the Router —
 	// the same list localguard enforces in front of it (main.go). Nil
 	// grants none.
@@ -142,7 +153,7 @@ func NewMux(opts Options) *http.ServeMux {
 	if opts.StaticHandler == nil {
 		opts.StaticHandler = http.NotFoundHandler()
 	}
-	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, attachments: opts.Attachments, fastModelFlagBaseURL: opts.FastModelFlagBaseURL, models: opts.Models, routerURL: opts.RouterURL, root: opts.Root, uiDist: opts.UIDist, startedAt: opts.StartedAt}
+	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, attachments: opts.Attachments, fastModelFlagBaseURL: opts.FastModelFlagBaseURL, models: opts.Models, routerURL: opts.RouterURL, root: opts.Root, uiDist: opts.UIDist, startedAt: opts.StartedAt, repoState: opts.RepoState, home: opts.Home}
 	if opts.Jobs != nil && opts.Sup != nil {
 		// Job bodies that must reach a dormant session (job.Deps.Waker) wake
 		// it through the same path a composer send uses.
@@ -270,6 +281,10 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("GET /sessions/{id}/commit-plan", s.handleSessionCommitPlan)
 	mux.HandleFunc("POST /sessions/{id}/move", s.handleSessionMove)
 	mux.HandleFunc("GET /sessions/{id}/push", s.handleSessionPushPreview)
+	mux.HandleFunc("GET /sessions/{id}/repos", s.handleSessionRepos)
+	mux.HandleFunc("GET /sessions/{id}/land", s.handleSessionLandPreview)
+	mux.HandleFunc("POST /sessions/{id}/land/draft", s.handleSessionLandDraft)
+	mux.HandleFunc("GET /repos/state", s.handleRepoState)
 	mux.HandleFunc("POST /sessions/{id}/push", s.handleSessionPush)
 	mux.HandleFunc("GET /sessions/{id}/move/folders", s.handleSessionMoveFolders)
 	mux.HandleFunc("POST /sessions/{id}/worktree/refresh", s.handleSessionWorktreeRefresh)

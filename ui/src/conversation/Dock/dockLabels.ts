@@ -1,7 +1,6 @@
 import { UNKNOWN_AGENT, agentNameForRef } from "../../router/agentRef";
 import type { AgentIndex } from "../../router/agentRef";
 import type { SessionTrust } from "../../router/types";
-import type { LandCardModel, WorktreeCardModel } from "../Worktree/worktreeCards";
 
 /**
  * The persona segment's text: the persona's name, never the stored `agt_…`
@@ -57,32 +56,4 @@ export function trustTone(trust: SessionTrust | string | undefined): "ok" | "war
     default:
       return "warn";
   }
-}
-
-function isLandCard(c: WorktreeCardModel): c is LandCardModel {
-  return c.kind === "landed" || c.kind === "conflicted" || c.kind === "refused" || c.kind === "autoResolved";
-}
-
-/**
- * The newest Land outcome among a session's worktree cards
- * (useWorktreeCards().cards) — what SessionDock's `landOutcome` wants.
- * Undefined when the session has never landed.
- */
-export function latestLandOutcome(cards: WorktreeCardModel[]): LandCardModel | undefined {
-  for (let i = cards.length - 1; i >= 0; i--) {
-    const c = cards[i];
-    if (isLandCard(c)) return c;
-  }
-  return undefined;
-}
-
-/**
- * Identity of one Land outcome. A repeated identical refusal keeps its
- * first card's id and counts up instead (collapseRepeats), so the count is
- * part of the key: a Land click that refuses the same way again still reads
- * as a new answer.
- */
-export function landOutcomeKey(card: LandCardModel | undefined): string | undefined {
-  if (!card) return undefined;
-  return `${card.id}:${card.kind === "refused" ? (card.repeats ?? 1) : 1}`;
 }

@@ -1,6 +1,6 @@
 # Commit, Land, Push: multi-repo sessions and Commit from Changes
 
-**Status:** Slices 1–5 built on `commit-multirepo` (2026-11-05), not merged; see Implementation notes.
+**Status:** Slices 1–5 on main (2026-11-09). Slices 6–8 (D10–D12) built on `repo-state` (2026-11-16), not merged.
 **Date:** 2026-11-05. **Driver:** Drew started a session in `~/repo` by accident.
 Its agent did real work in `~/repo/mads`. Changes showed most of it, but Commit
 and Land refused it, and there was no way to recover without re-rooting.
@@ -220,6 +220,109 @@ be committed in the repos the agent touches." When
 the folder contains repos one level down, offer them as shortcuts. Never scan
 deeper.
 
+### D10. Repo state: branch facts kept once per repo, kept current by watching git's ref files (2026-11-15)
+
+**Problem.** "Commits to push" belongs to a branch, but each session kept
+its own copy, recounted only by its own actions. In a shared checkout,
+another session's commit, push or merge left everyone else's copy stale
+("Push ↑3" over a dialog listing 2). Counting against "any branch on the
+remote" also counted commits already there under other hashes after a
+rebase-on-push ("Push ↑19", 17 of them copies).
+
+**Ownership split.**
+- *Session record* keeps what is the session's own: uncommitted and
+  outside counts (its files), and an isolated session's unlanded count (its
+  own `mads/session/…` branch). The rail and the close/sleep dialogs read
+  these, for every session, as today.
+- *Repo state* holds facts about branches several sessions share: per
+  worktree of a repo, its branch, tip, remote and remote branch, commits
+  ahead (to push) and behind as of the last fetch, and for a linked
+  worktree its base, fork commit and commits to land. `unpushed_count`
+  leaves the session record.
+
+**Counting copies as already there.** Ahead and to-land use git's patch
+comparison (`rev-list --cherry-pick --right-only <other>...<branch>`), so
+commits whose changes already exist under another hash don't count.
+
+**Computed once, in the Router.** `GET /repos/state?path=` (any worktree
+path) and `GET /sessions/{id}/repos` (the session's repo set with each
+repo's state) serve from a cache keyed by the repo's shared git dir.
+
+**Kept current by watching ref files.** Git records where every branch
+points in a few small files inside its shared git dir: `HEAD` and each
+`worktrees/<name>/HEAD` (what each checkout is on), `refs/heads/…` (one
+file per branch), `packed-refs` (many branches in one file), and
+`refs/remotes/…` (where the remote's branches were at the last fetch or
+push). Every commit, merge, reset, rebase step, fetch and push rewrites one
+of them atomically (lock file, then rename). The Router watches those files
+— not working trees — for repos with active sessions:
+- the git dir comes from `git rev-parse --git-common-dir` (linked worktrees
+  and submodules point elsewhere); `git rev-parse --show-ref-format` picks
+  `.git/reftable/` for repos using git's newer ref storage;
+- folders that don't exist yet (no remote, a fresh repo, a new
+  `refs/heads/fix/`) are watched from their parent and added when created;
+- changes settle per repo (1 s of quiet, at most 5 s), so a rebase or a
+  commit-then-push is one update;
+- each settled change invalidates the cache and appends one stored
+  `repo.changed {repo}` event (no session id), which the Router passes to
+  the UI like every other event;
+- **fallbacks:** a repo whose watch fails is polled every 60 s by comparing
+  `git for-each-ref` output and worktree HEADs (29 ms for mads's 134 refs);
+  watched repos are also polled every 5 minutes to catch a missed event;
+  opening or focusing a session still recounts it.
+- **limits:** changes made on another machine to a repo on a network drive
+  aren't reported by the OS (the poll catches them); working-tree edits
+  aren't ref changes and stay with the session's own tracking.
+
+**UI.** One window-wide repo-state store (like the sessions store: one
+fetch per repo per burst). The dock, path, chip and push dialog read to
+push / to land from it; the Changes tab refetches its change set on
+`repo.changed` for its session's repos, so files another session committed
+stop showing as uncommitted.
+
+### D11. Commit and Push side by side (trial, 2026-11-10)
+
+When a session has both uncommitted files and commits to push (typically
+files deliberately left out of a commit, like scratch or mockups), the dock
+and the Changes chip show both actions, e.g. "Commit 2 · Push ↑3", instead
+of hiding Push behind Commit. A trial: revisit after use.
+
+### D12. Land for every linked worktree, as a squash landing (2026-11-10)
+
+- **Which worktrees.** Any linked worktree of a repo in the session's set —
+  mads's own isolated worktrees and ones an agent made — gets a Land step
+  into its base.
+- **Base and fork commit.** The *fork commit* (where the branch started) is
+  what "this branch's own work" is counted from; the *base branch* is where
+  Land puts it. Inferred, in order: (1) what mads saw — shell tracking reads
+  `git worktree add -b X <path> [<start>]` / `git checkout -b X [<start>]`
+  and records both; (2) a base confirmed before, kept in the repo's own git
+  config as `branch.<X>.madsBase` (and `madsFork`); (3) the branch's
+  creation entry in its reflog ("Created from <name or hash>"); (4) `git
+  merge-base --fork-point <base> X`, which survives a rewritten base; (5)
+  the repo's default branch (`origin/HEAD`, else the main checkout's
+  branch). The Land confirmation shows the base, where the guess came from,
+  and lets the user change it.
+- **Squash landing.** Step 1 is today's: merge the base into the work branch
+  in the worktree, with mergiraf and the stop-for-review when mergiraf
+  resolved files. Step 2 makes **one** commit — the branch's final tree,
+  with the base's tip as its only parent — and fast-forwards the base to it
+  in the user's checkout (refusing only where it would overwrite local
+  changes; it can't conflict). Copies of commits already on the base never
+  arrive, because only the final tree is committed. Undo is one revert.
+- **After landing,** the work branch is reset to the new base tip (its files
+  are unchanged, so nothing moves in the worktree; the old commits stay in
+  the reflog), so the next Land counts from there. Skipped while an agent
+  is working in that worktree.
+- **Confirmation.** Land always asks: base (changeable), the commits being
+  squashed, and a message the user writes — empty, with "Draft with Fast
+  Model". No automatic message.
+- **Rebase-per-commit** was considered (mergiraf works inside a rebase too)
+  and left out for one consistent landing style. Losing the branch's
+  intermediate commits on the base is accepted for now (feature-branch
+  equivalent); revisit on user feedback.
+- **Cleanup** of worktrees and branches is out of scope here.
+
 ## Risks accepted for v1
 
 - D7 misses writes into repos a command doesn't name. Mitigation: those files
@@ -236,7 +339,8 @@ deeper.
 - Creating PRs. Push leaves the session branch ready for one.
 - Force push, pull, rebase or merge from the remote.
 - Moving folders, or copying files, into a repo (D4 moves single files).
-- Scanning or watching folders for repos or edits (D7).
+- Scanning or watching folders for repos or edits (D7). Watching git's ref
+  files (D10) is not this: a few files inside `.git`, not working trees.
 
 ## Decomposition (dependency order)
 
@@ -253,6 +357,14 @@ deeper.
 4. **Push.** D5: a new `sessionwt` op, remote resolution, fetch and ahead/behind,
    confirmation, locks, per-state target.
 5. **Land and Push across repos; Land refusal opens Commit.** D5 and D6.
+6. **Repo state (D10).** Ref watcher, per-repo state and cache, the
+   endpoints and `repo.changed`, copy-aware counts; `unpushed_count` leaves
+   the session record; UI store, dock/path/chip/push dialog and the Changes
+   tab read it.
+7. **Commit and Push side by side (D11).** UI only.
+8. **Squash Land for linked worktrees (D12).** Base and fork inference
+   (shell tracking records creation), the Land confirmation with a drafted
+   message, squash step 2, branch reset; the old merge Land goes.
 
 ## Decisions log
 
@@ -276,6 +388,15 @@ deeper.
 - 2026-11-05 — The "details I filled in" (per-repo counts, remote resolution,
   Push locks, prompt-free git, D6 grouping, ~8 tracker cap, D9 wording and
   one-level-down repo shortcuts) are accepted. *Drew.*
+
+- 2026-11-10 — Commit and Push side by side when both apply, as a trial (D11). *Drew.*
+- 2026-11-10 — Land for every linked worktree in the session's set; squash
+  landing everywhere; base inferred and changeable; landing message written
+  by the user with Draft available; cleanup out of scope (D12). *Drew.*
+- 2026-11-15 — Branch facts move to per-repo state, kept current by
+  watching git's ref files, announced with a stored `repo.changed` event
+  (not a live-only lane: the Router stays a pass-through of the stored log)
+  (D10). *Drew.*
 
 ## Implementation notes
 
@@ -364,3 +485,52 @@ deeper.
   and the Changes chip's "changes outside" controls; the popover offers
   "Commit them…". In practice the popover already holds Land back while
   such files exist, so the refusal mostly matters when counts are stale.
+
+### Slices 6–7 (2026-11-15, branch `repo-state`)
+
+- **D10, as built:** `pkg/repostate` (Compute, Cache, Watcher, Service);
+  the Router lists active sessions' checkouts every 30 s (plus any a view
+  asked about in the last 30 minutes) and watches their repos with
+  fsnotify. Endpoints `GET /repos/state?path=` and `GET
+  /sessions/{id}/repos`. `unpushed_count` is gone from session records.
+- **Also on a repo change:** before announcing it, the Router recounts the
+  session-owned counts of active sessions working in that repo — someone
+  may have committed their files. Found in the end-to-end check: without
+  it, a session kept "Commit… 1" after another committed its file.
+- **Measured end to end** (two sessions in one repo, commits and a push
+  made outside either): the other session's dock updated within 1.3–1.8 s
+  with no turn of its own; one stored `repo.changed` per settled change
+  (a commit and a push within the settling window were one).
+- **D11:** the dock and the Changes chip show Commit and Push side by side
+  when both apply; an isolated session with commits left to land shows
+  Commit then Land, as before. At narrow widths the word "Push" drops
+  before its count.
+
+### Slice 8 (2026-11-16, branch `repo-state`)
+
+- **D12, as built:** `sessionwt.BaseOf` (recorded/confirmed config →
+  reflog "Created from <branch>" → default branch; fork from the record,
+  the reflog's first entry, or `merge-base --fork-point`); repo state
+  reports `base`, `base_source`, `fork`, `to_land` for linked worktrees.
+  Shell tracking records a base when it sees `git worktree add -b` /
+  `checkout -b` / `switch -c` (`shellwatch.Creations`, run after the
+  command, never over a confirmed base).
+- **Squash Land:** step 2 is `commit-tree` of the branch's tree on the
+  base's tip, then the base moves to it — `merge --ff-only` where it's
+  checked out, else `update-ref` with compare-and-swap — and the work
+  branch `reset --keep`s to it. The base no longer has to be checked out
+  in the user's checkout. An unrelated staged file there stays staged.
+- **Endpoints:** `GET /sessions/{id}/land?repo=&base=` (preview), `POST
+  /sessions/{id}/land/draft`, `POST /sessions/{id}/land {repo, base,
+  message}` (refuses `message_required`). The Router refuses a Land while
+  any agent works in the session's repos.
+- **Hooks:** the landing commit is made with `commit-tree`, so no commit
+  hooks run on it (the old `--no-ff` merge ran `pre-merge-commit`); the
+  branch's own commits ran them when made. Open: whether the landing
+  commit should run them.
+- **UI:** `LandDialog` everywhere Land was a click; the ⎇ popover no
+  longer shows Land outcomes (the confirmation and the cards do).
+- **Verified end to end:** the isolated-session journey (8 steps) through
+  the confirmation; a worktree made outside mads landing as one squash
+  commit with the user's message, its branch moved, its base kept as
+  confirmed.

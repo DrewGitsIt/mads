@@ -44,6 +44,9 @@ type Ops struct {
 	// these holding the session's wake lock, which must not wait behind a
 	// pipeline's merge or another Land. Zero waits as long as ctx allows.
 	LockWait time.Duration
+	// Home is $MADS_HOME: mergiraf's state for a Land of a worktree mads
+	// didn't make.
+	Home string
 }
 
 // ErrLocked is a lock not had within Ops.LockWait.
@@ -337,23 +340,140 @@ func tipRepo(ctx context.Context, all []Target, hash string) string {
 	return ""
 }
 
-// Land is POST /sessions/{id}/land: the gates, then LandSteps, under the
+// landTarget resolves what a Land of repo would land, and into what (D12):
+// the session's own isolated worktree (repo empty, or naming it), or a
+// linked worktree in its repo set — its branch, landing into base when
+// given, else the inferred base. A main checkout has nothing to land.
+// source says where the base came from.
+func (o Ops) landTarget(ctx context.Context, sessionID, repo, base string) (t Target, rows []contracts.FileChange, source string, refusal *contracts.LandRefusal, err error) {
+	sess, primary, all, rows, err := o.targets(ctx, sessionID)
+	if err != nil {
+		return Target{}, nil, "", nil, err
+	}
+	refuse := func(reason, detail string) (Target, []contracts.FileChange, string, *contracts.LandRefusal, error) {
+		return Target{SessionID: sessionID}, rows, "", &contracts.LandRefusal{Reason: reason, Detail: detail}, nil
+	}
+	if repo == "" && (primary == nil || !primary.Isolated()) {
+		return refuse(contracts.LandNotIsolated, "This session works directly in your checkout, so there is nothing to land. Commit is all it needs.")
+	}
+	t, err = pick(primary, all, repo)
+	if err != nil {
+		return refuse(contracts.LandNotIsolated, "That folder isn't one of this session's repos.")
+	}
+	if t.Managed {
+		source = "session"
+		if base != "" && base != t.Base {
+			t.Base, source = base, "chosen"
+		}
+		return t, rows, source, nil, nil
+	}
+	own, err1 := Git(ctx, t.Folder, "rev-parse", "--absolute-git-dir")
+	common, err2 := commonDir(ctx, t.Folder)
+	if err1 != nil || err2 != nil || samePath(strings.TrimSpace(own), common) {
+		return refuse(contracts.LandNotIsolated, t.Folder+" is a main checkout, not a worktree: there is nothing to land. Commit is all it needs.")
+	}
+	branch, err := CurrentBranch(ctx, t.Folder)
+	if err != nil {
+		return refuse(contracts.LandOffBranch, t.Folder+" is on a detached HEAD: there's no branch to land.")
+	}
+	b := LandBase{Base: base, Source: "chosen"}
+	if base == "" {
+		var ok bool
+		if b, ok = BaseOf(ctx, t.Folder, branch); !ok {
+			return refuse(contracts.LandBaseNotCheckedOut, "No base branch to land "+branch+" into. Choose one.")
+		}
+	}
+	main, err := mainWorktree(ctx, t.Folder)
+	if err != nil {
+		return Target{}, nil, "", nil, err
+	}
+	return Target{SessionID: sessionID, Name: sess.Name, Folder: t.Folder, Primary: main, Branch: branch, Base: b.Base, Home: o.Home},
+		rows, b.Source, nil, nil
+}
+
+// maxLandCommits caps the confirmation's commit list.
+const maxLandCommits = 50
+
+// LandPreview is GET /sessions/{id}/land: what the Land confirmation
+// shows — the branch, its base and where that came from, the other
+// branches it could land into, its commits the base lacks, and why Land
+// would be refused now. Read-only and lock-free.
+func (o Ops) LandPreview(ctx context.Context, sessionID, repo, base string, g Gates) (contracts.LandPreview, error) {
+	t, rows, source, refusal, err := o.landTarget(ctx, sessionID, repo, base)
+	if err != nil {
+		return contracts.LandPreview{}, err
+	}
+	p := contracts.LandPreview{Repo: t.Folder, Branch: t.Branch, Base: t.Base, BaseSource: source,
+		Bases: []string{}, Commits: []contracts.PushCommit{}, Blocked: refusal}
+	if refusal != nil {
+		return p, nil
+	}
+	if out, err := Git(ctx, t.Primary, "for-each-ref", "--format=%(refname:short)", "refs/heads"); err == nil {
+		for _, b := range lines(out) {
+			if b != t.Branch {
+				p.Bases = append(p.Bases, b)
+			}
+		}
+	}
+	if !refExists(ctx, t.Primary, "refs/heads/"+t.Base) {
+		p.Blocked = &contracts.LandRefusal{Reason: contracts.LandBaseNotCheckedOut, Detail: "The branch " + t.Base + " doesn't exist. Choose another base."}
+		return p, nil
+	}
+	p.Fork = forkPoint(ctx, t.Primary, t.Base, t.Branch)
+	if p.ToLand, err = CountToLand(ctx, t.Primary, t.Base, t.Branch); err != nil {
+		return p, err
+	}
+	p.Commits = ToLand(ctx, t.Primary, t.Base, t.Branch, maxLandCommits)
+	p.Blocked, err = LandGate(ctx, t, g, p.ToLand, exists(t.Folder), SessionFiles(t.Folder, rows))
+	return p, err
+}
+
+// LandDraftInput is what the Fast Model drafts a landing message from:
+// the branch's diff against the base (cut at limit) and its commit
+// subjects, oldest first.
+func (o Ops) LandDraftInput(ctx context.Context, sessionID, repo, base string, limit int) (diff string, truncated bool, subjects []string, err error) {
+	t, _, _, refusal, err := o.landTarget(ctx, sessionID, repo, base)
+	if err != nil {
+		return "", false, nil, err
+	}
+	if refusal != nil {
+		return "", false, nil, refuseCommit(contracts.CommitNothingToCommit, refusal.Detail)
+	}
+	rng := "refs/heads/" + t.Base + "...refs/heads/" + t.Branch
+	diff, err = Git(ctx, t.Primary, "diff", "--no-color", "--no-ext-diff", rng)
+	if err != nil {
+		return "", false, nil, err
+	}
+	if len(diff) > limit {
+		diff, truncated = diff[:limit], true
+	}
+	commits := ToLand(ctx, t.Primary, t.Base, t.Branch, maxLandCommits)
+	for i := len(commits) - 1; i >= 0; i-- {
+		subjects = append(subjects, commits[i].Subject)
+	}
+	return diff, truncated, subjects, nil
+}
+
+// Land is POST /sessions/{id}/land (D12): the gates, then LandSteps —
+// merge the base into the branch where it's checked out, then squash the
+// result into one commit on the base, with the user's message — under the
 // session lock (LandSteps adds the repo lock for step 2). Every outcome is
 // a LandResult and a conversation event: merge.refused for a gate or a
 // refusing checkout, else merge.attempted then merge.completed,
-// merge.conflicted or merge.auto_resolved.
-func (o Ops) Land(ctx context.Context, sessionID string, g Gates) (contracts.LandResult, error) {
-	_, t, rows, err := o.load(ctx, sessionID)
-	if errors.Is(err, ErrNoFolder) {
-		t = Target{SessionID: sessionID}
-		err = nil
-	}
+// merge.conflicted or merge.auto_resolved. A linked worktree's base is
+// kept as confirmed for its next Land.
+func (o Ops) Land(ctx context.Context, sessionID string, req contracts.LandRequest, g Gates) (contracts.LandResult, error) {
+	t, rows, _, refusal, err := o.landTarget(ctx, sessionID, req.Repo, req.Base)
 	if err != nil {
 		return contracts.LandResult{}, err
 	}
-	if !t.Isolated() {
-		r, _ := LandGate(ctx, t, g, 0, false, nil)
-		return o.refused(ctx, t, r), nil
+	if refusal != nil {
+		return o.refused(ctx, t, refusal), nil
+	}
+	message := strings.TrimSpace(req.Message)
+	if message == "" {
+		return o.refused(ctx, t, &contracts.LandRefusal{Reason: contracts.LandMessageRequired,
+			Detail: "Land makes one commit on " + t.Base + ": write its message first."}), nil
 	}
 
 	var res contracts.LandResult
@@ -376,7 +496,7 @@ func (o Ops) Land(ctx context.Context, sessionID string, g Gates) (contracts.Lan
 		}
 		o.event(ctx, t, contracts.MergeAttempted, nil)
 		attempted = true
-		res, err = landSteps(ctx, t, o.LockWait)
+		res, err = landSteps(ctx, t, o.LockWait, message)
 		return err
 	})
 	if errors.Is(err, ErrLocked) {
@@ -394,10 +514,15 @@ func (o Ops) Land(ctx context.Context, sessionID string, g Gates) (contracts.Lan
 	}
 	switch res.Outcome {
 	case contracts.LandLanded:
-		o.recordAs(ctx, t, res.MergeCommit, "Land "+landName(t), provenance{source: contracts.CommitSourceLand})
+		o.recordAs(ctx, t, res.MergeCommit, message, provenance{source: contracts.CommitSourceLand})
 		o.event(ctx, t, contracts.MergeCompleted, map[string]any{
 			"merge_commit": res.MergeCommit, "fast_forwarded": res.FastForwarded,
 		})
+		if !t.Managed {
+			if err := RecordBase(ctx, t.Folder, t.Branch, LandBase{Base: t.Base, Fork: res.MergeCommit, Source: BaseConfirmed}); err != nil {
+				log.Printf("sessionwt: keep %s's base: %v", t.Branch, err)
+			}
+		}
 	case contracts.LandConflicted:
 		o.event(ctx, t, contracts.MergeConflicted, map[string]any{"files": res.Files, "step": "base"})
 	case contracts.LandAutoResolved:
@@ -459,7 +584,7 @@ func (o Ops) event(ctx context.Context, t Target, typ contracts.EventType, extra
 // touch it (D2), and says so with worktree.ensured when it had to repair
 // anything. Caller holds the session lock.
 func (o Ops) ensure(ctx context.Context, t Target) error {
-	if !t.Isolated() {
+	if !t.Isolated() || !t.Managed {
 		return nil
 	}
 	res, err := Ensure(ctx, Spec{Primary: t.Primary, Root: t.Root, SessionID: t.SessionID, Base: t.Base})

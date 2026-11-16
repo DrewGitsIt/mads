@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RouterClient } from "../router/client";
 import { subscribeToEvents } from "../router/events";
+import { useRepoChanged } from "../router/repoStateStore";
 import type { ChangeBaselineId, ChangeSet } from "../router/types";
 
 /**
@@ -45,7 +46,9 @@ export interface ChangeSetState {
 /**
  * The session's ChangeSet against one baseline, refetched (debounced) when
  * the session writes a file, commits, undoes a commit or changes agent
- * state. A refetch keeps the previous set on screen until the new one
+ * state, and when one of its repos' branches moved (repo.changed,
+ * COMMIT-LAND-PUSH D10) — another session's commit takes files out of
+ * "uncommitted" here too. A refetch keeps the previous set on screen until the new one
  * lands, so selection and scroll don't jump.
  */
 export function useChangeSet(routerClient: RouterClient, sessionId: string, vs: ChangeBaselineId = "start"): ChangeSetState {
@@ -82,17 +85,23 @@ export function useChangeSet(routerClient: RouterClient, sessionId: string, vs: 
     setError(undefined);
   }, [sessionId]);
 
+  // One debounce for every reason to refetch.
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const schedule = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(fetchNow, CHANGESET_REFRESH_DEBOUNCE_MS);
+  }, [fetchNow]);
+
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const unsubscribe = subscribeToEvents({ sessionId, types: CHANGESET_REFRESH_EVENT_TYPES }, () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(fetchNow, CHANGESET_REFRESH_DEBOUNCE_MS);
-    });
+    const unsubscribe = subscribeToEvents({ sessionId, types: CHANGESET_REFRESH_EVENT_TYPES }, schedule);
     return () => {
-      if (timer) clearTimeout(timer);
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = undefined;
       unsubscribe();
     };
-  }, [sessionId, fetchNow]);
+  }, [sessionId, schedule]);
+
+  useRepoChanged(routerClient, sessionId, schedule);
 
   return { changeSet, loading: loadedFor !== target, error, refetch: fetchNow };
 }

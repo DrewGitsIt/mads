@@ -88,39 +88,57 @@ func RemoteFor(ctx context.Context, dir, branch string) (remote, remoteBranch st
 	return "", "", false
 }
 
-// CountUnpushed counts the commits a push of branch would move its remote
-// branch past, as last fetched — the same list the confirmation shows: the
-// commits not on the remote branch, or for a branch the remote doesn't
-// have yet, those on none of the remote's branches. 0 with no remote.
-// Read-only and offline: the count is as fresh as the last fetch.
+// CountUnpushed counts the commits a push of branch would publish, as last
+// fetched — the same list the confirmation shows. Copies don't count: a
+// commit whose changes the remote already has under another hash (after a
+// rebase, a cherry-pick) is already there (docs/COMMIT-LAND-PUSH-DESIGN.md
+// D10). 0 with no remote. Read-only and offline.
 func CountUnpushed(ctx context.Context, dir, branch string) (int, error) {
 	remote, remoteBranch, _ := RemoteFor(ctx, dir, branch)
 	if remote == "" || branch == "" {
 		return 0, nil
 	}
-	revs := []string{"refs/heads/" + branch, "--not", "--remotes=" + remote}
-	if ref := "refs/remotes/" + remote + "/" + remoteBranch; refExists(ctx, dir, ref) {
-		revs = []string{ref + "..refs/heads/" + branch}
+	return countRange(ctx, dir, aheadRevs(ctx, dir, branch, remote, remoteBranch)...)
+}
+
+// aheadRevs is the rev-list range for "on branch, not on the remote",
+// copies excluded: against the remote branch when the remote has it, else
+// against the remote's default branch (a new branch's commits that are
+// already on main are copies too), else against all of the remote's
+// branches.
+func aheadRevs(ctx context.Context, dir, branch, remote, remoteBranch string) []string {
+	if against := pushAgainst(ctx, dir, remote, remoteBranch); against != "" {
+		return []string{"--cherry-pick", "--right-only", against + "...refs/heads/" + branch}
 	}
+	return []string{"refs/heads/" + branch, "--not", "--remotes=" + remote}
+}
+
+// pushAgainst is the remote ref a push of remoteBranch is measured against:
+// that branch on the remote, else the remote's default branch, else "".
+func pushAgainst(ctx context.Context, dir, remote, remoteBranch string) string {
+	if ref := "refs/remotes/" + remote + "/" + remoteBranch; refExists(ctx, dir, ref) {
+		return ref
+	}
+	if out, err := Git(ctx, dir, "symbolic-ref", "-q", "refs/remotes/"+remote+"/HEAD"); err == nil {
+		if ref := strings.TrimSpace(out); ref != "" && refExists(ctx, dir, ref) {
+			return ref
+		}
+	}
+	for _, b := range []string{"main", "master"} {
+		if ref := "refs/remotes/" + remote + "/" + b; refExists(ctx, dir, ref) {
+			return ref
+		}
+	}
+	return ""
+}
+
+// countRange is rev-list --count over revs.
+func countRange(ctx context.Context, dir string, revs ...string) (int, error) {
 	out, err := Git(ctx, dir, append([]string{"rev-list", "--count"}, revs...)...)
 	if err != nil {
 		return 0, err
 	}
 	return strconv.Atoi(strings.TrimSpace(out))
-}
-
-// unpushedOf is a target's header count: what its next push publishes —
-// the base for an isolated session (what Land moved), else the branch it
-// works on.
-func unpushedOf(ctx context.Context, t Target) (int, error) {
-	if t.Isolated() {
-		return CountUnpushed(ctx, t.Primary, t.Base)
-	}
-	branch, err := CurrentBranch(ctx, t.Folder)
-	if err != nil {
-		return 0, nil // detached: nothing to push
-	}
-	return CountUnpushed(ctx, t.Folder, branch)
 }
 
 // netGit is userGit for commands that reach a remote: bounded by timeout,
@@ -152,6 +170,10 @@ func netGit(ctx context.Context, dir string, timeout time.Duration, args ...stri
 }
 
 // remoteState is a branch against its remote branch, after a fetch.
+// ahead leaves copies out (commits whose changes the remote already has
+// under another hash): that is what a push would really publish. behind is
+// git's own count, since any commit the remote has that the branch lacks —
+// even the original of a local copy — means the push can't fast-forward.
 type remoteState struct {
 	remote, remoteBranch string
 	upstream, newBranch  bool
@@ -188,14 +210,12 @@ func readRemote(ctx context.Context, s pushSpot) (remoteState, *contracts.PushRe
 		return st, nil, nil
 	}
 	st.remoteRef = ref
-	out, err := Git(ctx, s.dir, "rev-list", "--left-right", "--count", "refs/heads/"+s.branch+"..."+ref)
-	if err != nil {
+	sym := "refs/heads/" + s.branch + "..." + ref
+	if st.ahead, err = countRange(ctx, s.dir, "--cherry-pick", "--left-only", sym); err != nil {
 		return st, nil, err
 	}
-	f := strings.Fields(out)
-	if len(f) == 2 {
-		st.ahead, _ = strconv.Atoi(f[0])
-		st.behind, _ = strconv.Atoi(f[1])
+	if st.behind, err = countRange(ctx, s.dir, "refs/heads/"+s.branch+".."+ref); err != nil {
+		return st, nil, err
 	}
 	return st, nil, nil
 }
@@ -284,9 +304,10 @@ func PushPreview(ctx context.Context, t Target, target string, g Gates) (contrac
 	}
 	p.Ahead, p.Behind = st.ahead, st.behind
 	if st.newBranch {
-		p.Commits = commitsIn(ctx, s.dir, maxPushCommits, "refs/heads/"+s.branch, "--not", "--remotes="+st.remote)
+		p.Commits = commitsIn(ctx, s.dir, maxPushCommits, aheadRevs(ctx, s.dir, s.branch, st.remote, st.remoteBranch)...)
 	} else {
-		p.Commits = commitsIn(ctx, s.dir, maxPushCommits, st.remoteRef+"..refs/heads/"+s.branch)
+		sym := "refs/heads/" + s.branch + "..." + st.remoteRef
+		p.Commits = commitsIn(ctx, s.dir, maxPushCommits, "--cherry-pick", "--left-only", sym)
 		p.Incoming = commitsIn(ctx, s.dir, maxIncoming, "refs/heads/"+s.branch+".."+st.remoteRef)
 	}
 	if p.Ahead == 0 {

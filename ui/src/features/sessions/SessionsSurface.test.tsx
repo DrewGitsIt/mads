@@ -374,7 +374,7 @@ describe("SessionsSurface", () => {
 
       const dialog = screen.getByRole("alertdialog");
       expect(within(dialog).getByText("Sleep “Alpha”?")).toBeTruthy();
-      expect(within(dialog).getByRole("button", { name: "Land into main and sleep" })).toBeTruthy();
+      expect(within(dialog).getByRole("button", { name: "Land into main and sleep…" })).toBeTruthy();
     });
 
     it("asks from the workspace kebab's Sleep now, the same way", async () => {
@@ -387,7 +387,7 @@ describe("SessionsSurface", () => {
 
       const dialog = screen.getByRole("alertdialog");
       expect(within(dialog).getByText("Sleep “Alpha”?")).toBeTruthy();
-      expect(within(dialog).getByRole("button", { name: "Land into main and sleep" })).toBeTruthy();
+      expect(within(dialog).getByRole("button", { name: "Land into main and sleep…" })).toBeTruthy();
     });
   });
 
