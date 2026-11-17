@@ -11,6 +11,7 @@ import {
   STOP_PICKUP_TASK,
 } from "./lib/pipelineScenario";
 import { createSession, createWorkspace, importTasks, pollEventOfType, setupWorkspace } from "./lib/seed";
+import { apiFetch } from "./lib/auth";
 
 // Stop a run mid agent stage, then pick the task up in a new run
 // (docs/PIPELINE-LEASES-DESIGN.md Part B). The resumable task's executor
@@ -35,30 +36,30 @@ async function shot(page: Page, name: string) {
 }
 
 async function events(routerURL: string, sessionId: string, type: string): Promise<Envelope[]> {
-  const res = await fetch(`${routerURL}/events?session_id=${sessionId}&types=${type}`);
+  const res = await apiFetch(`${routerURL}/events?session_id=${sessionId}&types=${type}`);
   if (!res.ok) throw new Error(`events: status ${res.status}`);
   return (await res.json()) as Envelope[];
 }
 
 async function taskStatus(routerURL: string, id: string): Promise<string> {
-  const res = await fetch(`${routerURL}/tasks/${id}`);
+  const res = await apiFetch(`${routerURL}/tasks/${id}`);
   if (!res.ok) throw new Error(`getTask: status ${res.status}`);
   return ((await res.json()) as { status: string }).status;
 }
 
 /** Live pipeline leases (any run's), straight from the Data Service. */
 async function pipelineLeases(dataURL: string): Promise<{ task_id: string; holder: string }[]> {
-  const res = await fetch(`${dataURL}/leases?kind=pipeline`, { headers: { "X-Mads-Actor": "pipeline" } });
+  const res = await apiFetch(`${dataURL}/leases?kind=pipeline`, { headers: { "X-Mads-Actor": "pipeline" } });
   if (!res.ok) throw new Error(`leases: status ${res.status}`);
   return (await res.json()) as { task_id: string; holder: string }[];
 }
 
 /** A person moves a task to in_progress themselves (the Data Service's default actor is "user"). */
 async function setInProgressAsUser(dataURL: string, id: string): Promise<void> {
-  const get = await fetch(`${dataURL}/tasks/${id}`);
+  const get = await apiFetch(`${dataURL}/tasks/${id}`);
   if (!get.ok) throw new Error(`getTask: status ${get.status}`);
   const task = await get.json();
-  const put = await fetch(`${dataURL}/tasks/${id}`, {
+  const put = await apiFetch(`${dataURL}/tasks/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json", "X-Mads-Actor": "user" },
     body: JSON.stringify({ ...task, status: "in_progress" }),
@@ -237,7 +238,7 @@ test.describe("tasks tab: stop a run and pick its work up", () => {
     expect(await taskStatus(routerURL, personId)).toBe("in_progress");
     expect((await events(routerURL, sessionId, "stage.started")).filter((e) => e.task_id === personId)).toEqual([]);
     // The work merged into the session's branch, including what Run 1 left behind.
-    const session = (await (await fetch(`${routerURL}/sessions/${sessionId}`)).json()) as {
+    const session = (await (await apiFetch(`${routerURL}/sessions/${sessionId}`)).json()) as {
       worktree_branch?: string;
       session?: { worktree_branch?: string };
     };

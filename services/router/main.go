@@ -25,6 +25,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/localguard"
 	"github.com/drewkidwell/mads/pkg/preflight"
 	"github.com/drewkidwell/mads/pkg/registryclient"
@@ -165,8 +166,25 @@ func buildProviderRegistry(madsHome string) (*provider.Registry, error) {
 	return providers, nil
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, attachmentStore *attachments.Store, fastModelFlagBaseURL string, models *modelcatalog.Catalog, routerURL string, ident identity, guard *localguard.Guard) http.Handler {
-	return guard.Wrap(api.New(api.Options{
+// frontDoor is the Router's local front door state
+// (docs/LOCAL-FRONT-DOOR-DESIGN.md): the install token and the
+// session-scoped tokens — the only two credential kinds (H7). A zero frontDoor
+// (tokens nil) is -insecure-no-auth, which localauth refuses outside go
+// test builds.
+type frontDoor struct {
+	tokens *localauth.Store
+	scoped *localauth.Registry
+}
+
+func (f frontDoor) door(mux *http.ServeMux) *localauth.Door {
+	if f.tokens == nil {
+		return localauth.Insecure()
+	}
+	return api.NewDoor(mux, f.tokens, f.scoped)
+}
+
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, attachmentStore *attachments.Store, fastModelFlagBaseURL string, models *modelcatalog.Catalog, routerURL string, ident identity, guard *localguard.Guard, auth frontDoor) http.Handler {
+	return guard.Wrap(api.NewHandler(api.Options{
 		Data:                 data,
 		Sup:                  sup,
 		Jobs:                 jobs,
@@ -187,7 +205,9 @@ func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runne
 		UIDist:               ident.uiDist,
 		StartedAt:            ident.startedAt,
 		OriginAllowed:        guard.OriginAllowed,
-	}))
+		Tokens:               auth.tokens,
+		Scoped:               auth.scoped,
+	}, auth.door))
 }
 
 // identity is what GET /health reports about this process's origin (see
@@ -212,6 +232,9 @@ func newIdentity(uiDist string) identity {
 
 func main() {
 	routerStart := time.Now()
+	// The Router reads the token from its file; a token in its own env
+	// would only leak into the harnesses it spawns (model discovery, jobs).
+	localauth.TakeChildEnv()
 	addr := flag.String("addr", "localhost:17373", "listen address")
 	allowedOrigins := flag.String("allowed-origins", "", "comma-separated browser origins, besides the Router's own, allowed to call it — e.g. the Vite dev server: "+strings.Join(localguard.DevServerOrigins, ","))
 	dataURL := flag.String("data-url", "http://localhost:17374", "Data Service base URL")
@@ -222,6 +245,7 @@ func main() {
 	fastmodelModel := flag.String("fastmodel-model", "", "Fast Model model name")
 	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root for credentials (env MADS_HOME)")
 	registryURL := flag.String("registry-url", "", "remote registry base URL (empty: unset — install/update/publish return a clear error)")
+	insecureNoAuth := flag.Bool("insecure-no-auth", false, "serve without the install token; refused unless this is a go test build")
 	uiDist := flag.String("ui-dist", "ui/dist", "path to the built UI (ui/dist) served at /; missing or unbuilt serves a placeholder page. Relative to the cwd the router is launched from, not the executable — scripts/app.sh and `make run` both launch from the repo root.")
 	flag.Parse()
 
@@ -231,7 +255,23 @@ func main() {
 	sessionArgv := append(strings.Fields(*sessionCmd), "-router-url", "http://"+*addr)
 	pipelineArgv := append(strings.Fields(*pipelineCmd), "-data-url", *dataURL)
 
-	data := dataclient.New(*dataURL, "router")
+	if *insecureNoAuth && !localauth.InsecureAllowed() {
+		log.Fatal("router: -insecure-no-auth is refused: only go test builds may serve without the install token")
+	}
+	// The install token (docs/LOCAL-FRONT-DOOR-DESIGN.md D1): created here
+	// if the Data Service hasn't yet, followed across rotations. A rotation
+	// also revokes every scoped token (H6).
+	tokens, err := localauth.LoadOrCreate(*madsHome)
+	if err != nil {
+		log.Fatalf("router: install token: %v", err)
+	}
+	auth := frontDoor{tokens: tokens, scoped: localauth.NewRegistry()}
+	tokens.OnRotate(auth.scoped.RevokeAll)
+	tokens.OnRotate(func() { log.Printf("router: install token rotated; scoped tokens revoked") })
+	if *insecureNoAuth {
+		auth = frontDoor{}
+	}
+	data := dataclient.New(*dataURL, "router", dataclient.WithTokenSource(tokens.Token))
 
 	providers, err := buildProviderRegistry(*madsHome)
 	if err != nil {
@@ -254,6 +294,11 @@ func main() {
 	reg := registryclient.New(*registryURL)
 	jobs := job.New(data, fm, reg)
 	sup := supervisor.New(data, sessionArgv, pipelineArgv, jobs)
+	// Children read the install token from its file themselves (H4).
+	sup.SetTokenFile(localauth.Path(*madsHome))
+	// Children listen on Unix sockets under $MADS_HOME/run (D9).
+	sup.SetMadsHome(*madsHome)
+	sup.SetScopedTokens(auth.scoped)
 	jobs.SetResolver(sup)
 	// Pushes deferred while a session slept replay as one forced turn the
 	// moment its child starts, whatever started it (job.FlushDeferred).
@@ -322,7 +367,7 @@ func main() {
 	// no session will ever delete; a week is long enough to come back to it.
 	go attachmentStore.SweepDrafts(7 * 24 * time.Hour)
 	go sweepLocalState(data, *madsHome)
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), attachmentStore, *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist), guard)}
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), attachmentStore, *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist), guard, auth)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

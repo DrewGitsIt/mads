@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/orchestratemcp"
 )
 
@@ -47,7 +48,7 @@ func cmdOrchestrate(args []string, stdout io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), *wait+30*time.Second)
 	defer cancel()
-	c := orchestratemcp.NewClient(*routerURL, *session)
+	c := orchestratemcp.NewClient(*routerURL, *session, orchestrateToken())
 
 	switch args[0] {
 	case "subjects":
@@ -70,6 +71,16 @@ func cmdOrchestrate(args []string, stdout io.Writer) error {
 		fmt.Fprint(os.Stderr, orchestrateUsage)
 		return fmt.Errorf("orchestrate: unknown subcommand %q", args[0])
 	}
+}
+
+// orchestrateToken is the bearer for `mads orchestrate`: a session-scoped
+// MADS_ROUTER_TOKEN if this shell somehow holds one, else the install token
+// from $MADS_HOME (the agent's shell never holds the scoped one).
+func orchestrateToken() string {
+	if tok := os.Getenv(localauth.EnvRouterToken); tok != "" {
+		return tok
+	}
+	return installToken()
 }
 
 func defaultOrchestrateRouter() string {

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 )
@@ -39,12 +40,12 @@ func PostInject(ctx context.Context, addr string, req contracts.InjectRequest) (
 	deadline := time.Now().Add(injectRetryWindow)
 	backoff := 100 * time.Millisecond
 	for {
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/inject", bytes.NewReader(raw))
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, childsock.URL(addr, "/inject"), bytes.NewReader(raw))
 		if err != nil {
 			return 0, nil, fmt.Errorf("build request: %w", err)
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(httpReq)
+		resp, err := childsock.Client.Do(httpReq)
 		if err != nil {
 			return 0, nil, fmt.Errorf("post: %w", err)
 		}

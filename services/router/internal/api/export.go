@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 )
 
@@ -146,11 +147,11 @@ func preferLive(live []contracts.TranscriptMessage, err error, stored func() []c
 func fetchChildTranscript(ctx context.Context, addr string) ([]contracts.TranscriptMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/transcript", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, childsock.URL(addr, "/transcript"), nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := childsock.Client.Do(req)
 	if err != nil {
 		return nil, err
 	}

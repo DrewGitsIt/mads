@@ -13,9 +13,13 @@ import (
 	"testing"
 	"time"
 
+	gokeyring "github.com/zalando/go-keyring"
+
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/localguard"
 	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/testleakcheck"
@@ -28,7 +32,6 @@ import (
 	"github.com/drewkidwell/mads/services/router/internal/attachments"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
-	gokeyring "github.com/zalando/go-keyring"
 )
 
 var testChildBin string
@@ -256,7 +259,21 @@ func TestHealthReportsIdentity(t *testing.T) {
 	opts.Root = "/src/checkout"
 	opts.UIDist = "/src/checkout/ui/dist"
 	opts.StartedAt = time.Date(2026, 9, 28, 10, 0, 0, 0, time.UTC)
-	srv := httptest.NewServer(api.New(opts))
+	// Anonymous callers (no token, so no principal) see only service and
+	// status (docs/LOCAL-FRONT-DOOR-DESIGN.md D3).
+	anon := httptest.NewServer(api.New(opts))
+	t.Cleanup(anon.Close)
+	aresp, err := http.Get(anon.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	abody := decodeJSON[map[string]string](t, aresp)
+	_ = aresp.Body.Close()
+	if len(abody) != 2 || abody["service"] != "router" || abody["status"] != "ok" {
+		t.Errorf("anonymous health = %v, want only service and status", abody)
+	}
+
+	srv := httptest.NewServer(localauth.Insecure().Wrap(api.New(opts)))
 	t.Cleanup(srv.Close)
 
 	resp, err := http.Get(srv.URL + "/health")
@@ -550,7 +567,7 @@ func TestSetSessionModel(t *testing.T) {
 
 	// Applied to the running child too — a persisted-only change would leave
 	// the agent answering on the old model for the rest of the session.
-	childResp, err := http.Get("http://" + created.Addr + "/model")
+	childResp, err := childsock.Client.Get(childsock.URL(created.Addr, "/model"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,7 +5,11 @@
 // reimplemented per call site with the risk of drifting apart.
 package agentenv
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/drewkidwell/mads/pkg/localauth"
+)
 
 // Mode selects how much of the parent process's environment is visible to a
 // spawned agent. Mirrors provider.Trust: this package defines its own type
@@ -56,6 +60,11 @@ var BaseAllowlist = []string{
 // pre-env_mode behavior. In ModeIsolated, the result starts from parentEnv
 // filtered to BaseAllowlist, LC_* names, and passthrough names, then adds
 // credentials and extra the same way.
+//
+// In every mode, neither of mads's own tokens (MADS_LOCAL_TOKEN,
+// MADS_ROUTER_TOKEN — docs/LOCAL-FRONT-DOOR-DESIGN.md D4) ever reaches the
+// agent, wherever it would have come from: the children remove them from
+// their own environment at start, and this is the backstop.
 func Build(mode Mode, parentEnv []string, credentials, passthrough, extra []string) []string {
 	base := parentEnv
 	if mode == ModeIsolated {
@@ -65,7 +74,7 @@ func Build(mode Mode, parentEnv []string, credentials, passthrough, extra []stri
 	env = append(env, base...)
 	env = append(env, credentials...)
 	env = append(env, extra...)
-	return env
+	return localauth.ScrubEnv(env)
 }
 
 // Select extracts the KEY=VALUE pairs from env whose KEY is in names,

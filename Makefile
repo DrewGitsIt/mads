@@ -55,7 +55,11 @@ pipeline:
 
 # Picked up by the *next* session spawn (-session-cmd is exec'd fresh too).
 # To move an already-running session onto the new binary without disturbing
-# any other session:  curl -sX POST localhost:17373/sessions/<id>/bounce
+# any other session:  mads api POST /sessions/<id>/bounce
+# (or, with curl, keep the token out of its argv, which other users can read:
+#  printf 'header = "Authorization: Bearer %s"\n' "$(cat ~/.mads/local.token)" | curl -K - -sX POST localhost:17373/sessions/<id>/bounce)
+# Children listen on Unix sockets, not ports: `mads ps` lists them (id, pid,
+# socket, state, uptime), `mads api --session <id> GET /status` pokes one.
 session:
 	go build -o $(GOBIN)/session ./services/session
 

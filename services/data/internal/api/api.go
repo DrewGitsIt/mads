@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/services/data/internal/store"
 )
 
@@ -36,10 +37,12 @@ type Identity struct {
 }
 
 // New returns the Data Service handler backed by db, with no Identity.
-func New(db *sql.DB) http.Handler { return NewWithIdentity(db, Identity{}) }
+func New(db *sql.DB) *http.ServeMux { return NewWithIdentity(db, Identity{}) }
 
 // NewWithIdentity is New plus the Identity GET /health reports.
-func NewWithIdentity(db *sql.DB, ident Identity) http.Handler {
+// It returns the bare ServeMux so main can put the local front door
+// (pkg/localauth) in front, classifying requests by the same patterns.
+func NewWithIdentity(db *sql.DB, ident Identity) *http.ServeMux {
 	l := store.NewLog(db)
 	caps := store.NewCapabilities(l)
 	tasks := store.NewTasks(l)
@@ -97,6 +100,13 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		status, code = "database unreachable", http.StatusServiceUnavailable
 	}
 	body := map[string]string{"service": "data", "status": status}
+	// GET /health is open (the front door exempts it), but only `service`
+	// and `status` are for anyone: where this process runs from is for the
+	// token's holder (scripts/app.sh sends it).
+	if localauth.FromContext(r.Context()).Kind == localauth.None {
+		writeJSON(w, code, body)
+		return
+	}
 	if s.ident.Root != "" {
 		body["root"] = s.ident.Root
 	}

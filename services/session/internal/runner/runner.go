@@ -110,6 +110,14 @@ type Runner struct {
 	// credstore-only behavior exactly as before this field existed.
 	VaultResolver *vault.Resolver
 
+	// TokenFile is the install token's path ($MADS_HOME/local.token),
+	// stamped into the commit hook's config (mads.tokenFile) so the hook can
+	// authenticate to the Data Service. Empty leaves it unset.
+	TokenFile string
+	// RouterToken is this child's session-scoped Router token
+	// (MADS_ROUTER_TOKEN, docs/LOCAL-FRONT-DOOR-DESIGN.md D4), handed only
+	// to the orchestrate MCP server's own environment — never the agent's.
+	RouterToken string
 	// RouterURL is the Router's own base URL, passed as MADS_ROUTER_URL to
 	// the orchestrate capability's MCP server process (docs/
 	// LINKED-SESSIONS-DESIGN.md, setupOrchestrate) — the one thing the
@@ -630,7 +638,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		log.Printf("runner: append session.activity_changed: %v", err)
 	}
 
-	r.synthEngine = synth.New(sess.SynthesisMode, r.sessionID, dataclient.New(r.data.BaseURL(), "synthesizer"), r.FastModel)
+	r.synthEngine = synth.New(sess.SynthesisMode, r.sessionID, r.data.As("synthesizer"), r.FastModel)
 
 	// Decided before the session is installed so the pass is in flight
 	// from the moment anything can reach the session (beginCompactLocked).
@@ -745,6 +753,7 @@ func (r *Runner) installHook(ctx context.Context, dir string) bool {
 	if err := githook.SetWorktreeConfig(ctx, dir, githook.Config{
 		SessionID: r.sessionID,
 		DataURL:   r.data.BaseURL(),
+		TokenFile: r.TokenFile,
 	}); err != nil {
 		log.Printf("runner: configure commit hook: %v", err)
 	}
@@ -1176,7 +1185,7 @@ func (r *Runner) recordInjectionAudit(ctx context.Context, attribution contracts
 	if attribution.LinkID == "" {
 		actor = "router" // a notice from the Router itself, not over a link
 	}
-	client := dataclient.New(r.data.BaseURL(), actor)
+	client := r.data.As(actor)
 	env := contracts.Envelope{
 		Type:      contracts.LinkMessageInjected,
 		SessionID: r.sessionID,

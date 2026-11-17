@@ -4,6 +4,7 @@ import os from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import { BrowserWindow, dialog, ipcMain, shell, type MessageBoxOptions, type WebContents } from "electron";
 import { isRunnable, resolveLinkTarget, splitCommand, type LinkTarget } from "./links";
+import { authHeaders } from "./localToken";
 
 /**
  * Opens links clicked in rendered markdown (agent replies, task text), and
@@ -17,8 +18,9 @@ import { isRunnable, resolveLinkTarget, splitCommand, type LinkTarget } from "./
  *     approved that exact command, or else to the OS default app — after a
  *     native confirmation when that app would run it — and to Finder / the
  *     file manager when no app takes it.
- * Not a Router route on purpose: the Router is unauthenticated and any
- * localhost page can call it, so it must never be the thing that opens files.
+ * Not a Router route on purpose: the Router's setting can be written by
+ * anything holding the install token (an agent, say), so it must never be
+ * the thing that opens files.
  */
 
 /** What became of a click, for the renderer to show on the link. */
@@ -34,6 +36,8 @@ const APPROVAL_FILE = "editor-command.json";
 interface Deps {
   routerBaseUrl: string;
   userDataDir: string;
+  /** The install token for main's own Router call (GET /config); "" sends none. */
+  routerToken?: () => string;
 }
 
 // One native prompt at a time: a page clicking a runnable link in a loop
@@ -104,7 +108,7 @@ async function openFile(sender: WebContents, path: string, deps: Deps): Promise<
   if (prompting) return "cancelled";
   prompting = true;
   try {
-    const command = await editorCommand(deps.routerBaseUrl);
+    const command = await editorCommand(deps.routerBaseUrl, deps.routerToken?.() ?? "");
     const use = command ? await approveEditor(sender, command, deps.userDataDir) : "default";
     if (use === "cancel") return "cancelled";
     if (use === "command" && command) return await runEditor(sender, command, path);
@@ -115,9 +119,12 @@ async function openFile(sender: WebContents, path: string, deps: Deps): Promise<
 }
 
 /** Settings' "Open files with", read fresh so a change applies to the next click. */
-async function editorCommand(routerBaseUrl: string): Promise<string | undefined> {
+async function editorCommand(routerBaseUrl: string, token: string): Promise<string | undefined> {
   try {
-    const res = await fetch(`${routerBaseUrl}/config`, { signal: AbortSignal.timeout(CONFIG_TIMEOUT_MS) });
+    const res = await fetch(`${routerBaseUrl}/config`, {
+      headers: authHeaders(token),
+      signal: AbortSignal.timeout(CONFIG_TIMEOUT_MS),
+    });
     if (!res.ok) return undefined;
     const config = (await res.json()) as { editor_command?: unknown };
     const command = typeof config.editor_command === "string" ? config.editor_command.trim() : "";
@@ -129,8 +136,8 @@ async function editorCommand(routerBaseUrl: string): Promise<string | undefined>
 }
 
 /**
- * Whether to run `command`. The setting lives on the Router, which any
- * localhost page can write to, so a command is only ever run after the user
+ * Whether to run `command`. The setting lives on the Router, which anything
+ * holding the install token (an agent, say) can write to, so a command is only ever run after the user
  * has seen that exact string here and said yes. The answer — yes or "use
  * the default app" — is remembered per command; a different string asks again.
  */

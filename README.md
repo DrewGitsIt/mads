@@ -126,6 +126,36 @@ flowchart TB
 
 Everything runs locally. Your data lives in `~/.mads`.
 
+### Locked to you
+
+Every call into the Router and the Data Service needs your **install token**,
+a random secret in `~/.mads/local.token` that only your user can read
+([design](docs/LOCAL-FRONT-DOOR-DESIGN.md)). The desktop app adds it to its
+own requests to the Router, below the page, where page code can't read it.
+Other OS users on the machine, sandboxed apps and containers sharing the host
+network can reach the ports but not the token, so they get `401`. Anything
+running as you, agents included, can read the file: this keeps other users out,
+it doesn't contain a compromised agent. There is no cookie and no
+plain-browser access: the app is the UI.
+
+```sh
+mads api GET /sessions      # instead of curl localhost:17373/sessions
+mads token rotate           # new token; running sessions' orchestrate tools
+                            # stop until each session restarts
+mads hooks refresh          # once after upgrading: see below
+mads ps                     # live session and pipeline children
+mads api --session <id> GET /status   # talk to one child directly
+```
+
+Session and pipeline children don't open TCP ports at all: they listen on
+Unix sockets in `~/.mads/run` (mode 0700) and accept only your user.
+
+**Upgrading from a build before the token.** Restart the services (Data
+Service, then Router: `scripts/app.sh --restart` does it), then run
+`mads hooks refresh` once. Until it runs, repos with the old commit hook
+keep committing normally but stop reporting their commits to mads. mads no
+longer works in a plain browser tab; use the app.
+
 ---
 
 ## Contributing

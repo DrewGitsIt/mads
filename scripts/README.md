@@ -76,7 +76,8 @@ mads update apply -yes                     # download, verify, swap, restart, he
 ```
 
 Both subcommands talk to a running Router (`-router http://localhost:17373` by
-default). `check` proxies `POST /update/check` (`pkg/update.Check`, spec
+default), sending the install token from `$MADS_HOME/local.token` like every
+`mads` subcommand (docs/LOCAL-FRONT-DOOR-DESIGN.md). `check` proxies `POST /update/check` (`pkg/update.Check`, spec
 §14.3): it never fires on its own — no polling, no phone-home — only in
 response to this explicit command, hitting `Config.UpdateFeedURL` (empty by
 default; no release feed exists yet). `apply` fetches the manifest itself,

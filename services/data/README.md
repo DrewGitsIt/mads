@@ -21,10 +21,14 @@ Router's retro engine (`services/router`'s `job.GenerateRetro`).
 ```sh
 make run        # listens on localhost:17374 (-addr to change)
 curl localhost:17374/health
+mads api --data GET /sessions      # every other route needs the install token
 ```
 
 Data lives in `~/.mads/mads.db` by default; override with `-data-dir` or
-`MADS_DATA_DIR`. Migrations apply automatically at startup.
+`MADS_DATA_DIR`. Migrations apply automatically at startup. The install token
+lives in `$MADS_HOME/local.token` (`-mads-home`, default `~/.mads`); the
+service creates it on first start if neither it nor the Router has
+(docs/LOCAL-FRONT-DOOR-DESIGN.md).
 
 ## Test it
 
@@ -39,13 +43,30 @@ database path (503).
 
 ## API contract
 
+**Authentication (the local front door, docs/LOCAL-FRONT-DOOR-DESIGN.md D3):**
+every route except `GET /health` requires the install token as
+`Authorization: Bearer <token>`, the token being the contents of
+`$MADS_HOME/local.token` (`pkg/localauth`; `pkg/dataclient`'s `WithToken` /
+`WithTokenSource`). Without it: `401
+{"code":"unauthorized","error":"…use mads api, … local.token"}`. Refusals are
+logged with method and path, never the presented value. A token file other
+users can read, or another user owns, is refused at startup. Rotation
+(`mads token rotate`) is picked up on the next request. Session and pipeline
+children read the token from the file the Router names (`-token-file`), never from
+env, argv or a pipe (H4). Every open request (an event stream) ends when its
+credential is revoked, at once on rotation.
+`-insecure-no-auth` exists only for `go test` builds and is refused otherwise.
+
 Wire types live in `pkg/contracts` (Envelope, Task, ValidationError) with golden fixtures
 in `pkg/contracts/testdata/`. Counterparties: the Router (reads/subscribes on behalf of
 the UI) and the other services (writes via lease, event append via outbox).
 
-- `GET /health` — `{"service":"data","status":"ok","root":"/abs/checkout","started_at":"<RFC 3339>"}`;
-  503 when the db is unreachable. `root` is the cwd the service was launched from —
-  `scripts/app.sh` refuses to reuse a Data Service started from a different checkout.
+- `GET /health` — open to all, but anonymous callers get only
+  `{"service":"data","status":"ok"}`; with the token it adds
+  `"root":"/abs/checkout","started_at":"<RFC 3339>"`. 503 when the db is
+  unreachable. `root` is the cwd the service was launched from —
+  `scripts/app.sh` (which sends the token) refuses to reuse a Data Service
+  started from a different checkout.
 - `POST /events` — append a standalone event (envelope minus seq/timestamp); 201 with
   the assigned seq; 422 `ValidationError` listing every problem at once.
 - `GET /events?since=<seq>&session_id=<id>&types=task.*,note.created` — filtered,

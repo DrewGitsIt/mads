@@ -2,6 +2,8 @@ package agentenv
 
 import (
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -155,4 +157,26 @@ func sameSet(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestBuild_NeverPassesMadsTokens: whichever way a token could arrive —
+// the parent env, a passthrough name, a credential, an extra — neither
+// MADS_LOCAL_TOKEN nor MADS_ROUTER_TOKEN reaches the agent, in either mode
+// (docs/LOCAL-FRONT-DOOR-DESIGN.md D4).
+func TestBuild_NeverPassesMadsTokens(t *testing.T) {
+	parent := []string{"PATH=/bin", "MADS_LOCAL_TOKEN=local", "MADS_ROUTER_TOKEN=scoped", "HOME=/h"}
+	for _, mode := range []Mode{ModeInherit, ModeIsolated, ""} {
+		env := Build(mode, parent,
+			[]string{"MADS_LOCAL_TOKEN=as-credential", "CRED=x"},
+			[]string{"MADS_LOCAL_TOKEN", "MADS_ROUTER_TOKEN"},
+			[]string{"MADS_ROUTER_TOKEN=as-extra"})
+		for _, kv := range env {
+			if strings.HasPrefix(kv, "MADS_LOCAL_TOKEN") || strings.HasPrefix(kv, "MADS_ROUTER_TOKEN") {
+				t.Errorf("mode %q: %s reached the agent env %v", mode, kv, env)
+			}
+		}
+		if !slices.Contains(env, "PATH=/bin") || !slices.Contains(env, "CRED=x") {
+			t.Errorf("mode %q: lost an ordinary var: %v", mode, env)
+		}
+	}
 }

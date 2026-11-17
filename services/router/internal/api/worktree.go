@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/providers/fastmodel"
@@ -457,14 +458,14 @@ func callChild(ctx context.Context, addr, method, path string, body any) (int, [
 		rd = bytes.NewReader(raw)
 		ctx = context.WithoutCancel(ctx)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, "http://"+addr+path, rd)
+	req, err := http.NewRequestWithContext(ctx, method, childsock.URL(addr, path), rd)
 	if err != nil {
 		return 0, nil, err
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := childsock.Client.Do(req)
 	if err != nil {
 		return 0, nil, err
 	}

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/testleakcheck"
 )
 
@@ -42,6 +43,21 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// sockPath is a socket path for id under a short scratch $MADS_HOME.
+func sockPath(t *testing.T, id string) string {
+	t.Helper()
+	home, err := os.MkdirTemp("", "ch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	p, err := childsock.Path(home, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func TestSpawnDiscoversAddrAndTerminate(t *testing.T) {
 	type exitResult struct {
 		expected bool
@@ -52,7 +68,7 @@ func TestSpawnDiscoversAddrAndTerminate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	p, err := Spawn(ctx, "test1", []string{testChildBin}, nil, func(_ *Process, expected bool, err error) {
+	p, err := Spawn(ctx, "test1", sockPath(t, "test1"), []string{testChildBin}, nil, func(_ *Process, expected bool, err error) {
 		exitCh <- exitResult{expected, err}
 	})
 	if err != nil {
@@ -63,7 +79,10 @@ func TestSpawnDiscoversAddrAndTerminate(t *testing.T) {
 		t.Fatal("Spawn: no address discovered")
 	}
 
-	conn, err := net.DialTimeout("tcp", p.Addr, 2*time.Second)
+	if !childsock.IsSocketAddr(p.Addr) {
+		t.Fatalf("Spawn: addr %q is not a socket path", p.Addr)
+	}
+	conn, err := net.DialTimeout("unix", p.Addr, 2*time.Second)
 	if err != nil {
 		t.Fatalf("dial discovered addr %s: %v", p.Addr, err)
 	}
@@ -98,7 +117,7 @@ func TestExternalKillIsUnexpected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	p, err := Spawn(ctx, "test2", []string{testChildBin}, nil, func(_ *Process, expected bool, err error) {
+	p, err := Spawn(ctx, "test2", sockPath(t, "test2"), []string{testChildBin}, nil, func(_ *Process, expected bool, err error) {
 		exitCh <- exitResult{expected, err}
 	})
 	if err != nil {
@@ -128,7 +147,7 @@ func TestExternalKillIsUnexpected(t *testing.T) {
 }
 
 func TestSpawnEmptyArgv(t *testing.T) {
-	if _, err := Spawn(context.Background(), "empty", nil, nil, nil); err == nil {
+	if _, err := Spawn(context.Background(), "empty", sockPath(t, "empty"), nil, nil, nil); err == nil {
 		t.Fatal("Spawn with empty argv: want error, got nil")
 	}
 }
@@ -156,7 +175,7 @@ func TestTerminateKillsGrandchildProcessGroup(t *testing.T) {
 	defer cancel()
 
 	argv := []string{"sh", scriptPath, pidfilePath, testChildBin}
-	p, err := Spawn(ctx, "wrapper", argv, nil, nil)
+	p, err := Spawn(ctx, "wrapper", sockPath(t, "wrapper"), argv, nil, nil)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}

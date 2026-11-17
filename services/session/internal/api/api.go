@@ -10,6 +10,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -61,8 +63,10 @@ func New(r *runner.Runner) http.Handler {
 // process-liveness probe, not a session-readiness one. Callers that need to
 // know whether the session is ready to accept turns learn that from
 // POST /messages's 503, not from here.
+// handleHealth also names the child (id, pid) so `mads ps` can identify a
+// socket nobody tracks any more — a leftover process.
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"service": "session", "status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{"service": "session", "status": "ok", "id": s.runner.SessionID(), "pid": strconv.Itoa(os.Getpid())})
 }
 
 // handleStatus reports what only this process knows about itself — when

@@ -25,8 +25,10 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/binlocate"
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/testleakcheck"
 	"github.com/drewkidwell/mads/services/data/datatest"
 )
@@ -230,13 +232,32 @@ type bootCreateSessionResponse struct {
 	Addr    string            `json:"addr"`
 }
 
+// bootToken is the install token of the Router a test booted, read from
+// its scratch $MADS_HOME (bootReadToken); bootPostJSON sends it.
+var bootToken string
+
+func bootReadToken(t *testing.T, home string) string {
+	t.Helper()
+	tok, err := localauth.ReadToken(home)
+	if err != nil {
+		t.Fatalf("read the booted Router's install token: %v", err)
+	}
+	return tok
+}
+
 func bootPostJSON(t *testing.T, url string, body, out any) *http.Response {
 	t.Helper()
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.Post(url, "application/json", strings.NewReader(string(raw))) //nolint:gosec,noctx // test helper, url is a local process this test spawned
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(string(raw))) //nolint:noctx // test helper
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	localauth.SetBearer(req, bootToken)
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // test helper, url is a local process this test spawned
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,6 +281,9 @@ func bootPostJSON(t *testing.T, url string, body, out any) *http.Response {
 func TestDigestwatchSubscribesAtBootAndDeliversDigest(t *testing.T) {
 	tmp := t.TempDir()
 	homeDir := filepath.Join(tmp, "home")
+	// A scratch home this deep puts the children's sockets in childsock's
+	// short /tmp fallback; it goes with the test.
+	t.Cleanup(func() { _ = os.RemoveAll(childsock.Dirs(homeDir)[1]) })
 	if err := os.MkdirAll(homeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -298,6 +322,7 @@ func TestDigestwatchSubscribesAtBootAndDeliversDigest(t *testing.T) {
 	defer router.terminate(t, 5*time.Second)
 	routerURL := "http://" + router.addr
 	bootWaitHealth(t, routerURL)
+	bootToken = bootReadToken(t, homeDir)
 
 	// Boot warms model discovery for every provider. hermes must refuse
 	// under this scratch HOME (no hermes dependency install there) rather
@@ -333,6 +358,10 @@ func TestDigestwatchSubscribesAtBootAndDeliversDigest(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create monitor session: status %d", resp.StatusCode)
 	}
+	// A child's addr is its Unix socket, in this Router's $MADS_HOME (D9).
+	if p, ok := childsock.Find(homeDir, watched.Session.ID); !ok || watched.Addr != p {
+		t.Fatalf("watched session's addr %q isn't its socket under %s", watched.Addr, homeDir)
+	}
 	if watched.Session.ID == "" || watched.Addr == "" || monitor.Session.ID == "" || monitor.Addr == "" {
 		t.Fatalf("incomplete create-session responses: watched=%+v monitor=%+v", watched, monitor)
 	}
@@ -359,7 +388,7 @@ func TestDigestwatchSubscribesAtBootAndDeliversDigest(t *testing.T) {
 	}
 
 	bootEventually(t, 10*time.Second, func() bool {
-		resp, err := http.Get("http://" + monitor.Addr + "/injections") //nolint:gosec,noctx // test helper, monitor.Addr is a local process this test spawned
+		resp, err := childsock.Client.Get(childsock.URL(monitor.Addr, "/injections")) //nolint:gosec,noctx // test helper, monitor.Addr is a local process this test spawned
 		if err != nil {
 			return false
 		}

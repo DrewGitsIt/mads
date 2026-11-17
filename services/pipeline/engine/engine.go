@@ -27,6 +27,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/inhibit"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/mergedriver"
 	"github.com/drewkidwell/mads/pkg/pipelineprogress"
 	"github.com/drewkidwell/mads/pkg/procid"
@@ -286,9 +287,13 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 		if cfg.MadsHome != "" {
 			mergirafState = mergedriver.StateDir(cfg.MadsHome)
 		}
+		tokenFile := ""
+		if cfg.MadsHome != "" {
+			tokenFile = localauth.Path(cfg.MadsHome)
+		}
 		e.wt = &worktrees{
 			primary: cfg.Cwd, repo: repo, root: cfg.WorktreeRoot,
-			dataURL: cfg.DataURL, sessionID: cfg.SessionID,
+			dataURL: cfg.DataURL, tokenFile: tokenFile, sessionID: cfg.SessionID,
 			data: cfg.Data, mergirafPath: mergirafPath, mergirafState: mergirafState,
 		}
 	}

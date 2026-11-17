@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/services/data/internal/store"
 )
 
@@ -49,9 +50,27 @@ func TestHealthReportsIdentity(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	srv := httptest.NewServer(NewWithIdentity(db, Identity{
+	mux := NewWithIdentity(db, Identity{
 		Root: "/src/checkout", StartedAt: time.Date(2026, 9, 28, 10, 0, 0, 0, time.UTC),
-	}))
+	})
+	// The token's holder sees where the service runs from; anyone else
+	// sees only service and status (docs/LOCAL-FRONT-DOOR-DESIGN.md D3).
+	anon := httptest.NewServer(mux)
+	defer anon.Close()
+	aresp, err := anon.Client().Get(anon.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var abody map[string]string
+	if err := json.NewDecoder(aresp.Body).Decode(&abody); err != nil {
+		t.Fatal(err)
+	}
+	_ = aresp.Body.Close()
+	if len(abody) != 2 || abody["service"] != "data" || abody["status"] != "ok" {
+		t.Errorf("anonymous health body: %v", abody)
+	}
+
+	srv := httptest.NewServer(localauth.Insecure().Wrap(mux))
 	defer srv.Close()
 
 	resp, err := srv.Client().Get(srv.URL + "/health")

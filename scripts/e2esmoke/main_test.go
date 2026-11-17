@@ -47,8 +47,10 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/binlocate"
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/testleakcheck"
 )
 
@@ -97,7 +99,11 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-var listeningRe = regexp.MustCompile(`listening on (\S+)`)
+// listeningRe takes the address from a "listening on <addr>" line: host:port
+// for the Data Service and Router (TCP), or — for a session or pipeline
+// child — the Unix socket path, which runs to the end of the line and may
+// contain spaces (docs/LOCAL-FRONT-DOOR-DESIGN.md D9).
+var listeningRe = regexp.MustCompile(`listening on (/.*\S|\S+)`)
 
 // listeningProc is a spawned service process discovered via the codebase's
 // "listening on <addr>" stderr log-line convention (see
@@ -296,13 +302,23 @@ type createSessionResponse struct {
 // handleStartRetro) — this is the manual escape hatch for those, matching
 // this package's own doc comment on why dataclient.CreateSession can't be
 // used against the Router directly.
+// installToken is the topology's install token (docs/LOCAL-FRONT-DOOR-DESIGN.md),
+// read from its scratch $MADS_HOME once the services are up; postJSON sends it.
+var installToken string
+
 func postJSON(t *testing.T, url string, body, out any) *http.Response {
 	t.Helper()
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.Post(url, "application/json", bytes.NewReader(raw)) //nolint:gosec,noctx // test helper, url is a local process this test spawned
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(raw)) //nolint:noctx // test helper
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	localauth.SetBearer(req, installToken)
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // test helper, url is a local process this test spawned
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,6 +341,9 @@ func TestFullTopologySmoke(t *testing.T) {
 	start := time.Now()
 	tmp := t.TempDir()
 	homeDir := filepath.Join(tmp, "home")
+	// A scratch home this deep puts the children's sockets in childsock's
+	// short /tmp fallback; it goes with the test.
+	t.Cleanup(func() { _ = os.RemoveAll(childsock.Dirs(homeDir)[1]) })
 	dataDir := filepath.Join(tmp, "data")
 	workspace := filepath.Join(tmp, "workspace")
 	worktreeRoot := filepath.Join(tmp, "worktrees")
@@ -356,6 +375,11 @@ func TestFullTopologySmoke(t *testing.T) {
 	defer router.terminate(t, 5*time.Second)
 	routerURL := "http://" + router.addr
 	waitHealth(t, routerURL)
+	tok, err := localauth.ReadToken(homeDir)
+	if err != nil {
+		t.Fatalf("install token: %v", err)
+	}
+	installToken = tok
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -373,10 +397,20 @@ func TestFullTopologySmoke(t *testing.T) {
 		t.Fatalf("create session: incomplete response %+v", created)
 	}
 	sessionID := created.Session.ID
+	// The child's addr is its Unix socket, not a TCP port (D9), and it
+	// answers there.
+	if sock, ok := childsock.Find(homeDir, sessionID); !ok || created.Addr != sock {
+		t.Fatalf("create session: addr %q isn't the child's socket under %s", created.Addr, homeDir)
+	}
+	if hresp, err := childsock.Client.Get(childsock.URL(created.Addr, "/health")); err != nil {
+		t.Fatalf("session child doesn't answer on its socket: %v", err)
+	} else {
+		_ = hresp.Body.Close()
+	}
 
 	// 5. Seed two independent tasks. dataclient's other methods are
 	// bare-shaped and work fine against the Router base URL.
-	client := dataclient.New(routerURL, "e2esmoke")
+	client := dataclient.New(routerURL, "e2esmoke", dataclient.WithToken(installToken))
 	seeded, err := client.ImportTasks(ctx, []contracts.Task{
 		{SessionID: sessionID, Title: "e2e smoke task one", Source: "user"},
 		{SessionID: sessionID, Title: "e2e smoke task two", Source: "user"},

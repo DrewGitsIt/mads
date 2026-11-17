@@ -18,6 +18,9 @@ Start the Data Service and Router (built from this checkout) if they aren't
 running, then launch the Electron app. Services this script starts are
 stopped again when the app exits.
 
+First makes sure the install token exists ($MADS_HOME/local.token, default
+~/.mads; see docs/LOCAL-FRONT-DOOR-DESIGN.md): the services and the app need it.
+
 A service already answering on its port is reused only if its /health says it
 was launched from this checkout (it is not rebuilt; restart it to pick up Go
 changes). One from another checkout, or an older build that doesn't say, is
@@ -59,6 +62,24 @@ cd "$REPO_ROOT"
 
 DATA_ADDR="${MADS_DATA_ADDR:-localhost:17374}"
 ROUTER_ADDR="${MADS_ROUTER_ADDR:-localhost:17373}"
+
+# The local front door (docs/LOCAL-FRONT-DOOR-DESIGN.md D7): every Router and
+# Data Service API call needs the install token in $MADS_HOME/local.token.
+# Make sure it exists before anything starts (the services would create it
+# too, but this also covers reusing services and Electron's first read), then
+# read it for our own /health calls. `mads token ensure` refuses a token file
+# other users can read.
+MADS_HOME_DIR="${MADS_HOME:-$HOME/.mads}"
+go build -o bin/mads ./cmd/mads
+MADS_HOME="$MADS_HOME_DIR" ./bin/mads token ensure >/dev/null
+TOKEN=""
+IFS= read -r TOKEN < "$MADS_HOME_DIR/local.token" || true
+
+# curl with the token, which goes in on stdin (printf is a builtin), never in
+# an argv another user could read with ps.
+authed_curl() {
+  printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" | curl -K - "$@"
+}
 
 started=()
 cleanup() {
@@ -121,7 +142,8 @@ pid_cwd() { # <pid>
 # this checkout, else stop with what's running and how to get out of it.
 check_reuse() { # <addr> <display name> <extra stop note>
   local addr="$1" name="$2" note="$3" body root started pid where
-  body="$(curl -sf "http://$addr/health" 2>/dev/null || true)"
+  # root and started_at are only for the token's holder.
+  body="$(authed_curl -sf "http://$addr/health" 2>/dev/null || true)"
   root="$(health_field "$body" root)"
   started="$(health_field "$body" started_at)"
   [ -n "$root" ] && [ -d "$root" ] && root="$(cd "$root" && pwd -P)"
@@ -171,7 +193,7 @@ stop_listener() { # <addr> <display name>
     fi
     return 0
   fi
-  body="$(curl -sf "http://$addr/health" 2>/dev/null || true)"
+  body="$(authed_curl -sf "http://$addr/health" 2>/dev/null || true)"
   root="$(health_field "$body" root)"
   started="$(health_field "$body" started_at)"
   [ -n "$root" ] || root="$(pid_cwd "$pid")"

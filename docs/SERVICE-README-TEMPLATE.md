@@ -15,7 +15,9 @@ does NOT do (its counterparties' jobs).
 make run        # exact command, required env/flags, default port
 ```
 
-What you can poke at once it's up (e.g. `curl localhost:PORT/health`).
+What you can poke at once it's up (e.g. `mads api GET /health` for the Router,
+`mads api --session <id> GET /health` for a session or pipeline child — children listen
+on Unix sockets, `mads ps` lists them).
 
 ## Test it
 

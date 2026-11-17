@@ -72,7 +72,7 @@ beforeEach(() => {
     vi.fn(async () => ({ ok: true, json: async () => ({ editor_command: editorCommand }) })),
   );
   openPath.mockResolvedValue("");
-  registerLinkHandlers({ routerBaseUrl: "http://router.test", userDataDir: userData });
+  registerLinkHandlers({ routerBaseUrl: "http://router.test", userDataDir: userData, routerToken: () => "tok-1" });
 });
 
 afterEach(() => {
@@ -157,6 +157,14 @@ describe("links:open", () => {
       writeFileSync(join(dir, "a.ts"), "");
       editorCommand = `"/opt/My Editor/bin/ed" -g`;
       spawnSucceeds();
+    });
+
+    it("reads the setting from the Router with the install token", async () => {
+      answer("Use This Command");
+      await invoke("links:open", "a.ts", dir);
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe("http://router.test/config");
+      expect(init.headers).toEqual({ Authorization: "Bearer tok-1" });
     });
 
     it("asks once per command, then runs it without a shell, path as its own argument", async () => {

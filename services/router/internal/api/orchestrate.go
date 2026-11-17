@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/linkwrap"
@@ -322,11 +323,11 @@ func (s *server) handleOrchestrateSetAttention(w http.ResponseWriter, r *http.Re
 // proxyTo writes straight to the ResponseWriter and can't hand the Router a
 // value to inspect server-side.
 func (s *server) fetchChildJSON(ctx context.Context, addr, path string, v any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, childsock.URL(addr, path), nil)
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := childsock.Client.Do(req)
 	if err != nil {
 		return err
 	}

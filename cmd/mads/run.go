@@ -74,7 +74,7 @@ func cmdRun(args []string, out io.Writer) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	client := dataclient.New(*data, "pipeline")
+	client := dataClient(*data, "pipeline")
 
 	// An unflagged run defers to the stored config so it agrees with the
 	// UI launch path (services/pipeline/main.go reads the same field from

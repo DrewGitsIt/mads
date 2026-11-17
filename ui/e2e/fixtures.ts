@@ -1,4 +1,5 @@
 import { test as base, expect, type Page } from "@playwright/test";
+import { tokenFor } from "./lib/auth";
 
 export interface ExpectableStatusPage extends Page {
   /**
@@ -10,9 +11,19 @@ export interface ExpectableStatusPage extends Page {
   allowStatus(urlSubstring: string): void;
 }
 
-export const test = base.extend<{ routerURL: string; page: ExpectableStatusPage }>({
+export const test = base.extend<{ routerURL: string; withToken: boolean; page: ExpectableStatusPage }>({
   routerURL: async ({}, use) => {
     await use(process.env.MADS_ROUTER_URL!);
+  },
+  /**
+   * Whether the context sends the shared topology's install token on every
+   * request (extraHTTPHeaders) — what Electron's main process adds below the
+   * page (docs/LOCAL-FRONT-DOOR-DESIGN.md H7). `test.use({ withToken: false })`
+   * for a journey without it.
+   */
+  withToken: [true, { option: true }],
+  extraHTTPHeaders: async ({ routerURL, withToken }, use) => {
+    await use(withToken ? { Authorization: `Bearer ${tokenFor(routerURL)}` } : {});
   },
   page: async ({ page }, use) => {
     const consoleErrors: string[] = [];

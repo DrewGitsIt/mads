@@ -240,4 +240,13 @@ const links = {
     ipcRenderer.invoke("links:describe", hrefs, baseDir),
 };
 
-contextBridge.exposeInMainWorld("mads", { badge, dialog, contextMenu, clipboard, links, shell: shellBridge });
+/**
+ * Where main reads the install token, and why it couldn't — for the 401
+ * screen (docs/LOCAL-FRONT-DOOR-DESIGN.md H7). Never the token itself:
+ * main adds it to the Router's requests below the page.
+ */
+const auth = {
+  tokenPath: (): Promise<{ path: string; problem?: string }> => ipcRenderer.invoke("auth:token-path"),
+};
+
+contextBridge.exposeInMainWorld("mads", { badge, dialog, contextMenu, clipboard, links, shell: shellBridge, auth });

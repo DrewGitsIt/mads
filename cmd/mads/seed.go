@@ -15,7 +15,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
-	"github.com/drewkidwell/mads/pkg/dataclient"
 )
 
 // seedFile is the task-graph format for `mads seed`: work items with
@@ -103,7 +102,7 @@ func cmdSeed(args []string) error {
 	if err != nil {
 		return err
 	}
-	imported, err := dataclient.New(*data, "user").ImportTasks(context.Background(), batch)
+	imported, err := dataClient(*data, "user").ImportTasks(context.Background(), batch)
 	if err != nil {
 		return err
 	}
@@ -132,7 +131,7 @@ func cmdNewSession(args []string) error {
 	// here is exactly the class of mistake the UI chip guards against, so
 	// the CLI checks it explicitly rather than surfacing as 404-at-spawn.
 	if *agent != "" && *agent != "auto" {
-		agents, aerr := dataclient.New(*data, "user").Agents(context.Background())
+		agents, aerr := dataClient(*data, "user").Agents(context.Background())
 		if aerr != nil {
 			return fmt.Errorf("new-session: list personas: %w", aerr)
 		}
@@ -154,7 +153,7 @@ func cmdNewSession(args []string) error {
 		Model:     *model,
 		Agent:     *agent,
 	}
-	if err := dataclient.New(*data, "user").CreateSession(context.Background(), &sess); err != nil {
+	if err := dataClient(*data, "user").CreateSession(context.Background(), &sess); err != nil {
 		return err
 	}
 	fmt.Println(sess.ID)
@@ -180,7 +179,8 @@ func cmdProviders(args []string) error {
 	router := fs.String("router", "http://localhost:17373", "Router URL")
 	name := fs.String("name", "", "list models for one provider (empty = all providers)")
 	_ = fs.Parse(args)
-	body, err := http.Get(*router + "/providers")
+	client := routerClient()
+	body, err := client.Get(*router + "/providers")
 	if err != nil {
 		return fmt.Errorf("providers: %w", err)
 	}
@@ -206,7 +206,7 @@ func cmdProviders(args []string) error {
 			continue
 		}
 		// One provider: list its models through the router's discovery.
-		mbody, err := http.Get(fmt.Sprintf("%s/providers/%s/models", *router, p.Name))
+		mbody, err := client.Get(fmt.Sprintf("%s/providers/%s/models", *router, p.Name))
 		if err != nil {
 			return fmt.Errorf("providers: %w", err)
 		}
@@ -271,7 +271,7 @@ func cmdTasks(args []string) error {
 	if *session == "" {
 		return fmt.Errorf("tasks: -session is required")
 	}
-	tasks, err := dataclient.New(*data, "user").Tasks(context.Background(), *session, "")
+	tasks, err := dataClient(*data, "user").Tasks(context.Background(), *session, "")
 	if err != nil {
 		return err
 	}

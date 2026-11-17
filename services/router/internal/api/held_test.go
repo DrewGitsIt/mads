@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/services/data/datatest"
@@ -92,7 +93,7 @@ func (rig heldRig) injections(t *testing.T) []contracts.InjectRequest {
 	if !ok {
 		t.Fatal("no child")
 	}
-	resp, err := http.Get("http://" + addr + "/injections")
+	resp, err := childsock.Client.Get(childsock.URL(addr, "/injections"))
 	if err != nil {
 		t.Fatal(err)
 	}
