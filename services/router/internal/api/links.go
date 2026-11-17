@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/linkwrap"
 	"github.com/drewkidwell/mads/pkg/madsbin"
@@ -40,12 +41,12 @@ func (s *server) notifyOrchestrateRefresh(sessionID string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), orchestrateRefreshTimeout)
 		defer cancel()
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/orchestrate/refresh", nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, childsock.URL(addr, "/orchestrate/refresh"), nil)
 		if err != nil {
 			log.Printf("router: build orchestrate refresh request for %s: %v", sessionID, err)
 			return
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := childsock.Client.Do(req)
 		if err != nil {
 			log.Printf("router: notify orchestrate refresh for %s: %v", sessionID, err)
 			return
@@ -133,12 +134,12 @@ func postInject(ctx context.Context, addr string, req contracts.InjectRequest) e
 	if err != nil {
 		return err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/inject", bytes.NewReader(raw))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, childsock.URL(addr, "/inject"), bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := childsock.Client.Do(httpReq)
 	if err != nil {
 		return err
 	}

@@ -4,16 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/testleakcheck"
 	"github.com/drewkidwell/mads/providers/fake"
@@ -88,7 +89,7 @@ func newCredStore(t *testing.T, creds map[string]string) *credstore.Store {
 // observe a separately-spawned process's env from a test.
 func envPresent(t *testing.T, addr, name string) bool {
 	t.Helper()
-	resp, err := http.Get(fmt.Sprintf("http://%s/env?name=%s", addr, name))
+	resp, err := childsock.Client.Get(childsock.URL(addr, "/env?name="+name))
 	if err != nil {
 		t.Fatalf("GET /env?name=%s: %v", name, err)
 	}
@@ -1150,5 +1151,61 @@ func TestCredentialBindingChangeAffectsOnlyNextSpawn(t *testing.T) {
 	}
 	if envPresent(t, secondAddr, "CRED_B") {
 		t.Error("second session has CRED_B, want absent (not bound after switch)")
+	}
+}
+
+// TestSpawnSessionHandsOverTokensAndRevokesOnExit: a session child gets a
+// fresh session-scoped token in its env (docs/LOCAL-FRONT-DOOR-DESIGN.md
+// D4) and never the install token (H4: it reads the file it's pointed at
+// with -token-file), and the scoped token dies with the child — whether the session ends or is deleted — while a respawn gets a
+// new one.
+func TestSpawnSessionHandsOverTokensAndRevokesOnExit(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := newSupervisor(t, data, nil)
+	scoped := localauth.NewRegistry()
+	sup.SetTokenFile("/nonexistent/local.token")
+	sup.SetScopedTokens(scoped)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	addr, err := sup.SpawnSession(ctx, "ses_tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !envPresent(t, addr, localauth.EnvRouterToken) {
+		t.Errorf("%s not in the spawned child's env", localauth.EnvRouterToken)
+	}
+	if envPresent(t, addr, localauth.EnvLocalToken) {
+		t.Errorf("the install token was handed over in %s", localauth.EnvLocalToken)
+	}
+	if scoped.Len() != 1 {
+		t.Fatalf("%d scoped tokens live, want 1", scoped.Len())
+	}
+	if err := sup.TerminateSession(ctx, "ses_tok"); err != nil {
+		t.Fatal(err)
+	}
+	if scoped.Len() != 0 {
+		t.Fatalf("%d scoped tokens live after the session ended, want 0", scoped.Len())
+	}
+	if _, err := sup.SpawnSession(ctx, "ses_tok"); err != nil {
+		t.Fatal(err)
+	}
+	if scoped.Len() != 1 {
+		t.Fatalf("respawn: %d scoped tokens, want 1", scoped.Len())
+	}
+	if err := sup.TerminateSessionForDelete(ctx, "ses_tok"); err != nil {
+		t.Fatal(err)
+	}
+	if scoped.Len() != 0 {
+		t.Fatalf("%d scoped tokens live after delete, want 0", scoped.Len())
+	}
+	// Pipelines get no token in env at all.
+	paddr, err := sup.SpawnPipeline(ctx, "run_tok", "ses_tok", "tpl", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envPresent(t, paddr, localauth.EnvLocalToken) || envPresent(t, paddr, localauth.EnvRouterToken) {
+		t.Error("pipeline child: want no token in its env")
 	}
 }

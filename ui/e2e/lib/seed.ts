@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { apiFetch } from "./auth";
 
 export interface SeedSession {
   id: string;
@@ -18,7 +19,7 @@ export async function createSession(
     trust?: "full" | "auto_review" | "limited" | "read_only";
   },
 ): Promise<SeedSession> {
-  const res = await fetch(`${routerURL}/sessions`, {
+  const res = await apiFetch(`${routerURL}/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -48,7 +49,7 @@ export async function createSessionNoSpawn(
   dataURL: string,
   body: { name: string; provider: string; workspace?: string; cwd?: string },
 ): Promise<{ id: string; name: string }> {
-  const res = await fetch(`${dataURL}/sessions`, {
+  const res = await apiFetch(`${dataURL}/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     // activity: "inactive" mirrors the steady state a real never-spawned
@@ -77,7 +78,7 @@ export async function renameSession(
   sessionID: string,
   name: string,
 ): Promise<void> {
-  const res = await fetch(`${routerURL}/sessions/${sessionID}/rename`, {
+  const res = await apiFetch(`${routerURL}/sessions/${sessionID}/rename`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
@@ -90,7 +91,7 @@ export async function importTasks(
   sessionID: string,
   titles: string[],
 ): Promise<{ id: string; title: string }[]> {
-  const res = await fetch(`${routerURL}/tasks/import`, {
+  const res = await apiFetch(`${routerURL}/tasks/import`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -108,10 +109,10 @@ export async function linkDependency(
   taskId: string,
   dependsOnId: string,
 ): Promise<void> {
-  const getRes = await fetch(`${routerURL}/tasks/${taskId}`);
+  const getRes = await apiFetch(`${routerURL}/tasks/${taskId}`);
   if (!getRes.ok) throw new Error(`getTask: status ${getRes.status}`);
   const task = await getRes.json();
-  const putRes = await fetch(`${routerURL}/tasks/${taskId}`, {
+  const putRes = await apiFetch(`${routerURL}/tasks/${taskId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...task, dependencies: [...(task.dependencies ?? []), dependsOnId] }),
@@ -131,7 +132,7 @@ export async function recordFileChange(
   sessionID: string,
   path: string,
 ): Promise<void> {
-  const res = await fetch(`${dataURL}/sessions/${sessionID}/files`, {
+  const res = await apiFetch(`${dataURL}/sessions/${sessionID}/files`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Mads-Actor": "e2e" },
     body: JSON.stringify({ session_id: sessionID, path, change: "added", origin: "tool_use" }),
@@ -160,7 +161,7 @@ export async function recordRealCommit(
   run(["add", "-A"]);
   run(["-c", "user.email=e2e@smoke.test", "-c", "user.name=e2esmoke", "commit", "-q", "-m", opts.message]);
   const hash = run(["rev-parse", "HEAD"]).toString().trim();
-  const res = await fetch(`${dataURL}/sessions/${sessionID}/commits`, {
+  const res = await apiFetch(`${dataURL}/sessions/${sessionID}/commits`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Mads-Actor": "e2e" },
     body: JSON.stringify({
@@ -184,7 +185,7 @@ export async function createWorkspace(
   routerURL: string,
   body: { name: string; repos?: WorkspaceRepo[]; defaults?: Record<string, string> },
 ): Promise<{ id: string; name: string }> {
-  const res = await fetch(`${routerURL}/workspaces`, {
+  const res = await apiFetch(`${routerURL}/workspaces`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...body, defaults: body.defaults ?? {} }),
@@ -198,11 +199,11 @@ export async function setConfig(
   routerURL: string,
   patch: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const getRes = await fetch(`${routerURL}/config`);
+  const getRes = await apiFetch(`${routerURL}/config`);
   if (!getRes.ok) throw new Error(`getConfig: status ${getRes.status}`);
   const current = (await getRes.json()) as Record<string, unknown>;
   const merged = { ...current, ...patch };
-  const putRes = await fetch(`${routerURL}/config`, {
+  const putRes = await apiFetch(`${routerURL}/config`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(merged),
@@ -260,7 +261,7 @@ export function runFakePipeline(opts: {
 
 /** POST /retros — kicks off async DPA generation against fastModelFixture. */
 export async function startRetro(routerURL: string, sessionIds: string[]): Promise<string> {
-  const res = await fetch(`${routerURL}/retros`, {
+  const res = await apiFetch(`${routerURL}/retros`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_ids: sessionIds }),
@@ -294,7 +295,7 @@ export async function pollRetro(
 ): Promise<SeedRetro> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const res = await fetch(`${routerURL}/retros/${retroId}`);
+    const res = await apiFetch(`${routerURL}/retros/${retroId}`);
     if (res.ok) return (await res.json()) as SeedRetro;
     await new Promise((r) => setTimeout(r, 200));
   }
@@ -313,7 +314,7 @@ export async function sendChatMessage(
   sessionID: string,
   text: string,
 ): Promise<void> {
-  const res = await fetch(`${routerURL}/sessions/${sessionID}/messages`, {
+  const res = await apiFetch(`${routerURL}/sessions/${sessionID}/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
@@ -327,7 +328,7 @@ export async function injectLinkMessage(
   linkID: string,
   text: string,
 ): Promise<void> {
-  const res = await fetch(`${routerURL}/links/${linkID}/inject`, {
+  const res = await apiFetch(`${routerURL}/links/${linkID}/inject`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
@@ -350,7 +351,7 @@ export async function pollTranscriptContains(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const res = await fetch(`${routerURL}/sessions/${sessionID}/transcript`);
+    const res = await apiFetch(`${routerURL}/sessions/${sessionID}/transcript`);
     if (res.ok) {
       const messages = (await res.json()) as { text?: string }[];
       if (messages.some((m) => m.text?.includes(textSubstring))) return;
@@ -374,7 +375,7 @@ export async function pollEventOfType(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const res = await fetch(`${routerURL}/events?session_id=${sessionId}&types=${eventType}`);
+    const res = await apiFetch(`${routerURL}/events?session_id=${sessionId}&types=${eventType}`);
     if (res.ok) {
       const events = (await res.json()) as { type: string }[];
       if (events.some((e) => e.type === eventType)) return;
@@ -398,7 +399,7 @@ export async function pollStageStarted(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const res = await fetch(`${routerURL}/events?session_id=${sessionId}&types=stage.started`);
+    const res = await apiFetch(`${routerURL}/events?session_id=${sessionId}&types=stage.started`);
     if (res.ok) {
       const events = (await res.json()) as { type: string; payload?: { stage?: string } }[];
       if (events.some((e) => e.type === "stage.started" && e.payload?.stage === stage)) return;
@@ -413,7 +414,7 @@ export async function createTask(
   routerURL: string,
   body: { session_id: string; title: string; draft?: boolean; dependencies?: string[] },
 ): Promise<{ id: string; title: string }> {
-  const res = await fetch(`${routerURL}/tasks`, {
+  const res = await apiFetch(`${routerURL}/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source: "user", ...body }),
@@ -427,7 +428,7 @@ export async function createTemplate(
   routerURL: string,
   body: { name: string; description?: string; source: string },
 ): Promise<{ id: string; name: string }> {
-  const res = await fetch(`${routerURL}/templates`, {
+  const res = await apiFetch(`${routerURL}/templates`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

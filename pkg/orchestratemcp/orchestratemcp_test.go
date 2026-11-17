@@ -24,7 +24,7 @@ func runLinesMode(t *testing.T, router *httptest.Server, sessionID string, readO
 	t.Helper()
 	in := strings.NewReader(strings.Join(reqLines, "\n") + "\n")
 	var out bytes.Buffer
-	srv := New(router.URL, sessionID, readOnly, in, &out)
+	srv := New(router.URL, sessionID, "mads_s_test-token", readOnly, in, &out)
 	if err := srv.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -270,12 +270,13 @@ func TestToolsCallCheckMailbox(t *testing.T) {
 // `session`, the session ID, grants, activity, cadence, turns (asked for
 // with ?turns=1) — and no link ID.
 func TestToolsCallListLinkedSessions(t *testing.T) {
-	var gotActor string
+	var gotActor, gotAuth string
 	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/sessions/leader-1/orchestrate/subjects" || r.URL.RawQuery != "turns=1" {
 			t.Fatalf("router saw %s %s", r.Method, r.URL)
 		}
 		gotActor = r.Header.Get("X-Mads-Actor")
+		gotAuth = r.Header.Get("Authorization")
 		_, _ = w.Write([]byte(strings.Replace(defaultSubjects, `"cadence":"on_signal"`, `"cadence":"on_signal","turns":42`, 1)))
 	}))
 	defer router.Close()
@@ -285,6 +286,10 @@ func TestToolsCallListLinkedSessions(t *testing.T) {
 	)
 	if gotActor != "session-leader-1" {
 		t.Fatalf("X-Mads-Actor = %q, want session-leader-1", gotActor)
+	}
+	// The session-scoped token rides every call (docs/LOCAL-FRONT-DOOR-DESIGN.md D4).
+	if gotAuth != "Bearer mads_s_test-token" {
+		t.Fatalf("Authorization = %q, want the scoped bearer", gotAuth)
 	}
 	text, isErr := resultText(t, resps[0])
 	if isErr {

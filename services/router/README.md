@@ -27,7 +27,8 @@ tasks.
 
 ```sh
 make run        # listens on localhost:17373 (-addr to change)
-curl localhost:17373/health
+curl localhost:17373/health        # open: service and status only
+mads api GET /sessions             # every API route needs the install token
 ```
 
 Flags: `-data-url` (default `http://localhost:17374`) points at the Data Service;
@@ -47,7 +48,7 @@ make test       # -race always
 ```
 
 `internal/child` and `internal/supervisor` spawn a real OS process — a throwaway
-`internal/testchild` binary that follows the same `-addr`/"listening on `<addr>`"
+`internal/testchild` binary that follows the same `-socket`/"listening on `<addr>`"
 readiness contract as the real services, built once in `TestMain` — and kill it directly
 (bypassing `Terminate`) to prove supervision, not just the code path a graceful shutdown
 would take. `internal/api` runs the full HTTP surface against a real Data Service via
@@ -66,11 +67,68 @@ Wire types live in `pkg/contracts`. Counterparties: the UI (HTTP, and eventually
 the Data Service (via `pkg/dataclient`); children (Session/Pipeline) are spawned processes,
 never called peer-to-peer.
 
-- `GET /health` — `{"service":"router","status":"ok","root":"/abs/checkout","ui_dist":"/abs/checkout/ui/dist","started_at":"<RFC 3339>"}`.
+### Children on Unix sockets (docs/LOCAL-FRONT-DOOR-DESIGN.md D9)
+
+The Supervisor spawns every session and pipeline child with `-socket
+$MADS_HOME/run/<id>.sock` (`run/` is 0700, the socket 0600; `pkg/childsock`). When that
+path is over the OS limit (104 bytes on macOS, 108 on Linux, less the NUL) it uses
+`/tmp/mads-<uid>-<hash of $MADS_HOME>/<id>.sock` instead (0700, refused if it's a
+symlink or another user's), and a path that still won't fit is a clear error. A child
+spawned this way opens no TCP port, and on every connection it accepts checks the peer is
+its own uid (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` — what `getpeereid(3)` reads — on
+macOS), closing anything else. The Router reaches children through
+`childsock.Transport`, which dials the socket behind `childsock.URL(addr, path)`;
+`proxyTo` (SSE and upgrades included) and `forwardToChild` use it. To poke a child by
+hand: `mads ps` lists them (id, pid, socket, state, uptime — including orphans a dead
+Router left), and `mads api --session <id> GET /status` talks to one.
+
+### The local front door (docs/LOCAL-FRONT-DOOR-DESIGN.md)
+
+Every API route needs the **install token** — the contents of `$MADS_HOME/local.token`
+(`-mads-home`, default `~/.mads`; created 0600 by whichever of the Router and Data
+Service starts first, `pkg/localauth`) — presented as `Authorization: Bearer <token>`
+(programs: `pkg/dataclient`, the `mads` CLI, `mads api`; and the app, whose Electron
+main process adds the header to the window's requests to the Router's origin with
+`webRequest`, below the page — H7). The bearer is the only way a credential is
+presented: there is no cookie, no sign-in route and no plain-browser access. Two
+credential kinds exist: the install token and session-scoped tokens. `internal/api/frontdoor.go` holds the tables;
+`localauth.Door` sits inside localguard and classifies each request with the mux's own
+pattern lookup.
+
+- **Exempt:** the static UI (`/`), `GET /health` (anonymous callers get only
+  `service`/`status`).
+- **Refusal:** `401 {"code":"unauthorized","error":"…use mads api, … local.token"}`,
+  logged with method and path, never the presented value.
+- **Session-scoped tokens (D4, H4):** each Session Service child is spawned with
+  `-token-file <path>` — it reads the install token itself and follows rotations; the
+  token is never in a child's env, argv or a pipe — and `MADS_ROUTER_TOKEN` (minted per
+  spawn, held in memory) in its env. The child removes that from its own environment
+  and hands it only to the orchestrate MCP server. A scoped
+  token reaches only `api.ScopedRoutes` — `GET/POST /sessions/{own id}/orchestrate/*` and
+  `POST /links/{id}/orchestrate/message` for a link its session granted — anything else is
+  `403 {"code":"forbidden"}`. The Router sets `X-Mads-Actor: session-<id>` from the token,
+  ignoring the caller's. Scoped tokens are revoked when the child exits (session end or
+  delete), on rotation, and by a Router restart.
+- **Rotation:** `mads token rotate` rewrites the file; the next request re-reads it, which
+  revokes every scoped token. Install-token users
+  (the services, the CLI, children through their token file) carry on; **running
+  sessions' orchestrate tools stop until each session restarts** (H6: the scoped tokens
+  aren't re-issued), and `mads token rotate` says so. The Router's background watchers
+  (digest, merge, signal, synthesis) resubscribe to the Data Service from their last seq
+  when a rotation ends their stream.
+- **Open streams end with their credential:** every authenticated request is watched;
+  a rotation cancels them all at once (only those whose credential it killed), and a
+  revoked scoped token ends its streams within a second (`localauth.Door`).
+- **Children never see credentials:** `proxyTo` strips `Cookie` and `Authorization` (and
+  the browser's `Origin`/`Sec-Fetch-*`) before a request goes to a child.
+- `-insecure-no-auth` exists only for `go test` builds; a real binary refuses it.
+
+- `GET /health` — open; anonymous: `{"service":"router","status":"ok"}`. With the
+  install token: `{"service":"router","status":"ok","root":"/abs/checkout","ui_dist":"/abs/checkout/ui/dist","started_at":"<RFC 3339>"}`.
   `root` is the cwd the Router was launched from and `ui_dist` the absolute `-ui-dist` it
-  serves; `scripts/app.sh` reads them to refuse reusing a Router started from a different
-  checkout (it would serve that checkout's UI and backend). Builds before these fields
-  existed report only `service`/`status`.
+  serves; `scripts/app.sh` (sending the token) reads them to refuse reusing a Router
+  started from a different checkout (it would serve that checkout's UI and backend).
+  Builds before these fields existed report only `service`/`status`.
 - `GET /version` — `{"version": "..."}`, the linker-set build version (`-ldflags
   -X main.version=...`, `"dev"` in local builds). `cmd/mads update apply`'s health check
   after a binary swap calls the *binary* directly (`mads --version`), not this route — this
@@ -87,8 +145,13 @@ never called peer-to-peer.
   space, registered provider binaries + versions against `pkg/preflight`'s compatibility
   matrix), each with `{name, healthy, detail?, fix_hint?}` (spec §14.8-9); no request body,
   always 200 unless the checker itself errors (never does, today).
+- `GET /children` — the live session and pipeline children this Router supervises:
+  `[{"id","kind":"session"|"pipeline","session_id","pid","socket","started_at"}]`. What
+  `mads ps` reads.
 - `POST /sessions` — create a session (proxies `dataclient.CreateSession`) and spawn its
-  Session Service child; 201 with `{"session": ..., "addr": ...}`. On spawn failure, the
+  Session Service child; 201 with `{"session": ..., "addr": ...}`. `addr` (here and on
+  bounce, resume, retros and pipelines) is the child's Unix socket path — see "Children
+  on Unix sockets" below. On spawn failure, the
   session record is rolled back (best-effort delete) so a failed create doesn't leave an
   orphaned record with nothing backing it. Before either step, an empty
   provider/model/agent/isolation/trust is resolved (spec §10's inheritance chain: session
@@ -284,7 +347,10 @@ localhost-only CORS policy — no flag/env to toggle it off:
   never a wildcard.
 - Non-localhost origins get zero CORS headers.
 - Allowed methods: `GET, POST, PUT, DELETE` (plus `OPTIONS` for preflight).
-  Allowed headers: `Content-Type`, `X-Mads-Actor`.
+  Allowed headers: `Content-Type`, `X-Mads-Actor`. A cross-origin page sends no
+  credential, so behind the front door it only ever gets `401`s: UI development
+  goes through the Vite dev server's same-origin proxy instead (`ui/vite.config.ts`),
+  which adds the bearer.
 - `OPTIONS` is answered directly by the middleware (204, no body) for every
   request, matching origin or not — the mux has no route registered for it.
 - `GET /events` (SSE) works cross-origin the same way: the middleware sets

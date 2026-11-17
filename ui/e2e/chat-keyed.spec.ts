@@ -16,6 +16,7 @@ import {
   SWITCH_PROMPTS,
   SWITCH_WORDS,
 } from "./lib/sessionScenario";
+import { apiFetch } from "./lib/auth";
 
 /**
  * The keyed chat pane (docs/CHAT-STREAM-DESIGN.md, "Test plan"): the
@@ -319,7 +320,7 @@ test.describe("keyed chat pane", () => {
     await setConfig(routerURL, { feature_flags: { linked_sessions: true } });
     const leader = await newSession(routerURL, "dup leader");
     const subject = await openNewSession(page, routerURL, "dup");
-    const linkRes = await fetch(`${routerURL}/links`, {
+    const linkRes = await apiFetch(`${routerURL}/links`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -339,7 +340,7 @@ test.describe("keyed chat pane", () => {
     const tools = conversation(page).getByTestId("activity-row").filter({ hasText: DUP_TOOL });
     await expect(tools).toHaveCount(1, { timeout: 15_000 });
     // The pre-tool text is stored, and a transcript read settles it (§5).
-    const stored = await fetch(`${routerURL}/sessions/${subject.id}/transcript?v=2`).then((r) => r.text());
+    const stored = await apiFetch(`${routerURL}/sessions/${subject.id}/transcript?v=2`).then((r) => r.text());
     expect(stored).toContain(pre);
 
     await reattach(page, subject.id);

@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -19,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 )
 
@@ -41,16 +41,18 @@ var (
 )
 
 func main() {
-	addr := flag.String("addr", "localhost:0", "listen address")
+	addr := flag.String("addr", "localhost:0", "TCP listen address, for running by hand (ignored with -socket)")
+	socket := flag.String("socket", "", "Unix socket to listen on — what the Router's Supervisor passes")
 	_ = flag.String("session-id", "", "ignored — matches the real session service's argv shape")
 	_ = flag.String("router-url", "", "ignored — matches the real session service's argv shape")
 	_ = flag.String("data-url", "", "ignored — matches the real session/pipeline service's argv shape")
 	_ = flag.String("run-id", "", "ignored — matches the real pipeline service's argv shape")
 	_ = flag.String("template", "", "ignored — matches the real pipeline service's argv shape")
+	_ = flag.String("token-file", "", "ignored — matches the real services' argv shape")
 	_ = flag.String("exclude-task-ids", "", "ignored — matches the real pipeline service's argv shape")
 	flag.Parse()
 
-	ln, err := net.Listen("tcp", *addr)
+	ln, err := childsock.ListenChild("testchild", *socket, *addr)
 	if err != nil {
 		log.Fatalf("testchild: listen %s: %v", *addr, err)
 	}

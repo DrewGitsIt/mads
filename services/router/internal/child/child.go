@@ -1,9 +1,10 @@
-// Package child spawns and supervises one OS child process, discovering its
-// listen address from its own "listening on <addr>" log line (the log-line
-// convention all four mads services already follow via the stdlib log
-// package to stderr). This is a soft contract, not a shared interface: if a
-// future service changes its log wording, spawning breaks silently with a
-// readyTimeout, not a compile error.
+// Package child spawns and supervises one OS child process. The child
+// listens on the Unix socket Spawn hands it (-socket, docs/
+// LOCAL-FRONT-DOOR-DESIGN.md D9) — never a TCP port — and its "listening on
+// <addr>" log line (the convention every mads service follows via the
+// stdlib log package to stderr) is the readiness signal. This is a soft
+// contract, not a shared interface: if a future service changes its log
+// wording, spawning breaks silently with a readyTimeout, not a compile error.
 package child
 
 import (
@@ -43,7 +44,9 @@ func killGroup(pid int, sig syscall.Signal) error {
 type Process struct {
 	ID   string // caller-assigned identity; also the lease "holder" string
 	Cmd  *exec.Cmd
-	Addr string // discovered from the "listening on <addr>" log line
+	Addr string // the Unix socket path the child listens on (pkg/childsock)
+	// StartedAt is when Spawn started the process.
+	StartedAt time.Time
 
 	expected atomic.Bool
 	done     chan struct{}
@@ -51,20 +54,23 @@ type Process struct {
 }
 
 // Spawn starts argv (argv[0] is the binary/command, e.g. "go"; the rest are
-// its args), always appending "-addr" "localhost:0", waits up to
-// readyTimeout for the child to log its listening address, and returns once
-// discovered (or errors and kills the child on timeout/early exit). onExit
+// its args), always appending "-socket" socket — so the child listens on
+// that Unix socket and opens no TCP port — waits up to readyTimeout for the
+// child to log that it is listening, and returns once it has (or errors and kills the child on timeout/early exit). onExit
 // is invoked exactly once from a background goroutine after the process
 // exits, with whether the exit was expected (Terminate was called) or not,
 // and the exit error (nil for a clean exit). env, if non-nil, is appended on
 // top of this process's own environment (os.Environ()) — additive, not a
 // replacement, so the child still inherits PATH etc. A nil/empty env is the
 // pre-existing full-inheritance behavior.
-func Spawn(ctx context.Context, id string, argv []string, env []string, onExit func(p *Process, expected bool, err error)) (*Process, error) {
+func Spawn(ctx context.Context, id, socket string, argv []string, env []string, onExit func(p *Process, expected bool, err error)) (*Process, error) {
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("child: empty argv")
 	}
-	full := append(append([]string{}, argv...), "-addr", "localhost:0")
+	if socket == "" {
+		return nil, fmt.Errorf("child %s: no socket path", id)
+	}
+	full := append(append([]string{}, argv...), "-socket", socket)
 	cmd := exec.Command(full[0], full[1:]...) //nolint:gosec // argv is operator-configured, not user input
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
@@ -83,7 +89,7 @@ func Spawn(ctx context.Context, id string, argv []string, env []string, onExit f
 		return nil, fmt.Errorf("child %s: start %v: %w", id, full, err)
 	}
 
-	p := &Process{ID: id, Cmd: cmd, done: make(chan struct{})}
+	p := &Process{ID: id, Cmd: cmd, StartedAt: time.Now(), done: make(chan struct{})}
 
 	readyCh := make(chan string, 1)
 	var readySent atomic.Bool
@@ -108,6 +114,11 @@ func Spawn(ctx context.Context, id string, argv []string, env []string, onExit f
 	go func() {
 		waitErr := cmd.Wait()
 		p.exitErr = waitErr
+		// The socket goes with the process (before onExit, so a respawn
+		// under the same id never finds — or loses — a file of the old one).
+		if fi, err := os.Lstat(socket); err == nil && fi.Mode()&os.ModeSocket != 0 {
+			_ = os.Remove(socket)
+		}
 		expected := p.expected.Load()
 		// Run onExit (and let it finish, e.g. its lease ReleaseAll) before
 		// closing done: Terminate callers — notably Bounce, which respawns
@@ -123,8 +134,8 @@ func Spawn(ctx context.Context, id string, argv []string, env []string, onExit f
 	}()
 
 	select {
-	case addr := <-readyCh:
-		p.Addr = addr
+	case <-readyCh:
+		p.Addr = socket
 		return p, nil
 	case <-exitedCh:
 		return nil, fmt.Errorf("child %s: exited before ready: %w", id, p.exitErr)

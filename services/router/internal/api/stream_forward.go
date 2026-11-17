@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+
+	"github.com/drewkidwell/mads/pkg/childsock"
 )
 
 // handleSessionOutput and handlePipelineOutput forward the UI's data-plane
@@ -252,15 +254,20 @@ func (s *server) handleSessionResolvePermission(w http.ResponseWriter, r *http.R
 // and /interrupt forwarders (httputil.ReverseProxy handles both request
 // shapes identically; it isn't SSE-specific).
 func (s *server) proxyTo(w http.ResponseWriter, r *http.Request, addr, childPath string) {
-	target := &url.URL{Scheme: "http", Host: addr}
+	// addr is the child's Unix socket (docs/LOCAL-FRONT-DOOR-DESIGN.md D9);
+	// childsock's Transport dials it. SSE and upgrades pass as before.
+	target := &url.URL{Scheme: "http", Host: childsock.Host(addr)}
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Transport = childsock.Transport
 	r2 := r.Clone(r.Context())
 	r2.URL.Path = childPath
 	r2.URL.RawPath = ""
 	// The browser's own headers stop here: localguard has already checked
 	// them at the Router's door, and a child accepts no browser origin at
 	// all — passing them on would refuse the app's own messages.
-	for _, h := range []string{"Origin", "Referer", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User"} {
+	// Nor do credentials: a child is reached over its own socket and never
+	// needs a cookie or a bearer from the page.
+	for _, h := range []string{"Origin", "Referer", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User", "Cookie", "Authorization"} {
 		r2.Header.Del(h)
 	}
 	proxy.ServeHTTP(w, r2)
@@ -278,13 +285,13 @@ func (s *server) postJSONToChild(w http.ResponseWriter, r *http.Request, addr, p
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, "http://"+addr+path, bytes.NewReader(raw))
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, childsock.URL(addr, path), bytes.NewReader(raw))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := childsock.Client.Do(req)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return

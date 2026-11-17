@@ -137,6 +137,34 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByLabelText("Settings")).toBeTruthy());
   });
 
+  // docs/LOCAL-FRONT-DOOR-DESIGN.md H7: a window whose requests carry no
+  // valid token gets 401 and must say so truthfully — mads couldn't use its
+  // token file — not that the backend is down.
+  it("shows the can't-reach-its-token screen on a 401, and Retry refetches", async () => {
+    let signedIn = false;
+    const fetchMock = vi.fn().mockImplementation((input: URL | string) => {
+      const path = new URL(input.toString()).pathname;
+      if (path === "/config" && !signedIn) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ code: "unauthorized", error: "no token" }), { status: 401 }),
+        );
+      }
+      const body = path === "/config" ? fixtureConfig : [];
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("mads can't reach its token")).toBeTruthy());
+    expect(screen.getByText("$MADS_HOME/local.token")).toBeTruthy();
+    expect(screen.getByText(/Restart the app/)).toBeTruthy();
+    expect(screen.queryByText(/mads open/)).toBeNull();
+    expect(screen.queryByText(/Can.t reach the mads backend/i)).toBeNull();
+
+    signedIn = true;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.getByLabelText("Settings")).toBeTruthy());
+  });
+
   it("a surface crash renders the error boundary while the rail stays usable", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     stubRouterFetch();

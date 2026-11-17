@@ -42,6 +42,9 @@ type Client struct {
 	base  string
 	actor string
 	http  *http.Client
+	// token is the install token's source (docs/LOCAL-FRONT-DOOR-DESIGN.md
+	// D1/D5), sent as a bearer on every request; nil sends none.
+	token func() string
 
 	// mu guards held: the leases this client claimed, by task id. The
 	// tokens live only here, in memory: never logged, never in an error.
@@ -54,17 +57,58 @@ type heldLease struct {
 	holder string
 }
 
+// Option configures a Client.
+type Option func(*Client)
+
+// WithToken sends tok, the install token, as a bearer on every request —
+// the Data Service refuses everything but GET /health without it.
+func WithToken(tok string) Option {
+	return func(c *Client) {
+		if tok == "" {
+			c.token = nil
+			return
+		}
+		c.token = func() string { return tok }
+	}
+}
+
+// WithTokenSource is WithToken for a token that can change under a running
+// process (a rotation): src is asked on every request. A *localauth.Store's
+// Token method is the usual source.
+func WithTokenSource(src func() string) Option {
+	return func(c *Client) { c.token = src }
+}
+
 // New builds a client. actor names the mutation identity this client rides
 // under (attribution, not authentication — spec §15); empty means the
-// server-side default, "user".
-func New(baseURL, actor string) *Client {
-	return &Client{
+// server-side default, "user". Authentication is the install token
+// (WithToken / WithTokenSource).
+func New(baseURL, actor string, opts ...Option) *Client {
+	c := &Client{
 		base:  strings.TrimSuffix(baseURL, "/"),
 		actor: actor,
 		http:  &http.Client{Timeout: 30 * time.Second},
 		held:  map[string]heldLease{},
 	}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
 }
+
+// authorize stamps the install token on req.
+func (c *Client) authorize(req *http.Request) {
+	if c.token == nil {
+		return
+	}
+	if tok := c.token(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+}
+
+// TokenSource is this client's token source (nil when it sends none), for
+// a caller building a sibling client to the same Data Service.
+func (c *Client) TokenSource() func() string { return c.token }
 
 func (c *Client) leaseToken(taskID string) string {
 	c.mu.Lock()
@@ -127,6 +171,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	if c.actor != "" {
 		req.Header.Set("X-Mads-Actor", c.actor)
 	}
+	c.authorize(req)
 	if id := pathTaskID(path); id != "" {
 		if tok := c.leaseToken(id); tok != "" {
 			req.Header.Set(leaseHeader, tok)
@@ -347,7 +392,7 @@ func (c *Client) LeasesOfKind(ctx context.Context, kind string) ([]contracts.Lea
 // leases of a kind it doesn't own (LeasesOfKind requires the caller's
 // actor); attribution, not authentication (spec §15).
 func (c *Client) As(actor string) *Client {
-	return &Client{base: c.base, actor: actor, http: c.http, held: map[string]heldLease{}}
+	return &Client{base: c.base, actor: actor, http: c.http, token: c.token, held: map[string]heldLease{}}
 }
 
 // ReclaimLease is the proof-or-nothing transition (reap-on-launch): if
@@ -1112,6 +1157,7 @@ func (c *Client) Stream(ctx context.Context, since int64, sessionID string, type
 		return nil, err
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	c.authorize(req)
 	resp, err := (&http.Client{}).Do(req) // no timeout: the stream lives until ctx ends
 	if err != nil {
 		return nil, err

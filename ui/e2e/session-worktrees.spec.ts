@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import path from "node:path";
 import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
+import { apiFetch } from "./lib/auth";
 
 /**
  * Session worktrees, end to end (docs/SESSION-WORKTREES-DESIGN.md): a
@@ -48,7 +49,7 @@ function git(dir: string, ...args: string[]): string {
 }
 
 async function getSession(routerURL: string, id: string): Promise<SessionRecord> {
-  const res = await fetch(`${routerURL}/sessions/${id}`);
+  const res = await apiFetch(`${routerURL}/sessions/${id}`);
   if (!res.ok) throw new Error(`GET /sessions/${id}: ${res.status}`);
   return (await res.json()) as SessionRecord;
 }
@@ -479,7 +480,7 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
 
 /** POST /sessions/{id}/land — setup, where the card isn't under test. */
 async function landViaAPI(routerURL: string, id: string, want: string): Promise<void> {
-  const res = await fetch(`${routerURL}/sessions/${id}/land`, {
+  const res = await apiFetch(`${routerURL}/sessions/${id}/land`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message: `Land (${want}) by the test` }),
@@ -517,7 +518,7 @@ function mergeDriverState(dir: string): string {
 
 /** POST /sessions/{id}/commit with every uncommitted session file — setup, where the dialog isn't under test. */
 async function commitAll(routerURL: string, id: string, message: string): Promise<void> {
-  const res = await fetch(`${routerURL}/sessions/${id}/commit`, {
+  const res = await apiFetch(`${routerURL}/sessions/${id}/commit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message }),
@@ -549,14 +550,14 @@ async function waitForSession(
  */
 async function agentWrites(routerURL: string, id: string, file: string, content: string): Promise<void> {
   const wrote = async () => {
-    const res = await fetch(`${routerURL}/sessions/${id}/transcript`);
+    const res = await apiFetch(`${routerURL}/sessions/${id}/transcript`);
     const messages = res.ok ? ((await res.json()) as { text?: string }[]) : [];
     return messages.filter((m) => m.text?.trim() === `wrote ${file}`).length;
   };
   const before = await wrote();
   const deadline = Date.now() + 15_000;
   for (;;) {
-    const res = await fetch(`${routerURL}/sessions/${id}/messages`, {
+    const res = await apiFetch(`${routerURL}/sessions/${id}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: `write-file ${file} ${content}` }),

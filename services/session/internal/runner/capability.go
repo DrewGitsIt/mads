@@ -10,6 +10,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/capability"
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/madsbin"
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -205,6 +206,12 @@ func (r *Runner) setupOrchestrate(ctx context.Context, sess contracts.Session) (
 		Config: contracts.CapabilityConfig{Command: madsCmd + " internal orchestrate-mcp"},
 	}
 	env := []string{"MADS_ROUTER_URL=" + r.RouterURL, "MADS_SESSION_ID=" + r.sessionID}
+	// The session-scoped Router token goes to this server's own env only
+	// (the MCP config the provider launches it from), never the agent's
+	// (docs/LOCAL-FRONT-DOOR-DESIGN.md D4).
+	if r.RouterToken != "" {
+		env = append(env, localauth.EnvRouterToken+"="+r.RouterToken)
+	}
 	if !hasOrchestrateGrant {
 		env = append(env, "MADS_ORCHESTRATE_READONLY=1")
 	}

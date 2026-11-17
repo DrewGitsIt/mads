@@ -28,13 +28,9 @@ func NewMergeWatcher(data *dataclient.Client, jobs *job.Runner) *MergeWatcher {
 // the subscribe with backoff on failure; returns only once ctx is done.
 // Callers run it on its own goroutine for the life of the process.
 func (w *MergeWatcher) Run(ctx context.Context) {
-	ch := subscribeRetry(ctx, "merge.completed", digestwatchInitialBackoff, digestwatchMaxBackoff, func() (<-chan contracts.Envelope, error) {
-		return w.data.Stream(ctx, 0, "", []string{string(contracts.MergeCompleted)})
-	})
-	if ch == nil {
-		return
-	}
-	for env := range ch {
+	consumeForever(ctx, "merge.completed", digestwatchInitialBackoff, digestwatchMaxBackoff, func(since int64) (<-chan contracts.Envelope, error) {
+		return w.data.Stream(ctx, since, "", []string{string(contracts.MergeCompleted)})
+	}, func(env contracts.Envelope) {
 		var p struct {
 			Kind      string   `json:"kind"`
 			WaitedOut bool     `json:"waited_out"`
@@ -43,13 +39,13 @@ func (w *MergeWatcher) Run(ctx context.Context) {
 		}
 		if err := json.Unmarshal(env.Payload, &p); err != nil {
 			log.Printf("digestwatch: decode merge.completed payload for %s: %v", env.SessionID, err)
-			continue
+			return
 		}
 		if !p.WaitedOut || p.Kind == "land" || env.SessionID == "" {
-			continue
+			return
 		}
 		if _, err := w.jobs.Spawn(ctx, job.FolderNoticeKind, env.SessionID, job.NotifyFolderChanged(env.SessionID, p.TaskTitle, p.Files)); err != nil {
 			log.Printf("digestwatch: spawn folder notice job for %s: %v", env.SessionID, err)
 		}
-	}
+	})
 }

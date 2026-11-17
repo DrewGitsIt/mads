@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
 )
@@ -382,12 +383,12 @@ func (s *server) setChildModel(ctx context.Context, addr, model string) (queued 
 	if err != nil {
 		return false, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/model", bytes.NewReader(raw))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, childsock.URL(addr, "/model"), bytes.NewReader(raw))
 	if err != nil {
 		return false, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := childsock.Client.Do(req)
 	if err != nil {
 		return false, err
 	}
@@ -561,6 +562,9 @@ func (s *server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		writeErrMsg(w, http.StatusBadGateway, "delete session: terminate: ", err)
 		return
 	}
+	// The child's exit revoked its own scoped token; this drops any other
+	// (docs/LOCAL-FRONT-DOOR-DESIGN.md D4).
+	s.scoped.RevokeSession(id)
 	// The child may have written its worktree only now, at its first start.
 	if cur, err := s.data.Session(r.Context(), id); err == nil {
 		sess = cur

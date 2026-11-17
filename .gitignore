@@ -13,3 +13,8 @@ coverage.out
 /mads
 /.claude/
 /HANDOFF.md
+
+# build outputs of `go build ./services/<x>` run from the repo root
+/router
+/data
+/testchild

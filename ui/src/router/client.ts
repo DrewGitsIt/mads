@@ -482,6 +482,17 @@ export interface RouterClient {
  * methods added in W6.4; nothing else in this client needed field-level
  * errors before now.
  */
+/**
+ * A 401 from the Router's front door (docs/LOCAL-FRONT-DOOR-DESIGN.md H7):
+ * the request carried no valid install token — which the app's main process
+ * adds below the page, so it couldn't read the token file.
+ */
+export class RouterUnauthorizedError extends Error {
+  constructor() {
+    super("router request refused: no valid install token");
+  }
+}
+
 export class RouterValidationError extends Error {
   constructor(public readonly errors: { field: string; message: string }[]) {
     super(errors.map((e) => `${e.field}: ${e.message}`).join("; "));
@@ -615,6 +626,9 @@ export function checkLinkSessionIds(sessionIds: string[]): string[] {
 // Thin fetch wrapper shared by every surface — no ad-hoc fetches in
 // components. The Router's address is exposed via VITE_ROUTER_URL; the
 // default matches the Router's own `-addr` flag default (localhost:17373).
+// The Vite dev server (`npm run dev`) sets it to "" unless told otherwise: it
+// proxies the Router same-origin, adding no credential (vite-router-proxy.ts,
+// docs/LOCAL-FRONT-DOOR-DESIGN.md H3/H7).
 export const ROUTER_BASE =
   (import.meta.env.VITE_ROUTER_URL as string | undefined) ?? "http://localhost:17373";
 
@@ -623,6 +637,7 @@ export const ROUTER_BASE =
  * any other non-ok status throws RouterHTTPError. 204 decodes to undefined.
  */
 async function readJSON<T>(res: Response): Promise<T> {
+  if (res.status === 401) throw new RouterUnauthorizedError();
   if (!res.ok) {
     const body = (await res
       .clone()

@@ -7,14 +7,17 @@ import {
   Menu,
   MenuItemConstructorOptions,
   MessageChannelMain,
+  session,
   shell,
   utilityProcess,
   type UtilityProcess,
   type WebContents,
 } from "electron";
+import { unwatchFile, watchFile } from "node:fs";
 import { join } from "node:path";
 import { classifyNavigation } from "./externalLinks";
 import { registerLinkHandlers } from "./linkOpener";
+import { bearerInjector, readTokenChecked, routerFilter, tokenPath } from "./localToken";
 import { ShellRegistryCache } from "./pty/shellRegistryCache";
 import type { ShellActivity, ShellInfo } from "./pty/shellHostCore";
 import { HostRequests } from "./pty/hostRequests";
@@ -35,7 +38,9 @@ const ICON_PNG = join(__dirname, "..", "assets", "icon", "mads.png");
 // mads_brand_app in scripts/ensure-electron.sh. Renaming would also move the
 // data directory, so pin it where package.json's "name" has always put it:
 // localStorage (shell dock state, graph positions, unseen markers) lives there.
-app.setPath("userData", join(app.getPath("appData"), "mads-ui"));
+// MADS_USER_DATA_DIR moves it (the e2e Electron journey uses a scratch dir,
+// never the user's real one).
+app.setPath("userData", process.env.MADS_USER_DATA_DIR || join(app.getPath("appData"), "mads-ui"));
 app.setName("mads");
 
 // Trimmed replacement for Electron's stock File/Edit/View/Window/Help menu,
@@ -137,7 +142,42 @@ function registerAppHandlers(): void {
   );
 
   registerShellBroker();
-  registerLinkHandlers({ routerBaseUrl: ROUTER_BASE_URL, userDataDir: app.getPath("userData") });
+  registerLinkHandlers({ routerBaseUrl: ROUTER_BASE_URL, userDataDir: app.getPath("userData"), routerToken: () => currentToken });
+}
+
+// The local front door (docs/LOCAL-FRONT-DOOR-DESIGN.md H7): main reads the
+// install token (with the services' mode and owner checks) and adds it as
+// `Authorization: Bearer` to the window's requests to the Router — fetch,
+// EventSource, <img>, downloads alike — below the page, with webRequest
+// filtered to the Router's origin. Page code can't read a header added
+// there; nothing token-shaped reaches the renderer. The token is cached here
+// and re-read when the file changes (`mads token rotate`). In dev
+// (VITE_DEV_SERVER_URL) the page talks to the Vite dev server, whose proxy
+// adds nothing; set VITE_ROUTER_URL to the Router and the page calls it
+// directly, through this hook.
+let currentToken = "";
+let tokenProblem: string | undefined;
+
+function loadToken(): void {
+  const { token, why } = readTokenChecked();
+  currentToken = token;
+  tokenProblem = token ? undefined : why;
+  if (why) console.warn(`mads: ${why}; the Router will refuse this window until that's fixed`);
+}
+
+function followTokenRotation(): void {
+  const path = tokenPath();
+  watchFile(path, { interval: 2000 }, () => loadToken());
+  app.on("will-quit", () => unwatchFile(path));
+}
+
+function injectRouterBearer(): void {
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    routerFilter(ROUTER_BASE_URL),
+    bearerInjector(ROUTER_BASE_URL, () => currentToken),
+  );
+  // The 401 screen names the file mads couldn't use.
+  ipcMain.handle("auth:token-path", () => ({ path: tokenPath(), problem: tokenProblem }));
 }
 
 // The shell host (docs/SHELL-DOCK-DESIGN.md D1) is a utilityProcess that owns
@@ -321,13 +361,17 @@ function createWindow(): void {
   // The Router serves the built UI same-origin (scripts/app.sh guarantees
   // it's already up before Electron launches), so this is always an http(s)
   // origin — never file://, which would send Origin: null and fail the
-  // Router's localhost-only CORS policy.
-  win.loadURL(appUrl);
+  // Router's localhost-only CORS policy. The bearer hook is in place before
+  // this, so the very first API call carries the token.
+  void win.loadURL(appUrl);
 }
 
 app.whenReady().then(() => {
   if (process.execPath.includes("/Electron.app/")) app.dock?.setIcon(ICON_PNG);
   registerAppHandlers();
+  loadToken();
+  followTokenRotation();
+  injectRouterBearer();
   createWindow();
 });
 

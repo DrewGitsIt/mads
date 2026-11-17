@@ -21,6 +21,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localauth"
 )
 
 var (
@@ -216,7 +217,13 @@ func freshInstall(t *testing.T) (madsPath, home string) {
 	}
 	base, stop := startDataService(t, home)
 	defer stop()
-	cfg, err := dataclient.New(base, "smoketest").Config(context.Background())
+	// First run also creates the install token (docs/LOCAL-FRONT-DOOR-DESIGN.md
+	// D1), which every route but /health needs.
+	tok, err := localauth.ReadToken(dataDir)
+	if err != nil {
+		t.Fatalf("first run didn't create the install token: %v", err)
+	}
+	cfg, err := dataclient.New(base, "smoketest", dataclient.WithToken(tok)).Config(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

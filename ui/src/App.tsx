@@ -15,7 +15,7 @@ import { applyTheme } from "./features/settings/theme/applyTheme";
 import { applyMotion } from "./features/settings/theme/applyMotion";
 import { FirstRunWizard } from "./onboarding/FirstRunWizard";
 import { setFlags } from "./featureFlags";
-import { router } from "./router/client";
+import { router, RouterUnauthorizedError } from "./router/client";
 import { useBusHealth } from "./router/useBusHealth";
 import type { Config } from "./router/types";
 import { LibrarySurface } from "./library/LibrarySurface";
@@ -76,7 +76,7 @@ export function App() {
     else guardLeave(go);
   }, []);
   const [config, setConfig] = useState<Config | null>(null);
-  const [configError, setConfigError] = useState(false);
+  const [configError, setConfigError] = useState<false | "unreachable" | "unauthorized">(false);
 
   const loadConfig = useCallback(() => {
     setConfigError(false);
@@ -93,7 +93,9 @@ export function App() {
         });
         setConfig(c);
       })
-      .catch(() => setConfigError(true));
+      .catch((err: unknown) =>
+        setConfigError(err instanceof RouterUnauthorizedError ? "unauthorized" : "unreachable"),
+      );
   }, []);
 
   useEffect(() => {
@@ -164,7 +166,7 @@ export function App() {
 
   const commands = useMemo(() => buildCommands(sessions, tasks), [sessions, tasks]);
 
-  if (configError) return <ConfigGateFailure onRetry={loadConfig} />;
+  if (configError) return <ConfigGateFailure onRetry={loadConfig} unauthorized={configError === "unauthorized"} />;
 
   // The shell renders without waiting on Config: the rail's only config-shaped
   // inputs (theme, feature flags) have safe defaults and are applied the

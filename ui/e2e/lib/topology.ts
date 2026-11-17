@@ -1,12 +1,16 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { readTokenFile, registerToken } from "./auth";
 
 const repoRoot = path.resolve(__dirname, "../../..");
 const uiDist = path.resolve(__dirname, "../../dist");
 
-const listeningRe = /listening on (\S+)/;
+// host:port for the Data Service and Router; a child would log its Unix
+// socket path, which may contain spaces (docs/LOCAL-FRONT-DOOR-DESIGN.md D9).
+const listeningRe = /listening on (\/.*\S|\S+)/;
 
 interface ListeningProc {
   proc: ChildProcess;
@@ -146,6 +150,13 @@ function verifyNoLeaks(binPath: string): void {
 export interface Topology {
   dataURL: string;
   routerURL: string;
+  /**
+   * This topology's install token ($MADS_HOME/local.token, created by the
+   * services at boot): every Router and Data Service API call needs it
+   * (docs/LOCAL-FRONT-DOOR-DESIGN.md). lib/auth.ts's apiFetch and the page fixture
+   * find it by URL.
+   */
+  token: string;
   madsBin: string;
   sessionBin: string;
   tmpDir: string;
@@ -184,6 +195,8 @@ export interface BootTopologyOptions {
    * get the fake's built-in dialect (echo, slow, ...).
    */
   sessionScenario?: string;
+  /** Extra Router flags (e.g. -allowed-origins for a dev-server journey). */
+  routerArgs?: string[];
 }
 
 /** Builds fresh mads/data/router/session binaries into a scratch dir and boots the full topology, mirroring scripts/e2esmoke/main_test.go. */
@@ -261,11 +274,16 @@ export async function bootTopology(opts: BootTopologyOptions): Promise<Topology>
       homeDir,
       "-ui-dist",
       uiDist,
+      ...(opts.routerArgs ?? []),
     ],
     env,
   );
   const routerURL = `http://${router.addr}`;
   await waitHealth(routerURL);
+  // The Data Service created the token on its first start (the Router
+  // loaded the same file); both answer only to it.
+  const token = readTokenFile(homeDir);
+  registerToken([routerURL, dataURL], token);
 
   const teardown = async () => {
     await router.terminate();
@@ -274,7 +292,12 @@ export async function bootTopology(opts: BootTopologyOptions): Promise<Topology>
     verifyNoLeaks(pipelineBin);
     rmSync(buildDir, { recursive: true, force: true });
     rmSync(tmpDir, { recursive: true, force: true });
+    // A scratch $MADS_HOME this deep is past the socket-path limit, so the
+    // children's sockets went to pkg/childsock's short /tmp fallback
+    // (/tmp/mads-<uid>-<sha256(home)[:10]>); it's empty by now.
+    const sockFallback = `/tmp/mads-${process.getuid?.() ?? 0}-${createHash("sha256").update(homeDir).digest("hex").slice(0, 10)}`;
+    rmSync(sockFallback, { recursive: true, force: true });
   };
 
-  return { dataURL, routerURL, madsBin, sessionBin, tmpDir, homeDir, mergirafPath, agentBinDir, teardown };
+  return { dataURL, routerURL, token, madsBin, sessionBin, tmpDir, homeDir, mergirafPath, agentBinDir, teardown };
 }

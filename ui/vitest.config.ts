@@ -9,7 +9,7 @@ export default defineConfig({
     // ui/electron/pty/ (shellEnv, resolveCwd) — they don't touch node-pty or
     // any Electron API, so (unlike *.realtest.ts, see vitest.electron.config.ts)
     // there's no reason to keep them out of the default `make check` gate.
-    include: ["src/**/*.test.{ts,tsx}", "electron/**/*.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}", "electron/**/*.test.ts", "vite-router-proxy.test.ts"],
     exclude: ["e2e/**", "node_modules/**"],
     setupFiles: ["./src/setupTests.ts"],
   },

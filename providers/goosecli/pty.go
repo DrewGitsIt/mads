@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -29,17 +30,19 @@ import (
 // if ever built, absorbs it later.
 func (p *Provider) startPTY(opts provider.StartOptions) (provider.Session, error) {
 	bin := p.bin()
-	cmd := exec.Command(bin, p.ptyArgs(opts)...)
+	args, wrapDir := p.ptyArgsIn(opts)
+	cmd := exec.Command(bin, args...)
 	cmd.Dir = opts.Cwd
 	// The direct composition the engineConfig comment documents as the
 	// byte-identical non-engine form of its BaseEnv/Env split.
 	cmd.Env = agentenv.Build(p.cfg.EnvMode, os.Environ(), p.cfg.Env, p.cfg.EnvPassthrough, opts.Env)
 	master, err := pty.Start(cmd)
 	if err != nil {
+		removeWrapDir(wrapDir)
 		return nil, fmt.Errorf("start %s on a pty: %w", bin, err)
 	}
 
-	s := &ptySession{cmd: cmd, master: master, ref: opts.Resume, announced: make(chan string, 1)}
+	s := &ptySession{cmd: cmd, master: master, ref: opts.Resume, announced: make(chan string, 1), wrapDir: wrapDir}
 	if opts.Resume != "" {
 		// Resumed: the ref is known at Start-return, so no pump and no tee —
 		// Terminal() is the master directly, and the announce channel is
@@ -76,8 +79,25 @@ func (p *Provider) startPTY(opts provider.StartOptions) (provider.Session, error
 // No trust flags: `goose session` has no capture-verified trust flag
 // surface, and trust on the terminal transport is the human at the
 // keyboard anyway (kirocli/pty.go precedent).
+//
+// An extension's Env never rides the argv, where every OS user can read it
+// with ps (docs/LOCAL-FRONT-DOOR-DESIGN.md H4: the orchestrate server's
+// session-scoped token is in it): an extension with Env is launched through
+// an owner-only (0700) wrapper script, in a 0700 directory, that exports
+// the Env and execs the command.
+//
+// ptyArgs is the argv alone (tests of its shape): any wrapper it had to
+// write is removed again. startPTY uses ptyArgsIn and keeps them.
 func (p *Provider) ptyArgs(opts provider.StartOptions) []string {
-	args := []string{"session"}
+	args, dir := p.ptyArgsIn(opts)
+	removeWrapDir(dir)
+	return args
+}
+
+// ptyArgsIn is ptyArgs plus the wrapper directory it wrote ("" if none),
+// for the caller to remove when the session ends.
+func (p *Provider) ptyArgsIn(opts provider.StartOptions) (args []string, wrapDir string) {
+	args = []string{"session"}
 	if opts.Resume != "" {
 		args = append(args, "--resume", "--session-id", opts.Resume)
 	}
@@ -89,7 +109,21 @@ func (p *Provider) ptyArgs(opts provider.StartOptions) []string {
 		if len(strings.Fields(srv.Command)) == 0 {
 			continue
 		}
-		spec := strings.Join(append(append([]string{}, srv.Env...), srv.Command), " ")
+		spec := srv.Command
+		if len(srv.Env) > 0 {
+			if wrapDir == "" {
+				d, err := os.MkdirTemp("", "mads-goose-ext-")
+				if err != nil {
+					continue // never fall back to env in argv
+				}
+				wrapDir = d
+			}
+			w, err := writeExtensionWrapper(wrapDir, len(specs), srv)
+			if err != nil {
+				continue
+			}
+			spec = w
+		}
 		if srv.Name != "" {
 			spec = srv.Name + ":" + spec
 		}
@@ -102,7 +136,40 @@ func (p *Provider) ptyArgs(opts provider.StartOptions) []string {
 		args = append(args, "--with-extension", spec)
 	}
 	args = append(args, p.cfg.ExtraArgs...)
-	return args
+	return args, wrapDir
+}
+
+// shQuote single-quotes s for sh.
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// writeExtensionWrapper writes an owner-only script that exports srv.Env
+// and execs srv.Command, and returns its path.
+func writeExtensionWrapper(dir string, n int, srv provider.MCPServerRef) (string, error) {
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n# written by mads: an MCP extension's env, kept out of goose's argv\n")
+	for _, kv := range srv.Env {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			continue
+		}
+		b.WriteString("export " + k + "=" + shQuote(v) + "\n")
+	}
+	b.WriteString("exec")
+	for _, f := range strings.Fields(srv.Command) {
+		b.WriteString(" " + shQuote(f))
+	}
+	b.WriteString(` "$@"` + "\n")
+	path := filepath.Join(dir, fmt.Sprintf("ext-%d.sh", n))
+	if err := os.WriteFile(path, []byte(b.String()), 0o700); err != nil { //nolint:gosec // an executable wrapper, owner-only
+		return "", err
+	}
+	return path, nil
+}
+
+func removeWrapDir(dir string) {
+	if dir != "" {
+		_ = os.RemoveAll(dir)
+	}
 }
 
 // bannerScanBudget bounds the raw bytes the banner pump accumulates before
@@ -176,6 +243,10 @@ type ptySession struct {
 
 	announced chan string // cap 1; pump (or the constructor) is the sole closer
 
+	// wrapDir holds the owner-only extension wrappers (ptyArgsIn); removed
+	// on Close.
+	wrapDir string
+
 	mu     sync.Mutex
 	ref    string
 	closed bool
@@ -237,6 +308,7 @@ func (s *ptySession) Close() error {
 	s.mu.Unlock()
 	_ = s.master.Close()
 	closeWait(s.cmd, 3*time.Second)
+	removeWrapDir(s.wrapDir)
 	return nil
 }
 

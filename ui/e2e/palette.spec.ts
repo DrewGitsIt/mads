@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import { createSession, importTasks } from "./lib/seed";
+import { apiFetch } from "./lib/auth";
 
 const PLACEHOLDER = "Jump to a session, run a pipeline, run retro…";
 
@@ -53,7 +54,7 @@ test("palette journey: Run pipeline… opens the session's Tasks tab in Plan and
   await expect(panel.getByRole("button", { name: "Run 1 task" })).toBeEnabled();
 
   // Plan only: nothing was started for the session.
-  const res = await fetch(`${routerURL}/events?session_id=${session.id}&types=pipeline.started`);
+  const res = await apiFetch(`${routerURL}/events?session_id=${session.id}&types=pipeline.started`);
   expect(res.ok).toBeTruthy();
   expect(await res.json()).toEqual([]);
 });

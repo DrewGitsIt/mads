@@ -56,7 +56,7 @@ func cmdPersonas(args []string) int {
 		}
 	}
 
-	data := dataclient.New(dataBase, "user")
+	data := dataClient(dataBase, "user")
 	ctx := context.Background()
 
 	switch verb {

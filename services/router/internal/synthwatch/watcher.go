@@ -129,14 +129,40 @@ func NewWatcher(data *dataclient.Client, jobs *job.Runner, resolveFastModel func
 // ctx is done. Callers run it on its own goroutine for the life of the
 // process.
 func (w *Watcher) Run(ctx context.Context) {
-	ch := subscribeRetry(ctx, "session.turn_ended", watcherInitialBackoff, watcherMaxBackoff, func() (<-chan contracts.Envelope, error) {
-		return w.data.Stream(ctx, 0, "", []string{string(contracts.TurnEnded)})
-	})
-	if ch == nil {
-		return
-	}
-	for env := range ch {
-		w.handle(ctx, env)
+	consumeForever(ctx, "session.turn_ended", watcherInitialBackoff, watcherMaxBackoff, func(since int64) (<-chan contracts.Envelope, error) {
+		return w.data.Stream(ctx, since, "", []string{string(contracts.TurnEnded)})
+	}, func(env contracts.Envelope) { w.handle(ctx, env) })
+}
+
+// consumeForever subscribes, hands every envelope to handle, and — when the
+// stream ends while ctx is still live (the Data Service restarted, or a
+// token rotation ended every open stream, docs/LOCAL-FRONT-DOOR-DESIGN.md
+// round 2) — subscribes again from the last seq it saw, so the watcher
+// never silently stops. Returns once ctx is done.
+func consumeForever(ctx context.Context, name string, initialBackoff, maxBackoff time.Duration, subscribe func(since int64) (<-chan contracts.Envelope, error), handle func(contracts.Envelope)) {
+	var since int64
+	for {
+		ch := subscribeRetry(ctx, name, initialBackoff, maxBackoff, func() (<-chan contracts.Envelope, error) {
+			return subscribe(since)
+		})
+		if ch == nil {
+			return
+		}
+		for env := range ch {
+			if env.Seq > since {
+				since = env.Seq
+			}
+			handle(env)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		log.Printf("%s: %s stream ended; resubscribing from seq %d", "synthwatch", name, since)
+		select {
+		case <-time.After(initialBackoff):
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 

@@ -89,7 +89,9 @@ make ui         # no restart at all: the Router serves ui/dist off disk and
                 # (Ctrl+R / Cmd+R)
 make session    # next session spawn picks it up (-session-cmd is exec'd
                 # fresh); to move a live session onto it:
-                #   curl -sX POST localhost:17373/sessions/<id>/bounce
+                #   mads api POST /sessions/<id>/bounce
+                # (mads ps lists live children; mads api --session <id>
+                # talks to one over its Unix socket — there is no port)
 make pipeline   # next pipeline run picks it up, same mechanism
 make data       # needs a restart, but a survivable one: state is in
                 # ~/.mads/mads.db and the Router's watchers reconnect
@@ -151,6 +153,13 @@ These come from spec §15 and apply to every change:
   `provider-fake`, never a live LLM. A flaky test is a defect: fix it or
   delete it within the week.
 - **`-race` is always on.**
+- **Every API call carries the install token** (docs/LOCAL-FRONT-DOOR-DESIGN.md).
+  A new Router or Data Service route is behind the door by default, and the
+  guard tests (`services/router/frontdoor_test.go`, `services/data/frontdoor_test.go`)
+  fail if it isn't. Tests use a scratch `$MADS_HOME`, never `~/.mads`. Nothing
+  a session or pipeline starts may inherit `MADS_LOCAL_TOKEN` or
+  `MADS_ROUTER_TOKEN`, and no token may appear in any argv (other users can
+  read argv with `ps`): use env, an owner-only file, or stdin (`curl -K -`).
 - **New providers pass the conformance suite.** Every adapter declares each
   behavior as native, emulated, or unsupported, and
   `conformance.Run` holds it to that claim in both directions.

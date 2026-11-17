@@ -16,6 +16,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/preflight"
 	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/repostate"
@@ -62,6 +63,10 @@ type server struct {
 	// changesets caches recent change sets for the working-diff gate
 	// (changeset.go).
 	changesets changeSetCache
+	// tokens, codes and scoped are the local front door's state
+	// (frontdoor.go); nil disables /auth/* and scoped-token revocation.
+	tokens *localauth.Store
+	scoped *localauth.Registry
 }
 
 // Options bundles server's dependencies so New takes a single argument —
@@ -125,6 +130,11 @@ type Options struct {
 	// Home is $MADS_HOME, for mergiraf's state when landing a worktree mads
 	// didn't make. Empty lands without mergiraf there.
 	Home string
+	// Tokens is the install token, Scoped the session-scoped tokens
+	// (docs/LOCAL-FRONT-DOOR-DESIGN.md). Nil Scoped means there are none to
+	// revoke.
+	Tokens *localauth.Store
+	Scoped *localauth.Registry
 
 	// OriginAllowed says which browser pages CORS lets call the Router —
 	// the same list localguard enforces in front of it (main.go). Nil
@@ -153,7 +163,7 @@ func NewMux(opts Options) *http.ServeMux {
 	if opts.StaticHandler == nil {
 		opts.StaticHandler = http.NotFoundHandler()
 	}
-	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, attachments: opts.Attachments, fastModelFlagBaseURL: opts.FastModelFlagBaseURL, models: opts.Models, routerURL: opts.RouterURL, root: opts.Root, uiDist: opts.UIDist, startedAt: opts.StartedAt, repoState: opts.RepoState, home: opts.Home}
+	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, attachments: opts.Attachments, fastModelFlagBaseURL: opts.FastModelFlagBaseURL, models: opts.Models, routerURL: opts.RouterURL, root: opts.Root, uiDist: opts.UIDist, startedAt: opts.StartedAt, repoState: opts.RepoState, home: opts.Home, tokens: opts.Tokens, scoped: opts.Scoped}
 	if opts.Jobs != nil && opts.Sup != nil {
 		// Job bodies that must reach a dormant session (job.Deps.Waker) wake
 		// it through the same path a composer send uses.
@@ -162,6 +172,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /version", s.handleVersion)
+	mux.HandleFunc("GET /children", s.handleListChildren)
 	mux.HandleFunc("POST /update/check", s.handleUpdateCheck)
 	mux.HandleFunc("POST /sessions", s.handleCreateSession)
 	mux.HandleFunc("GET /sessions/defaults", s.handleSessionDefaults)
@@ -265,12 +276,12 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("GET /sessions/{id}/tools/{toolUseId}/output", s.handleBackgroundOutput)
 	mux.HandleFunc("GET /sessions/{id}/export", s.handleExportSession)
 	mux.HandleFunc("POST /links/{id}/inject", s.requireLinkedSessions(s.handleLinkInject))
-	mux.HandleFunc("GET /sessions/{id}/orchestrate/subjects", s.requireLinkedSessions(s.handleOrchestrateSubjects))
-	mux.HandleFunc("GET /sessions/{id}/orchestrate/summary", s.requireLinkedSessions(s.handleOrchestrateSummary))
-	mux.HandleFunc("GET /sessions/{id}/orchestrate/turns", s.requireLinkedSessions(s.handleOrchestrateGetTurns))
-	mux.HandleFunc("POST /sessions/{id}/orchestrate/attention", s.requireLinkedSessions(s.handleOrchestrateSetAttention))
-	mux.HandleFunc("POST /sessions/{id}/orchestrate/mailbox", s.requireLinkedSessions(s.handleOrchestrateDrainMailbox))
-	mux.HandleFunc("POST /links/{id}/orchestrate/message", s.requireLinkedSessions(s.handleOrchestrateMessage))
+	mux.HandleFunc("GET /sessions/{id}/orchestrate/subjects", s.ownSession(s.requireLinkedSessions(s.handleOrchestrateSubjects)))
+	mux.HandleFunc("GET /sessions/{id}/orchestrate/summary", s.ownSession(s.requireLinkedSessions(s.handleOrchestrateSummary)))
+	mux.HandleFunc("GET /sessions/{id}/orchestrate/turns", s.ownSession(s.requireLinkedSessions(s.handleOrchestrateGetTurns)))
+	mux.HandleFunc("POST /sessions/{id}/orchestrate/attention", s.ownSession(s.requireLinkedSessions(s.handleOrchestrateSetAttention)))
+	mux.HandleFunc("POST /sessions/{id}/orchestrate/mailbox", s.ownSession(s.requireLinkedSessions(s.handleOrchestrateDrainMailbox)))
+	mux.HandleFunc("POST /links/{id}/orchestrate/message", s.ownLink(s.requireLinkedSessions(s.handleOrchestrateMessage)))
 	mux.HandleFunc("GET /sessions/{id}/files", s.handleSessionFiles)
 	mux.HandleFunc("GET /sessions/{id}/commits", s.handleSessionCommits)
 	mux.HandleFunc("GET /sessions/{id}/commits/{hash}/diff", s.handleSessionCommitDiff)
@@ -339,8 +350,15 @@ func NewMux(opts Options) *http.ServeMux {
 	return mux
 }
 
-func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	body := map[string]string{"service": "router", "status": "ok"}
+	// Open to all (an exempt route), but where this Router runs from is
+	// only for the install token's holder (docs/LOCAL-FRONT-DOOR-DESIGN.md
+	// D3; scripts/app.sh sends it).
+	if localauth.FromContext(r.Context()).Kind != localauth.Install {
+		writeJSON(w, http.StatusOK, body)
+		return
+	}
 	if s.root != "" {
 		body["root"] = s.root
 	}
@@ -351,6 +369,16 @@ func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		body["started_at"] = s.startedAt.UTC().Format(time.RFC3339)
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+// handleListChildren lists the live session and pipeline children this
+// Router supervises — id, kind, pid, socket, start time — for `mads ps`.
+func (s *server) handleListChildren(w http.ResponseWriter, _ *http.Request) {
+	if s.sup == nil {
+		writeJSON(w, http.StatusOK, []supervisor.ChildInfo{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.sup.Children())
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

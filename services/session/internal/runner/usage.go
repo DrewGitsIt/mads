@@ -224,6 +224,9 @@ func (r *Runner) persistAccount(a *provider.AccountStatus) {
 	r.publishUsageUpdated()
 }
 
+// SessionID is the session this runner serves.
+func (r *Runner) SessionID() string { return r.sessionID }
+
 // Status is what GET /status reports: the process's start and the
 // provider's last word.
 func (r *Runner) Status() contracts.SessionStatus {
