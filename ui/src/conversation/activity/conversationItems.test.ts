@@ -269,6 +269,23 @@ describe("foldHistoryEvents (T17)", () => {
     expect(h.subagentStreams.get("tu1")).toHaveLength(1);
     expect(h).not.toHaveProperty("thinking");
   });
+
+  it("puts each run's input and report into a revived subagent's stream where they happened", () => {
+    const call = (seq: number, id: string) =>
+      env(seq, "session.subagent_event", { parent_tool_use_id: "tu1", kind: "tool_use", tool: { id, name: "Bash" } });
+    const h = foldHistoryEvents([
+      env(1, "session.subagent_task", { phase: "started", task_id: "tk1", tool_use_id: "tu1", prompt: "Build it" }),
+      call(2, "c1"),
+      env(3, "session.subagent_task", { phase: "notification", task_id: "tk1", tool_use_id: "tu1", summary: "Built." }),
+      // The parent relays more work: the lifecycle carries the SendMessage
+      // call's id, the stream keeps the spawn's.
+      env(4, "session.subagent_task", { phase: "started", task_id: "tk1", tool_use_id: "tu_send", prompt: "Harden it" }),
+      call(5, "c2"),
+    ]);
+    const shape = h.subagentStreams.get("tu1")?.map((i) => (i.type === "tool" ? `tool:${i.tool.id}` : `${i.type}:${i.text}`));
+    expect(shape).toEqual(["message:Build it", "tool:c1", "text:Built.", "message:Harden it", "tool:c2"]);
+    expect(h.subagentStreams.has("tu_send")).toBe(false);
+  });
 });
 
 describe("resumeRunningTasks", () => {

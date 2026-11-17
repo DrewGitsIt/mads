@@ -33,6 +33,12 @@ export type DockView =
       subtype?: string;
       items: SubStreamItem[];
       task?: TaskModel;
+      /**
+       * Its last report, for a stream that can't hold it: the live rows,
+       * which carry no notification. A file or a log read-back has every
+       * run's report in place already.
+       */
+      summary?: string;
     };
 
 export interface ActivityDockProps {
@@ -361,7 +367,7 @@ function SubagentDetail({
         <SubagentStream
           items={view.items}
           running={running}
-          summary={view.task?.summary}
+          summary={view.summary}
           statuses={statuses}
           permissions={permissions}
           onResolvePermission={onResolvePermission}
@@ -391,6 +397,12 @@ export function SubagentStream({
 }: {
   items: SubStreamItem[];
   running: boolean;
+  /**
+   * Its last report, after the stream — only for a stream that doesn't
+   * hold its reports itself. Hidden while it runs: a revived subagent's
+   * report is the run before, and pinned under the new run's work it read
+   * as though nothing had happened since.
+   */
   summary?: string;
   statuses?: ReadonlyMap<string, ToolStatus>;
   permissions?: ReadonlyMap<string, PermissionRequest[]>;
@@ -481,7 +493,7 @@ export function SubagentStream({
           </div>
         ),
       )}
-      {summary && (
+      {summary && !running && (
         <div className={styles.subText}>
           <Markdown className={styles.subProse} text={summary} breaks />
         </div>

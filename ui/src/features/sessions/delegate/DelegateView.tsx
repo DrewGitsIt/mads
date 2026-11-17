@@ -67,7 +67,7 @@ export interface DelegateViewProps {
  * prompt, its own text and the harness's timestamps. Where it doesn't — or
  * not yet — it comes from what mads recorded live (session.subagent_event),
  * which has the tool calls but none of the delegate's text, read back in
- * full only then.
+ * full only then; its lifecycle lines add each run's input and report.
  */
 export function DelegateView({ sessionId, harnessId, parent, routerClient, onBack, onOpenDelegate }: DelegateViewProps) {
   // The session's whole delegate list, keyed by harness id, not just this
@@ -239,7 +239,6 @@ export function DelegateView({ sessionId, harnessId, parent, routerClient, onBac
             <SubagentStream
               items={items}
               running={running}
-              summary={model?.summary}
               statuses={history.statuses}
               selectedToolId={openTool?.id}
               onOpenTool={(tool) => setOpenTool({ id: tool.id, tool })}

@@ -244,6 +244,8 @@ type transcriptLine struct {
 	// Kind "peer" is a cross-session message from another claude process
 	// that arrived while the session was idle (isMeta, content the CLI's
 	// wrapper; the origin carries the sender and the bare body).
+	// Kind "coordinator", in a subagent's own file, is a message its parent
+	// relayed to it (SendMessage) — isMeta, wrapped (relayedText).
 	Origin  *wireOrigin  `json:"origin"`
 	Message *wireMessage `json:"message"`
 	// ToolUseResult is a tool_result line's structured result; only a
@@ -710,6 +712,10 @@ func (st *transcriptState) add(line []byte, msgs []provider.Message) []provider.
 	if l.Type == "user" && (l.Origin != nil && l.Origin.Kind == "task-notification") {
 		return st.notice(messageText(l.Message), l.UUID, ts, msgs)
 	}
+	// In a subagent's own file, a message its parent relayed to it is
+	// harness-injected (isMeta) but is the input that started its next run:
+	// it stays, unwrapped, as the run's opening message.
+	relayed := st.sidechain && l.IsMeta && l.Origin != nil && l.Origin.Kind == "coordinator"
 	switch l.Type {
 	case "user":
 		var texts []string
@@ -721,7 +727,9 @@ func (st *transcriptState) add(line []byte, msgs []provider.Message) []provider.
 				// <local-command-stdout>) are not something the human
 				// typed — rendering them as user bubbles misattributes
 				// them. Tool results on such lines still flow below.
-				if b.Text != "" && !l.IsMeta && !isCommandMarkup(b.Text) {
+				if relayed && b.Text != "" {
+					texts = append(texts, relayedText(b.Text))
+				} else if b.Text != "" && !l.IsMeta && !isCommandMarkup(b.Text) {
 					texts = append(texts, b.Text)
 				}
 			case "tool_result":
@@ -893,4 +901,17 @@ func probeCwd(path string) (string, bool) {
 // path: claude names each file <ref>.jsonl.
 func refFromPath(path string) string {
 	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
+}
+
+// The wrapper claude-code puts around a message a parent relays to its
+// subagent (SendMessage), whatever the subagent was doing (2.1.285).
+const (
+	relayPrefix = "The coordinator sent a message while you were working:\n"
+	relaySuffix = "\n\nAddress this before completing your current task."
+)
+
+// relayedText is a relayed message as the parent wrote it, without the
+// wrapper; text in any other shape is kept whole.
+func relayedText(s string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(s, relayPrefix), relaySuffix)
 }
