@@ -76,6 +76,28 @@ describe("DelegateView", () => {
     expect(onBack).toHaveBeenCalled();
   });
 
+  it("Cmd+↑↑ goes to the start of its stream and Cmd+↓↓ back to the tail", async () => {
+    const client = new FakeRouterClient();
+    client.delegates.push(record);
+    vi.spyOn(client, "getEvents").mockResolvedValue([]);
+    render(<DelegateView sessionId="s1" harnessId="a1" parent={{ ...fixtureSessions["session-active"], name: "Parent" }} routerClient={client} onBack={vi.fn()} />);
+    await screen.findByRole("heading", { name: "Audit error handling" });
+    const el = screen.getByTestId("delegate-stream");
+    const scrollTo = vi.fn();
+    el.scrollTo = scrollTo as unknown as typeof el.scrollTo;
+    Object.defineProperty(el, "scrollHeight", { configurable: true, get: () => 900 });
+
+    fireEvent.keyDown(window, { key: "ArrowUp", metaKey: true });
+    expect(scrollTo).not.toHaveBeenCalled(); // nothing to hop between
+    fireEvent.keyDown(window, { key: "ArrowUp", metaKey: true });
+    expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 0 }));
+    expect(el.dataset.stick).toBe("free");
+    fireEvent.keyDown(window, { key: "ArrowDown", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "ArrowDown", ctrlKey: true });
+    expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 900 }));
+    expect(el.dataset.stick).toBe("follow");
+  });
+
   it("says so when the delegate has no record", async () => {
     const client = new FakeRouterClient();
     vi.spyOn(client, "getEvents").mockResolvedValue([]);

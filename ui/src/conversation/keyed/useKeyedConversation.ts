@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { RouterClient, SessionEventSource } from "../../router/client";
-import type { TranscriptMissing } from "../../router/types";
+import type { TranscriptMessage, TranscriptMissing } from "../../router/types";
 import {
   conversationReducer,
   emptyConversation,
@@ -57,6 +57,14 @@ export interface KeyedConversation {
   dispatch: (a: ConvAction) => void;
   /** Fetch the page before the oldest loaded row; resolves once merged. */
   loadOlder: () => Promise<void>;
+  /**
+   * Fetch every page before the oldest loaded row and merge them as one
+   * (one render, not one per page). Resolves true once merged; false if
+   * `cancelled()` turned true first, or nothing was older — nothing merges.
+   * `beforeMerge` runs just before the merge, so whatever the merge's render
+   * should do (land on the first message) is set up in time for it.
+   */
+  loadAllOlder: (cancelled: () => boolean, beforeMerge?: () => void) => Promise<boolean>;
   /** Refetch the last page and merge it by key (turn end, a terminal-mode turn). */
   refreshLast: () => Promise<void>;
   /** Close the stream and open it again from the last frame seen. */
@@ -261,6 +269,45 @@ export function useKeyedConversation(
     return p;
   }, [client, sessionId]);
 
+  const loadAllOlder = useCallback(
+    async (cancelled: () => boolean, beforeMerge?: () => void) => {
+      // A single page in flight lands first: the cursor to start from is after it.
+      await olderInFlight.current?.catch(() => {});
+      const start = stateRef.current.cursor;
+      if (!stateRef.current.hasMore || !start) return false;
+      const all = async (): Promise<boolean> => {
+        const pages: TranscriptMessage[][] = [];
+        let before = start;
+        for (;;) {
+          if (cancelled()) return false;
+          const page = await client.getTranscriptPage(sessionId, { before, limit: PAGE_LIMIT });
+          const rows = page.rows ?? [];
+          pages.unshift(rows);
+          const next = rows[0]?.key;
+          if (!page.has_more || !next || next === before) break;
+          before = next;
+        }
+        // Cancelled, or the list moved on under it (another session, a swap).
+        if (cancelled() || stateRef.current.cursor !== start) return false;
+        beforeMerge?.();
+        dispatch({ type: "olderPage", rows: pages.flat(), hasMore: false });
+        return true;
+      };
+      // Single-page scroll-up paging waits on this rather than racing it.
+      const p = all();
+      olderInFlight.current = p.then(
+        () => {},
+        () => {},
+      );
+      try {
+        return await p;
+      } finally {
+        olderInFlight.current = null;
+      }
+    },
+    [client, sessionId],
+  );
+
   const rows = useMemo(() => orderedRows(state), [state]);
-  return { state, rows, dispatch, loadOlder, refreshLast, reattach: bump, error: errorRef.current, missing };
+  return { state, rows, dispatch, loadOlder, loadAllOlder, refreshLast, reattach: bump, error: errorRef.current, missing };
 }

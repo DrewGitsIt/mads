@@ -220,6 +220,62 @@ describe("ConversationTab — keyed conversation", () => {
     expect(getPage).toHaveBeenCalledTimes(2);
   });
 
+  it("Cmd+↑↑ loads every older page as one, with a note while it does, then lands on the first message", async () => {
+    const client = new FakeRouterClient();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const getPage = vi
+      .spyOn(client, "getTranscriptPage")
+      .mockResolvedValueOnce(page([{ role: "user", key: "u5", text: "the latest question" }], true))
+      .mockResolvedValueOnce(page([{ role: "user", key: "u4", text: "an older question" }], true))
+      .mockImplementationOnce(async () => {
+        await held;
+        return page([{ role: "user", key: "u1", text: "the very first question" }], false);
+      });
+    Element.prototype.scrollTo ??= function () {};
+    await mount(client);
+    await waitFor(() => expect(screen.getByText("the latest question")).toBeTruthy());
+    stream().scrollTop = 500;
+
+    fireEvent.keyDown(window, { key: "ArrowUp", metaKey: true });
+    fireEvent.keyDown(window, { key: "ArrowUp", metaKey: true });
+    await waitFor(() => expect(screen.getByTestId("loading-all").textContent).toBe("Loading earlier messages…"));
+    // Nothing merges page by page: the first older page waits for the rest.
+    expect(screen.queryByText("an older question")).toBeNull();
+
+    await act(async () => release());
+    await waitFor(() => expect(screen.getByText("the very first question")).toBeTruthy());
+    expect(screen.queryByTestId("loading-all")).toBeNull();
+    expect(getPage.mock.calls[2]).toEqual(["session-active", { before: "u4", limit: 100 }]);
+    const order = [...stream().querySelectorAll("[data-user-msg]")].map((el) => el.textContent);
+    expect(order[0]).toContain("the very first question");
+    expect(order[1]).toContain("an older question");
+    expect(stream().scrollTop).toBe(0);
+  });
+
+  it("Cmd+↑↑ is called off by reading on: nothing merges", async () => {
+    const client = new FakeRouterClient();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    vi.spyOn(client, "getTranscriptPage")
+      .mockResolvedValueOnce(page([{ role: "user", key: "u5", text: "the latest question" }], true))
+      .mockImplementationOnce(async () => {
+        await held;
+        return page([{ role: "user", key: "u4", text: "an older question" }], false);
+      });
+    Element.prototype.scrollTo ??= function () {};
+    await mount(client);
+    await waitFor(() => expect(screen.getByText("the latest question")).toBeTruthy());
+
+    fireEvent.keyDown(window, { key: "ArrowUp", metaKey: true });
+    fireEvent.keyDown(window, { key: "ArrowUp", metaKey: true });
+    await waitFor(() => expect(screen.getByTestId("loading-all")).toBeTruthy());
+    fireEvent.wheel(stream());
+    expect(screen.queryByTestId("loading-all")).toBeNull();
+    await act(async () => release());
+    expect(screen.queryByText("an older question")).toBeNull();
+  });
+
   it("a turn the stream already ended stays ended when a stale working arrives with its end", async () => {
     // A send the harness refuses at once (an expired login): the stream's
     // turn_end lands before the control plane's working / turn_ended / idle,

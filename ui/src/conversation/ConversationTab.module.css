@@ -129,7 +129,7 @@
   display: none;
 }
 
-/* The working line, queued messages and Show all: solid --bg0, the pane's
+/* The working line and queued messages: solid --bg0, the pane's
    own colour, so it's invisible at the bottom of the stream and hides the
    conversation scrolled up behind it. Bleeds over the strip's side and
    bottom padding so no text shows around it; the approval pill and running
@@ -149,9 +149,15 @@
   padding: 0;
 }
 
-/* Show all: skips a paced reveal that trails the agent. Sits at the strip's
-   right edge, nearest the composer. */
+/* Show all: skips a paced reveal that trails the agent. Floats just above
+   the whole pinned strip at its right edge — over the stream, never under a
+   running stack or approval pill — and takes none of the strip's height, so
+   coming and going moves nothing. */
 .revealAll {
+  position: absolute;
+  right: var(--space-4);
+  bottom: 100%;
+  padding-bottom: var(--space-2);
   display: flex;
   justify-content: flex-end;
   animation: reveal-all-in var(--dur) var(--ease-out);
@@ -170,4 +176,22 @@
     opacity: 0;
     transform: translateY(4px);
   }
+}
+
+/* ↑↑ (Cmd/Ctrl) on a long history: every older page is on its way. Floats
+   at the top of the pane, where the jump will land; reading on cancels it. */
+.loadingAll {
+  position: absolute;
+  top: var(--space-2);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 41;
+  padding: var(--space-1) var(--space-3);
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  box-shadow: var(--shadow);
+  color: var(--text2);
+  font: italic 500 var(--fs-sm) var(--sans);
+  pointer-events: none;
 }
