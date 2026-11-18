@@ -12,8 +12,9 @@ const COMPACTING = "Compacting…";
  * the entire live turn (ConversationTab keeps `working` truthy from send to
  * turn_end), so "is it still going?" is never ambiguous — the elapsed
  * counter ticks turn-long, and a current-activity ticker line streams the
- * latest tool title (or "Thinking", fed by thinking-token ticks) while the
- * label stays a calm, generic "Working…". A pending tool names itself
+ * latest tool title (or "Thinking", fed by thinking-token ticks). The
+ * dots already say "working": the word shows only until the turn's first
+ * step names what it's doing (or for a compaction, which has none). A pending tool names itself
  * (aria) ahead of the generic label. A turn parked on a permission prompt
  * isn't this indicator's story: the conversation's approval jump owns that
  * signal, live turn or not (a background subagent can ask after the turn).
@@ -64,7 +65,7 @@ export function WorkingIndicator({
       <span className={styles.dot} aria-hidden="true" />
       <span className={styles.dot} aria-hidden="true" />
       <span className={styles.dot} aria-hidden="true" />
-      <span className={styles.label}>{shown}</span>
+      {!ticker && <span className={styles.label}>{shown}</span>}
       {ticker && (
         <span className={styles.ticker} data-testid="working-ticker" key={ticker}>
           {ticker}

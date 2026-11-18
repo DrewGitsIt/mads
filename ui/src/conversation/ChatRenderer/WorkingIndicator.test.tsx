@@ -19,10 +19,13 @@ describe("WorkingIndicator", () => {
     expect(screen.queryByTestId("working-ticker")).toBeNull();
   });
 
-  it("still ticks a real activity under the generic label", () => {
-    render(<WorkingIndicator activity="Running bash · make check" />);
-    expect(screen.getByRole("status", { name: "Working…" })).toBeTruthy();
+  it("says Working… only until a step names what it's doing", () => {
+    const { rerender } = render(<WorkingIndicator />);
+    expect(screen.getByRole("status").textContent).toContain("Working…");
+    rerender(<WorkingIndicator activity="Running bash · make check" />);
+    const status = screen.getByRole("status", { name: "Working…" }); // still its name for assistive tech
     expect(screen.getByTestId("working-ticker").textContent).toBe("Running bash · make check");
+    expect(status.textContent).not.toContain("Working…");
   });
 
   describe("elapsed counter", () => {
