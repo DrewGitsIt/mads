@@ -147,7 +147,11 @@ describe("ConversationTab — paced reveal", () => {
     tick(0);
     tick(100);
     expect(liveText()).not.toContain("w59.");
-    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+    // It floats over the pinned strip, never inside its band.
+    const chip = screen.getByRole("button", { name: "Show all" });
+    expect(screen.getByTestId("pinned-cluster").contains(chip)).toBe(true);
+    expect(screen.queryByTestId("pinned-band")?.contains(chip) ?? false).toBe(false);
+    fireEvent.click(chip);
     expect(liveText()).toContain("w59.");
     await waitFor(() => expect(screen.queryByRole("button", { name: "Show all" })).toBeNull());
   });

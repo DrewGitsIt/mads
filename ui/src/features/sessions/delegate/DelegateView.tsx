@@ -17,6 +17,7 @@ import {
 import { KindIcon } from "../../../conversation/activity/primitives";
 import { useDelegateFile } from "../../../conversation/activity/useDelegateFile";
 import { useStickToBottom } from "../../../conversation/useStickToBottom";
+import { glideTo, useJumpKeys } from "../../../conversation/useJumpKeys";
 import { TaskCounters, TaskStatusGlyph } from "../../../conversation/activity/TaskCard";
 import { waitingOnText } from "../../../router/delegateLive";
 import styles from "./DelegateView.module.css";
@@ -198,6 +199,18 @@ export function DelegateView({ sessionId, harnessId, parent, routerClient, onBac
   // go the moment the user scrolls up — the conversation pane's rule
   // (useStickToBottom).
   const stick = useStickToBottom();
+  // Cmd/Ctrl ↑↑ / ↓↓: the start of its stream, or back to following the tail
+  // (a delegate has no messages of its own to hop between).
+  useJumpKeys(stick.element, {
+    toTop: (el) => {
+      stick.release();
+      glideTo(el, 0);
+    },
+    toBottom: (el) => {
+      stick.follow();
+      glideTo(el, el.scrollHeight);
+    },
+  });
 
   // The parent's workspace and branch: where the delegate works unless it
   // has a worktree (or a branch) of its own.
@@ -248,10 +261,12 @@ export function DelegateView({ sessionId, harnessId, parent, routerClient, onBac
             />
           )}
         </ContentColumn>
-        {running && (
+        {running ? (
           <div className={styles.pinned}>
             <WorkingIndicator tool={inFlight} since={model?.startedAt ?? record?.started_at} />
           </div>
+        ) : (
+          <div className={styles.end} aria-hidden="true" />
         )}
       </div>
       {record && (

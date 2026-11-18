@@ -76,11 +76,14 @@
   font: var(--fs-sm) var(--sans);
 }
 
+/* No bottom padding here: a sticky child stops at the scroller's padding
+   edge, so .pinned would float that far above the bottom with the stream
+   showing through underneath. The space under the stream is .end's. */
 .body {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 16px 0 28px;
+  padding: 16px 0 0;
   font: var(--fs-body) var(--mono);
   color: var(--text2);
 }
@@ -92,10 +95,15 @@
   position: sticky;
   bottom: 0;
   z-index: 40;
-  padding: var(--space-3) var(--space-4) 0;
+  padding: var(--space-3) var(--space-4);
   /* Solid in the pane's own colour, as the conversation's .pinnedBand, so
      the stream scrolls behind the indicator rather than through it. */
   background: var(--bg0);
+}
+
+/* The breathing room under the stream's last item, when nothing's pinned. */
+.end {
+  height: 28px;
 }
 
 .note {

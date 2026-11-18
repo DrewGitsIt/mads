@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../components/Button/Button";
 import { Card } from "../components/Card/Card";
 import { ConfirmDialog } from "../components/ConfirmDialog/ConfirmDialog";
@@ -102,6 +102,7 @@ import { STREAM_REATTACH_EVENT, type StreamReattachDetail } from "./streamReatta
 import { useStickToBottom } from "./useStickToBottom";
 import { useRunway } from "./useRunway";
 import { useDoubleEnter } from "./useDoubleEnter";
+import { glideTo, useJumpKeys } from "./useJumpKeys";
 import { useOlderPages } from "./useOlderPages";
 import { FindBar, useFindBar } from "./Find/FindBar";
 import { useVisibleCards } from "./useVisibleCards";
@@ -1182,30 +1183,91 @@ export function ConversationTab({
   useDoubleEnter(tabRef, reveal.behind, revealAll);
 
   // Ctrl/Cmd+↑/↓ hops between the user's own messages — anchored on the
-  // [data-user-msg] elements ChatRenderer stamps on each user bubble.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (!(e.ctrlKey || e.metaKey) || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
-      const el = streamRef.current;
-      if (!el) return;
+  // [data-user-msg] elements ChatRenderer stamps on each user bubble. A
+  // double tap goes to the very start (every older page loaded first, as one)
+  // or back to the tail.
+  const [loadingAll, setLoadingAll] = useState(false);
+  const loadAllToken = useRef<{ cancelled: boolean } | null>(null);
+  const jumpToTop = useRef(false);
+  const cancelLoadAll = useCallback(() => {
+    if (loadAllToken.current) loadAllToken.current.cancelled = true;
+    loadAllToken.current = null;
+    setLoadingAll(false);
+  }, []);
+  useJumpKeys(streamRef, {
+    hop: (dir, el) => {
       const anchors = Array.from(el.querySelectorAll<HTMLElement>("[data-user-msg]"));
-      if (anchors.length === 0) return;
-      e.preventDefault();
+      if (anchors.length === 0) return false;
+      cancelLoadAll();
       const containerTop = el.getBoundingClientRect().top;
       const offsets = anchors.map((a) => a.getBoundingClientRect().top - containerTop + el.scrollTop);
       const cur = el.scrollTop;
       const target =
-        e.key === "ArrowUp"
+        dir === "up"
           ? ([...offsets].reverse().find((o) => o < cur - 4) ?? 0)
           : (offsets.find((o) => o > cur + 4) ?? el.scrollHeight);
       // Hopping up leaves the tail — as the approval jump does, let go now
       // rather than at the smooth scroll's first event.
-      if (e.key === "ArrowUp") stick.release();
+      if (dir === "up") stick.release();
       el.scrollTo({ top: target, behavior: "smooth" });
-    }
+      return true;
+    },
+    toTop: (el) => {
+      stick.release();
+      if (!conv.state.hasMore) {
+        cancelLoadAll();
+        glideTo(el, 0);
+        return;
+      }
+      if (loadAllToken.current) return; // already on its way
+      // Far away, and as far as any distance: arrive, don't glide.
+      const token = { cancelled: false };
+      loadAllToken.current = token;
+      setLoadingAll(true);
+      conv
+        .loadAllOlder(
+          () => token.cancelled,
+          () => (jumpToTop.current = true),
+        )
+        .catch(() => {})
+        .finally(() => {
+          if (loadAllToken.current === token) cancelLoadAll();
+        });
+    },
+    toBottom: (el) => {
+      cancelLoadAll();
+      stick.follow();
+      glideTo(el, el.scrollHeight);
+    },
+  });
+  // The pages ↑↑ asked for landed: the first message, instantly.
+  useLayoutEffect(() => {
+    const el = streamRef.current;
+    if (!jumpToTop.current || !el) return;
+    jumpToTop.current = false;
+    el.scrollTop = 0;
+  }, [conv.state.cursor, streamRef]);
+  // Reading on while it loads (a scroll, a key, a click) calls it off.
+  useEffect(() => {
+    if (!loadingAll) return;
+    const el = streamRef.current;
+    const onKey = (e: KeyboardEvent) => {
+      if (["Meta", "Control", "Shift", "Alt"].includes(e.key)) return;
+      if (!((e.ctrlKey || e.metaKey) && e.key === "ArrowUp")) cancelLoadAll();
+    };
+    el?.addEventListener("wheel", cancelLoadAll, { passive: true });
+    el?.addEventListener("touchstart", cancelLoadAll, { passive: true });
+    el?.addEventListener("pointerdown", cancelLoadAll);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [stick, streamRef]);
+    return () => {
+      el?.removeEventListener("wheel", cancelLoadAll);
+      el?.removeEventListener("touchstart", cancelLoadAll);
+      el?.removeEventListener("pointerdown", cancelLoadAll);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [loadingAll, cancelLoadAll, streamRef]);
+  // Another session: whatever was loading was for the last one.
+  useEffect(() => cancelLoadAll, [sessionId, cancelLoadAll]);
 
   // The subagent dock's stream: the subagent's own transcript file, read on
   // open and again as it runs (its task id is its harness id — the file's
@@ -1802,6 +1864,16 @@ export function ConversationTab({
                       stream, outside it, so the scrollbar ends at its top edge. */}
                   <div ref={runway.spacerRef} className={styles.runwaySpacer} aria-hidden="true" data-testid="runway-spacer" />
                   <div className={styles.pinned} data-testid="pinned-cluster" ref={pinnedRef}>
+                    {showAll.present && (
+                      // The paced reveal trails the agent by more than a couple of
+                      // seconds' reading — offer to skip to the end of it. Floats
+                      // above everything pinned, taking none of its height.
+                      <div className={styles.revealAll} data-leaving={showAll.leaving || undefined}>
+                        <Chip tone="info" onClick={() => reveal.revealAll()}>
+                          Show all
+                        </Chip>
+                      </div>
+                    )}
                     <ApprovalJump
                       pending={pendingPermissions}
                       subagentName={subagentName}
@@ -1820,7 +1892,7 @@ export function ConversationTab({
                         openSubagent(model.toolUseId, model.description ?? "Subagent", model.subagentType)
                       }
                     />
-                    {(working || queuedMessages.length > 0 || showAll.present) && (
+                    {(working || queuedMessages.length > 0) && (
                       // The strip's text rows sit on a solid band of the pane's
                       // own background: scrolled up, the conversation passes
                       // behind them instead of through them.
@@ -1837,20 +1909,16 @@ export function ConversationTab({
                           onCancel={handleCancelQueued}
                           className={styles.queuedAbove}
                         />
-                        {showAll.present && (
-                          // The paced reveal trails the agent by more than a couple of
-                          // seconds' reading — offer to skip to the end of it.
-                          <div className={styles.revealAll} data-leaving={showAll.leaving || undefined}>
-                            <Chip tone="info" onClick={() => reveal.revealAll()}>
-                              Show all
-                            </Chip>
-                          </div>
-                        )}
                       </div>
                     )}
                   </div>
                 </div>
                 {find.open && <FindBar {...find.bar} streamRef={streamRef} />}
+                {loadingAll && (
+                  <div className={styles.loadingAll} role="status" data-testid="loading-all">
+                    Loading earlier messages…
+                  </div>
+                )}
                 <SessionDock {...dockProps} mode="chat">
                   <Composer
                     routerClient={routerClient}
