@@ -140,6 +140,24 @@ describe("conversationReducer", () => {
     expect(live.rows.c.tool?.result?.background).toEqual({ task_id: "b2" });
   });
 
+  it("drops a replayed result whose call it never saw (a pruned subagent call)", () => {
+    // The runner's replay after a background subagent's call was pruned at
+    // a parent turn end: the result alone, nameless and without a parent.
+    const s = run(
+      emptyConversation(),
+      hello(),
+      f("tool_result", {
+        key: "tool:toolu_SUB",
+        text: "PASS ...",
+        is_error: false,
+        tool: { id: "toolu_SUB", name: "", status: "completed" },
+      }),
+      f("replay_end"),
+    );
+    expect(view(s)).toEqual([]);
+    expect(s.rows["tool:toolu_SUB"]).toBeUndefined();
+  });
+
   it("unsaved keeps agent rows and marks a user send failed, in place", () => {
     let s = run(emptyConversation(), hello(), f("replay_end"), f("user_message", { key: "u1", text: "hi" }), ...textItem("a1", "partial"));
     s = run(s, f("unsaved", { keys: ["u1", "a1"] }));

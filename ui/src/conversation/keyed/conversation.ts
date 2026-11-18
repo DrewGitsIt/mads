@@ -451,6 +451,12 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
     case "tool_result": {
       if (!key || storedHas(s, key)) return s;
       const tool = d.tool as ToolUse | undefined;
+      // A result whose call this tab never saw, with nothing to name it by:
+      // a background subagent's call the runner pruned at a parent turn end,
+      // replayed alone. Its frame carries no parent, so it would land in the
+      // main list as a nameless row; the subagent's dock has it from its
+      // transcript file. As keyPage does, an orphan has nothing to attach to.
+      if (!s.rows[key] && !tool?.name) return s;
       return upsertLive(s, key, (prev) => {
         const base = prev?.tool ?? tool ?? { name: "" };
         return {
