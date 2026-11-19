@@ -182,6 +182,22 @@ describe("TerminalView (renderer contract)", () => {
     expect(bridge.write).not.toHaveBeenCalled();
   });
 
+  it("Ctrl+` reported as key Unidentified (Electron on Wayland) still bubbles without writing to the pty", async () => {
+    const { bridge } = makeStubBridge();
+    const { container } = render(<TerminalView bridge={bridge} />);
+    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+    const onDocumentKey = vi.fn();
+    document.addEventListener("keydown", onDocumentKey);
+
+    const textarea = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+    textarea.focus();
+    fireEvent.keyDown(textarea, { key: "Unidentified", code: "Backquote", keyCode: 192, ctrlKey: true });
+    document.removeEventListener("keydown", onDocumentKey);
+
+    expect(onDocumentKey).toHaveBeenCalledTimes(1);
+    expect(bridge.write).not.toHaveBeenCalled();
+  });
+
   it("reports a process exit through onExit after printing the exit line", async () => {
     const { bridge, exitListeners } = makeStubBridge();
     const onExit = vi.fn();

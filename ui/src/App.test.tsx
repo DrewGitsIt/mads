@@ -304,6 +304,23 @@ describe("App command palette (W6.11)", () => {
     expect(screen.queryByText(/Shell requires the Electron shell/)).toBeNull();
   });
 
+  it("Ctrl+` toggles the Shell dock when the key arrives Unidentified (Electron on Wayland)", async () => {
+    stubRouterFetch();
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy());
+
+    fireEvent.keyDown(document, { key: "P", metaKey: true, shiftKey: true });
+    fireEvent.click(screen.getByTestId("jump:session-active"));
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Conversation" }).getAttribute("aria-selected")).toBe(
+        "true",
+      ),
+    );
+
+    fireEvent.keyDown(document, { key: "Unidentified", code: "Backquote", ctrlKey: true });
+    expect(screen.getByText(/Shell requires the Electron shell/)).toBeTruthy();
+  });
+
   it("Ctrl+` has no effect when no session workspace is open", async () => {
     stubRouterFetch();
     render(<App />);

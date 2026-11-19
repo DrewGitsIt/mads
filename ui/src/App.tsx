@@ -23,7 +23,7 @@ import { DashboardTab } from "./dashboard/DashboardTab";
 import { pipelineClient } from "./pipeline/client/pipelineClient";
 import type { WorkspaceTabId } from "./features/sessions/workspace/tabRegistry";
 import { useEndDeletedSessionShells } from "./conversation/ShellDock/useEndDeletedSessionShells";
-import { requestShellToggle } from "./conversation/shellToggleSignal";
+import { isShellToggleKey, requestShellToggle } from "./conversation/shellToggleSignal";
 import {
   guardLeave,
   OPEN_LIBRARY_EVENT,
@@ -128,7 +128,7 @@ export function App() {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
-      } else if (e.ctrlKey && e.key === "`") {
+      } else if (isShellToggleKey(e)) {
         e.preventDefault();
         requestShellToggle();
       }
