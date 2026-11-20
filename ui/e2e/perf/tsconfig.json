@@ -1,0 +1,15 @@
+{
+  "//": "Type-checks the perf harness: npx --prefix ui tsc -p ui/e2e/perf (Playwright itself only transpiles).",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "moduleResolution": "Bundler",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["*.ts", "../lib/auth.ts", "../lib/topology.ts"]
+}

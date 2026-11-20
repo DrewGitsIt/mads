@@ -3,7 +3,7 @@
 GOBIN := $(CURDIR)/bin
 LINT  := $(GOBIN)/golangci-lint
 
-.PHONY: build test lint check tidy ui-deps app e2e-smoke ui-smoke release-gate check-migrations
+.PHONY: build test lint check tidy ui-deps app e2e-smoke ui-smoke ui-perf release-gate check-migrations
 .PHONY: services ui mads data router session pipeline mesh
 
 build: ui-deps
@@ -140,6 +140,16 @@ ui-smoke: ui-deps
 		npx --prefix ui playwright install chromium; \
 	fi
 	npm --prefix ui run test:e2e
+
+# Perf harness (docs/PERF-HARNESS-PLAN.md): local only, never in CI.
+#   make ui-perf BASE=<ref> CAND=<ref|worktree dir> PROFILE=S|M|L|XL N=5 BROWSER=chromium|electron
+# CAND is optional (baseline only). Builds each side into temp dirs (refs via
+# a temp `git worktree add`), seeds one workload, runs the scenarios ABAB on
+# hermetic stacks behind the delay proxy, and writes perf-results/<stamp>/.
+# Also: SCENARIOS=1,3  PERF_DELAYS=off|<regex>=<ms>,...  PERF_CDP_SSE=1.
+ui-perf: ui-deps
+	BASE="$(BASE)" CAND="$(CAND)" PROFILE="$(PROFILE)" N="$(N)" BROWSER="$(BROWSER)" SCENARIOS="$(SCENARIOS)" \
+		sh ui/e2e/perf/run.sh
 
 # Release gate: cross-platform build matrix + install/update smokes against
 # the native candidate. Kept out of `check`/CI's fast `test` job (multi-

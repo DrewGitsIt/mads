@@ -1,0 +1,351 @@
+{
+  "name": "XL",
+  "description": "L scaled ×3.242 (events) ×1.800 (records)",
+  "seed": 1,
+  "sessions": 137,
+  "active_sessions": 5,
+  "delegate_sessions": 72,
+  "delegates": 882,
+  "running_delegates": 3,
+  "links": 20,
+  "watched_repos": 1,
+  "session_skew": 1.094,
+  "events": {
+    "account.auth_changed": {
+      "count": 13,
+      "mean_bytes": 88.5,
+      "p50_bytes": 88,
+      "p95_bytes": 89,
+      "max_bytes": 89,
+      "global_frac": 1
+    },
+    "agent.created": {
+      "count": 6,
+      "mean_bytes": 31,
+      "p50_bytes": 28,
+      "p95_bytes": 34,
+      "max_bytes": 34,
+      "global_frac": 1
+    },
+    "agent.draft_generated": {
+      "count": 6,
+      "mean_bytes": 2326,
+      "p50_bytes": 2150,
+      "p95_bytes": 2502,
+      "max_bytes": 2502,
+      "global_frac": 1
+    },
+    "agent.updated": {
+      "count": 3,
+      "mean_bytes": 28,
+      "p50_bytes": 28,
+      "p95_bytes": 28,
+      "max_bytes": 28,
+      "global_frac": 1
+    },
+    "capability.created": {
+      "count": 6,
+      "mean_bytes": 35.5,
+      "p50_bytes": 32,
+      "p95_bytes": 39,
+      "max_bytes": 39,
+      "global_frac": 1
+    },
+    "capability.deleted": {
+      "count": 3,
+      "mean_bytes": 39,
+      "p50_bytes": 39,
+      "p95_bytes": 39,
+      "max_bytes": 39,
+      "global_frac": 1
+    },
+    "commit.created": {
+      "count": 3977,
+      "mean_bytes": 66,
+      "p50_bytes": 65,
+      "p95_bytes": 65,
+      "max_bytes": 302
+    },
+    "config.updated": {
+      "count": 97,
+      "mean_bytes": 0,
+      "p50_bytes": 0,
+      "p95_bytes": 0,
+      "max_bytes": 0,
+      "global_frac": 1
+    },
+    "device.paired": {
+      "count": 3,
+      "mean_bytes": 134,
+      "p50_bytes": 134,
+      "p95_bytes": 134,
+      "max_bytes": 134,
+      "global_frac": 1
+    },
+    "file.changed": {
+      "count": 42591,
+      "mean_bytes": 141.1,
+      "p50_bytes": 132,
+      "p95_bytes": 210,
+      "max_bytes": 254
+    },
+    "job.completed": {
+      "count": 152521,
+      "mean_bytes": 55.4,
+      "p50_bytes": 56,
+      "p95_bytes": 56,
+      "max_bytes": 59
+    },
+    "job.failed": {
+      "count": 6,
+      "mean_bytes": 453,
+      "p50_bytes": 112,
+      "p95_bytes": 794,
+      "max_bytes": 794
+    },
+    "job.queued": {
+      "count": 152527,
+      "mean_bytes": 55.4,
+      "p50_bytes": 56,
+      "p95_bytes": 56,
+      "max_bytes": 59
+    },
+    "job.started": {
+      "count": 152527,
+      "mean_bytes": 55.4,
+      "p50_bytes": 56,
+      "p95_bytes": 56,
+      "max_bytes": 59
+    },
+    "link.created": {
+      "count": 36,
+      "mean_bytes": 124.7,
+      "p50_bytes": 131,
+      "p95_bytes": 131,
+      "max_bytes": 131
+    },
+    "link.digest_discarded": {
+      "count": 13,
+      "mean_bytes": 26.8,
+      "p50_bytes": 13,
+      "p95_bytes": 69,
+      "max_bytes": 69
+    },
+    "link.message_injected": {
+      "count": 1533,
+      "mean_bytes": 1015.9,
+      "p50_bytes": 781,
+      "p95_bytes": 2614,
+      "max_bytes": 7755
+    },
+    "link.updated": {
+      "count": 55,
+      "mean_bytes": 128.3,
+      "p50_bytes": 131,
+      "p95_bytes": 131,
+      "max_bytes": 131
+    },
+    "merge.attempted": {
+      "count": 6,
+      "mean_bytes": 74,
+      "p50_bytes": 71,
+      "p95_bytes": 77,
+      "max_bytes": 77
+    },
+    "merge.completed": {
+      "count": 6,
+      "mean_bytes": 154,
+      "p50_bytes": 151,
+      "p95_bytes": 157,
+      "max_bytes": 157
+    },
+    "peer.created": {
+      "count": 3,
+      "mean_bytes": 17,
+      "p50_bytes": 17,
+      "p95_bytes": 17,
+      "max_bytes": 17,
+      "global_frac": 1
+    },
+    "peer.reachability_changed": {
+      "count": 357,
+      "mean_bytes": 112.5,
+      "p50_bytes": 101,
+      "p95_bytes": 125,
+      "max_bytes": 157,
+      "global_frac": 1
+    },
+    "peer.updated": {
+      "count": 3,
+      "mean_bytes": 17,
+      "p50_bytes": 17,
+      "p95_bytes": 17,
+      "max_bytes": 17,
+      "global_frac": 1
+    },
+    "profile.created": {
+      "count": 3,
+      "mean_bytes": 25,
+      "p50_bytes": 25,
+      "p95_bytes": 25,
+      "max_bytes": 25,
+      "global_frac": 1
+    },
+    "profile.updated": {
+      "count": 3,
+      "mean_bytes": 25,
+      "p50_bytes": 25,
+      "p95_bytes": 25,
+      "max_bytes": 25,
+      "global_frac": 1
+    },
+    "repo.changed": {
+      "count": 493,
+      "mean_bytes": 77.8,
+      "p50_bytes": 71,
+      "p95_bytes": 89,
+      "max_bytes": 89,
+      "global_frac": 1
+    },
+    "session.activity_changed": {
+      "count": 2195,
+      "mean_bytes": 27.5,
+      "p50_bytes": 33,
+      "p95_bytes": 33,
+      "max_bytes": 33
+    },
+    "session.agent_state": {
+      "count": 96493,
+      "mean_bytes": 110.2,
+      "p50_bytes": 111,
+      "p95_bytes": 167,
+      "max_bytes": 267
+    },
+    "session.compact": {
+      "count": 600,
+      "mean_bytes": 20.6,
+      "p50_bytes": 17,
+      "p95_bytes": 31,
+      "max_bytes": 31
+    },
+    "session.created": {
+      "count": 370,
+      "mean_bytes": 347.7,
+      "p50_bytes": 242,
+      "p95_bytes": 1049,
+      "max_bytes": 1223
+    },
+    "session.delegate_changed": {
+      "count": 64754,
+      "mean_bytes": 928.7,
+      "p50_bytes": 936,
+      "p95_bytes": 1017,
+      "max_bytes": 1223
+    },
+    "session.deleted": {
+      "count": 123,
+      "mean_bytes": 43.3,
+      "p50_bytes": 33,
+      "p95_bytes": 72,
+      "max_bytes": 331
+    },
+    "session.peer_address": {
+      "count": 344,
+      "mean_bytes": 41.9,
+      "p50_bytes": 42,
+      "p95_bytes": 42,
+      "max_bytes": 42
+    },
+    "session.provisioning": {
+      "count": 2765,
+      "mean_bytes": 29.6,
+      "p50_bytes": 25,
+      "p95_bytes": 50,
+      "max_bytes": 50
+    },
+    "session.queue_changed": {
+      "count": 139,
+      "mean_bytes": 1017.6,
+      "p50_bytes": 252,
+      "p95_bytes": 2795,
+      "max_bytes": 13717
+    },
+    "session.renamed": {
+      "count": 357,
+      "mean_bytes": 371.4,
+      "p50_bytes": 261,
+      "p95_bytes": 1070,
+      "max_bytes": 1218
+    },
+    "session.subagent_event": {
+      "count": 184386,
+      "mean_bytes": 2345.6,
+      "p50_bytes": 718,
+      "p95_bytes": 9647,
+      "max_bytes": 131751
+    },
+    "session.subagent_task": {
+      "count": 98136,
+      "mean_bytes": 436,
+      "p50_bytes": 280,
+      "p95_bytes": 320,
+      "max_bytes": 32684
+    },
+    "session.thinking": {
+      "count": 4058,
+      "mean_bytes": 257.2,
+      "p50_bytes": 249,
+      "p95_bytes": 355,
+      "max_bytes": 478
+    },
+    "session.tool_status_changed": {
+      "count": 45,
+      "mean_bytes": 125,
+      "p50_bytes": 125,
+      "p95_bytes": 125,
+      "max_bytes": 125
+    },
+    "session.turn_ended": {
+      "count": 8383,
+      "mean_bytes": 4962.3,
+      "p50_bytes": 4084,
+      "p95_bytes": 12431,
+      "max_bytes": 83941
+    },
+    "session.updated": {
+      "count": 17300,
+      "mean_bytes": 0,
+      "p50_bytes": 0,
+      "p95_bytes": 0,
+      "max_bytes": 0
+    },
+    "session.usage_updated": {
+      "count": 12743,
+      "mean_bytes": 2,
+      "p50_bytes": 2,
+      "p95_bytes": 2,
+      "max_bytes": 2
+    },
+    "template.updated": {
+      "count": 3,
+      "mean_bytes": 33,
+      "p50_bytes": 33,
+      "p95_bytes": 33,
+      "max_bytes": 33,
+      "global_frac": 1
+    },
+    "workspace.created": {
+      "count": 3,
+      "mean_bytes": 15,
+      "p50_bytes": 15,
+      "p95_bytes": 15,
+      "max_bytes": 15,
+      "global_frac": 1
+    }
+  },
+  "fixtures": {
+    "pending_permissions": 0,
+    "queued_messages": 0,
+    "provisioning_sessions": 0
+  }
+}

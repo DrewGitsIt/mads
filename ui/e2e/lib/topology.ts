@@ -12,14 +12,14 @@ const uiDist = path.resolve(__dirname, "../../dist");
 // socket path, which may contain spaces (docs/LOCAL-FRONT-DOOR-DESIGN.md D9).
 const listeningRe = /listening on (\/.*\S|\S+)/;
 
-interface ListeningProc {
+export interface ListeningProc {
   proc: ChildProcess;
   addr: string;
   exited: Promise<void>;
   terminate(graceMs?: number): Promise<void>;
 }
 
-function cleanEnv(home: string): NodeJS.ProcessEnv {
+export function cleanEnv(home: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (k === "HOME" || k === "MADS_DATA_DIR" || k === "MADS_HOME") continue;
@@ -30,7 +30,7 @@ function cleanEnv(home: string): NodeJS.ProcessEnv {
   return env;
 }
 
-function spawnListening(name: string, argv: string[], env: NodeJS.ProcessEnv): Promise<ListeningProc> {
+export function spawnListening(name: string, argv: string[], env: NodeJS.ProcessEnv): Promise<ListeningProc> {
   return new Promise((resolve, reject) => {
     const proc = spawn(argv[0], argv.slice(1), { env, stdio: ["ignore", "ignore", "pipe"] });
     const lines: string[] = [];
@@ -109,7 +109,7 @@ async function terminate(proc: ChildProcess, exited: Promise<void>, graceMs: num
   }
 }
 
-async function waitHealth(base: string): Promise<void> {
+export async function waitHealth(base: string): Promise<void> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     try {
