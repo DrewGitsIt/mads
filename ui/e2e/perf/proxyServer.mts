@@ -26,6 +26,13 @@ const sockets = new Set();
 let nextReq = 1;
 const requests = [];
 let busy = 0;
+// The last moment an /events stream moved a byte or sat backpressured (the
+// page not reading fast enough): either way its replay isn't over.
+let lastEventsActivity = 0;
+const eventsRes = new Set();
+setInterval(() => {
+  for (const r of eventsRes) if (r.writableNeedDrain) lastEventsActivity = Date.now();
+}, 50).unref();
 const timeline = [[Date.now(), 0]];
 const mark = (d) => {
   busy += d;
@@ -97,8 +104,14 @@ const server = createServer((req, res) => {
         res.writeHead(up.statusCode ?? 502, up.statusMessage, up.headers);
         res.flushHeaders();
         let prevNL = false;
+        const isEvents = rec.sse && rec.path === "/events";
+        if (isEvents) {
+          eventsRes.add(res);
+          res.on("close", () => eventsRes.delete(res));
+        }
         up.on("data", (chunk) => {
           rec.bytes += chunk.length;
+          if (isEvents) lastEventsActivity = Date.now();
           if (rec.sse) {
             // Frames end in a blank line; JSON data lines never hold a raw newline.
             for (let i = 0; i < chunk.length; i++) {
@@ -143,7 +156,9 @@ process.on("message", (msg) => {
       target = new URL(msg.url);
       return reply(true);
     case "snapshot":
-      return reply({ now: Date.now(), requests, timeline });
+      return reply({ now: Date.now(), requests, timeline, lastEventsActivity });
+    case "status":
+      return reply({ now: Date.now(), lastEventsActivity });
     case "cutAll":
       for (const s of sockets) s.destroy();
       return reply(true);

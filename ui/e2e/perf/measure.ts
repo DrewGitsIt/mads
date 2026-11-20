@@ -130,11 +130,12 @@ const isEventsStream = (r: NetRequest) => r.type === "EventSource" && r.path ===
  * purpose (the delay rules) excluded — or until capMs. Returns whether it
  * hit the cap.
  */
-async function quiet(net: NetCollector, since: number, capMs: number, delayed: (r: NetRequest) => boolean): Promise<boolean> {
+async function quiet(net: NetCollector, proxy: PerfStack["proxy"], since: number, capMs: number, delayed: (r: NetRequest) => boolean): Promise<boolean> {
   const deadline = Date.now() + capMs;
   for (;;) {
+    const activity = Math.max(net.lastEventsByte, await proxy.eventsActivity());
     const now = Date.now();
-    const streamIdle = now - Math.max(net.lastEventsByte, since) >= STREAM_QUIET_MS;
+    const streamIdle = now - Math.max(activity, since) >= STREAM_QUIET_MS;
     const shortIdle = now - Math.max(net.lastShortStart, since) >= 1000 && net.shortInFlight(delayed).length === 0;
     if (streamIdle && shortIdle) return false;
     if (now > deadline) return true;
@@ -147,11 +148,12 @@ async function quiet(net: NetCollector, since: number, capMs: number, delayed: (
  * started (click → marker) has finished or failed, and /events has been
  * quiet for 500 ms. Returns [settledAt, capped].
  */
-async function settle(net: NetCollector, clickAt: number, markerAt: number): Promise<[number, boolean]> {
+async function settle(net: NetCollector, proxy: PerfStack["proxy"], clickAt: number, markerAt: number): Promise<[number, boolean]> {
   const deadline = Date.now() + SETTLE_CAP_MS;
   for (;;) {
     const open = net.shortOpenBetween(clickAt, markerAt);
-    const eventsQuiet = Date.now() - net.lastEventsByte >= SETTLE_EVENTS_QUIET_MS;
+    // The proxy's view counts a stream the page is too busy to read as active.
+    const eventsQuiet = Date.now() - Math.max(net.lastEventsByte, await proxy.eventsActivity()) >= SETTLE_EVENTS_QUIET_MS;
     if (open.length === 0 && eventsQuiet) {
       const leg = [...net.requests.values()].filter((r) => !isLongLived(r) && r.start >= clickAt && r.start <= markerAt && r.end !== undefined);
       const lastEnd = Math.max(markerAt, ...leg.map((r) => r.end!));
@@ -380,7 +382,7 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       manifest,
       browser: plan.browser,
       quiesce: async () => {
-        if (await quiet(net!, Date.now(), PREPARE_CAP_MS, delayed)) {
+        if (await quiet(net!, stack!.proxy, Date.now(), PREPARE_CAP_MS, delayed)) {
           const open = net!.shortInFlight(delayed).map((r) => `${r.method} ${routeOf(r.path)} (${r.type})`);
           throw new Error(`page never went quiet; still in flight: ${open.join(", ") || "none (a stream kept receiving)"}`);
         }
@@ -403,7 +405,7 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       await leg.act(ctx);
       await leg.ready(ctx);
       const markerAt = Date.now();
-      const [settledAt, capped] = await settle(net, clickAt, markerAt);
+      const [settledAt, capped] = await settle(net, stack.proxy, clickAt, markerAt);
       if (capped) result.windowCapped = true;
       if (leg.quiesceAfter) await ctx.quiesce();
       const snap = await stack.proxy.snapshot();
@@ -425,7 +427,7 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
         writeFileSync(path.join(dir, `${tag}-${result.legs.length}.aria.txt`), await page.locator("body").ariaSnapshot().catch(() => ""));
       }
     }
-    if (await quiet(net, t0, WINDOW_CAP_MS, delayed)) result.windowCapped = true;
+    if (await quiet(net, stack.proxy, t0, WINDOW_CAP_MS, delayed)) result.windowCapped = true;
     const t1 = Date.now();
     const snap1 = await stack.proxy.snapshot();
     await socks.stop();

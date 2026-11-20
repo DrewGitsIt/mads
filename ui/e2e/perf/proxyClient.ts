@@ -25,6 +25,7 @@ export interface ProxySnapshot {
   requests: ProxyRequest[];
   /** (time, requests in flight — so busy sockets) after every change. */
   timeline: [number, number][];
+  lastEventsActivity: number;
 }
 
 export interface DelayProxy {
@@ -33,6 +34,8 @@ export interface DelayProxy {
   pid: number;
   setTarget(url: string): Promise<void>;
   snapshot(): Promise<ProxySnapshot>;
+  /** Last time an /events stream relayed a byte or was backpressured by the page. */
+  eventsActivity(): Promise<number>;
   /** Destroys every client socket at once (a sleep/wake; scenario 7). */
   cutAll(): Promise<void>;
   close(): Promise<void>;
@@ -81,6 +84,7 @@ export async function startDelayProxy(opts: { delays: string; holdOutput: boolea
       await call("setTarget", { url });
     },
     snapshot: () => call<ProxySnapshot>("snapshot"),
+    eventsActivity: async () => (await call<{ lastEventsActivity: number }>("status")).lastEventsActivity,
     cutAll: async () => {
       await call("cutAll");
     },
