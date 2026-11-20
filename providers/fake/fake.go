@@ -27,6 +27,7 @@
 //
 // MADS_FAKE_START_DELAY_MS in the environment delays every Start by that
 // long (a slow harness start, for watching provisioning).
+//
 //	"ratelimit" → the turn fails with a rate-limit error
 //	"fail once <x>" → fails like "ratelimit" the first time it's sent in a
 //	                  conversation, then replies as "echo <x>" — a retry
