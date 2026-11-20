@@ -541,13 +541,13 @@ export function liveHits(urls: string[]): string[] {
 }
 
 /** Waits for a leg's armed marker, returning [page time, harness time]. Fails after 30 s, naming it. */
-async function waitMarker(w: Watch, name: string, spec: MarkerSpec): Promise<[number, number]> {
-  const deadline = Date.now() + MARKER_CAP_MS;
+async function waitMarker(w: Watch, name: string, spec: MarkerSpec, capMs = MARKER_CAP_MS): Promise<[number, number]> {
+  const deadline = Date.now() + capMs;
   for (;;) {
     const p = await readProbe(w.page, Number.MAX_SAFE_INTEGER);
     w.cdpLag.max = Math.max(w.cdpLag.max, Date.now() - p.pageNow);
     if (p.markers[name]) return [p.markers[name], Date.now()];
-    if (Date.now() > deadline) throw new Error(`marker never appeared: ${name} ${JSON.stringify(spec)} (${MARKER_CAP_MS / 1000} s)`);
+    if (Date.now() > deadline) throw new Error(`marker never appeared: ${name} ${JSON.stringify(spec)} (${capMs / 1000} s)`);
     await sleep(25);
   }
 }
@@ -610,7 +610,7 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       if (leg.navigates) await rig.context.addInitScript(`window.__perf && window.__perf.arm(${JSON.stringify(leg.name)}, ${JSON.stringify(spec)});`);
       await arm(page, leg.name, spec);
       await leg.act(ctx);
-      const [markerAt, markerSeen] = await waitMarker(watch, leg.name, spec);
+      const [markerAt, markerSeen] = await waitMarker(watch, leg.name, spec, leg.markerCapMs);
       const rule = await waitRule(watch, clickAt, head, SETTLE_CAP_MS);
       if (rule.capped) throw new Error(`settle capped at ${SETTLE_CAP_MS / 1000} s: ${rule.reason}`);
       const settledAt = Math.max(markerAt, rule.at);

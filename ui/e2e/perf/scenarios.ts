@@ -51,6 +51,8 @@ export interface Leg {
   quiesceAfter?: boolean;
   /** The act loads a new document: the marker is armed in it by an init script. */
   navigates?: boolean;
+  /** How long the marker may take (default PERF_MARKER_CAP_MS, 30 s). */
+  markerCapMs?: number;
 }
 
 export interface Scenario {
@@ -294,6 +296,9 @@ export const SCENARIOS: Scenario[] = [
         act: (ctx) => ctx.stack.proxy.offline(OFFLINE_S * 1000),
         // Resumed: a new /events stream has opened after the network came back.
         marker: (_ctx, clickAt) => ({ kind: "esOpenAfter", after: clickAt + OFFLINE_S * 1000 }),
+        // The outage, plus the bus's backoff (random, up to 30 s after
+        // repeated failures), plus slack.
+        markerCapMs: OFFLINE_S * 1000 + 45_000,
       },
     ],
     smoke: renameSmoke,
