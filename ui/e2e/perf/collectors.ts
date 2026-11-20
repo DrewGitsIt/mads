@@ -143,7 +143,11 @@ export class NetCollector {
     }
     cdp.on("Network.loadingFinished", (e) => {
       const r = this.requests.get(e.requestId);
-      if (r) r.end = this.wall(e.timestamp);
+      if (!r) return;
+      r.end = this.wall(e.timestamp);
+      // Dropped as stale while CDP's event stream lagged (a big replay is
+      // hundreds of thousands of dataReceived events): it did finish.
+      if (r.failed === "stale") r.failed = undefined;
     });
     cdp.on("Network.loadingFailed", (e) => {
       const r = this.requests.get(e.requestId);
@@ -184,7 +188,9 @@ export class NetCollector {
   }
 
   /**
-   * Marks requests CDP still holds as in flight when they can't be: started
+   * Marks requests CDP still holds as in flight when they can't be (its
+   * events reach the harness late during a big replay, or a replaced page
+   * never reports an end): started
    * over `ageMs` ago, the proxy never saw them or saw them finish, and the
    * proxy has had a free socket all along (so they aren't queued for one).
    * Returns how many it marked.
