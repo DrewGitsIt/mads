@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 )
+
+var nonAlnum = regexp.MustCompile(`[^A-Za-z0-9]`)
 
 // writeDelegateTranscript writes one delegate's claude-code sidechain file
 // (the shape providers/claudecode reads: agentId-tagged user/assistant lines
@@ -17,7 +20,14 @@ import (
 // session.subagent_event payloads the log holds for it, so the file and the
 // log tell one story.
 func writeDelegateTranscript(root, repoDir, ref string, d *seedDelegate, events [][]byte, ats []time.Time) error {
-	project := strings.ReplaceAll(repoDir, string(filepath.Separator), "-")
+	// Claude Code's project folder: the real path of the cwd with every
+	// character but [A-Za-z0-9] replaced by '-' (so "/." becomes "--", as
+	// ~/.claude/projects shows for paths like /private/var/.../T/x_y).
+	real := repoDir
+	if r, err := filepath.EvalSymlinks(repoDir); err == nil {
+		real = r
+	}
+	project := nonAlnum.ReplaceAllString(real, "-")
 	dir := filepath.Join(root, project, ref, "subagents")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err

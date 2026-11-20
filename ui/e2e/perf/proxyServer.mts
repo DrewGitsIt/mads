@@ -58,6 +58,11 @@ const server = createServer((req, res) => {
     bytes: 0,
     frames: 0,
     aborted: false,
+    // /events only: the highest seq forwarded (from SSE `id:` lines), and
+    // when its first and last bytes went out.
+    maxSeq: 0,
+    firstByte: undefined,
+    lastByte: undefined,
   };
   requests.push(rec);
   mark(1);
@@ -104,6 +109,8 @@ const server = createServer((req, res) => {
         res.writeHead(up.statusCode ?? 502, up.statusMessage, up.headers);
         res.flushHeaders();
         let prevNL = false;
+        // The current line's head, enough to read an `id: <seq>` line.
+        let line = "";
         const isEvents = rec.sse && rec.path === "/events";
         if (isEvents) {
           eventsRes.add(res);
@@ -111,13 +118,27 @@ const server = createServer((req, res) => {
         }
         up.on("data", (chunk) => {
           rec.bytes += chunk.length;
-          if (isEvents) lastEventsActivity = Date.now();
+          if (isEvents) {
+            const now = Date.now();
+            lastEventsActivity = now;
+            rec.firstByte ??= now;
+            rec.lastByte = now;
+          }
           if (rec.sse) {
             // Frames end in a blank line; JSON data lines never hold a raw newline.
             for (let i = 0; i < chunk.length; i++) {
               const nl = chunk[i] === 10;
               if (nl && prevNL) rec.frames++;
               prevNL = nl;
+              if (isEvents) {
+                if (nl) {
+                  if (line.startsWith("id: ")) {
+                    const seq = Number(line.slice(4));
+                    if (seq > rec.maxSeq) rec.maxSeq = seq;
+                  }
+                  line = "";
+                } else if (line.length < 32) line += String.fromCharCode(chunk[i]);
+              }
             }
           }
         });

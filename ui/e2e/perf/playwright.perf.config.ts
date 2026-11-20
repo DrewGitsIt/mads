@@ -14,9 +14,10 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  // A dead worker, a timeout or a live-port hit stops the run: no new
-  // worker starts the next repetition beside whatever the dead one left.
-  maxFailures: 1,
+  // No maxFailures: a failed repetition is reported and the run goes on.
+  // A dead worker is different — harness.perf.ts sees its leftover pid
+  // registry and fails every later test at once, so nothing is measured
+  // beside what it left running.
   reporter: [["list"]],
   timeout: 10 * 60_000,
   use: { trace: "off", screenshot: "off", video: "off" },

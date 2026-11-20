@@ -13,7 +13,7 @@ import type { Manifest } from "./scenarios";
 
 const DET_LABELS: Record<string, string> = {
   events_stream_bytes_proxy: "/events stream bytes sent (proxy)",
-  events_stream_bytes: "/events bytes the page received (CDP; less if it closed a stream mid-replay)",
+  events_stream_bytes: "/events bytes the page received (CDP — not authoritative: undercounts on closed or delayed streams)",
   events_stream_frames: "/events SSE frames (proxy)",
   events_stream_messages_cdp: "/events SSE messages (CDP)",
   events_stream_connects: "/events (re)connects",
@@ -22,14 +22,18 @@ const DET_LABELS: Record<string, string> = {
   events_batch_bytes: "GET /events batch bytes",
   requests_short: "short requests",
   requests_delayed: "…of which delayed by the proxy",
-  output_streams_held: "/output streams held open by the proxy",
-  peak_busy_sockets_proxy: "peak busy sockets (proxy; secondary)",
-  peak_connections_cdp: "peak connections (CDP connectionId; secondary)",
-  peak_sockets_lsof: "peak sockets to the proxy (lsof; secondary)",
+  output_streams_held: "/output streams held open by the proxy (heartbeat comments only, no data)",
+  peak_busy_sockets_proxy: "peak busy sockets (proxy, authoritative; secondary)",
+  peak_sockets_lsof: "peak sockets to the proxy (lsof, authoritative; secondary)",
+  peak_connections_cdp: "peak connections (CDP — not authoritative: misses requests the proxy holds)",
+  cdp_stale_dropped: "CDP entries dropped as stale (no end reported; harness bookkeeping)",
 };
 
 const TIMING_LABELS: Record<string, string> = {
   settled_ms: "click → settled, all legs (ms)",
+  main_task_ms: "main-thread task time, all legs (CDP TaskDuration, ms)",
+  main_script_ms: "main-thread script time, all legs (CDP ScriptDuration, ms)",
+  lag_max_ms: "worst main-thread lag (50 ms probe, ms)",
   last_events_byte_ms: "click → last /events byte (ms)",
   all_sockets_busy_ms: "time with all 6 sockets busy (ms)",
   queued_total_ms: "total queued time, all requests (ms)",
@@ -128,7 +132,12 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
     );
   }
   lines.push("", "Deterministic metrics are exact values; ⚠ marks one that varied across a build's repetitions (min … max); (±N B) is a byte total that varied by under 0.1%.");
-  lines.push("Timings are median [IQR]. Ratio is cand/base of the medians. Settled = data marker visible, every short request started before it done or failed, and /events quiet 500 ms.", "");
+  lines.push(
+    "Timings are median [IQR]. Ratio is cand/base of the medians.",
+    "Settled = data marker visible, then: no non-delayed short request in flight or started for 500 ms; every open /events stream caught up to the log head at the click (or owing nothing); main thread answering the lag probe within 50 ms for 500 ms.",
+    "Proxy and lsof counts are authoritative; CDP counts are cross-checks (they miss what the proxy holds or the page abandons). The held /output stream carries heartbeat comments only, no data.",
+    "",
+  );
 
   // Every repetition the plan asked for, so missing ones show.
   for (const sid of plan.scenarios) {
@@ -163,6 +172,16 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
         row(`leg “${n}” click → settled (ms)`, labels.map((l) => timingCell(by(l).map((r) => r.legs[i]?.settledMs ?? NaN))));
         row(`leg “${n}” click → last /events byte (ms)`, labels.map((l) => timingCell(by(l).map((r) => r.legs[i]?.lastEventsByteMs ?? NaN))));
         row(`leg “${n}” /events bytes`, labels.map((l) => detCell(by(l).map((r) => r.legs[i]?.eventsBytes ?? NaN), "bytes")));
+        row(`leg “${n}” main-thread task / script (ms)`, labels.map((l) => {
+          const t = timingCell(by(l).map((r) => r.legs[i]?.taskMs ?? NaN));
+          const sc = timingCell(by(l).map((r) => r.legs[i]?.scriptMs ?? NaN));
+          return { text: `${t.text} / ${sc.text}`, value: t.value };
+        }));
+        row(`leg “${n}” lag p95 / max (ms)`, labels.map((l) => {
+          const p = timingCell(by(l).map((r) => r.legs[i]?.lagP95Ms ?? NaN));
+          const mx = timingCell(by(l).map((r) => r.legs[i]?.lagMaxMs ?? NaN));
+          return { text: `${p.text} / ${mx.text}`, value: mx.value };
+        }));
       });
       for (const [k, label] of Object.entries(DET_LABELS)) {
         if (!ok.some((r) => k in r.det)) continue;

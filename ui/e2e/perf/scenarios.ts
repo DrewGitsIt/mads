@@ -181,11 +181,13 @@ export const SCENARIOS: Scenario[] = [
         name: "→Retro",
         act: (ctx) => nav(ctx.page).getByRole("button", { name: "Retro", exact: true }).click(),
         ready: retroReady,
+        quiesceAfter: true,
       },
       {
         name: "→Sessions",
         act: (ctx) => nav(ctx.page).getByRole("button", { name: "Sessions", exact: true }).click(),
         ready: railReady,
+        quiesceAfter: true,
       },
     ],
   },

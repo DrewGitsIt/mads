@@ -101,16 +101,33 @@ killtree() {
 	for k in $kids; do killtree "$k"; done
 	kill -TERM "$1" 2>/dev/null || true
 }
+# verified <pid> <lstart> <command>: is that pid still the process we
+# registered (same start time, same full command), not a recycled one?
+verified() {
+	[ "$(ps -ww -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//')" = "$2" ] &&
+		[ "$(ps -ww -o command= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//')" = "$3" ]
+}
+# The pid registry: a file per repetition still running or never torn down
+# (a clean teardown deletes its own). Lines: pid<TAB>pid<TAB>lstart<TAB>name<TAB>command, dir<TAB>path.
 reap() {
-	for f in "$PIDS"/*.txt; do
-		[ -f "$f" ] || continue
-		awk '$1=="pid"{print $2}' "$f" | while read -r p; do killtree "$p"; done
+	for sig in TERM KILL; do
+		for f in "$PIDS"/*.txt; do
+			[ -f "$f" ] || continue
+			while IFS="$(printf '\t')" read -r kind a b _name c; do
+				[ "$kind" = pid ] || continue
+				if verified "$a" "$b" "$c"; then
+					if [ $sig = TERM ]; then killtree "$a"; else kill -KILL "$a" 2>/dev/null || true; fi
+				fi
+			done <"$f"
+		done
+		[ $sig = TERM ] && sleep 2
 	done
-	sleep 2
 	for f in "$PIDS"/*.txt; do
 		[ -f "$f" ] || continue
-		awk '$1=="pid"{print $2}' "$f" | while read -r p; do kill -KILL "$p" 2>/dev/null || true; done
-		awk '$1=="dir"{print $2}' "$f" | while read -r d; do rm -rf "$d"; done
+		while IFS="$(printf '\t')" read -r kind a _rest; do
+			[ "$kind" = dir ] && rm -rf "$a"
+		done <"$f"
+		rm -f "$f"
 	done
 	# Anything still running out of this run's temp tree (binaries, browser
 	# profiles under TMPDIR) is ours.

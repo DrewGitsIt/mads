@@ -144,7 +144,7 @@ ui-smoke: ui-deps
 # Perf harness (docs/PERF-HARNESS-PLAN.md): local only, never in CI.
 #   make ui-perf BASE=<ref> CAND=<ref|worktree dir> PROFILE=S|M|L|XL N=5 BROWSER=chromium|electron
 # CAND is optional (baseline only). Builds each side into temp dirs (refs via
-# a temp `git worktree add`), seeds one workload, runs the scenarios ABAB on
+# a temp `git worktree add`), seeds one workload, runs the scenarios ABBA on
 # hermetic stacks behind the delay proxy, and writes perf-results/<stamp>/.
 # Every scenario runs with the proxy's delays on and off (MODES=on,off).
 # Also: SCENARIOS=1,3b  PERF_DELAYS=<regex>=<ms>,...  PERF_HOLD_OUTPUT=0  PERF_CDP_SSE=1.

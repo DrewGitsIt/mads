@@ -1,18 +1,19 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { test } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { abortActive, loadPlan, runOne, type Result } from "./measure";
 import { scenarioById } from "./scenarios";
+import { strandedRepetitions } from "./stack";
 
 /**
  * One test per (scenario, delay mode, repetition, build). Within a scenario
  * and mode the builds alternate ABBA (A B, B A, A B, ...) so drift lands on
  * both alike. Each test boots its own stack on a fresh copy of the run's one
  * seeded database, in its own browser (or Electron app), and writes its raw
- * result to <runDir>/raw/. A scenario that fails records ok=false and the
- * run goes on; a crash, a timeout or a live-port hit fails the test, and the
- * config's maxFailures: 1 then stops the whole run. globalTeardown writes
- * the report, failures and missing repetitions included.
+ * result to <runDir>/raw/. A repetition that fails (ok=false) fails its
+ * test and the run goes on; a worker that dies leaves its pid registry
+ * file, and every test after it fails at once (see below). globalTeardown
+ * writes the report, failures and missing repetitions included.
  */
 const plan = loadPlan();
 
@@ -39,6 +40,12 @@ if (!plan) {
         const order = rep % 2 === 1 ? plan.builds : [...plan.builds].reverse();
         for (const build of order) {
           test(`${scenario.id} · delays ${mode} · ${build.label} · rep ${rep}`, async () => {
+            // A repetition that ends cleanly deletes its pid registry file; one
+            // left behind means a worker died mid-repetition. Its processes may
+            // still be running, so nothing more is measured: every later test
+            // fails here at once and run.sh reaps them.
+            const stranded = strandedRepetitions();
+            expect(stranded, "a worker died mid-repetition; the run is aborted").toEqual([]);
             let result: Result;
             try {
               result = await runOne({ plan, build, scenario, rep, mode });
@@ -56,6 +63,8 @@ if (!plan) {
                     `queued total ${result.timing.queued_total_ms}ms (max ${result.timing.queued_max_ms}); ${legs}`
                   : `FAILED ${result.error}`),
             );
+            // A failed repetition fails its test (T6); the run goes on to the next.
+            expect(result.ok, result.error).toBe(true);
           });
         }
       }

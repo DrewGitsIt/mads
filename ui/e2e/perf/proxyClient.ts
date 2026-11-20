@@ -18,6 +18,10 @@ export interface ProxyRequest {
   bytes: number;
   frames: number;
   aborted: boolean;
+  /** /events: highest seq forwarded, and first/last byte out. */
+  maxSeq: number;
+  firstByte?: number;
+  lastByte?: number;
 }
 
 export interface ProxySnapshot {

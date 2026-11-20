@@ -78,7 +78,20 @@ export class NetCollector {
     // Keep Chromium from buffering response bodies for getResponseBody: a
     // 100+ MB replay would otherwise sit in the inspector's buffer.
     await cdp.send("Network.enable", { maxTotalBufferSize: 4 * 1024 * 1024, maxResourceBufferSize: 256 * 1024 });
+    await cdp.send("Performance.enable", { timeDomain: "timeTicks" }).catch(() => {});
     cdp.on("Network.requestWillBeSent", (e) => {
+      // A new document (a reload, Electron's included): the old page's
+      // requests are abandoned and may never report an end. Close them here
+      // or they read as in flight forever.
+      if (e.type === "Document") {
+        const at = e.wallTime * 1000;
+        for (const r of this.requests.values()) {
+          if (r.end === undefined && r.type !== "Document") {
+            r.end = at;
+            r.failed = "navigated";
+          }
+        }
+      }
       if (!e.request.url.startsWith(this.origin)) {
         if (/^(https?|wss?):/.test(e.request.url)) this.foreign.push(e.request.url);
         return;
@@ -163,6 +176,32 @@ export class NetCollector {
     return [...this.requests.values()].filter((r) => !isLongLived(r) && r.start >= from && r.start <= to && r.end === undefined);
   }
 
+  /** CDP Performance metrics, ms: main-thread task and script time so far. */
+  async mainThread(): Promise<{ taskMs: number; scriptMs: number }> {
+    const r = await this.cdp!.send("Performance.getMetrics").catch(() => ({ metrics: [] as { name: string; value: number }[] }));
+    const get = (n: string) => (r.metrics.find((m) => m.name === n)?.value ?? 0) * 1000;
+    return { taskMs: get("TaskDuration"), scriptMs: get("ScriptDuration") };
+  }
+
+  /**
+   * Marks requests CDP still holds as in flight when they can't be: started
+   * over `ageMs` ago, the proxy never saw them or saw them finish, and the
+   * proxy has had a free socket all along (so they aren't queued for one).
+   * Returns how many it marked.
+   */
+  dropStale(proxyInFlight: (r: NetRequest) => boolean, socketsFree: boolean, ageMs = 5000): number {
+    if (!socketsFree) return 0;
+    let n = 0;
+    const now = Date.now();
+    for (const r of this.requests.values()) {
+      if (r.end !== undefined || isLongLived(r) || now - r.start < ageMs || proxyInFlight(r)) continue;
+      r.end = now;
+      r.failed = "stale";
+      n++;
+    }
+    return n;
+  }
+
   async detach(): Promise<void> {
     await this.cdp?.detach().catch(() => {});
   }
@@ -204,6 +243,39 @@ export class NetCollector {
 }
 
 // ---------------------------------------------------------------------------
+// Main-thread responsiveness, from inside the page.
+
+/**
+ * A lag probe: every 50 ms, how late the timer fired and how long a
+ * MessageChannel round trip took — whichever is worse. A busy main thread
+ * shows as lag even when no single task is "long". Samples are
+ * [wall ms, lag ms].
+ */
+export const LAG_PROBE_INIT = `(() => {
+  const w = window;
+  w.__perfLag = [];
+  let prev = performance.now();
+  setInterval(() => {
+    const now = performance.now();
+    const drift = Math.max(0, now - prev - 50);
+    prev = now;
+    const ch = new MessageChannel();
+    const t = performance.now();
+    ch.port1.onmessage = () => {
+      const rtt = performance.now() - t;
+      w.__perfLag.push([performance.timeOrigin + now, Math.round(Math.max(drift, rtt))]);
+      if (w.__perfLag.length > 40000) w.__perfLag.splice(0, 20000);
+      ch.port1.close();
+    };
+    ch.port2.postMessage(0);
+  }, 50);
+})();`;
+
+/** Lag samples taken after `since` (wall ms). */
+export async function lagSince(page: Page, since: number): Promise<[number, number][]> {
+  return page.evaluate((s) => ((window as unknown as { __perfLag?: [number, number][] }).__perfLag ?? []).filter((x) => x[0] > s), since);
+}
+
 // Long tasks, from inside the page.
 
 /** Installed with page.addInitScript before the app's first script runs. */
@@ -371,7 +443,13 @@ export class SocketSampler {
         if (line.endsWith(`->127.0.0.1:${this.port}`)) {
           n++;
           this.owners.add(`${cmd}(${pid})`);
-        } else this.foreign.add(`${cmd}: ${line.slice(1)}`);
+        } else {
+          // Loopback pairs inside the browser (Electron's own sockets) are
+          // internal — unless the far end is a live mads port.
+          const remote = line.slice(line.indexOf("->") + 2);
+          const loopback = /^(127\.0\.0\.1|\[::1\]):/.test(remote);
+          if (!loopback || /:(17373|17374|17380)$/.test(remote)) this.foreign.add(`${cmd}: ${line.slice(1)}`);
+        }
       }
     }
     this.peak = Math.max(this.peak, n);
