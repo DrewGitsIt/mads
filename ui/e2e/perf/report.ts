@@ -267,6 +267,8 @@ export function writeReport(plan: Plan): string {
   const md = renderReport(plan, results, manifest);
   const out = path.join(plan.runDir, "report.md");
   writeFileSync(out, md + "\n");
-  writeFileSync(path.join(plan.runDir, "results.json"), JSON.stringify({ plan, manifest, results, allOk: allOk(plan, results) }, null, 2));
+  // Realism: the manifest names real sessions; it stays in the run's temp dir.
+  const kept = plan.realism ? undefined : manifest;
+  writeFileSync(path.join(plan.runDir, "results.json"), JSON.stringify({ plan, manifest: kept, results, allOk: allOk(plan, results) }, null, 2));
   return out;
 }

@@ -350,6 +350,11 @@ func TestRealismPreparesTheCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
+	// Real-repo rows in plain columns, as a live database has them.
+	if _, err := db.Exec(`INSERT INTO file_changes (session_id, repo, path, change, origin, attributed, timestamp)
+		SELECT id, '/tmp/perf-repo/x', '/tmp/perf-repo/x/a.go', 'modified', 'agent', 1, '2026-01-01T00:00:00Z' FROM sessions LIMIT 1`); err != nil {
+		t.Fatal(err)
+	}
 	// A shadow store recorded on a session: the copy must not keep it.
 	if _, err := db.Exec(`UPDATE sessions SET data = json_set(data, '$.shadow_dir', '/home/someone/.local/share/x') WHERE rowid = 1`); err != nil {
 		t.Fatal(err)
@@ -365,6 +370,14 @@ func TestRealismPreparesTheCopy(t *testing.T) {
 	}
 	if leaked != 0 || sum.Rewritten == 0 {
 		t.Fatalf("paths left in sessions: %d (rewritten %d)", leaked, sum.Rewritten)
+	}
+	var realCols int
+	if err := db.QueryRow(`SELECT (SELECT count(*) FROM file_changes WHERE repo LIKE '/tmp/perf-repo%' OR path LIKE '/tmp/perf-repo%') +
+		(SELECT count(*) FROM commits WHERE repo LIKE '/tmp/perf-repo%')`).Scan(&realCols); err != nil {
+		t.Fatal(err)
+	}
+	if realCols != 0 {
+		t.Fatalf("%d plain-column paths left", realCols)
 	}
 	var running int
 	if err := db.QueryRow(`SELECT count(*) FROM delegates WHERE session_id = ? AND state = 'running'`, m.Parent.ID).Scan(&running); err != nil {

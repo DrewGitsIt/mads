@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"strings"
 
 	"github.com/drewkidwell/mads/services/data/internal/store"
@@ -95,6 +96,13 @@ func realism(ctx context.Context, db *sql.DB, safeRoot string) (*Manifest, *real
 		}
 		sum.Rewritten += n
 	}
+	// And plain columns: file_changes.repo/path and commits.repo name real
+	// repos, and the Router's changeset runs git in them.
+	n, err := rewriteColumns(ctx, db, safeRoot)
+	if err != nil {
+		return nil, nil, err
+	}
+	sum.Rewritten += n
 
 	// Scenario sessions: rail-visible (not set aside), most events first.
 	type cand struct {
@@ -264,6 +272,75 @@ func rewritePaths(ctx context.Context, db *sql.DB, table, safeRoot string) (int,
 	return n, nil
 }
 
+func isPath(x string) bool {
+	return x == "/" || (strings.HasPrefix(x, "/") && strings.Count(x, "/") > 1) || strings.HasPrefix(x, "~/")
+}
+
+// rewriteColumns points every path-valued TEXT column outside the event
+// log (and outside the JSON data columns, done above) at safeRoot/<base>.
+func rewriteColumns(ctx context.Context, db *sql.DB, safe string) (int, error) {
+	rows, err := db.QueryContext(ctx, `SELECT m.name, p.name FROM sqlite_master m, pragma_table_info(m.name) p
+		WHERE m.type = 'table' AND m.name NOT IN ('events','sqlite_sequence','schema_migrations','meta')
+		AND p.name <> 'data' AND upper(p.type) LIKE 'TEXT%'`)
+	if err != nil {
+		return 0, err
+	}
+	type col struct{ t, c string }
+	var cols []col
+	for rows.Next() {
+		var c col
+		if err := rows.Scan(&c.t, &c.c); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		cols = append(cols, c)
+	}
+	_ = rows.Close()
+	total := 0
+	for _, c := range cols {
+		q := fmt.Sprintf(`SELECT rowid, %q FROM %q WHERE %q LIKE '/%%' OR %q LIKE '~/%%' OR %q LIKE '%%:/%%'`, c.c, c.t, c.c, c.c, c.c)
+		rs, err := db.QueryContext(ctx, q)
+		if err != nil {
+			return 0, err
+		}
+		type upd struct {
+			id int64
+			v  string
+		}
+		var ups []upd
+		for rs.Next() {
+			var id int64
+			var v string
+			if err := rs.Scan(&id, &v); err != nil {
+				_ = rs.Close()
+				return 0, err
+			}
+			var nv string
+			switch {
+			case isPath(v):
+				nv = safe
+				if v != "/" {
+					nv = safe + "/" + filepath.Base(v)
+				}
+			case strings.Contains(v, ":/") && isPath(v[strings.Index(v, ":/")+1:]):
+				// "<provider>:<dir>" keys (account_auth.account).
+				nv = v[:strings.Index(v, ":/")+1] + safe
+			default:
+				continue
+			}
+			ups = append(ups, upd{id, nv})
+		}
+		_ = rs.Close()
+		for _, u := range ups {
+			if _, err := db.ExecContext(ctx, fmt.Sprintf(`UPDATE %q SET %q = ? WHERE rowid = ?`, c.t, c.c), u.v, u.id); err != nil {
+				return 0, err
+			}
+		}
+		total += len(ups)
+	}
+	return total, nil
+}
+
 func walkPaths(v any, safe string, n *int) any {
 	switch x := v.(type) {
 	case map[string]any:
@@ -284,7 +361,7 @@ func walkPaths(v any, safe string, n *int) any {
 	case string:
 		// A path: "/" itself, or rooted with at least one more segment
 		// ("/compact"-style command names are left alone).
-		if x == "/" || (strings.HasPrefix(x, "/") && strings.Count(x, "/") > 1) || strings.HasPrefix(x, "~/") {
+		if isPath(x) {
 			*n++
 			return safe
 		}
