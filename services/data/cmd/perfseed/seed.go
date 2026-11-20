@@ -51,6 +51,14 @@ type SeedOptions struct {
 	RepoDir string
 	// Now anchors timestamps: synthetic events span the 30 days before it.
 	Now time.Time
+	// TranscriptsDir, when set, makes the parent session a claude-code one
+	// and writes its first running delegate's own transcript under it, laid
+	// out like ~/.claude/projects (<project>/<ref>/subagents/agent-<id>.jsonl):
+	// the harness copies it into each stack's scratch $HOME, so opening that
+	// delegate takes the live path (its file), and the second running one —
+	// with no file — the fallback (the log). The file mirrors the delegate's
+	// own session.subagent_event history.
+	TranscriptsDir string
 }
 
 // Manifest tells the harness what was seeded: which sessions and delegates
@@ -84,6 +92,9 @@ type ManifestParent struct {
 	// Router's boot sweep will conclude (and so show in the rail).
 	Delegates int                `json:"delegates"`
 	Running   []ManifestDelegate `json:"running"`
+	// WithFile has a transcript file (scenario 3); NoFile has none (3b).
+	WithFile *ManifestDelegate `json:"with_file,omitempty"`
+	NoFile   *ManifestDelegate `json:"no_file,omitempty"`
 }
 
 type ManifestDelegate struct {
@@ -138,6 +149,7 @@ func Seed(ctx context.Context, path string, p *Profile, opt SeedOptions) (*Manif
 	}
 
 	fill := newFiller(rng)
+	parentRef := ""
 	ss := make([]*seedSession, p.Sessions)
 	for i := range ss {
 		s := &seedSession{idx: i, id: hexID(rng, "ses"), name: sessionName(i)}
@@ -150,6 +162,10 @@ func Seed(ctx context.Context, path string, p *Profile, opt SeedOptions) (*Manif
 			ID: s.id, Name: s.name, Activity: act, Workspace: ws.ID, Provider: "fake",
 			Isolation: contracts.IsolationCurrentDir, Cwd: opt.RepoDir, Dir: opt.RepoDir,
 			CreatedAt: base.Add(time.Duration(i) * time.Minute),
+		}
+		if i == 0 && opt.TranscriptsDir != "" {
+			rec.Provider, rec.ProviderRef = "claude-code", fmt.Sprintf("perf-%016x", rng.Uint64())
+			parentRef = rec.ProviderRef
 		}
 		if err := sessions.Create(ctx, rec, actor); err != nil {
 			return nil, fmt.Errorf("seed: session %d: %w", i, err)
@@ -239,6 +255,17 @@ func Seed(ctx context.Context, path string, p *Profile, opt SeedOptions) (*Manif
 	window := opt.Now.Sub(base)
 	at := func(i int) time.Time { return base.Add(time.Duration(float64(window) * float64(i) / total)) }
 
+	// The delegate whose transcript file gets written, and its stream.
+	var fileDelegate *seedDelegate
+	type fileEvent struct {
+		payload []byte
+		at      time.Time
+	}
+	var fileEvents []fileEvent
+	if opt.TranscriptsDir != "" {
+		fileDelegate = ss[0].delegates[0]
+	}
+
 	pickSession := func(typ string) (*seedSession, *seedDelegate) {
 		switch typ {
 		case "session.subagent_event", "session.subagent_task":
@@ -279,6 +306,9 @@ func Seed(ctx context.Context, path string, p *Profile, opt SeedOptions) (*Manif
 				if err != nil {
 					return err
 				}
+				if d != nil && d == fileDelegate && pl.typ == "session.subagent_event" {
+					fileEvents = append(fileEvents, fileEvent{payload: payload, at: g.at})
+				}
 				env.Payload = payload
 				if err := tx.Append(env); err != nil {
 					return err
@@ -303,6 +333,28 @@ func Seed(ctx context.Context, path string, p *Profile, opt SeedOptions) (*Manif
 	for _, d := range parent.delegates {
 		if d.running {
 			m.Parent.Running = append(m.Parent.Running, ManifestDelegate{HarnessID: d.harnessID, ToolUseID: d.toolUseID, Description: d.description})
+		}
+	}
+	if fileDelegate != nil {
+		var lines [][]byte
+		for _, e := range fileEvents {
+			lines = append(lines, e.payload)
+		}
+		ats := make([]time.Time, len(fileEvents))
+		for i, e := range fileEvents {
+			ats[i] = e.at
+		}
+		if err := writeDelegateTranscript(opt.TranscriptsDir, opt.RepoDir, parentRef, fileDelegate, lines, ats); err != nil {
+			return nil, err
+		}
+		md := ManifestDelegate{HarnessID: fileDelegate.harnessID, ToolUseID: fileDelegate.toolUseID, Description: fileDelegate.description}
+		m.Parent.WithFile = &md
+		for _, d := range parent.delegates {
+			if d.running && d != fileDelegate {
+				nf := ManifestDelegate{HarnessID: d.harnessID, ToolUseID: d.toolUseID, Description: d.description}
+				m.Parent.NoFile = &nf
+				break
+			}
 		}
 	}
 	m.SwitchA = ManifestRef{ID: ss[1].id, Name: ss[1].name}

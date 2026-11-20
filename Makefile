@@ -146,9 +146,11 @@ ui-smoke: ui-deps
 # CAND is optional (baseline only). Builds each side into temp dirs (refs via
 # a temp `git worktree add`), seeds one workload, runs the scenarios ABAB on
 # hermetic stacks behind the delay proxy, and writes perf-results/<stamp>/.
-# Also: SCENARIOS=1,3  PERF_DELAYS=off|<regex>=<ms>,...  PERF_CDP_SSE=1.
-ui-perf: ui-deps
-	BASE="$(BASE)" CAND="$(CAND)" PROFILE="$(PROFILE)" N="$(N)" BROWSER="$(BROWSER)" SCENARIOS="$(SCENARIOS)" \
+# Every scenario runs with the proxy's delays on and off (MODES=on,off).
+# Also: SCENARIOS=1,3b  PERF_DELAYS=<regex>=<ms>,...  PERF_HOLD_OUTPUT=0  PERF_CDP_SSE=1.
+# No ui-deps prerequisite: run.sh installs deps only where they are missing.
+ui-perf:
+	BASE="$(BASE)" CAND="$(CAND)" PROFILE="$(PROFILE)" N="$(N)" BROWSER="$(BROWSER)" SCENARIOS="$(SCENARIOS)" MODES="$(MODES)" \
 		sh ui/e2e/perf/run.sh
 
 # Release gate: cross-platform build matrix + install/update smokes against

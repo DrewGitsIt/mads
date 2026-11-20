@@ -32,9 +32,8 @@ export interface NetRequest {
   status?: number;
   connectionId?: number;
   failed?: string;
-  /** Bytes received (encoded, on the wire) inside the current window. */
-  windowEncoded: number;
-  /** Decoded body bytes inside the current window (equal here: no compression). */
+  query: string;
+  /** Decoded body bytes inside the current window (= wire body bytes: nothing is compressed). */
   windowDecoded: number;
   windowSseMessages: number;
   /** Queueing + stalled time: requestWillBeSent → sendStart. */
@@ -43,7 +42,7 @@ export interface NetRequest {
 
 /** A request whose life is the stream itself, not a round trip. */
 export function isLongLived(r: Pick<NetRequest, "type" | "path">): boolean {
-  return r.type === "EventSource" || /\/(output|stream)$/.test(r.path) || r.path.endsWith("/events/stream");
+  return r.type === "EventSource" || /^\/sessions\/[^/]+\/output$/.test(r.path);
 }
 
 /** Path with ids folded, so requests group by route. */
@@ -58,11 +57,15 @@ export function routeOf(path: string): string {
 
 export class NetCollector {
   readonly requests = new Map<string, NetRequest>();
+  /** Every URL the page asked for on any other origin (the live-port check reads these). */
+  readonly foreign: string[] = [];
   private monoToWall?: number;
   private windowStart = 0;
   private cdp?: CDPSession;
   /** Wall ms of the newest byte on any long-lived stream, and of the newest short request start. */
   lastStreamByte = 0;
+  /** Wall ms of the newest byte on an /events stream. */
+  lastEventsByte = 0;
   lastShortStart = 0;
   constructor(
     private readonly origin: string,
@@ -76,7 +79,10 @@ export class NetCollector {
     // 100+ MB replay would otherwise sit in the inspector's buffer.
     await cdp.send("Network.enable", { maxTotalBufferSize: 4 * 1024 * 1024, maxResourceBufferSize: 256 * 1024 });
     cdp.on("Network.requestWillBeSent", (e) => {
-      if (!e.request.url.startsWith(this.origin)) return;
+      if (!e.request.url.startsWith(this.origin)) {
+        if (/^(https?|wss?):/.test(e.request.url)) this.foreign.push(e.request.url);
+        return;
+      }
       const wall = e.wallTime * 1000;
       this.monoToWall ??= wall - e.timestamp * 1000;
       const u = new URL(e.request.url);
@@ -84,11 +90,11 @@ export class NetCollector {
         id: e.requestId,
         url: e.request.url,
         path: u.pathname,
+        query: u.search,
         method: e.request.method,
         type: e.type ?? "Other",
         start: wall,
         startMono: e.timestamp,
-        windowEncoded: 0,
         windowDecoded: 0,
         windowSseMessages: 0,
       };
@@ -112,8 +118,8 @@ export class NetCollector {
       if (!r) return;
       const at = this.wall(e.timestamp);
       if (isLongLived(r)) this.lastStreamByte = Math.max(this.lastStreamByte, at);
+      if (r.type === "EventSource" && r.path === "/events") this.lastEventsByte = Math.max(this.lastEventsByte, at);
       if (at < this.windowStart) return;
-      r.windowEncoded += e.encodedDataLength;
       r.windowDecoded += e.dataLength;
     });
     if (this.trackSseMessages) {
@@ -142,15 +148,19 @@ export class NetCollector {
   startWindow(at = Date.now()): void {
     this.windowStart = at;
     for (const r of this.requests.values()) {
-      r.windowEncoded = 0;
       r.windowDecoded = 0;
       r.windowSseMessages = 0;
     }
   }
 
-  /** Short (non-stream) requests still waiting for their end. */
-  shortInFlight(): NetRequest[] {
-    return [...this.requests.values()].filter((r) => !isLongLived(r) && r.end === undefined);
+  /** Short (non-stream) requests still waiting for their end; `skip` drops ones held on purpose. */
+  shortInFlight(skip?: (r: NetRequest) => boolean): NetRequest[] {
+    return [...this.requests.values()].filter((r) => !isLongLived(r) && r.end === undefined && !skip?.(r));
+  }
+
+  /** Short requests that started in [from, to] and have neither finished nor failed. */
+  shortOpenBetween(from: number, to: number): NetRequest[] {
+    return [...this.requests.values()].filter((r) => !isLongLived(r) && r.start >= from && r.start <= to && r.end === undefined);
   }
 
   async detach(): Promise<void> {
@@ -160,7 +170,7 @@ export class NetCollector {
   /** Every request that started in, or carried bytes into, [from, to]. */
   window(from: number, to: number): NetRequest[] {
     return [...this.requests.values()].filter(
-      (r) => (r.start >= from && r.start <= to) || r.windowEncoded > 0 || r.windowDecoded > 0,
+      (r) => (r.start >= from && r.start <= to) || r.windowDecoded > 0,
     );
   }
 
@@ -260,12 +270,28 @@ export class ProcSampler {
   private last = new Map<number, number>();
   private peak = new Map<number, number>();
   private busy = false;
-  constructor(private readonly pids: Record<string, number>) {}
+  /** Children of these pids (the Router's session/pipeline processes) are sampled too, under `<name>-children`. */
+  constructor(
+    private readonly pids: Record<string, number>,
+    private readonly parents: string[] = [],
+    private readonly onChild: (pid: number) => void = () => {},
+  ) {}
+
+  private readonly childGroups = new Map<number, string>();
 
   private async sample(): Promise<void> {
     if (this.busy) return;
     this.busy = true;
-    const ids = Object.values(this.pids).join(",");
+    for (const name of this.parents) {
+      const out = await run("pgrep", ["-P", String(this.pids[name])]);
+      for (const c of out.split("\n").filter(Boolean).map(Number)) {
+        if (!this.childGroups.has(c)) {
+          this.childGroups.set(c, `${name}-children`);
+          this.onChild(c);
+        }
+      }
+    }
+    const ids = [...Object.values(this.pids), ...this.childGroups.keys()].join(",");
     const out = await run("ps", ["-o", "pid=,rss=,time=", "-p", ids]);
     for (const line of out.trim().split("\n")) {
       const [pid, rss, time] = line.trim().split(/\s+/);
@@ -289,22 +315,23 @@ export class ProcSampler {
     while (this.busy) await new Promise((r) => setTimeout(r, 20));
     await this.sample();
     const out: Record<string, ProcStats> = {};
-    for (const [name, pid] of Object.entries(this.pids)) {
-      out[name] = {
-        cpuMs: Math.round(((this.last.get(pid) ?? 0) - (this.first.get(pid) ?? 0)) * 1000),
-        peakRssMB: Math.round((this.peak.get(pid) ?? 0) * 10) / 10,
-      };
-    }
+    const add = (name: string, pid: number) => {
+      const o = (out[name] ??= { cpuMs: 0, peakRssMB: 0 });
+      o.cpuMs += Math.round(((this.last.get(pid) ?? 0) - (this.first.get(pid) ?? 0)) * 1000);
+      o.peakRssMB = Math.max(o.peakRssMB, Math.round((this.peak.get(pid) ?? 0) * 10) / 10);
+    };
+    for (const [name, pid] of Object.entries(this.pids)) add(name, pid);
+    for (const [pid, name] of this.childGroups) add(name, pid);
     return out;
   }
 }
 
 /**
- * Samples established TCP connections whose remote end is the proxy's port
- * — the browser's side of each socket (the proxy's own side has the port
- * as its local end and is excluded, as is this process). The port is
- * ephemeral and this run's own, so every such socket is the test
- * browser's; the owning commands are recorded to show it.
+ * Samples the test browser's TCP connections with lsof: how many go to the
+ * proxy's port at once (its sockets to the page's origin), and any that go
+ * anywhere else (there should be none: background networking is off). The
+ * browser is its pid and every descendant (Chromium's network service is a
+ * child process).
  */
 export class SocketSampler {
   private timer?: ReturnType<typeof setInterval>;
@@ -312,21 +339,39 @@ export class SocketSampler {
   peak = 0;
   samples = 0;
   readonly owners = new Set<string>();
-  constructor(private readonly port: number) {}
+  readonly foreign = new Set<string>();
+  constructor(
+    private readonly port: number,
+    private readonly browserPid: number,
+  ) {}
+
+  private async tree(): Promise<Set<number>> {
+    const all = new Set<number>([this.browserPid]);
+    let frontier = [this.browserPid];
+    while (frontier.length) {
+      const out = await run("pgrep", ["-P", frontier.join(",")]);
+      frontier = out.split("\n").filter(Boolean).map(Number).filter((p) => !all.has(p));
+      for (const p of frontier) all.add(p);
+    }
+    return all;
+  }
 
   private async sample(): Promise<void> {
     if (this.busy) return;
     this.busy = true;
-    const out = await run("lsof", ["-nP", `-iTCP@127.0.0.1:${this.port}`, "-sTCP:ESTABLISHED", "-Fpcn"]);
+    const pids = await this.tree();
+    const out = await run("lsof", ["-nP", "-a", "-iTCP", "-p", [...pids].join(","), "-Fpcnt"]);
     let pid = 0;
     let cmd = "";
     let n = 0;
     for (const line of out.split("\n")) {
       if (line.startsWith("p")) pid = Number(line.slice(1));
       else if (line.startsWith("c")) cmd = line.slice(1);
-      else if (line.startsWith("n") && pid !== process.pid && line.endsWith(`->127.0.0.1:${this.port}`)) {
-        n++;
-        this.owners.add(`${cmd}(${pid})`);
+      else if (line.startsWith("n") && line.includes("->")) {
+        if (line.endsWith(`->127.0.0.1:${this.port}`)) {
+          n++;
+          this.owners.add(`${cmd}(${pid})`);
+        } else this.foreign.add(`${cmd}: ${line.slice(1)}`);
       }
     }
     this.peak = Math.max(this.peak, n);

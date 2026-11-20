@@ -1,18 +1,23 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, constants, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { readTokenFile } from "../lib/auth";
 import { cleanEnv, spawnListening, waitHealth, type ListeningProc } from "../lib/topology";
-import { startDelayProxy, type DelayProxy, type DelayRule } from "./delayProxy";
+import { startDelayProxy, type DelayProxy } from "./proxyClient";
 
 /**
  * One repetition's stack: the build's own data/router binaries on ephemeral
  * ports, a scratch $HOME/$MADS_HOME, an empty $MADS_AGENT_BIN_DIR (no real
  * provider CLI can start), a fresh copy of the run's seeded database, and the
- * delay proxy in front of the Router. Same rules as lib/topology.ts's
- * bootTopology, which this mirrors — but with prebuilt binaries and UI (one
- * build per ref, not per boot) and a database that already exists.
+ * delay proxy (its own process) in front of the Router. Same rules as
+ * lib/topology.ts's bootTopology, whose helpers this uses — but with prebuilt
+ * binaries and UI (one build per ref) and a database that already exists.
+ *
+ * Every process it starts is written to the run's pid registry
+ * (PERF_PIDS_DIR) the moment it exists, so run.sh can kill whatever a dead
+ * worker left behind.
  */
 export interface PerfStack {
   proxy: DelayProxy;
@@ -23,6 +28,8 @@ export interface PerfStack {
   token: string;
   homeDir: string;
   pids: { router: number; data: number };
+  /** Records another process this repetition owns (the browser, Electron). */
+  own(pid: number, name: string): void;
   teardown(): Promise<void>;
 }
 
@@ -37,13 +44,50 @@ export interface Build {
   desc?: string;
 }
 
-export async function bootPerfStack(opts: { build: Build; seededDB: string; rules: DelayRule[] }): Promise<PerfStack> {
+/** The run's pid registry: one file per repetition, read by run.sh. */
+function registry(tag: string): (line: string) => void {
+  const dir = process.env.PERF_PIDS_DIR;
+  if (!dir) return () => {};
+  mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${tag}.txt`);
+  return (line) => appendFileSync(file, line + "\n");
+}
+
+/** Descendants of pid (the Router's session/pipeline children). */
+export function childrenOf(pid: number): number[] {
+  try {
+    return execFileSync("pgrep", ["-P", String(pid)], { encoding: "utf8" })
+      .split("\n")
+      .filter(Boolean)
+      .map(Number);
+  } catch {
+    return [];
+  }
+}
+
+export async function bootPerfStack(opts: {
+  build: Build;
+  seededDB: string;
+  /** A ~/.claude/projects tree to copy into the scratch $HOME (perfseed -transcripts). */
+  transcriptsDir?: string;
+  delays: string;
+  holdOutput: boolean;
+  tag: string;
+}): Promise<PerfStack> {
+  const record = registry(opts.tag);
   const tmpDir = mkdtempSync(path.join(tmpdir(), "mads-perf-run-"));
+  record(`dir ${tmpDir}`);
   const homeDir = path.join(tmpDir, "home");
   const dataDir = path.join(tmpDir, "data");
   mkdirSync(homeDir, { recursive: true });
   mkdirSync(dataDir, { recursive: true });
+  // pkg/childsock's short fallback for a $MADS_HOME this deep.
+  const sockFallback = `/tmp/mads-${process.getuid?.() ?? 0}-${createHash("sha256").update(homeDir).digest("hex").slice(0, 10)}`;
+  record(`dir ${sockFallback}`);
   writeFileSync(path.join(homeDir, ".gitconfig"), "[user]\n\tname = perf user\n\temail = perf@perf.test\n");
+  if (opts.transcriptsDir && existsSync(opts.transcriptsDir)) {
+    cpSync(opts.transcriptsDir, path.join(homeDir, ".claude", "projects"), { recursive: true });
+  }
   // A fresh copy per repetition: the Data Service migrates and appends to
   // it, and no repetition may see another's writes. A clone on APFS.
   copyFileSync(opts.seededDB, path.join(dataDir, "mads.db"), constants.COPYFILE_FICLONE);
@@ -56,17 +100,19 @@ export async function bootPerfStack(opts: { build: Build; seededDB: string; rule
 
   const bin = (n: string) => path.join(opts.build.binDir, n);
   const procs: ListeningProc[] = [];
-  const proxy = await startDelayProxy({ rules: opts.rules });
+  let proxy: DelayProxy | undefined;
   const cleanup = async () => {
-    await proxy.close().catch(() => {});
-    for (const p of procs.reverse()) await p.terminate();
+    await proxy?.close().catch(() => {});
+    for (const p of [...procs].reverse()) await p.terminate();
     rmSync(tmpDir, { recursive: true, force: true });
-    const sockFallback = `/tmp/mads-${process.getuid?.() ?? 0}-${createHash("sha256").update(homeDir).digest("hex").slice(0, 10)}`;
     rmSync(sockFallback, { recursive: true, force: true });
   };
   try {
+    proxy = await startDelayProxy({ delays: opts.delays, holdOutput: opts.holdOutput });
+    record(`pid ${proxy.pid} proxy`);
     const data = await spawnListening("data", [bin("data"), "-addr", "127.0.0.1:0", "-data-dir", dataDir], env);
     procs.push(data);
+    record(`pid ${data.proc.pid} data`);
     const dataURL = `http://${data.addr}`;
     await waitHealth(dataURL);
     const router = await spawnListening(
@@ -92,9 +138,10 @@ export async function bootPerfStack(opts: { build: Build; seededDB: string; rule
       env,
     );
     procs.push(router);
+    record(`pid ${router.proc.pid} router`);
     const routerURL = `http://${router.addr}`;
     await waitHealth(routerURL);
-    proxy.setTarget(routerURL);
+    await proxy.setTarget(routerURL);
     const token = readTokenFile(homeDir);
     return {
       proxy,
@@ -104,6 +151,7 @@ export async function bootPerfStack(opts: { build: Build; seededDB: string; rule
       token,
       homeDir,
       pids: { router: router.proc.pid!, data: data.proc.pid! },
+      own: (pid, name) => record(`pid ${pid} ${name}`),
       teardown: cleanup,
     };
   } catch (err) {

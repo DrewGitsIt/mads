@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/services/data/internal/store"
 )
 
@@ -302,5 +303,38 @@ func TestCalibrateReadsOnlyShape(t *testing.T) {
 	// The round trip seeds again: a calibrated profile is a valid input.
 	if err := got.validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSeedDelegateTranscriptReadsAsClaudeCode(t *testing.T) {
+	p := testProfile()
+	dir := t.TempDir()
+	tr := filepath.Join(dir, "projects")
+	m, err := Seed(context.Background(), filepath.Join(dir, "mads.db"), p, SeedOptions{RepoDir: "/tmp/perf-repo", TranscriptsDir: tr, Now: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Parent.WithFile == nil || m.Parent.NoFile == nil || m.Parent.WithFile.HarnessID == m.Parent.NoFile.HarnessID {
+		t.Fatalf("manifest parent: %+v", m.Parent)
+	}
+	db, err := openReadOnly(filepath.Join(dir, "mads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	sess, err := store.NewSessions(store.NewLog(db)).Get(context.Background(), m.Parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.Provider != "claude-code" || sess.ProviderRef == "" {
+		t.Fatalf("parent provider %q ref %q", sess.Provider, sess.ProviderRef)
+	}
+	prov := claudecode.New(claudecode.Config{TranscriptDir: tr})
+	msgs, ok, err := prov.DelegateTranscript(context.Background(), sess.ProviderRef, m.Parent.WithFile.HarnessID)
+	if err != nil || !ok || len(msgs) < 2 {
+		t.Fatalf("claude-code read of the seeded file: ok=%v err=%v msgs=%d", ok, err, len(msgs))
+	}
+	if _, ok, _ := prov.DelegateTranscript(context.Background(), sess.ProviderRef, m.Parent.NoFile.HarnessID); ok {
+		t.Fatal("the no-file delegate has a file")
 	}
 }

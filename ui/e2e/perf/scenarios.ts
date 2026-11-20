@@ -5,7 +5,14 @@ import type { PerfStack } from "./stack";
 export interface Manifest {
   profile: string;
   sessions: { id: string; name: string }[];
-  parent: { id: string; name: string; delegates: number; running: { harness_id: string; description: string }[] };
+  parent: {
+    id: string;
+    name: string;
+    delegates: number;
+    running: { harness_id: string; description: string }[];
+    with_file?: { harness_id: string; description: string };
+    no_file?: { harness_id: string; description: string };
+  };
   switch_a: { id: string; name: string };
   switch_b: { id: string; name: string };
   total_events: number;
@@ -19,15 +26,18 @@ export interface ScenarioCtx {
   stack: PerfStack;
   manifest: Manifest;
   browser: "chromium" | "electron";
-  /** Waits until the page is quiet: no stream bytes and no new short requests for a while. */
+  /** Waits until the page is quiet: no /events bytes, no new or open short requests (delayed ones aside). */
   quiesce(): Promise<void>;
 }
 
-/** One click (or navigation) and the DOM marker that says its view is there. */
+/** One click (or navigation) and the data marker that says its view has rendered its data. */
 export interface Leg {
   name: string;
   act(ctx: ScenarioCtx): Promise<void>;
-  marker(ctx: ScenarioCtx): Locator;
+  /** Resolves once the view shows data (not just its frame). */
+  ready(ctx: ScenarioCtx): Promise<void>;
+  /** Let the page go quiet before the next leg, so each leg's bytes are its own. */
+  quiesceAfter?: boolean;
 }
 
 export interface Scenario {
@@ -41,36 +51,92 @@ export interface Scenario {
 // --- Selectors. Only what main already renders: the baseline is main as-is,
 // so a scenario can't lean on a test hook main doesn't have.
 
+const T = 120_000;
 const rail = (p: Page) => p.locator('[aria-label="Session list"]');
 const railCard = (p: Page, id: string) => rail(p).locator(`[data-rail-card][data-rail-id="${id}"]`);
-/** The open session's header: its rename button carries its name. */
-const workspace = (p: Page, id: string) =>
+/** The open session's header: its rename button carries its name, from GET /sessions/{id}. */
+const header = (p: Page, id: string) =>
   p.getByTitle("Rename session").filter({ hasText: new RegExp(`^${escapeRe(nameOf(id))}$`) });
 const nameOf = (id: string) => m().sessions.find((s) => s.id === id)?.name ?? id;
 const nav = (p: Page) => p.getByRole("navigation", { name: "Main navigation" });
 
-/** The app's first view: the rail with its seeded sessions. */
-const railLoaded = (ctx: ScenarioCtx) => rail(ctx.page).locator("[data-rail-card]").first();
+async function until(what: string, f: () => Promise<boolean>, timeoutMs = T): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await f().catch(() => false))) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+/** Every seeded session's card is in the rail, each with its status line drawn. */
+async function railReady(ctx: ScenarioCtx): Promise<void> {
+  const n = ctx.manifest.sessions.length;
+  await until(`${n} rail cards with status lines`, async () => {
+    const cards = rail(ctx.page).locator("[data-rail-card]");
+    return (await cards.count()) >= n && (await rail(ctx.page).locator("[data-rail-card] [role=status]").count()) >= n;
+  });
+}
+
+/** The session's header named from its record, and its conversation pane past "loading". */
+async function sessionReady(ctx: ScenarioCtx, id: string): Promise<void> {
+  await header(ctx.page, id).waitFor({ state: "visible", timeout: T });
+  // The seeded sessions have no transcript: the pane's settled state is its empty/missing notice or its stream.
+  await ctx.page
+    .locator('#workspace-panel-conversation [data-testid="transcript-missing"], #workspace-panel-conversation [data-testid="conversation-stream"]')
+    .first()
+    .waitFor({ state: "visible", timeout: T });
+}
+
+/** The delegate's own view with at least one tool row of its stream rendered. */
+async function delegateReady(ctx: ScenarioCtx): Promise<void> {
+  await ctx.page.locator('[data-testid="delegate-stream"] [data-testid="activity-row"]').first().waitFor({ state: "visible", timeout: T });
+}
+
+/** The retro picker listing the seeded sessions (GET /sessions answered). */
+async function retroReady(ctx: ScenarioCtx): Promise<void> {
+  await ctx.page.getByRole("button", { name: "Generate retro" }).waitFor({ state: "visible", timeout: T });
+  await ctx.page.getByText(ctx.manifest.switch_a.name, { exact: true }).first().waitFor({ state: "visible", timeout: T });
+}
 
 async function load(ctx: ScenarioCtx): Promise<void> {
   if (ctx.browser === "electron") await ctx.page.reload();
   else await ctx.page.goto(ctx.stack.appURL);
-  await railLoaded(ctx).waitFor({ state: "visible", timeout: 120_000 });
+  await railReady(ctx);
 }
 
 async function openSession(ctx: ScenarioCtx, id: string): Promise<void> {
   await railCard(ctx.page, id).click();
-  await workspace(ctx.page, id).waitFor({ state: "visible", timeout: 120_000 });
+  await sessionReady(ctx, id);
 }
 
-const openLeg = (name: string, id: () => string): Leg => ({
+const openLeg = (name: string, id: () => string, quiesceAfter = false): Leg => ({
   name,
   act: (ctx) => railCard(ctx.page, id()).click(),
-  marker: (ctx) => workspace(ctx.page, id()),
+  ready: (ctx) => sessionReady(ctx, id()),
+  quiesceAfter,
 });
 
 let current: Manifest | undefined;
 const m = () => current!;
+
+function delegateScenario(id: string, title: string, pick: (man: Manifest) => { description: string } | undefined): Scenario {
+  const row = (ctx: ScenarioCtx): Locator => {
+    const d = pick(m());
+    if (!d) throw new Error(`${id}: the workload has no such delegate (seed with -transcripts)`);
+    return ctx.page.getByTestId("delegate-rows").getByRole("button", { name: new RegExp(escapeRe(d.description)) }).first();
+  };
+  return {
+    id,
+    title,
+    prepare: async (ctx) => {
+      await load(ctx);
+      await ctx.quiesce();
+      await openSession(ctx, m().parent.id);
+      await row(ctx).waitFor({ state: "visible", timeout: 60_000 });
+    },
+    legs: [{ name: "open delegate", act: (ctx) => row(ctx).click(), ready: delegateReady }],
+  };
+}
 
 export const SCENARIOS: Scenario[] = [
   {
@@ -84,37 +150,24 @@ export const SCENARIOS: Scenario[] = [
           if (ctx.browser === "electron") await ctx.page.reload({ waitUntil: "commit" });
           else await ctx.page.goto(ctx.stack.appURL, { waitUntil: "commit" });
         },
-        marker: railLoaded,
+        ready: railReady,
       },
     ],
   },
   {
     id: "2-switch-session",
-    title: "Switch session A → B → A",
+    title: "Switch session A → B → A (quiet between legs)",
     prepare: async (ctx) => {
       await load(ctx);
       await ctx.quiesce();
       await openSession(ctx, m().switch_a.id);
     },
-    legs: [openLeg("A→B", () => m().switch_b.id), openLeg("B→A", () => m().switch_a.id)],
+    legs: [openLeg("A→B", () => m().switch_b.id, true), openLeg("B→A", () => m().switch_a.id, true)],
   },
-  {
-    id: "3-open-delegate",
-    title: "Open a delegate from its parent",
-    prepare: async (ctx) => {
-      await load(ctx);
-      await ctx.quiesce();
-      await openSession(ctx, m().parent.id);
-      await delegateRow(ctx).waitFor({ state: "visible", timeout: 60_000 });
-    },
-    legs: [
-      {
-        name: "open delegate",
-        act: (ctx) => delegateRow(ctx).click(),
-        marker: (ctx) => ctx.page.getByTestId("delegate-view"),
-      },
-    ],
-  },
+  // The live path: the delegate has its own transcript file.
+  delegateScenario("3-open-delegate", "Open a delegate from its parent (transcript file)", (man) => man.parent.with_file ?? man.parent.running[0]),
+  // The fallback: no file, so the view reads the session's whole subagent log back.
+  delegateScenario("3b-open-delegate-nofile", "Open a delegate with no transcript file (log fallback)", (man) => man.parent.no_file),
   {
     id: "4-retro-roundtrip",
     title: "Retro → Sessions round trip",
@@ -127,12 +180,12 @@ export const SCENARIOS: Scenario[] = [
       {
         name: "→Retro",
         act: (ctx) => nav(ctx.page).getByRole("button", { name: "Retro", exact: true }).click(),
-        marker: (ctx) => ctx.page.getByRole("button", { name: "Generate retro" }),
+        ready: retroReady,
       },
       {
         name: "→Sessions",
         act: (ctx) => nav(ctx.page).getByRole("button", { name: "Sessions", exact: true }).click(),
-        marker: railLoaded,
+        ready: railReady,
       },
     ],
   },
@@ -148,7 +201,10 @@ export const SCENARIOS: Scenario[] = [
       {
         name: "→launchpad",
         act: (ctx) => ctx.page.getByRole("button", { name: "New session" }).click(),
-        marker: (ctx) => ctx.page.getByLabel("Describe your goal"),
+        ready: async (ctx) => {
+          await ctx.page.getByLabel("Describe your goal").waitFor({ state: "visible", timeout: T });
+          await railReady(ctx);
+        },
       },
     ],
   },
@@ -156,12 +212,6 @@ export const SCENARIOS: Scenario[] = [
   // drop and resume, DelayProxy.cutAll), plus correctness assertions run
   // after 1, 4 and 7 (Scenario could grow an `assert(ctx)` hook).
 ];
-
-/** The parent's first running-at-seed delegate, concluded at boot: inside the rail's fade window. */
-function delegateRow(ctx: ScenarioCtx): Locator {
-  const d = m().parent.running[0];
-  return ctx.page.getByTestId("delegate-rows").getByRole("button", { name: new RegExp(escapeRe(d.description)) }).first();
-}
 
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -172,7 +222,7 @@ export function useManifest(man: Manifest): void {
 }
 
 export function scenarioById(id: string): Scenario {
-  const s = SCENARIOS.find((x) => x.id === id || x.id.startsWith(`${id}-`));
+  const s = SCENARIOS.find((x) => x.id === id) ?? SCENARIOS.find((x) => x.id.startsWith(`${id}-`));
   if (!s) throw new Error(`unknown scenario ${id}; have ${SCENARIOS.map((x) => x.id).join(", ")}`);
   return s;
 }

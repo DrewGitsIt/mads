@@ -54,6 +54,7 @@ func runSeed(args []string) error {
 	repo := fs.String("repo", "", "workspace repo directory (every session's cwd)")
 	manifest := fs.String("manifest", "", "where to write the manifest JSON (default: stdout)")
 	now := fs.String("now", "", "RFC 3339 anchor for event timestamps (default: now)")
+	transcripts := fs.String("transcripts", "", "write the parent's first delegate's claude-code transcript under this dir (a ~/.claude/projects tree)")
 	_ = fs.Parse(args)
 	if *db == "" || *prof == "" || *repo == "" {
 		return fmt.Errorf("seed: -db, -profile and -repo are required")
@@ -62,7 +63,7 @@ func runSeed(args []string) error {
 	if err != nil {
 		return err
 	}
-	opt := SeedOptions{RepoDir: *repo}
+	opt := SeedOptions{RepoDir: *repo, TranscriptsDir: *transcripts}
 	if *now != "" {
 		if opt.Now, err = time.Parse(time.RFC3339, *now); err != nil {
 			return fmt.Errorf("seed: -now: %w", err)

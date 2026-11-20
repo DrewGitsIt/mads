@@ -1,4 +1,4 @@
-import { defineConfig, devices } from "@playwright/test";
+import { defineConfig } from "@playwright/test";
 
 /**
  * The perf harness (docs/PERF-HARNESS-PLAN.md): its own config, so `make
@@ -14,10 +14,13 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
+  // A dead worker, a timeout or a live-port hit stops the run: no new
+  // worker starts the next repetition beside whatever the dead one left.
+  maxFailures: 1,
   reporter: [["list"]],
-  timeout: 15 * 60_000,
+  timeout: 10 * 60_000,
   use: { trace: "off", screenshot: "off", video: "off" },
-  // channel "chromium": the full Chromium build (new headless), not the
-  // stripped headless shell — the same browser the app's Electron embeds.
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], channel: "chromium" } }],
+  // Each repetition launches its own browser (measure.ts: full Chromium,
+  // background networking off), so nothing here launches one.
+  projects: [{ name: "perf" }],
 });
