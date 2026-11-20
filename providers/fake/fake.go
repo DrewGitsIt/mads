@@ -24,15 +24,14 @@
 //	              session's permission hook (StartOptions.Permissions) until
 //	              it is decided, then ends the turn with "allowed"/"denied"
 //	"crash"     → dies mid-turn (event stream closes with no turn end)
-//
-// MADS_FAKE_START_DELAY_MS in the environment delays every Start by that
-// long (a slow harness start, for watching provisioning).
-//
 //	"ratelimit" → the turn fails with a rate-limit error
 //	"fail once <x>" → fails like "ratelimit" the first time it's sent in a
 //	                  conversation, then replies as "echo <x>" — a retry
 //	                  that succeeds
 //	anything    → "ok"
+//
+// MADS_FAKE_START_DELAY_MS in the environment delays every Start by that
+// long (a slow harness start, for watching provisioning).
 //
 // A message MADS wrapped (pkg/linkwrap — a linked session's message, a
 // digest, a notice) is read as its bodies joined, so an injected "echo <x>"
