@@ -56,6 +56,8 @@ function scratchRepo(stack: PerfStack, name: string): string {
 
 export interface LiveFixture {
   session: { id: string; name: string };
+  /** A finished delegate of the session, inside the rail's fade window, with a few tool calls in the log. */
+  delegate?: { harnessId: string; description: string };
   workspaceId: string;
   backgroundPrompt: string;
   pipelineRunning: boolean;
@@ -72,7 +74,7 @@ let n = 0;
  */
 export async function liveFixture(
   stack: PerfStack,
-  opts: { background?: boolean; pipeline?: boolean; slow?: boolean; name?: string },
+  opts: { background?: boolean; pipeline?: boolean; slow?: boolean; permission?: boolean; delegate?: boolean; name?: string },
 ): Promise<LiveFixture> {
   const tag = `${Date.now() % 1_000_000}-${++n}`;
   const repo = scratchRepo(stack, `fx-${tag}`);
@@ -88,6 +90,15 @@ export async function liveFixture(
   const fx: LiveFixture = { session: { id: created.session.id, name }, workspaceId: ws.id, backgroundPrompt: "background 900 1000", pipelineRunning: false };
   if (opts.background) await router(stack, "POST", `/sessions/${fx.session.id}/messages`, { text: fx.backgroundPrompt });
   else if (opts.slow) await router(stack, "POST", `/sessions/${fx.session.id}/messages`, { text: "slow" });
+  else if (opts.permission) {
+    // The fake's permission dialect parks the turn on the session's real
+    // permission hook: the Runner records it, so the log
+    // (session.permission_requested) and REST (GET .../permission-requests)
+    // agree, as in production.
+    await router(stack, "POST", `/sessions/${fx.session.id}/messages`, { text: "permission Bash" });
+    await waitFor(async () => (await router<unknown[]>(stack, "GET", `/sessions/${fx.session.id}/permission-requests`)).length > 0, 30_000, "the permission request to be pending");
+  }
+  if (opts.delegate) fx.delegate = await addDelegate(stack, fx.session.id);
   if (opts.pipeline) {
     const tpl = await router<{ id: string }>(stack, "POST", "/templates", {
       name: `perf-pinned-${tag}`,
@@ -133,4 +144,40 @@ export async function startStuckFastModel(): Promise<{ url: string; close(): Pro
       await new Promise<void>((r) => server.close(() => r()));
     },
   };
+}
+
+/**
+ * Gives a session a delegate the rail shows: a finished record (ended now,
+ * so inside the 10-minute fade window) put through the Data Service, plus a
+ * tool call and its result in the log under its tool use (the view's
+ * fallback when there's no transcript file).
+ */
+export async function addDelegate(stack: PerfStack, sessionId: string): Promise<{ harnessId: string; description: string }> {
+  const harnessId = `a${Date.now().toString(16)}perf`;
+  const toolUseId = `toolu_perf_${Date.now()}`;
+  const description = "perf pinned delegate";
+  const now = new Date().toISOString();
+  for (const [kind, extra] of [
+    ["tool_use", { tool: { id: `${toolUseId}_1`, name: "Bash", input: { command: "echo perf" }, status: "in_progress" } }],
+    ["tool_result", { text: "perf", tool: { id: `${toolUseId}_1`, name: "Bash", status: "completed" } }],
+  ] as const) {
+    await data(stack, "POST", "/events", {
+      type: "session.subagent_event",
+      session_id: sessionId,
+      actor: "perf",
+      payload: { parent_tool_use_id: toolUseId, subagent_type: "general-purpose", kind, ...extra },
+    });
+  }
+  await data(stack, "PUT", `/sessions/${sessionId}/delegates/${harnessId}`, {
+    session_id: sessionId,
+    harness_id: harnessId,
+    tool_use_id: toolUseId,
+    type: "general-purpose",
+    description,
+    state: "completed",
+    runs: 1,
+    started_at: now,
+    ended_at: now,
+  });
+  return { harnessId, description };
 }

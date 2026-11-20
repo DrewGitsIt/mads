@@ -22,13 +22,23 @@ import type { Page } from "@playwright/test";
  *    it holds.
  *  - longtasks: PerformanceObserver longtask entries.
  */
-export const PROBE_INIT = `(() => {
+export const PROBE_INIT = probeInit(process.env.PERF_PROBE !== "0");
+
+/**
+ * The probe's source. full=false (PERF_PROBE=0) keeps only the markers —
+ * no request wrappers, observers or lag probe — to measure their overhead;
+ * settle then skips the page-side inputs it can't have.
+ */
+export function probeInit(full: boolean): string {
+  return `(() => {
+  const FULL = ${full};
   const w = window;
   const now = () => performance.timeOrigin + performance.now();
-  const P = (w.__perf = { reqs: [], res: [], lag: [], lastBusy: 0, lastSample: 0, markers: {}, armed: {}, long: [] });
+  const P = (w.__perf = { lite: !FULL, reqs: [], res: [], lag: [], lastBusy: 0, lastSample: 0, markers: {}, armed: {}, long: [] });
   let id = 0;
   const abs = (u) => { try { return new URL(u, location.href).href; } catch { return String(u); } };
 
+  if (FULL) {
   const of = w.fetch.bind(w);
   w.fetch = function (input, init) {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -48,7 +58,13 @@ export const PROBE_INIT = `(() => {
         super(url, cfg);
         const r = { id: ++id, kind: "es", method: "GET", url: abs(url), start: now() };
         P.reqs.push(r);
-        this.addEventListener("open", () => { r.open = r.open || now(); });
+        // A native auto-reconnect (readyState back to CONNECTING after an
+        // error, then open again) is counted: /output and pipeline streams
+        // do it on a drop; the bus closes and reopens its own instead.
+        this.addEventListener("open", () => {
+          if (r.open) r.reconnects = (r.reconnects || 0) + 1;
+          else r.open = now();
+        });
         this.addEventListener("error", () => { if (this.readyState === 2) r.closed = r.closed || now(); });
         this.__perfReq = r;
       }
@@ -88,6 +104,7 @@ export const PROBE_INIT = `(() => {
     };
     ch.port2.postMessage(0);
   }, 50);
+  }
 
   const visible = (el) => !!el && (el.checkVisibility ? el.checkVisibility() : el.offsetParent !== null);
   const textIs = (sel, text) => [...document.querySelectorAll(sel)].some((e) => e.textContent.trim() === text && visible(e));
@@ -103,23 +120,42 @@ export const PROBE_INIT = `(() => {
       [...document.querySelectorAll('[title="Rename session"]')].some((e) => e.textContent.trim() === s.name && visible(e)) &&
       visible(document.querySelector('#workspace-panel-conversation [data-testid="transcript-missing"], #workspace-panel-conversation [data-testid="conversation-stream"]')),
     delegate: () => visible(document.querySelector('[data-testid="delegate-stream"] [data-testid="activity-row"]')),
-    retro: (s) => textIs("button", "Generate retro") && textIs("label, span, div, li, td", s.name),
+    retro: (s) => textIs("button", "Generate retro") && textIs("label, label span", s.name),
     launchpad: (s) => visible(document.querySelector('[aria-label="Describe your goal"]')) && rail(s.rail),
     esAfter: (s) => P.reqs.some((r) => r.kind === "es" && r.start >= s.after && new URL(r.url).pathname === "/events"),
     cardText: (s) => { const c = document.querySelector('[data-rail-card][data-rail-id="' + s.id + '"]'); return !!c && c.textContent.includes(s.text); },
-    text: (s) => [...document.querySelectorAll(s.sel || "*")].some((e) => visible(e) && s.any.some((t) => e.textContent.trim() === t)),
+    text: (s) => [...document.querySelectorAll(s.sel)].some((e) => visible(e) && s.any.some((t) => e.textContent.trim() === t)),
+    exists: (s) => visible(document.querySelector(s.sel)),
+    esOpenAfter: (s) => P.reqs.some((r) => r.kind === "es" && r.open >= s.after && new URL(r.url).pathname === "/events"),
   };
+  // Checked at most once per frame while anything is armed, and a marker
+  // is disarmed once it holds.
   const check = () => {
     for (const [name, spec] of Object.entries(P.armed)) {
-      if (P.markers[name]) continue;
-      try { if (preds[spec.kind](spec)) P.markers[name] = now(); } catch {}
+      try {
+        if (preds[spec.kind](spec)) {
+          P.markers[name] = now();
+          delete P.armed[name];
+        }
+      } catch {}
+    }
+  };
+  let queued = false;
+  const schedule = () => {
+    if (queued) return;
+    for (const _ in P.armed) {
+      queued = true;
+      requestAnimationFrame(() => { queued = false; check(); });
+      return;
     }
   };
   P.arm = (name, spec) => { delete P.markers[name]; P.armed[name] = spec; check(); };
-  const mo = () => new MutationObserver(check).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+  const mo = () => new MutationObserver(schedule).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
   if (document.documentElement) mo(); else document.addEventListener("DOMContentLoaded", mo);
-  setInterval(check, 50);
+  // Backstop for a marker that holds with no mutation (a request-only one).
+  setInterval(() => { for (const _ in P.armed) { check(); return; } }, 100);
 })();`;
+}
 
 export type MarkerSpec =
   | { kind: "rail"; n?: number; ids?: string[] }
@@ -129,7 +165,9 @@ export type MarkerSpec =
   | { kind: "launchpad"; rail: { n?: number; ids?: string[] } }
   | { kind: "esAfter"; after: number }
   | { kind: "cardText"; id: string; text: string }
-  | { kind: "text"; sel?: string; any: string[] };
+  | { kind: "text"; sel: string; any: string[] }
+  | { kind: "esOpenAfter"; after: number }
+  | { kind: "exists"; sel: string };
 
 export interface PageReq {
   id: number;
@@ -142,9 +180,13 @@ export interface PageReq {
   failed?: number;
   open?: number;
   closed?: number;
+  /** Native EventSource auto-reconnects (open again after an error). */
+  reconnects?: number;
 }
 
 export interface ProbeRead {
+  /** PERF_PROBE=0: markers only. */
+  lite: boolean;
   /** Page time when this read was taken (vs the harness's receive time: the CDP lag, F4). */
   pageNow: number;
   reqs: PageReq[];
@@ -156,8 +198,9 @@ export interface ProbeRead {
 /** One read of the probe. `reqsSince` limits the request list. */
 export async function readProbe(page: Page, reqsSince = 0): Promise<ProbeRead> {
   return page.evaluate((since) => {
-    const P = (window as unknown as { __perf: { reqs: PageReq[]; lastBusy: number; lastSample: number; markers: Record<string, number> } }).__perf;
+    const P = (window as unknown as { __perf: { lite: boolean; reqs: PageReq[]; lastBusy: number; lastSample: number; markers: Record<string, number> } }).__perf;
     return {
+      lite: P.lite,
       pageNow: performance.timeOrigin + performance.now(),
       reqs: P.reqs.filter((r) => r.start >= since || (r.closed === undefined && r.failed === undefined)),
       lastBusy: P.lastBusy,

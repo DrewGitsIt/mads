@@ -8,14 +8,9 @@ import { liveFixture, renameSession, type LiveFixture } from "./fixtures";
 export interface Manifest {
   profile: string;
   sessions: { id: string; name: string }[];
-  parent: {
-    id: string;
-    name: string;
-    delegates: number;
-    running: { harness_id: string; description: string }[];
-    with_file?: { harness_id: string; description: string };
-    no_file?: { harness_id: string; description: string };
-  };
+  parent: ParentRef;
+  /** A typical parent (~1,000 subagent events; scenario 3t). */
+  typical?: ParentRef;
   workspace_id?: string;
   /** Which rail cards mean "loaded": every session (seeded), or named ones (realism, where Done is capped). */
   rail?: { n?: number; ids?: string[] };
@@ -25,6 +20,16 @@ export interface Manifest {
   total_bytes: number;
   counts: Record<string, number>;
   bytes: Record<string, number>;
+}
+
+export interface ParentRef {
+  id: string;
+  name: string;
+  delegates: number;
+  subagent_events?: number;
+  running: { harness_id: string; description: string }[];
+  with_file?: { harness_id: string; description: string };
+  no_file?: { harness_id: string; description: string };
 }
 
 export interface ScenarioCtx {
@@ -61,7 +66,9 @@ export interface Scenario {
 // --- Selectors. Only what main already renders: the baseline is main as-is,
 // so a scenario can't lean on a test hook main doesn't have.
 
-const T = 120_000;
+const T = Number(process.env.PERF_PREPARE_WAIT_MS ?? 30_000);
+/** Scenario 7b's outage (PERF_OFFLINE_S, default 20). */
+const OFFLINE_S = Number(process.env.PERF_OFFLINE_S ?? 20);
 const rail = (p: Page) => p.locator('[aria-label="Session list"]');
 const railCard = (p: Page, id: string) => rail(p).locator(`[data-rail-card][data-rail-id="${id}"]`);
 /** The open session's header: its rename button carries its name, from GET /sessions/{id}. */
@@ -122,9 +129,9 @@ async function load(ctx: ScenarioCtx): Promise<void> {
   await railReady(ctx);
 }
 
-async function openSession(ctx: ScenarioCtx, id: string): Promise<void> {
+async function openSession(ctx: ScenarioCtx, id: string, name = nameOf(id)): Promise<void> {
   await railCard(ctx.page, id).click();
-  await sessionReady(ctx, id);
+  await header(ctx.page, id, name).waitFor({ state: "visible", timeout: T });
 }
 
 const openLeg = (name: string, id: () => string, quiesceAfter = false): Leg => ({
@@ -176,7 +183,12 @@ async function renameSmoke(ctx: ScenarioCtx): Promise<CheckResult> {
 let current: Manifest | undefined;
 const m = () => current!;
 
-function delegateScenario(id: string, title: string, pick: (man: Manifest) => { description: string } | undefined): Scenario {
+function delegateScenario(
+  id: string,
+  title: string,
+  pick: (man: Manifest) => { description: string } | undefined,
+  parentOf: (man: Manifest) => ParentRef | undefined = (man) => man.parent,
+): Scenario {
   const row = (ctx: ScenarioCtx): Locator => {
     const d = pick(m());
     if (!d) throw new Error(`${id}: the workload has no such delegate (seed with -transcripts)`);
@@ -188,8 +200,10 @@ function delegateScenario(id: string, title: string, pick: (man: Manifest) => { 
     prepare: async (ctx) => {
       await load(ctx);
       await ctx.quiesce();
-      await openSession(ctx, m().parent.id);
-      await row(ctx).waitFor({ state: "visible", timeout: 60_000 });
+      const p = parentOf(m());
+      if (!p) throw new Error(`${id}: the workload has no such parent`);
+      await openSession(ctx, p.id, p.name);
+      await row(ctx).waitFor({ state: "visible", timeout: 30_000 });
     },
     legs: [{ name: "open delegate", act: (ctx) => row(ctx).click(), marker: () => ({ kind: "delegate" }) }],
     smoke: renameSmoke,
@@ -226,9 +240,17 @@ export const SCENARIOS: Scenario[] = [
     smoke: renameSmoke,
   },
   // The live path: the delegate has its own transcript file.
-  delegateScenario("3-open-delegate", "Open a delegate from its parent (transcript file)", (man) => man.parent.with_file ?? man.parent.running[0]),
+  // The heaviest parent, modelled on the live top session (~15k subagent events at L).
+  delegateScenario("3-open-delegate", "Open a delegate from the heaviest parent (transcript file)", (man) => man.parent.with_file ?? man.parent.running[0]),
   // The fallback: no file, so the view reads the session's whole subagent log back.
-  delegateScenario("3b-open-delegate-nofile", "Open a delegate with no transcript file (log fallback)", (man) => man.parent.no_file),
+  delegateScenario("3b-open-delegate-nofile", "Open a delegate of the heaviest parent with no transcript file (log fallback)", (man) => man.parent.no_file),
+  // A typical parent: ~1,000 subagent events (the live delegate Drew opened in ~4 s).
+  delegateScenario(
+    "3t-open-delegate-typical",
+    "Open a delegate from a typical parent (~1,000 subagent events; transcript file)",
+    (man) => man.typical?.with_file ?? man.typical?.running[0],
+    (man) => man.typical,
+  ),
   {
     id: "4-retro-roundtrip",
     title: "Retro → Sessions round trip",
@@ -258,6 +280,24 @@ export const SCENARIOS: Scenario[] = [
     smoke: renameSmoke,
   },
   pinnedScenario(),
+  {
+    id: "7b-offline",
+    title: "Offline for a while, then back (connections refused: backoff, health, probes)",
+    prepare: async (ctx) => {
+      await load(ctx);
+      await ctx.quiesce();
+      await openSession(ctx, m().switch_a.id);
+    },
+    legs: [
+      {
+        name: `offline ${OFFLINE_S} s → resumed`,
+        act: (ctx) => ctx.stack.proxy.offline(OFFLINE_S * 1000),
+        // Resumed: a new /events stream has opened after the network came back.
+        marker: (_ctx, clickAt) => ({ kind: "esOpenAfter", after: clickAt + OFFLINE_S * 1000 }),
+      },
+    ],
+    smoke: renameSmoke,
+  },
   {
     id: "7-drop-resume",
     title: "Network drop and resume (every socket cut, as on sleep/wake)",
@@ -292,7 +332,7 @@ function pinnedScenario(): Scenario {
     id: "6-pinned-streams",
     title: "Switch and Retro round trip with long-lived streams pinned (dock background output + live pipeline attempt)",
     prepare: async (ctx) => {
-      fx = await liveFixture(ctx.stack, { background: true, pipeline: true });
+      fx = await liveFixture(ctx.stack, { background: true, pipeline: true, delegate: true });
       await load(ctx);
       await ctx.quiesce().catch(() => {}); // the live attempt keeps the page busy; prepare only
       await railCard(ctx.page, sid()).click();
@@ -311,6 +351,25 @@ function pinnedScenario(): Scenario {
       await ctx.page.locator("[data-activity-dock] .xterm-rows").getByText(/line \d+/).first().waitFor({ state: "visible", timeout: 30_000 });
     },
     legs: [
+      // Inside S, its streams still open: the Changes tab (the changeset), then one of S's delegates.
+      {
+        name: "S: Changes tab",
+        act: (ctx) => ctx.page.getByRole("tab", { name: /Changes/ }).click(),
+        marker: () => ({ kind: "exists", sel: '#workspace-panel-files [data-testid="changes-list"], #workspace-panel-files [data-testid="changes-totals"], #workspace-panel-files [data-testid="changes-work-state"]' }),
+        quiesceAfter: true,
+      },
+      {
+        name: "S: Conversation tab",
+        act: (ctx) => ctx.page.getByRole("tab", { name: /Conversation/ }).click(),
+        marker: () => ({ kind: "exists", sel: '#workspace-panel-conversation [data-testid="conversation-stream"]' }),
+        quiesceAfter: true,
+      },
+      {
+        name: "S: open delegate",
+        act: (ctx) => ctx.page.getByTestId("delegate-rows").getByRole("button", { name: /perf pinned delegate/ }).first().click(),
+        marker: () => ({ kind: "delegate" }),
+        quiesceAfter: true,
+      },
       { name: "S→A", act: (ctx) => railCard(ctx.page, m().switch_a.id).click(), marker: () => ({ kind: "session", name: m().switch_a.name }), quiesceAfter: true },
       { name: "A→S", act: (ctx) => railCard(ctx.page, sid()).click(), marker: () => ({ kind: "session", name: fx!.session.name }), quiesceAfter: true },
       retroLeg,

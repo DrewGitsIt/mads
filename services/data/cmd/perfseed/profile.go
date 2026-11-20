@@ -32,7 +32,10 @@ type Profile struct {
 	// fresh stack shows them inside the rail's 10-minute fade window — the
 	// row scenario 3 clicks.
 	RunningDelegates int `json:"running_delegates"`
-	Links            int `json:"links"`
+	// TypicalSubagentEvents sizes scenario 3t's parent (default 1000: the
+	// live delegate Drew opened in ~4 s had a ~1k-event parent).
+	TypicalSubagentEvents int `json:"typical_subagent_events,omitempty"`
+	Links                 int `json:"links"`
 	// WatchedRepos is the number of repos in the workspace (git work comes
 	// later; today only the primary repo is used).
 	WatchedRepos int `json:"watched_repos"`

@@ -139,6 +139,7 @@ reap() {
 }
 cleanup() {
 	trap - EXIT INT TERM
+	[ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
 	reap
 	for wt in $WORKTREES; do
 		git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true
@@ -172,8 +173,23 @@ build() {
 	fi
 	echo "$src" >"$TMP/src-$label.path"
 	echo "ui-perf: building $label: $desc" >&2
+	# The hermetic fake provider is harness infrastructure: this tree's
+	# providers/fake is laid over the build (go build -overlay; nothing is
+	# written into it), so every build has the dialects the checks drive
+	# (e.g. "permission"). The product code under test is the build's own.
+	ov="$TMP/fake-overlay-$label.json"
+	{
+		printf '{"Replace":{'
+		sep=""
+		for f in "$ROOT"/providers/fake/*.go; do
+			case "$f" in *_test.go) continue ;; esac
+			printf '%s"%s":"%s"' "$sep" "$src/providers/fake/$(basename "$f")" "$f"
+			sep=","
+		done
+		printf '}}'
+	} >"$ov"
 	for svc in data router session pipeline; do
-		(cd "$src" && go build -o "$out/bin/$svc" "./services/$svc")
+		(cd "$src" && go build -overlay "$ov" -o "$out/bin/$svc" "./services/$svc")
 	done
 	if [ ! -d "$src/ui/node_modules" ]; then
 		# Never a symlink (an `npm ci` through one emptied a checkout): a
@@ -282,9 +298,22 @@ export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-pla
 # TMPDIR inside the run's temp tree: browser profiles, Electron user data and
 # every stack's scratch dirs land there, so reap() can find and remove them.
 set +e
-(cd "$ROOT/ui" && TMPDIR="$TMP/tmp" PERF_PIDS_DIR="$PIDS" PERF_PLAN="$RUN_DIR/plan.json" \
+# Realism: watch every stack process for git/agent processes, files outside
+# the run's temp tree, and non-loopback connections, the whole run long.
+WATCH_STOP="$TMP/watch.stop"
+if [ -n "$REALISM" ]; then
+	sh "$ROOT/ui/e2e/perf/isolationWatch.sh" "$PIDS" "$TMP" "$WATCH_STOP" "$RUN_DIR/isolation.json" &
+	WATCH_PID=$!
+fi
+# GIT_CEILING_DIRECTORIES: no git a stack runs can discover a repo above the run's temp tree.
+(cd "$ROOT/ui" && TMPDIR="$TMP/tmp" PERF_PIDS_DIR="$PIDS" PERF_PLAN="$RUN_DIR/plan.json" PERF_GIT_CEILING="$TMP" \
 	npx playwright test --config e2e/perf/playwright.perf.config.ts)
 pw=$?
+if [ -n "$REALISM" ]; then
+	touch "$WATCH_STOP"
+	wait "$WATCH_PID"
+	cat "$RUN_DIR/isolation.json" 2>/dev/null
+fi
 set -e
 echo "ui-perf: results in $RUN_DIR"
 [ -f "$RUN_DIR/report.md" ] && cat "$RUN_DIR/report.md"

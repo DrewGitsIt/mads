@@ -3,6 +3,7 @@ import { data, liveFixture, router, startStuckFastModel, waitFor } from "./fixtu
 import { bootRig, type CheckResult, type Plan, type Result } from "./measure";
 import type { Build } from "./stack";
 import type { Manifest } from "./scenarios";
+import { resolveCheck } from "./checkNames";
 
 /**
  * Correctness checks (docs/PERF-HARNESS-PLAN.md §5): a faster design must
@@ -41,6 +42,8 @@ async function retroRoundTrip(page: Page): Promise<void> {
 interface Check {
   name: string;
   title: string;
+  /** Extra environment for the stack (the fake's start delay). */
+  env?: Record<string, string>;
   run(c: { page: Page; rig: Awaited<ReturnType<typeof bootRig>>; manifest: Manifest }): Promise<CheckResult[]>;
   needsFastModel?: boolean;
 }
@@ -48,18 +51,13 @@ interface Check {
 export const CHECKS: Check[] = [
   {
     name: "a-permission",
-    title: "a pending permission request shows on the rail after a reload and after Retro → Sessions",
-    // The request is a log record (session.permission_requested with no
-    // resolution) written to the Data Service before the page loads — the
-    // shape a parked harness leaves; the fake provider has no permission flow.
-    run: async ({ page, rig, manifest }) => {
-      const id = manifest.switch_b.id;
-      await data(rig.stack, "POST", "/events", {
-        type: "session.permission_requested",
-        session_id: id,
-        actor: "perf",
-        payload: { request_id: "perf-permission-1", tool: "Bash", tool_use_id: "toolu_perf_permission" },
-      });
+    title: "a pending permission request shows on the rail after a load, a reload and Retro → Sessions",
+    // A live fake session parked on its permission hook (the fake's
+    // "permission" dialect): the Runner holds the request, so the log and
+    // GET /sessions/{id}/permission-requests agree, as in production.
+    run: async ({ page, rig }) => {
+      const fx = await liveFixture(rig.stack, { permission: true });
+      const id = fx.session.id;
       const shows = async () => {
         try {
           await card(page, id).getByRole("status").filter({ hasText: /Needs approval/ }).waitFor({ state: "visible", timeout: 30_000 });
@@ -143,7 +141,10 @@ export const CHECKS: Check[] = [
   },
   {
     name: "c-retro-progress",
-    title: "an in-progress retro shows its progress after starting it, and after leaving and coming back",
+    // UI-only: the generation view is local state fed by the retro job's
+    // own events; no list a reload rebuilds from the bus shows an
+    // in-progress retro on main. Reported, excluded from bus comparisons.
+    title: "(UI-only) an in-progress retro shows its progress after starting it, and after leaving and coming back",
     // A Fast Model that never answers keeps the retro in progress.
     needsFastModel: true,
     run: async ({ page, rig, manifest }) => {
@@ -194,34 +195,60 @@ export const CHECKS: Check[] = [
   },
   {
     name: "e-provisioning",
-    title: "a session being provisioned renders its steps",
-    // Started from the launchpad, as a user does; the step labels are caught
-    // in the page (probe text marker) however briefly they show.
+    title: "a session being provisioned renders its steps, and still does after a reload part-way",
+    // The fake harness takes 10 s to start (MADS_FAKE_START_DELAY_MS), so
+    // the session sits in "Starting agent" long enough to reload mid-way.
+    env: { MADS_FAKE_START_DELAY_MS: process.env.PERF_PROVISION_DELAY_MS ?? "10000" },
     run: async ({ page, rig }) => {
+      // The strip (role=status "Session provisioning") with its step spans.
+      const armSteps = (name: string) =>
+        page.evaluate(
+          (n) =>
+            (window as unknown as { __perf: { arm(n: string, s: unknown): void } }).__perf.arm(n, {
+              kind: "exists",
+              sel: '[aria-label="Session provisioning"] span',
+            }),
+          name,
+        );
+      const seen = (name: string) =>
+        waitFor(
+          async () => !!(await page.evaluate((n) => (window as unknown as { __perf: { markers: Record<string, number> } }).__perf.markers[n], name)),
+          30_000,
+          "the provisioning strip's steps",
+        );
+      let sessionId = "";
       return [
         await step("from the launchpad", async () => {
           await load(page, rig.stack.appURL);
-          await page.evaluate(() =>
-            (window as unknown as { __perf: { arm(n: string, s: unknown): void } }).__perf.arm("provisioning", {
-              kind: "text",
-              any: ["Using current directory", "Setting up worktree", "Installing commit hook", "Connecting capabilities", "Starting agent"],
-            }),
-          );
+          await armSteps("steps");
           await page.getByLabel("Describe your goal").fill("echo perf provisioning check");
           await page.getByRole("button", { name: "Start session" }).click();
-          await waitFor(
-            async () => !!(await page.evaluate(() => (window as unknown as { __perf: { markers: Record<string, number> } }).__perf.markers.provisioning)),
-            30_000,
-            "a provisioning step label",
-          );
+          await seen("steps");
+          // The session it just created: the newest one.
+          const all = await router<{ id: string; created_at: string }[]>(rig.stack, "GET", "/sessions");
+          sessionId = [...all].sort((a, b) => b.created_at.localeCompare(a.created_at))[0]?.id ?? "";
         }),
+        await step(
+          "after a reload part-way",
+          async () => {
+            if (!sessionId) throw new Error("the new session wasn't found");
+            await page.reload();
+            await rail(page).locator("[data-rail-card]").first().waitFor({ state: "visible", timeout: T });
+            await armSteps("steps-reload");
+            await card(page, sessionId).click();
+            await seen("steps-reload");
+          },
+          "SessionsSurface shows the provisioning strip only for the session this window just created (provisioningSessionId, " +
+            "component state): after a reload the session opens without it, whatever the bus replays",
+        ),
       ];
     },
   },
 ];
 
 export function checkByName(name: string): Check {
-  const c = CHECKS.find((x) => x.name === name || x.name.startsWith(`${name}-`));
+  const full = resolveCheck(name);
+  const c = CHECKS.find((x) => x.name === full);
   if (!c) throw new Error(`unknown check ${name}; have ${CHECKS.map((x) => x.name).join(", ")}`);
   return c;
 }
@@ -257,6 +284,7 @@ export async function runCheck(opts: { plan: Plan; build: Build; name: string; m
       tag: `check-${check.name}-${opts.build.label}`,
       manifest: opts.manifest,
       fastModelURL: fm?.url,
+      env: check.env,
     });
     result.checks = await check.run({ page: rig.page, rig, manifest: opts.manifest });
     // A step known to fail on main doesn't fail the check; anything else does.
@@ -264,6 +292,9 @@ export async function runCheck(opts: { plan: Plan; build: Build; name: string; m
     if (!result.ok) result.error = result.checks.filter((c) => !c.ok && !c.knownOnMain).map((c) => `${c.name}: ${c.detail}`).join("; ");
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err);
+    // A check that throws before its steps run is a failure on record, not silence.
+    if (result.checks.length === 0) result.checks = [{ name: "setup", ok: false, detail: result.error.split("\n")[0].slice(0, 200) }];
+    result.ok = false;
   } finally {
     await rig?.teardown();
     await fm?.close();

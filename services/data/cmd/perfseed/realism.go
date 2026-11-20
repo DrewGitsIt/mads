@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/drewkidwell/mads/services/data/internal/store"
@@ -90,7 +91,7 @@ func realism(ctx context.Context, db *sql.DB, safeRoot string) (*Manifest, *real
 		return nil, nil, err
 	}
 	for _, t := range tables {
-		n, err := rewritePaths(ctx, db, t, safeRoot)
+		n, err := rewritePaths(ctx, db, t, safeRoot, endpointTables[t])
 		if err != nil {
 			return nil, nil, fmt.Errorf("realism: %s: %w", t, err)
 		}
@@ -231,9 +232,21 @@ func tablesWithData(ctx context.Context, db *sql.DB) ([]string, error) {
 	return out, rows.Err()
 }
 
+// endpointTables hold configuration that could reach a network service or
+// start a program: their URL, endpoint, key, token, command and host
+// fields are blanked in the copy (fast_model_* included).
+var endpointTables = map[string]bool{"config": true, "capabilities": true, "agents": true, "profiles": true, "templates": true, "workspaces": true}
+
+var endpointKey = regexp.MustCompile(`(?i)url|endpoint|fast_model|api_?key|token|secret|password|command|^args$|^env$|host|webhook|registry`)
+
+// pathInText finds absolute paths inside free text (a handoff's notes, a
+// task's scope), for rewriting where a path isn't the whole value.
+var pathInText = regexp.MustCompile(`(?:/Users|/home|/private|/var|/tmp|/Volumes|/opt|/srv|/mnt)/[^\s"'<>()\[\],;:` + "`" + `]*`)
+
 // rewritePaths points every absolute-path string in table's JSON records
-// at safeRoot and drops shadow_dir. Returns how many strings it changed.
-func rewritePaths(ctx context.Context, db *sql.DB, table, safeRoot string) (int, error) {
+// at safeRoot, rewrites paths inside text, drops shadow_dir, and (for an
+// endpoint table) blanks endpoint fields. Returns how many it changed.
+func rewritePaths(ctx context.Context, db *sql.DB, table, safeRoot string, blankEndpoints bool) (int, error) {
 	rows, err := db.QueryContext(ctx, `SELECT rowid, data FROM "`+table+`"`)
 	if err != nil {
 		return 0, err
@@ -256,7 +269,7 @@ func rewritePaths(ctx context.Context, db *sql.DB, table, safeRoot string) (int,
 			continue
 		}
 		c := 0
-		v = walkPaths(v, safeRoot, &c)
+		v = walkPaths(v, safeRoot, blankEndpoints, &c)
 		if c > 0 {
 			b, _ := json.Marshal(v)
 			ups = append(ups, upd{id, string(b)})
@@ -298,7 +311,7 @@ func rewriteColumns(ctx context.Context, db *sql.DB, safe string) (int, error) {
 	_ = rows.Close()
 	total := 0
 	for _, c := range cols {
-		q := fmt.Sprintf(`SELECT rowid, %q FROM %q WHERE %q LIKE '/%%' OR %q LIKE '~/%%' OR %q LIKE '%%:/%%'`, c.c, c.t, c.c, c.c, c.c)
+		q := fmt.Sprintf(`SELECT rowid, %q FROM %q WHERE %q LIKE '%%/%%'`, c.c, c.t, c.c)
 		rs, err := db.QueryContext(ctx, q)
 		if err != nil {
 			return 0, err
@@ -325,6 +338,9 @@ func rewriteColumns(ctx context.Context, db *sql.DB, safe string) (int, error) {
 			case strings.Contains(v, ":/") && isPath(v[strings.Index(v, ":/")+1:]):
 				// "<provider>:<dir>" keys (account_auth.account).
 				nv = v[:strings.Index(v, ":/")+1] + safe
+			case pathInText.MatchString(v):
+				// Paths inside text: task_handoffs.content, task_notes.content, tasks.scope.
+				nv = pathInText.ReplaceAllString(v, safe)
 			default:
 				continue
 			}
@@ -341,7 +357,7 @@ func rewriteColumns(ctx context.Context, db *sql.DB, safe string) (int, error) {
 	return total, nil
 }
 
-func walkPaths(v any, safe string, n *int) any {
+func walkPaths(v any, safe string, blank bool, n *int) any {
 	switch x := v.(type) {
 	case map[string]any:
 		for k, e := range x {
@@ -350,12 +366,27 @@ func walkPaths(v any, safe string, n *int) any {
 				*n++
 				continue
 			}
-			x[k] = walkPaths(e, safe, n)
+			if blank && endpointKey.MatchString(k) {
+				switch e.(type) {
+				case string:
+					x[k] = ""
+				case []any:
+					x[k] = []any{}
+				case map[string]any:
+					x[k] = map[string]any{}
+				default:
+					x[k] = walkPaths(e, safe, blank, n)
+					continue
+				}
+				*n++
+				continue
+			}
+			x[k] = walkPaths(e, safe, blank, n)
 		}
 		return x
 	case []any:
 		for i, e := range x {
-			x[i] = walkPaths(e, safe, n)
+			x[i] = walkPaths(e, safe, blank, n)
 		}
 		return x
 	case string:
@@ -364,6 +395,10 @@ func walkPaths(v any, safe string, n *int) any {
 		if isPath(x) {
 			*n++
 			return safe
+		}
+		if r := pathInText.ReplaceAllString(x, safe); r != x {
+			*n++
+			return r
 		}
 		return x
 	}

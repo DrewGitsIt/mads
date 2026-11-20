@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "
 import path from "node:path";
 import type { DelayMode, Plan, Result } from "./measure";
 import type { Manifest } from "./scenarios";
+import { resolveCheck, UI_ONLY_CHECKS } from "./checkNames";
 
 /**
  * The run's report: per scenario and delay mode, deterministic metrics as
@@ -219,33 +220,10 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
       lines.push("");
     }
   }
-  // Correctness checks, per build; and the live-event smoke after each scenario.
+  // Correctness checks, per build, step by step; and the live-event smoke after each scenario.
   const checkRs = results.filter((r) => r.scenario.startsWith("check:"));
   if (plan.checks.length) {
-    lines.push("## Correctness checks", "");
-    lines.push(cand ? `| check | ${base} | ${cand} |` : `| check | ${base} |`, cand ? "|---|---|---|" : "|---|---|");
-    const regressions: string[] = [];
-    for (const c of plan.checks) {
-      const cell = (l: string) => {
-        const r = checkRs.find((x) => x.scenario === `check:${c}` && x.build === l);
-        if (!r) return { ok: undefined as boolean | undefined, steps: undefined as Result["checks"] | undefined, text: "✗ missing" };
-        const detail =
-          r.checks.map((x) => `${x.ok ? "✓" : x.knownOnMain ? "✗ (known on main)" : "✗"} ${x.name}${x.detail ? ` (${x.detail})` : ""}`).join("; ") || r.error || "";
-        return { ok: r.ok, steps: r.checks, text: `${r.ok ? "✓" : "✗"} ${detail}` };
-      };
-      const b = cell(base);
-      const k = cand ? cell(cand) : undefined;
-      // Flag any step the candidate fails that base passes.
-      for (const st of k?.steps ?? []) {
-        const bs = (b.steps ?? []).find((x) => x.name === st.name);
-        if (bs?.ok && !st.ok) regressions.push(`${c}: ${st.name}`);
-      }
-      lines.push(cand ? `| ${c} | ${b.text} | ${k!.text} |` : `| ${c} | ${b.text} |`);
-    }
-    const known = [...new Set(checkRs.flatMap((r) => r.checks.filter((x) => x.knownOnMain && !x.ok).map((x) => `${r.scenario.slice(6)} “${x.name}”: ${x.knownOnMain}`)))];
-    if (known.length) lines.push("", "Known to fail on main (not counted against the run):", ...known.map((x) => `- ${x}`));
-    if (regressions.length) lines.splice(lines.indexOf("## Correctness checks") + 1, 0, "", `**⚠⚠ CANDIDATE REGRESSION: passes on base, fails on cand: ${regressions.join(", ")}**`);
-    lines.push("");
+    lines.push(...renderChecks(plan, checkRs), "");
   }
   const smokes = results.filter((r) => !r.scenario.startsWith("check:") && r.checks?.length);
   if (smokes.length) {
@@ -271,4 +249,59 @@ export function writeReport(plan: Plan): string {
   const kept = plan.realism ? undefined : manifest;
   writeFileSync(path.join(plan.runDir, "results.json"), JSON.stringify({ plan, manifest: kept, results, allOk: allOk(plan, results) }, null, 2));
   return out;
+}
+
+export type StepStatus = "pass" | "fail" | "known-fail" | "FIXED" | "REGRESSION" | "missing";
+
+/**
+ * One check's steps across builds. With a candidate: pass (both pass),
+ * known-fail-still-failing, FIXED (base fails, cand passes), REGRESSION
+ * (base passes, cand fails), fail (both fail, not known on main). Failure
+ * messages from both builds are shown side by side.
+ */
+export function compareCheck(base: Result | undefined, cand: Result | undefined, hasCand: boolean): { step: string; status: StepStatus; base?: string; cand?: string }[] {
+  const steps = new Map<string, { b?: Result["checks"][number]; c?: Result["checks"][number] }>();
+  for (const s of base?.checks ?? []) steps.set(s.name, { ...steps.get(s.name), b: s });
+  for (const s of cand?.checks ?? []) steps.set(s.name, { ...steps.get(s.name), c: s });
+  if (steps.size === 0) steps.set("(no steps ran)", {});
+  const out: { step: string; status: StepStatus; base?: string; cand?: string }[] = [];
+  const msg = (s?: Result["checks"][number], r?: Result) => (s ? (s.ok ? "✓" : `✗ ${s.detail ?? ""}`) : r ? `✗ ${r.error ?? "did not run"}` : "missing");
+  for (const [step, { b, c }] of steps) {
+    let status: StepStatus;
+    if (!hasCand) status = !b ? "missing" : b.ok ? "pass" : b.knownOnMain ? "known-fail" : "fail";
+    else if (!b || !c) status = "missing";
+    else if (b.ok && c.ok) status = "pass";
+    else if (b.ok && !c.ok) status = "REGRESSION";
+    else if (!b.ok && c.ok) status = "FIXED";
+    else status = b.knownOnMain ? "known-fail" : "fail";
+    out.push({ step, status, base: msg(b, base), cand: hasCand ? msg(c, cand) : undefined });
+  }
+  return out;
+}
+
+export function renderChecks(plan: Plan, checkRs: Result[]): string[] {
+  const [base, cand] = plan.builds.map((b) => b.label);
+  const lines: string[] = ["## Correctness checks", ""];
+  const regressions: string[] = [];
+  const fixed: string[] = [];
+  lines.push(cand ? `| check | step | status | ${base} | ${cand} |` : `| check | step | status | ${base} |`, cand ? "|---|---|---|---|---|" : "|---|---|---|---|");
+  const known: string[] = [];
+  for (const c of plan.checks) {
+    const full = resolveCheck(c);
+    const find = (l: string) => checkRs.find((x) => x.scenario === `check:${full}` && x.build === l);
+    const b = find(base);
+    const k = cand ? find(cand) : undefined;
+    const label = UI_ONLY_CHECKS.has(full) ? `${full} (UI-only, not a bus check)` : full;
+    for (const row of compareCheck(b, k, !!cand)) {
+      if (row.status === "REGRESSION" && !UI_ONLY_CHECKS.has(full)) regressions.push(`${full}: ${row.step}`);
+      if (row.status === "FIXED") fixed.push(`${full}: ${row.step}`);
+      const st = row.status === "pass" ? "✓ pass" : row.status === "known-fail" ? "✗ known on main" : row.status === "FIXED" ? "★ FIXED" : row.status === "REGRESSION" ? "⚠ REGRESSION" : `✗ ${row.status}`;
+      lines.push(cand ? `| ${label} | ${row.step} | ${st} | ${row.base} | ${row.cand} |` : `| ${label} | ${row.step} | ${st} | ${row.base} |`);
+    }
+    for (const s of [...(b?.checks ?? []), ...(k?.checks ?? [])]) if (s.knownOnMain && !s.ok) known.push(`${full} “${s.name}”: ${s.knownOnMain}`);
+  }
+  if (regressions.length) lines.splice(1, 0, "", `**⚠⚠ CANDIDATE REGRESSION: passes on base, fails on cand: ${regressions.join("; ")}**`);
+  if (fixed.length) lines.push("", `★ Fixed by the candidate (fails on base, passes on cand): ${fixed.join("; ")}`);
+  if (known.length) lines.push("", "Known to fail on main (not counted against the run):", ...[...new Set(known)].map((x) => `- ${x}`));
+  return lines;
 }

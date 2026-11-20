@@ -61,6 +61,7 @@ const server = createServer((req, res) => {
     // /events only: the highest seq forwarded (from SSE `id:` lines), and
     // when its first and last bytes went out.
     maxSeq: 0,
+    declaredStart: undefined,
     firstByte: undefined,
     lastByte: undefined,
   };
@@ -132,6 +133,12 @@ const server = createServer((req, res) => {
               prevNL = nl;
               if (isEvents) {
                 if (nl) {
+                  // The harness contract (docs/PERF-HARNESS-PLAN.md): a stream
+                  // may declare where the server starts it, ": start <seq>".
+                  if (line.startsWith(": start ") && rec.declaredStart === undefined) {
+                    const st = Number(line.slice(8));
+                    if (Number.isFinite(st)) rec.declaredStart = st;
+                  }
                   if (line.startsWith("id: ")) {
                     const seq = Number(line.slice(4));
                     if (seq > rec.maxSeq) rec.maxSeq = seq;
@@ -164,7 +171,15 @@ const server = createServer((req, res) => {
   }
 });
 
+// Offline mode (scenario 7b): until this time every new connection is
+// refused at once, as when the network is down.
+let offlineUntil = 0;
+
 server.on("connection", (s) => {
+  if (Date.now() < offlineUntil) {
+    s.destroy();
+    return;
+  }
   s.setNoDelay(true);
   sockets.add(s);
   s.on("close", () => sockets.delete(s));
@@ -181,6 +196,10 @@ process.on("message", (msg) => {
     case "status":
       return reply({ now: Date.now(), lastEventsActivity });
     case "cutAll":
+      for (const s of sockets) s.destroy();
+      return reply(true);
+    case "offline":
+      offlineUntil = Date.now() + msg.ms;
       for (const s of sockets) s.destroy();
       return reply(true);
     case "close":

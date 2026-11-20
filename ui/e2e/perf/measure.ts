@@ -4,7 +4,8 @@ import path from "node:path";
 import { _electron as electron, chromium, type Browser, type BrowserContext, type BrowserServer, type Page } from "@playwright/test";
 import { MainThreadMetrics, ProcSampler, SocketSampler, routeOf } from "./collectors";
 import { delayFor, parseDelays } from "./delayRules";
-import { PROBE_INIT, arm, probeSeries, readProbe, type PageReq } from "./probe";
+import { resolveCheck } from "./checkNames";
+import { PROBE_INIT, arm, probeSeries, readProbe, type MarkerSpec, type PageReq } from "./probe";
 import type { ProxyRequest, ProxySnapshot } from "./proxyClient";
 import { SCENARIOS, scenarioById, useManifest, type Manifest, type Scenario, type ScenarioCtx } from "./scenarios";
 import { bootPerfStack, childrenOf, logHead, streamTarget, waitDelegatesConcluded, type Build, type PerfStack } from "./stack";
@@ -43,9 +44,14 @@ export function loadPlan(): Plan | undefined {
   const p = process.env.PERF_PLAN;
   if (!p) return undefined;
   const plan = JSON.parse(readFileSync(p, "utf8")) as Plan;
-  plan.scenarios = plan.scenarios.length ? plan.scenarios.map((s) => scenarioById(s).id) : SCENARIOS.map((s) => s.id);
+  plan.scenarios =
+    plan.scenarios.length === 1 && plan.scenarios[0] === "none"
+      ? []
+      : plan.scenarios.length
+        ? plan.scenarios.map((s) => scenarioById(s).id)
+        : SCENARIOS.map((s) => s.id);
   plan.modes ??= ["on", "off"];
-  plan.checks ??= [];
+  plan.checks = (plan.checks ?? []).map(resolveCheck);
   return plan;
 }
 
@@ -114,9 +120,9 @@ export interface Result {
 }
 
 const WINDOW_CAP_MS = Number(process.env.PERF_WINDOW_CAP_MS ?? 120_000);
-const PREPARE_CAP_MS = Number(process.env.PERF_PREPARE_CAP_MS ?? 300_000);
+const PREPARE_CAP_MS = Number(process.env.PERF_PREPARE_CAP_MS ?? 180_000);
 const SETTLE_CAP_MS = Number(process.env.PERF_SETTLE_CAP_MS ?? 180_000);
-const MARKER_CAP_MS = 180_000;
+const MARKER_CAP_MS = Number(process.env.PERF_MARKER_CAP_MS ?? 30_000);
 const SOCKETS_PER_ORIGIN = 6;
 const LIVE_PORT = /^(https?|wss?):\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:(17373|17374|17380))\b/;
 
@@ -166,11 +172,23 @@ function matchRequests(page: PageReq[], proxy: ProxyRequest[], origin: string): 
     const k = `${p.method} ${p.path}${p.query}`;
     (byKey.get(k) ?? byKey.set(k, []).get(k)!).push(p);
   }
-  for (const r of [...page].sort((a, b) => a.start - b.start)) {
+  // The page's own "it got there" time bounds the match: an EventSource's
+  // open, a fetch's headers. Requests with one are paired first, inside
+  // [start, reached]; one that failed or closed without ever reaching the
+  // proxy (an outage, an abort in the queue) must not take another's record.
+  const reached = (r: PageReq) => r.open ?? r.headers;
+  const ordered = [...page].sort((a, b) => Number(reached(b) !== undefined) - Number(reached(a) !== undefined) || a.start - b.start);
+  for (const r of ordered) {
     if (!r.url.startsWith(origin)) continue;
     const u = new URL(r.url);
     const cands = byKey.get(`${r.method} ${u.pathname}${u.search}`) ?? [];
-    const m = cands.find((p) => !used.has(p.id) && p.start >= r.start - 20);
+    const hi = reached(r);
+    const lo = r.start - 20;
+    const m = cands.find((p) => !used.has(p.id) && p.start >= lo && (hi === undefined ? true : p.start <= hi + 20));
+    if (m && hi === undefined && (r.failed !== undefined || r.closed !== undefined) && m.start > (r.failed ?? r.closed)!) {
+      out.set(r.id, undefined);
+      continue;
+    }
     if (m) used.add(m.id);
     out.set(r.id, m);
   }
@@ -249,6 +267,7 @@ export interface Watch {
 const SHORT_QUIET_MS = 500;
 const MAIN_IDLE_MS = 500;
 const BYTE_IDLE_MS = 1500;
+const NO_PROGRESS_MS = Number(process.env.PERF_NO_PROGRESS_MS ?? 30_000);
 
 /**
  * The one rule both settle and quiet use, from `start` on, with every
@@ -267,9 +286,9 @@ const BYTE_IDLE_MS = 1500;
  * Resolves with the instant all three first held, not counting the quiet
  * windows themselves.
  */
-export async function waitRule(w: Watch, start: number, head: number, capMs: number): Promise<{ at: number; capped: boolean }> {
+export async function waitRule(w: Watch, start: number, head: number, capMs: number): Promise<{ at: number; capped: boolean; reason?: string }> {
   const deadline = Date.now() + capMs;
-  const targets = new Map<number, number>();
+  const targets = new Map<string, number>();
   const caughtAt = new Map<number, number>();
   const fellBack = new Set<number>();
   for (;;) {
@@ -289,12 +308,16 @@ export async function waitRule(w: Watch, start: number, head: number, capMs: num
       if (r.end === undefined || r.end >= start) lastShort = Math.max(lastShort, r.start, r.end ?? 0);
     }
     let eventsQueued = false;
+    let queuedES: PageReq[] = [];
     for (const r of probe.reqs) {
       if (match.get(r.id) || r.failed !== undefined || r.closed !== undefined || r.headers !== undefined) continue;
       const u = new URL(r.url);
       if (w.delayed(r.method, u.pathname)) continue;
       if (r.kind === "es") {
-        if (u.pathname === "/events") eventsQueued = true;
+        if (u.pathname === "/events") {
+          eventsQueued = true;
+          queuedES.push(r);
+        }
         continue;
       }
       busy = true;
@@ -302,16 +325,20 @@ export async function waitRule(w: Watch, start: number, head: number, capMs: num
     }
     const shortOk = !busy && now - lastShort >= SHORT_QUIET_MS;
 
-    // /events caught up to head.
+    // /events caught up: each open stream has forwarded the newest event it
+    // will actually send — matching its filter, after where it starts
+    // (its own `: start <seq>` declaration if the server made one, else
+    // its `since`, else 0), up to the head at `start`.
     let eventsOk = !eventsQueued;
     let eventsAt = start;
+    let stuck = "";
     for (const r of snap.requests) {
       if (!isEvents(r) || r.end !== undefined) continue;
-      if (!targets.has(r.id)) {
-        const q = new URLSearchParams(r.query);
-        targets.set(r.id, await streamTarget(w.stack, Number(q.get("since") ?? 0), head, (q.get("types") ?? "").split(",").filter(Boolean)));
-      }
-      const target = targets.get(r.id)!;
+      const q = new URLSearchParams(r.query);
+      const from = r.declaredStart ?? Number(q.get("since") ?? 0);
+      const key = `${r.id}:${from}`;
+      if (!targets.has(key)) targets.set(key, await streamTarget(w.stack, from, head, (q.get("types") ?? "").split(",").filter(Boolean)));
+      const target = targets.get(key)!;
       if (target > 0 && r.maxSeq < target) {
         // F5: bytes flowing but no id: lines at all — wait for byte idle instead.
         if (r.maxSeq === 0 && r.bytes > 0 && r.lastByte !== undefined && now - r.lastByte >= BYTE_IDLE_MS) {
@@ -321,19 +348,31 @@ export async function waitRule(w: Watch, start: number, head: number, capMs: num
           }
         } else {
           eventsOk = false;
+          // No progress for 30 s while still owing frames: name it and stop.
+          if (now - Math.max(r.lastByte ?? r.start, start) > NO_PROGRESS_MS) {
+            stuck = `/events stream stuck behind head: forwarded through seq ${r.maxSeq}, owes up to ${target} (start ${from}, head ${head}), no byte for ${Math.round((now - (r.lastByte ?? r.start)) / 1000)} s`;
+          }
           continue;
         }
       }
       if (!caughtAt.has(r.id)) caughtAt.set(r.id, target > 0 ? (r.lastByte ?? now) : Math.max(r.start, start));
       eventsAt = Math.max(eventsAt, caughtAt.get(r.id)!);
     }
+    if (eventsQueued && now - start > NO_PROGRESS_MS && !stuck) {
+      const d = queuedES.map((r) => `started ${Math.round(r.start - start)} ms in, open ${r.open ? Math.round(r.open - start) : "-"}, reconnects ${r.reconnects ?? 0}`);
+      stuck = `an /events EventSource the proxy never saw has been open in the browser for over 30 s (${d.join("; ")})`;
+    }
 
-    // Main thread, in page time: the probe is alive and calm.
-    const lastBusy = Math.max(probe.lastBusy, start);
-    const mainOk = probe.lastSample >= probe.pageNow - 250 && probe.lastSample - lastBusy >= MAIN_IDLE_MS;
+    // Main thread, in page time: the probe is alive and calm (PERF_PROBE=0: not measured).
+    const lastBusy = probe.lite ? start : Math.max(probe.lastBusy, start);
+    const mainOk = probe.lite || (probe.lastSample >= probe.pageNow - 250 && probe.lastSample - lastBusy >= MAIN_IDLE_MS);
 
     if (shortOk && eventsOk && mainOk) return { at: Math.max(lastShort, eventsAt, lastBusy), capped: false };
-    if (Date.now() > deadline) return { at: Date.now(), capped: true };
+    if (stuck) throw new Error(`settle: ${stuck}`);
+    if (Date.now() > deadline) {
+      const why = [!shortOk && "short requests still in flight or starting", !eventsOk && "/events behind head", !mainOk && "main thread busy"].filter(Boolean).join(", ");
+      return { at: Date.now(), capped: true, reason: why };
+    }
     await sleep(50);
   }
 }
@@ -373,7 +412,15 @@ export interface Rig {
 }
 
 /** Boots a repetition's stack and browser (or Electron). Registers teardown with abortActive. */
-export async function bootRig(opts: { plan: Plan; build: Build; mode: DelayMode; tag: string; manifest: Manifest; fastModelURL?: string }): Promise<Rig> {
+export async function bootRig(opts: {
+  plan: Plan;
+  build: Build;
+  mode: DelayMode;
+  tag: string;
+  manifest: Manifest;
+  fastModelURL?: string;
+  env?: Record<string, string>;
+}): Promise<Rig> {
   const { plan, build, mode, tag, manifest } = opts;
   const delays = mode === "on" ? plan.delays : "off";
   const rules = parseDelays(delays);
@@ -408,8 +455,10 @@ export async function bootRig(opts: { plan: Plan; build: Build; mode: DelayMode;
       holdOutput: plan.holdOutput,
       tag,
       fastModelURL: opts.fastModelURL,
+      env: opts.env,
     });
     if (manifest.parent?.running?.length) await waitDelegatesConcluded(stack, manifest.parent.id);
+    if (manifest.typical?.running?.length) await waitDelegatesConcluded(stack, manifest.typical.id);
     let page: Page;
     let browserPid: number;
     if (plan.browser === "electron") {
@@ -455,6 +504,9 @@ export async function bootRig(opts: { plan: Plan; build: Build; mode: DelayMode;
       page = await context.newPage();
     }
     for (const c of childrenOf(browserPid)) stack.own(c, "browser-child");
+    // Every Playwright action fails in 30 s, naming itself, rather than
+    // running into the test's 10-minute timeout.
+    context.setDefaultTimeout(Number(process.env.PERF_ACTION_TIMEOUT_MS ?? 30_000));
     const urls: string[] = [];
     page.on("request", (r) => urls.push(r.url()));
     await metrics.attach(page);
@@ -473,7 +525,7 @@ export async function bootRig(opts: { plan: Plan; build: Build; mode: DelayMode;
       browser: plan.browser,
       quiesce: async () => {
         const r = await waitRule(watch, Date.now(), await logHead(st), PREPARE_CAP_MS);
-        if (r.capped) throw new Error("page never went quiet (a request in flight or queued, a stream behind head, or a busy main thread)");
+        if (r.capped) throw new Error(`page never went quiet: ${r.reason}`);
       },
     };
     return { stack, page, context, browserPid, watch, metrics, urls, ctx, teardown };
@@ -488,14 +540,14 @@ export function liveHits(urls: string[]): string[] {
   return urls.filter((u) => LIVE_PORT.test(u));
 }
 
-/** Waits for a leg's armed marker, returning [page time, harness time]. */
-async function waitMarker(w: Watch, name: string): Promise<[number, number]> {
+/** Waits for a leg's armed marker, returning [page time, harness time]. Fails after 30 s, naming it. */
+async function waitMarker(w: Watch, name: string, spec: MarkerSpec): Promise<[number, number]> {
   const deadline = Date.now() + MARKER_CAP_MS;
   for (;;) {
     const p = await readProbe(w.page, Number.MAX_SAFE_INTEGER);
     w.cdpLag.max = Math.max(w.cdpLag.max, Date.now() - p.pageNow);
     if (p.markers[name]) return [p.markers[name], Date.now()];
-    if (Date.now() > deadline) throw new Error(`marker ${name} never held`);
+    if (Date.now() > deadline) throw new Error(`marker never appeared: ${name} ${JSON.stringify(spec)} (${MARKER_CAP_MS / 1000} s)`);
     await sleep(25);
   }
 }
@@ -558,9 +610,9 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       if (leg.navigates) await rig.context.addInitScript(`window.__perf && window.__perf.arm(${JSON.stringify(leg.name)}, ${JSON.stringify(spec)});`);
       await arm(page, leg.name, spec);
       await leg.act(ctx);
-      const [markerAt, markerSeen] = await waitMarker(watch, leg.name);
+      const [markerAt, markerSeen] = await waitMarker(watch, leg.name, spec);
       const rule = await waitRule(watch, clickAt, head, SETTLE_CAP_MS);
-      if (rule.capped) result.windowCapped = true;
+      if (rule.capped) throw new Error(`settle capped at ${SETTLE_CAP_MS / 1000} s: ${rule.reason}`);
       const settledAt = Math.max(markerAt, rule.at);
       const m1 = await metrics.read();
       const series = await probeSeries(page, clickAt);
@@ -640,6 +692,8 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       requests_short: shortsProxy.length,
       requests_delayed: proxyNew.filter((r) => r.delayMs > 0).length,
       output_streams_held: proxyNew.filter((r) => r.held).length,
+      es_auto_reconnects: probe.reqs.filter((r) => r.kind === "es").reduce((a, r) => a + (r.reconnects ?? 0), 0),
+      events_declared_start: ev.per.filter((p) => p.r.declaredStart !== undefined).length,
       peak_busy_sockets_proxy: peakIn(snap1.timeline, t0, t1),
       peak_sockets_lsof: socks.peak,
     };

@@ -41,7 +41,8 @@ type seedDelegate struct {
 	puts        int
 	done        int // puts written so far
 	start, end  float64
-	descPad     int
+	target      int // the record's size, roughly (profile mean ±40)
+	descPad     int // the description filler that gets there, fixed at the first put
 }
 
 // SeedOptions are the knobs a seed run takes beyond the profile.
@@ -70,7 +71,10 @@ type Manifest struct {
 	RepoDir     string         `json:"repo_dir"`
 	Sessions    []ManifestRef  `json:"sessions"`
 	Parent      ManifestParent `json:"parent"`
-	SwitchA     ManifestRef    `json:"switch_a"`
+	// Typical is a delegate parent with about typical_subagent_events of
+	// the log's subagent events (scenario 3t), against Parent's heaviest.
+	Typical *ManifestParent `json:"typical,omitempty"`
+	SwitchA ManifestRef     `json:"switch_a"`
 	// Rail names the cards whose arrival means the rail has loaded (realism:
 	// the scenario sessions; seeded runs expect every session).
 	Rail        *ManifestRail    `json:"rail,omitempty"`
@@ -101,7 +105,9 @@ type ManifestParent struct {
 	Running   []ManifestDelegate `json:"running"`
 	// WithFile has a transcript file (scenario 3); NoFile has none (3b).
 	WithFile *ManifestDelegate `json:"with_file,omitempty"`
-	NoFile   *ManifestDelegate `json:"no_file,omitempty"`
+	// SubagentEvents in the log for this session.
+	SubagentEvents int               `json:"subagent_events,omitempty"`
+	NoFile         *ManifestDelegate `json:"no_file,omitempty"`
 }
 
 type ManifestDelegate struct {
@@ -156,7 +162,10 @@ func Seed(ctx context.Context, path string, p *Profile, opt SeedOptions) (*Manif
 	}
 
 	fill := newFiller(rng)
-	parentRef := ""
+	// The typical parent (scenario 3t): the delegate session expected to get
+	// closest to typical_subagent_events of the log's subagent events.
+	ti := typicalIndex(p)
+	refs := map[int]string{}
 	ss := make([]*seedSession, p.Sessions)
 	for i := range ss {
 		s := &seedSession{idx: i, id: hexID(rng, "ses"), name: sessionName(i)}
@@ -170,9 +179,9 @@ func Seed(ctx context.Context, path string, p *Profile, opt SeedOptions) (*Manif
 			Isolation: contracts.IsolationCurrentDir, Cwd: opt.RepoDir, Dir: opt.RepoDir,
 			CreatedAt: base.Add(time.Duration(i) * time.Minute),
 		}
-		if i == 0 && opt.TranscriptsDir != "" {
+		if (i == 0 || i == ti) && opt.TranscriptsDir != "" {
 			rec.Provider, rec.ProviderRef = "claude-code", fmt.Sprintf("perf-%016x", rng.Uint64())
-			parentRef = rec.ProviderRef
+			refs[i] = rec.ProviderRef
 		}
 		if err := sessions.Create(ctx, rec, actor); err != nil {
 			return nil, fmt.Errorf("seed: session %d: %w", i, err)
@@ -196,7 +205,7 @@ func Seed(ctx context.Context, path string, p *Profile, opt SeedOptions) (*Manif
 	// Delegates: spread over the delegate sessions by weight (the parent,
 	// session 0, gets the most), each put several times so its record's
 	// session.delegate_changed history has the profile's length.
-	dels, err := planDelegates(rng, p, ss)
+	dels, err := planDelegates(rng, p, ss, ti)
 	if err != nil {
 		return nil, err
 	}
@@ -262,15 +271,18 @@ func Seed(ctx context.Context, path string, p *Profile, opt SeedOptions) (*Manif
 	window := opt.Now.Sub(base)
 	at := func(i int) time.Time { return base.Add(time.Duration(float64(window) * float64(i) / total)) }
 
-	// The delegate whose transcript file gets written, and its stream.
-	var fileDelegate *seedDelegate
+	// The delegates whose transcript files get written (the parent's and
+	// the typical parent's first), and their streams.
 	type fileEvent struct {
 		payload []byte
 		at      time.Time
 	}
-	var fileEvents []fileEvent
+	fileEvents := map[*seedDelegate][]fileEvent{}
 	if opt.TranscriptsDir != "" {
-		fileDelegate = ss[0].delegates[0]
+		fileEvents[ss[0].delegates[0]] = nil
+		if ti > 0 {
+			fileEvents[ss[ti].delegates[0]] = nil
+		}
 	}
 
 	pickSession := func(typ string) (*seedSession, *seedDelegate) {
@@ -313,8 +325,8 @@ func Seed(ctx context.Context, path string, p *Profile, opt SeedOptions) (*Manif
 				if err != nil {
 					return err
 				}
-				if d != nil && d == fileDelegate && pl.typ == "session.subagent_event" {
-					fileEvents = append(fileEvents, fileEvent{payload: payload, at: g.at})
+				if fe, ok := fileEvents[d]; ok && d != nil && pl.typ == "session.subagent_event" {
+					fileEvents[d] = append(fe, fileEvent{payload: payload, at: g.at})
 				}
 				env.Payload = payload
 				if err := tx.Append(env); err != nil {
@@ -342,26 +354,41 @@ func Seed(ctx context.Context, path string, p *Profile, opt SeedOptions) (*Manif
 			m.Parent.Running = append(m.Parent.Running, ManifestDelegate{HarnessID: d.harnessID, ToolUseID: d.toolUseID, Description: d.description})
 		}
 	}
-	if fileDelegate != nil {
-		var lines [][]byte
-		for _, e := range fileEvents {
-			lines = append(lines, e.payload)
+	writeFile := func(si int) (*ManifestDelegate, error) {
+		d := ss[si].delegates[0]
+		evs, ok := fileEvents[d]
+		if !ok {
+			return nil, nil
 		}
-		ats := make([]time.Time, len(fileEvents))
-		for i, e := range fileEvents {
-			ats[i] = e.at
+		lines := make([][]byte, len(evs))
+		ats := make([]time.Time, len(evs))
+		for i, e := range evs {
+			lines[i], ats[i] = e.payload, e.at
 		}
-		if err := writeDelegateTranscript(opt.TranscriptsDir, opt.RepoDir, parentRef, fileDelegate, lines, ats); err != nil {
+		if err := writeDelegateTranscript(opt.TranscriptsDir, opt.RepoDir, refs[si], d, lines, ats); err != nil {
 			return nil, err
 		}
-		md := ManifestDelegate{HarnessID: fileDelegate.harnessID, ToolUseID: fileDelegate.toolUseID, Description: fileDelegate.description}
-		m.Parent.WithFile = &md
+		return &ManifestDelegate{HarnessID: d.harnessID, ToolUseID: d.toolUseID, Description: d.description}, nil
+	}
+	if m.Parent.WithFile, err = writeFile(0); err != nil {
+		return nil, err
+	}
+	if m.Parent.WithFile != nil {
 		for _, d := range parent.delegates {
-			if d.running && d != fileDelegate {
+			if d.running && d.harnessID != m.Parent.WithFile.HarnessID {
 				nf := ManifestDelegate{HarnessID: d.harnessID, ToolUseID: d.toolUseID, Description: d.description}
 				m.Parent.NoFile = &nf
 				break
 			}
+		}
+	}
+	if ti > 0 {
+		t := ss[ti]
+		m.Typical = &ManifestParent{ManifestRef: ManifestRef{ID: t.id, Name: t.name}, Delegates: len(t.delegates)}
+		d := t.delegates[0]
+		m.Typical.Running = []ManifestDelegate{{HarnessID: d.harnessID, ToolUseID: d.toolUseID, Description: d.description}}
+		if m.Typical.WithFile, err = writeFile(ti); err != nil {
+			return nil, err
 		}
 	}
 	m.SwitchA = ManifestRef{ID: ss[1].id, Name: ss[1].name}
@@ -370,6 +397,14 @@ func Seed(ctx context.Context, path string, p *Profile, opt SeedOptions) (*Manif
 	m.Counts, m.Bytes, err = statsByType(ctx, db)
 	if err != nil {
 		return nil, err
+	}
+	if m.Typical != nil {
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE session_id = ? AND type = 'session.subagent_event'`, m.Typical.ID).Scan(&m.Typical.SubagentEvents); err != nil {
+			return nil, err
+		}
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE session_id = ? AND type = 'session.subagent_event'`, m.Parent.ID).Scan(&m.Parent.SubagentEvents); err != nil {
+			return nil, err
+		}
 	}
 	for t, n := range m.Counts {
 		m.TotalEvents += n
@@ -390,7 +425,26 @@ func sessionName(i int) string {
 }
 
 // planDelegates builds every delegate and how many times it is put.
-func planDelegates(rng *rand.Rand, p *Profile, ss []*seedSession) ([]*seedDelegate, error) {
+// typicalIndex is the delegate session (never the parent) whose expected
+// share of subagent events is closest to the profile's typical count, or 0
+// when there's none to pick.
+func typicalIndex(p *Profile) int {
+	want := p.TypicalSubagentEvents
+	if want <= 0 {
+		want = 1000
+	}
+	n := float64(p.Events["session.subagent_event"].Count)
+	w := zipfWeights(p.DelegateSessions, p.SessionSkew)
+	best, bestDiff := 0, math.Inf(1)
+	for i := 1; i < len(w); i++ {
+		if d := math.Abs(w[i]*n - float64(want)); d < bestDiff {
+			best, bestDiff = i, d
+		}
+	}
+	return best
+}
+
+func planDelegates(rng *rand.Rand, p *Profile, ss []*seedSession, ti int) ([]*seedDelegate, error) {
 	want := p.Events[string(contracts.SessionDelegateChanged)].Count
 	if want < p.Delegates {
 		return nil, fmt.Errorf("profile: session.delegate_changed (%d) below delegates (%d): every delegate is put at least once", want, p.Delegates)
@@ -425,7 +479,7 @@ func planDelegates(rng *rand.Rand, p *Profile, ss []*seedSession) ([]*seedDelega
 				toolUseID:   hexID(rng, "toolu"),
 				typ:         types[rng.IntN(len(types))],
 				description: fmt.Sprintf("perf delegate %02d-%03d", si, k),
-				running:     si == 0 && k < p.RunningDelegates,
+				running:     (si == 0 && k < p.RunningDelegates) || (ti > 0 && si == ti && k == 0),
 				puts:        1,
 			}
 			s.delegates = append(s.delegates, d)
@@ -452,7 +506,7 @@ func planDelegates(rng *rand.Rand, p *Profile, ss []*seedSession) ([]*seedDelega
 	for _, d := range all {
 		d.start = rng.Float64() * 0.9
 		d.end = d.start + rng.Float64()*(1-d.start)
-		d.descPad = max(0, int(mean)-520+rng.IntN(80)-40)
+		d.target = max(0, int(mean)+rng.IntN(80)-40)
 	}
 	return all, nil
 }
@@ -502,14 +556,19 @@ func putDelegate(ctx context.Context, st *store.Delegates, d *seedDelegate, at t
 		Usage:        &contracts.Usage{InputTokens: 1000 + d.done*100, OutputTokens: 200 + d.done*20, Model: "fake-model"},
 		Capabilities: &contracts.DelegateCapabilities{Transcript: false, Continuable: false, Steer: contracts.DelegateSteerNone, Stop: false},
 	}
-	if d.descPad > 0 {
-		// The same text on every put: one task's description, sized so the
-		// record matches the profile's mean.
-		rec.Description = d.description + " — " + fill.pool[:d.descPad]
-	}
 	if last && !d.running {
 		ended := at.UTC()
 		rec.State, rec.EndedAt = contracts.DelegateCompleted, &ended
+	}
+	if d.done == 1 {
+		// Sized once, from the record as stored (the store adds its id and
+		// two timestamps, ~110 bytes), so the record matches the profile.
+		b, _ := json.Marshal(rec)
+		d.descPad = max(0, d.target-len(b)-110-len(" — "))
+	}
+	if d.descPad > 0 {
+		// The same text on every put: one task's description.
+		rec.Description = d.description + " — " + fill.pool[:d.descPad]
 	}
 	if err := st.Put(ctx, rec, actor); err != nil {
 		return fmt.Errorf("seed: delegate %s put %d: %w", d.harnessID, d.done, err)

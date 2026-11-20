@@ -143,6 +143,8 @@ export async function bootPerfStack(opts: {
   tag: string;
   /** A Fast Model endpoint for the Router (checks only; scenarios run without one, so jobs skip). */
   fastModelURL?: string;
+  /** Extra environment for the stack's processes (e.g. MADS_FAKE_START_DELAY_MS). */
+  env?: Record<string, string>;
 }): Promise<PerfStack> {
   const reg = registry(opts.tag);
   const tmpDir = mkdtempSync(path.join(tmpdir(), "mads-perf-run-"));
@@ -163,6 +165,16 @@ export async function bootPerfStack(opts: {
   copyFileSync(opts.seededDB, path.join(dataDir, "mads.db"), constants.COPYFILE_FICLONE);
 
   const env = cleanEnv(homeDir);
+  // No credential of the harness's own environment reaches the stack.
+  for (const k of Object.keys(env)) {
+    if (/API_?KEY|TOKEN|SECRET|PASSW|CREDENTIAL|_AUTH|SESSION_KEY|PRIVATE_KEY/i.test(k)) delete env[k];
+  }
+  // Anything a child tries to reach that isn't loopback goes to a dead
+  // proxy; and git can't discover a repo above the run's temp tree.
+  for (const k of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]) env[k] = "http://127.0.0.1:1";
+  env.NO_PROXY = env.no_proxy = "127.0.0.1,localhost,::1";
+  env.GIT_CEILING_DIRECTORIES = process.env.PERF_GIT_CEILING || path.dirname(tmpDir);
+  Object.assign(env, opts.env ?? {});
   env.MADS_MERGIRAF = path.join(tmpDir, "mergiraf-standin", "mergiraf");
   const agentBinDir = path.join(tmpDir, "agent-bin-standins");
   mkdirSync(agentBinDir, { recursive: true });
@@ -185,7 +197,14 @@ export async function bootPerfStack(opts: {
   try {
     proxy = await startDelayProxy({ delays: opts.delays, holdOutput: opts.holdOutput });
     reg.pid(proxy.pid, "proxy");
-    const data = await spawnListening("data", [bin("data"), "-addr", "127.0.0.1:0", "-data-dir", dataDir], env);
+    // The services' working directory, which a spawned session child
+    // resolves "." to: a scratch git repo here, never the checkout the
+    // harness runs from (whose git status a session would otherwise read).
+    const cwd = path.join(tmpDir, "cwd");
+    mkdirSync(cwd, { recursive: true });
+    execFileSync("git", ["-C", cwd, "init", "-q", "-b", "main"]);
+    execFileSync("git", ["-C", cwd, "-c", "user.name=perf", "-c", "user.email=perf@perf.test", "commit", "-q", "--allow-empty", "-m", "perf cwd"]);
+    const data = await spawnListening("data", [bin("data"), "-addr", "127.0.0.1:0", "-data-dir", dataDir], env, cwd);
     procs.push(data);
     reg.pid(data.proc.pid!, "data");
     const dataURL = `http://${data.addr}`;
@@ -212,6 +231,7 @@ export async function bootPerfStack(opts: {
         proxy.url,
       ],
       env,
+      cwd,
     );
     procs.push(router);
     reg.pid(router.proc.pid!, "router");

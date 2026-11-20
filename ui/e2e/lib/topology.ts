@@ -30,9 +30,9 @@ export function cleanEnv(home: string): NodeJS.ProcessEnv {
   return env;
 }
 
-export function spawnListening(name: string, argv: string[], env: NodeJS.ProcessEnv): Promise<ListeningProc> {
+export function spawnListening(name: string, argv: string[], env: NodeJS.ProcessEnv, cwd?: string): Promise<ListeningProc> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(argv[0], argv.slice(1), { env, stdio: ["ignore", "ignore", "pipe"] });
+    const proc = spawn(argv[0], argv.slice(1), { env, cwd, stdio: ["ignore", "ignore", "pipe"] });
     const lines: string[] = [];
     let settled = false;
 

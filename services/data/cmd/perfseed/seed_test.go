@@ -175,13 +175,17 @@ func TestSeedRecordsConsistent(t *testing.T) {
 			}
 			if d.State == contracts.DelegateRunning {
 				running++
-				if s.ID != m.Parent.ID {
-					t.Errorf("running delegate %s outside the parent session", d.HarnessID)
+				if s.ID != m.Parent.ID && (m.Typical == nil || s.ID != m.Typical.ID) {
+					t.Errorf("running delegate %s outside the parent sessions", d.HarnessID)
 				}
 			}
 		}
 	}
-	if total != p.Delegates || running != p.RunningDelegates || len(m.Parent.Running) != p.RunningDelegates {
+	typical := 0
+	if m.Typical != nil {
+		typical = 1
+	}
+	if total != p.Delegates || running != p.RunningDelegates+typical || len(m.Parent.Running) != p.RunningDelegates {
 		t.Fatalf("delegates %d (running %d, manifest %d), want %d (running %d)",
 			total, running, len(m.Parent.Running), p.Delegates, p.RunningDelegates)
 	}

@@ -20,6 +20,8 @@ export interface ProxyRequest {
   aborted: boolean;
   /** /events: highest seq forwarded, and first/last byte out. */
   maxSeq: number;
+  /** The seq the server says the stream starts after (": start <seq>"), if it declared one. */
+  declaredStart?: number;
   firstByte?: number;
   lastByte?: number;
 }
@@ -42,6 +44,8 @@ export interface DelayProxy {
   eventsActivity(): Promise<number>;
   /** Destroys every client socket at once (a sleep/wake; scenario 7). */
   cutAll(): Promise<void>;
+  /** Cuts every socket and refuses new connections for ms (offline; scenario 7b). */
+  offline(ms: number): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -91,6 +95,9 @@ export async function startDelayProxy(opts: { delays: string; holdOutput: boolea
     eventsActivity: async () => (await call<{ lastEventsActivity: number }>("status")).lastEventsActivity,
     cutAll: async () => {
       await call("cutAll");
+    },
+    offline: async (ms) => {
+      await call("offline", { ms });
     },
     close: async () => {
       if (child.exitCode !== null) return;

@@ -94,6 +94,28 @@ A small Node reverse proxy sits between the browser and the Router.
 - No product code changes. Not usable for an HTTP/2 spike; that's out of
   scope.
 
+### 2b. Harness contract: where a stream starts
+
+Settle waits until every open `/events` stream has forwarded the newest
+event it will actually send: the highest seq matching its `types`, after
+where it starts, up to the log head read (from the database) at the click.
+Without help the harness takes "where it starts" from the request's
+`since` (missing = 0), which is right for main, where the client asks for
+history. A design whose **server** decides where a stream starts (a
+live-only bus that starts at the head, a bounded replay) must say so, or
+the harness waits for frames that never come:
+
+- the stream's first lines MAY include an SSE comment `: start <seq>`,
+  meaning "this stream sends events with seq > <seq>";
+- the proxy reads it; the target becomes the newest matching seq in
+  (<seq>, head], so a stream starting at or past the head is caught up at
+  once;
+- without it, the `since` rule stands. The report counts streams that
+  declared a start (`events_declared_start`).
+
+A stream that still owes frames and moves no byte for 30 s fails the
+repetition with the seq it reached and the one it owes.
+
 ### 3. Collectors (Playwright plus the Chrome DevTools Protocol)
 
 | Metric | Source | Kind |
