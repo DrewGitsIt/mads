@@ -11,8 +11,8 @@ import type { Manifest } from "./scenarios";
  */
 
 const DET_LABELS: Record<string, string> = {
-  events_stream_bytes: "/events stream bytes (CDP)",
-  events_stream_bytes_proxy: "/events stream bytes (proxy)",
+  events_stream_bytes_proxy: "/events stream bytes sent (proxy)",
+  events_stream_bytes: "/events stream bytes the page received (CDP; less if it closed the stream mid-replay)",
   events_stream_frames: "/events SSE frames (proxy)",
   events_stream_messages_cdp: "/events SSE messages (CDP)",
   events_stream_connects: "/events (re)connects",
