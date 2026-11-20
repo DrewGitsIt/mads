@@ -64,13 +64,16 @@ type SeedOptions struct {
 // Manifest tells the harness what was seeded: which sessions and delegates
 // its scenarios click, and the exact per-type counts and bytes written.
 type Manifest struct {
-	Profile     string           `json:"profile"`
-	Seed        uint64           `json:"seed"`
-	WorkspaceID string           `json:"workspace_id"`
-	RepoDir     string           `json:"repo_dir"`
-	Sessions    []ManifestRef    `json:"sessions"`
-	Parent      ManifestParent   `json:"parent"`
-	SwitchA     ManifestRef      `json:"switch_a"`
+	Profile     string         `json:"profile"`
+	Seed        uint64         `json:"seed"`
+	WorkspaceID string         `json:"workspace_id"`
+	RepoDir     string         `json:"repo_dir"`
+	Sessions    []ManifestRef  `json:"sessions"`
+	Parent      ManifestParent `json:"parent"`
+	SwitchA     ManifestRef    `json:"switch_a"`
+	// Rail names the cards whose arrival means the rail has loaded (realism:
+	// the scenario sessions; seeded runs expect every session).
+	Rail        *ManifestRail    `json:"rail,omitempty"`
 	SwitchB     ManifestRef      `json:"switch_b"`
 	Counts      map[string]int   `json:"counts"`
 	Bytes       map[string]int64 `json:"bytes"`
@@ -79,6 +82,10 @@ type Manifest struct {
 	Skipped     []string         `json:"skipped_types,omitempty"`
 	Notes       []string         `json:"notes,omitempty"`
 	ElapsedMS   int64            `json:"elapsed_ms"`
+}
+
+type ManifestRail struct {
+	IDs []string `json:"ids"`
 }
 
 type ManifestRef struct {

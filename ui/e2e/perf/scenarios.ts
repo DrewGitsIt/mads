@@ -1,5 +1,8 @@
 import type { Locator, Page } from "@playwright/test";
+import type { MarkerSpec } from "./probe";
 import type { PerfStack } from "./stack";
+import type { CheckResult } from "./measure";
+import { liveFixture, renameSession, type LiveFixture } from "./fixtures";
 
 /** What perfseed wrote (services/data/cmd/perfseed Manifest), as far as the scenarios need it. */
 export interface Manifest {
@@ -13,6 +16,9 @@ export interface Manifest {
     with_file?: { harness_id: string; description: string };
     no_file?: { harness_id: string; description: string };
   };
+  workspace_id?: string;
+  /** Which rail cards mean "loaded": every session (seeded), or named ones (realism, where Done is capped). */
+  rail?: { n?: number; ids?: string[] };
   switch_a: { id: string; name: string };
   switch_b: { id: string; name: string };
   total_events: number;
@@ -34,10 +40,12 @@ export interface ScenarioCtx {
 export interface Leg {
   name: string;
   act(ctx: ScenarioCtx): Promise<void>;
-  /** Resolves once the view shows data (not just its frame). */
-  ready(ctx: ScenarioCtx): Promise<void>;
+  /** The data marker, checked inside the page (probe.ts) from the click on. */
+  marker(ctx: ScenarioCtx, clickAt: number): MarkerSpec;
   /** Let the page go quiet before the next leg, so each leg's bytes are its own. */
   quiesceAfter?: boolean;
+  /** The act loads a new document: the marker is armed in it by an init script. */
+  navigates?: boolean;
 }
 
 export interface Scenario {
@@ -46,6 +54,8 @@ export interface Scenario {
   /** Gets the page to the scenario's starting view and lets it settle. Not measured. */
   prepare(ctx: ScenarioCtx): Promise<void>;
   legs: Leg[];
+  /** The live-event smoke run after the measured window (seeded and realism alike). */
+  smoke?(ctx: ScenarioCtx): Promise<CheckResult>;
 }
 
 // --- Selectors. Only what main already renders: the baseline is main as-is,
@@ -55,8 +65,8 @@ const T = 120_000;
 const rail = (p: Page) => p.locator('[aria-label="Session list"]');
 const railCard = (p: Page, id: string) => rail(p).locator(`[data-rail-card][data-rail-id="${id}"]`);
 /** The open session's header: its rename button carries its name, from GET /sessions/{id}. */
-const header = (p: Page, id: string) =>
-  p.getByTitle("Rename session").filter({ hasText: new RegExp(`^${escapeRe(nameOf(id))}$`) });
+const header = (p: Page, id: string, name = nameOf(id)) =>
+  p.getByTitle("Rename session").filter({ hasText: new RegExp(`^${escapeRe(name)}$`) });
 const nameOf = (id: string) => m().sessions.find((s) => s.id === id)?.name ?? id;
 const nav = (p: Page) => p.getByRole("navigation", { name: "Main navigation" });
 
@@ -68,12 +78,20 @@ async function until(what: string, f: () => Promise<boolean>, timeoutMs = T): Pr
   }
 }
 
-/** Every seeded session's card is in the rail, each with its status line drawn. */
+/** Which rail cards mean the rail has loaded its data. */
+const railSpec = (man: Manifest): { n?: number; ids?: string[] } => man.rail ?? { n: man.sessions.length };
+const railMarker = (ctx: ScenarioCtx): MarkerSpec => ({ kind: "rail", ...railSpec(ctx.manifest) });
+
+/** Every expected rail card is in, each with its status line drawn. */
 async function railReady(ctx: ScenarioCtx): Promise<void> {
-  const n = ctx.manifest.sessions.length;
-  await until(`${n} rail cards with status lines`, async () => {
-    const cards = rail(ctx.page).locator("[data-rail-card]");
-    return (await cards.count()) >= n && (await rail(ctx.page).locator("[data-rail-card] [role=status]").count()) >= n;
+  const spec = railSpec(ctx.manifest);
+  await until("the rail's cards with status lines", async () => {
+    if (spec.ids) {
+      for (const id of spec.ids) if ((await railCard(ctx.page, id).locator("[role=status]").count()) === 0) return false;
+      return true;
+    }
+    const n = spec.n ?? 1;
+    return (await rail(ctx.page).locator("[data-rail-card]").count()) >= n && (await rail(ctx.page).locator("[data-rail-card] [role=status]").count()) >= n;
   });
 }
 
@@ -112,9 +130,48 @@ async function openSession(ctx: ScenarioCtx, id: string): Promise<void> {
 const openLeg = (name: string, id: () => string, quiesceAfter = false): Leg => ({
   name,
   act: (ctx) => railCard(ctx.page, id()).click(),
-  ready: (ctx) => sessionReady(ctx, id()),
+  marker: () => ({ kind: "session", name: nameOf(id()) }),
   quiesceAfter,
 });
+
+const retroLeg: Leg = {
+  name: "→Retro",
+  act: (ctx) => nav(ctx.page).getByRole("button", { name: "Retro", exact: true }).click(),
+  marker: () => ({ kind: "retro", name: m().switch_a.name }),
+  quiesceAfter: true,
+};
+const sessionsLeg: Leg = {
+  name: "→Sessions",
+  act: (ctx) => nav(ctx.page).getByRole("button", { name: "Sessions", exact: true }).click(),
+  marker: railMarker,
+  quiesceAfter: true,
+};
+
+/**
+ * The live-event smoke: a session renamed through the Router API shows its
+ * new name on its rail card within 2 s (timed inside the page).
+ */
+async function renameSmoke(ctx: ScenarioCtx): Promise<CheckResult> {
+  const id = m().switch_b.id;
+  const name = `perf smoke ${Date.now() % 1_000_000}`;
+  const at = Date.now();
+  await ctx.page.evaluate(
+    ([sid, n]) =>
+      (window as unknown as { __perf: { arm(n: string, s: unknown): void } }).__perf.arm("smoke", { kind: "cardText", id: sid, text: n }),
+    [id, name] as const,
+  );
+  await renameSession(ctx.stack, id, name);
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const seen = await ctx.page.evaluate(() => (window as unknown as { __perf: { markers: Record<string, number> } }).__perf.markers.smoke);
+    if (seen) {
+      const ms = Math.round(seen - at);
+      return { name: "live event: rename shows on the rail within 2 s", ok: ms <= 2000, detail: `${ms} ms` };
+    }
+    if (Date.now() > deadline) return { name: "live event: rename shows on the rail within 2 s", ok: false, detail: "not within 10 s" };
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
 
 let current: Manifest | undefined;
 const m = () => current!;
@@ -134,7 +191,8 @@ function delegateScenario(id: string, title: string, pick: (man: Manifest) => { 
       await openSession(ctx, m().parent.id);
       await row(ctx).waitFor({ state: "visible", timeout: 60_000 });
     },
-    legs: [{ name: "open delegate", act: (ctx) => row(ctx).click(), ready: delegateReady }],
+    legs: [{ name: "open delegate", act: (ctx) => row(ctx).click(), marker: () => ({ kind: "delegate" }) }],
+    smoke: renameSmoke,
   };
 }
 
@@ -150,9 +208,11 @@ export const SCENARIOS: Scenario[] = [
           if (ctx.browser === "electron") await ctx.page.reload({ waitUntil: "commit" });
           else await ctx.page.goto(ctx.stack.appURL, { waitUntil: "commit" });
         },
-        ready: railReady,
+        marker: railMarker,
+        navigates: true,
       },
     ],
+    smoke: renameSmoke,
   },
   {
     id: "2-switch-session",
@@ -163,6 +223,7 @@ export const SCENARIOS: Scenario[] = [
       await openSession(ctx, m().switch_a.id);
     },
     legs: [openLeg("A→B", () => m().switch_b.id, true), openLeg("B→A", () => m().switch_a.id, true)],
+    smoke: renameSmoke,
   },
   // The live path: the delegate has its own transcript file.
   delegateScenario("3-open-delegate", "Open a delegate from its parent (transcript file)", (man) => man.parent.with_file ?? man.parent.running[0]),
@@ -176,20 +237,8 @@ export const SCENARIOS: Scenario[] = [
       await ctx.quiesce();
       await openSession(ctx, m().switch_a.id);
     },
-    legs: [
-      {
-        name: "→Retro",
-        act: (ctx) => nav(ctx.page).getByRole("button", { name: "Retro", exact: true }).click(),
-        ready: retroReady,
-        quiesceAfter: true,
-      },
-      {
-        name: "→Sessions",
-        act: (ctx) => nav(ctx.page).getByRole("button", { name: "Sessions", exact: true }).click(),
-        ready: railReady,
-        quiesceAfter: true,
-      },
-    ],
+    legs: [retroLeg, sessionsLeg],
+    smoke: renameSmoke,
   },
   {
     id: "5-launchpad",
@@ -203,17 +252,73 @@ export const SCENARIOS: Scenario[] = [
       {
         name: "→launchpad",
         act: (ctx) => ctx.page.getByRole("button", { name: "New session" }).click(),
-        ready: async (ctx) => {
-          await ctx.page.getByLabel("Describe your goal").waitFor({ state: "visible", timeout: T });
-          await railReady(ctx);
-        },
+        marker: (ctx) => ({ kind: "launchpad", rail: railSpec(ctx.manifest) }),
       },
     ],
+    smoke: renameSmoke,
   },
-  // Phase 5 slots in here: 6 (pinned long-lived streams) and 7 (network
-  // drop and resume, DelayProxy.cutAll), plus correctness assertions run
-  // after 1, 4 and 7 (Scenario could grow an `assert(ctx)` hook).
+  pinnedScenario(),
+  {
+    id: "7-drop-resume",
+    title: "Network drop and resume (every socket cut, as on sleep/wake)",
+    prepare: async (ctx) => {
+      await load(ctx);
+      await ctx.quiesce();
+      await openSession(ctx, m().switch_a.id);
+    },
+    legs: [
+      {
+        name: "cut → resumed",
+        act: (ctx) => ctx.stack.proxy.cutAll(),
+        // Resumed: the bus has opened a new /events stream (then the rule waits for it to catch up).
+        marker: (_ctx, clickAt) => ({ kind: "esAfter", after: clickAt }),
+      },
+    ],
+    smoke: renameSmoke,
+  },
 ];
+
+/**
+ * Scenario 6: the switch and Retro round trip of 2 and 4, starting from a
+ * session holding long-lived streams the way a working one does — a live
+ * fake-provider session with a background process streaming into the open
+ * tool dock, and its Tasks tab mounted on a live pipeline attempt
+ * (fixtures.ts). Session A, B and the Retro surface are the seeded ones.
+ */
+function pinnedScenario(): Scenario {
+  let fx: LiveFixture | undefined;
+  const sid = () => fx!.session.id;
+  return {
+    id: "6-pinned-streams",
+    title: "Switch and Retro round trip with long-lived streams pinned (dock background output + live pipeline attempt)",
+    prepare: async (ctx) => {
+      fx = await liveFixture(ctx.stack, { background: true, pipeline: true });
+      await load(ctx);
+      await ctx.quiesce().catch(() => {}); // the live attempt keeps the page busy; prepare only
+      await railCard(ctx.page, sid()).click();
+      await header(ctx.page, sid(), fx.session.name).waitFor({ state: "visible", timeout: T });
+      // The Tasks tab first (it stays mounted once visited), then the conversation with the dock open.
+      await ctx.page.getByRole("tab", { name: /Tasks/ }).click();
+      await ctx.page.getByTestId("tasks-run-badge").waitFor({ state: "visible", timeout: 60_000 });
+      await ctx.page.getByRole("tab", { name: /Conversation|Chat/ }).first().click();
+      const conv = ctx.page.locator("#workspace-panel-conversation");
+      const row = conv.getByTestId("activity-row").filter({ hasText: fx.backgroundPrompt });
+      const group = conv.getByTestId("activity-group").last();
+      await group.waitFor({ state: "visible", timeout: 30_000 });
+      if (!(await row.isVisible())) await group.getByRole("button").first().click();
+      await row.locator("[data-dock-source]").click();
+      // The dock is streaming the process's output (a line a second).
+      await ctx.page.locator("[data-activity-dock] .xterm-rows").getByText(/line \d+/).first().waitFor({ state: "visible", timeout: 30_000 });
+    },
+    legs: [
+      { name: "S→A", act: (ctx) => railCard(ctx.page, m().switch_a.id).click(), marker: () => ({ kind: "session", name: m().switch_a.name }), quiesceAfter: true },
+      { name: "A→S", act: (ctx) => railCard(ctx.page, sid()).click(), marker: () => ({ kind: "session", name: fx!.session.name }), quiesceAfter: true },
+      retroLeg,
+      sessionsLeg,
+    ],
+    smoke: renameSmoke,
+  };
+}
 
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

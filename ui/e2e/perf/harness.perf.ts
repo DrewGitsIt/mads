@@ -1,7 +1,10 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test, expect } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { abortActive, loadPlan, runOne, type Result } from "./measure";
+import { checkByName, runCheck } from "./checks";
+import type { Manifest } from "./scenarios";
 import { scenarioById } from "./scenarios";
 import { strandedRepetitions } from "./stack";
 
@@ -23,7 +26,7 @@ test.afterEach(async () => {
 });
 
 function save(r: Result): void {
-  const dir = path.join(plan!.runDir, "raw", r.scenario, r.mode);
+  const dir = path.join(plan!.runDir, "raw", r.scenario.replace(":", "-"), r.mode);
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, `${r.build}-${r.rep}.json`), JSON.stringify(r, null, 2));
 }
@@ -68,6 +71,20 @@ if (!plan) {
           });
         }
       }
+    }
+  }
+  // Correctness checks: once per build, a fresh stack each.
+  for (const name of plan.checks) {
+    const check = checkByName(name);
+    for (const build of plan.builds) {
+      test(`check ${check.name} · ${build.label}`, async () => {
+        expect(strandedRepetitions(), "a worker died mid-repetition; the run is aborted").toEqual([]);
+        const manifest = JSON.parse(readFileSync(plan.manifestPath, "utf8")) as Manifest;
+        const result = await runCheck({ plan, build, name: check.name, manifest });
+        save(result);
+        console.log(`check ${check.name} ${build.label}: ${result.ok ? "✓" : "✗"} ${result.checks.map((c) => `${c.ok ? "✓" : "✗"} ${c.name}${c.detail ? ` (${c.detail})` : ""}`).join("; ")}${result.error && !result.checks.length ? ` ${result.error}` : ""}`);
+        expect(result.ok, result.error).toBe(true);
+      });
     }
   }
 }

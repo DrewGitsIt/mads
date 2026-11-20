@@ -2,8 +2,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { _electron as electron, chromium, type Browser, type BrowserContext, type BrowserServer, type Page } from "@playwright/test";
-import { LAG_PROBE_INIT, LONG_TASK_INIT, NetCollector, ProcSampler, SocketSampler, isLongLived, lagSince, longTasks, routeOf, type NetRequest } from "./collectors";
+import { MainThreadMetrics, ProcSampler, SocketSampler, routeOf } from "./collectors";
 import { delayFor, parseDelays } from "./delayRules";
+import { PROBE_INIT, arm, probeSeries, readProbe, type PageReq } from "./probe";
 import type { ProxyRequest, ProxySnapshot } from "./proxyClient";
 import { SCENARIOS, scenarioById, useManifest, type Manifest, type Scenario, type ScenarioCtx } from "./scenarios";
 import { bootPerfStack, childrenOf, logHead, streamTarget, waitDelegatesConcluded, type Build, type PerfStack } from "./stack";
@@ -27,13 +28,14 @@ export interface Plan {
   delays: string;
   /** Hold the open conversation's /output stream open at the proxy (delayRules.ts HELD_OUTPUT). */
   holdOutput: boolean;
-  /** Track SSE messages over CDP too (heavy: ships every message's data to the harness). */
-  cdpSse: boolean;
+  /** Correctness checks to run once per build (checks.ts); empty: none. */
+  checks: string[];
   /**
-   * The B1 comparison only: put back the old context.route() live-port
-   * guard, which routes every request through the Playwright worker.
+   * Realism mode: the workload is a sanitised copy of a real database
+   * (perfseed realism). Results must not name sessions: errors are
+   * redacted and no screenshots are kept.
    */
-  legacyRouteGuard?: boolean;
+  realism?: boolean;
   meta: Record<string, unknown>;
 }
 
@@ -43,14 +45,17 @@ export function loadPlan(): Plan | undefined {
   const plan = JSON.parse(readFileSync(p, "utf8")) as Plan;
   plan.scenarios = plan.scenarios.length ? plan.scenarios.map((s) => scenarioById(s).id) : SCENARIOS.map((s) => s.id);
   plan.modes ??= ["on", "off"];
+  plan.checks ??= [];
   return plan;
 }
 
 export interface LegResult {
   name: string;
-  /** Click → its data marker visible. */
+  /** Click → its data marker held, in page time (the probe's MutationObserver). */
   markerMs: number;
-  /** Click → settled: marker visible, then waitRule (short requests, /events caught up to head, main thread idle). */
+  /** Click → the harness saw the marker (diagnostic: includes any CDP backlog). */
+  markerSeenMs: number;
+  /** Click → settled: the marker, then waitRule. */
   settledMs: number;
   /** Click → the last /events byte the proxy forwarded in the leg. */
   lastEventsByteMs: number;
@@ -60,11 +65,25 @@ export interface LegResult {
   /** Lag-probe samples, click → settled: worst and p95 (ms). */
   lagMaxMs: number;
   lagP95Ms: number;
-  /** DOM size at settle. */
+  /** Worst gap between a probe read's page time and when the harness got it (F4). */
+  cdpLagMaxMs: number;
   domNodes: number;
   eventsBytes: number;
   eventsFrames: number;
   eventsConnects: number;
+}
+
+export interface CheckResult {
+  name: string;
+  ok: boolean;
+  detail?: string;
+  /**
+   * Fails on main today, for a reason outside the bus (or a bug the bus
+   * redesign is meant to fix): reported, not counted against the run. A
+   * candidate passing it shows as an improvement; failing one base passes
+   * is flagged.
+   */
+  knownOnMain?: string;
 }
 
 export interface Result {
@@ -88,13 +107,16 @@ export interface Result {
   socketOwners: string[];
   /** Connections the browser opened anywhere but the proxy (should be none). */
   browserForeign: string[];
-  /** Every request in the window: route, CDP type, start (ms after t0), queued, duration, status. */
-  requests: [string, string, number, number | null, number | null, number | string | null][];
+  /** The live-event smoke after the scenario, and any checks run in the same repetition. */
+  checks: CheckResult[];
+  /** Every proxy request in the window: route, start (ms after t0), queued in the browser, duration, status. */
+  requests: [string, number, number | null, number | null, number | string | null][];
 }
 
 const WINDOW_CAP_MS = Number(process.env.PERF_WINDOW_CAP_MS ?? 120_000);
 const PREPARE_CAP_MS = Number(process.env.PERF_PREPARE_CAP_MS ?? 300_000);
 const SETTLE_CAP_MS = Number(process.env.PERF_SETTLE_CAP_MS ?? 180_000);
+const MARKER_CAP_MS = 180_000;
 const SOCKETS_PER_ORIGIN = 6;
 const LIVE_PORT = /^(https?|wss?):\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:(17373|17374|17380))\b/;
 
@@ -115,99 +137,44 @@ export const CHROMIUM_ARGS = [
   "--disable-component-extensions-with-background-pages",
   "--no-service-autorun",
   "--disable-field-trial-config",
-  // The backstop: no host but loopback resolves, so whatever service the
-  // flags above miss (lsof caught Google endpoints without it) can't
-  // connect anywhere. No --disable-features here: Chromium keeps only the
-  // last one, and Playwright passes its own.
+  // The backstop: no host but loopback resolves. No --disable-features
+  // here: Chromium keeps only the last one, and Playwright passes its own.
   "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1",
 ];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const isEventsStream = (r: NetRequest) => r.type === "EventSource" && r.path === "/events";
-
-/**
- * Everything the settle/quiet rule needs to watch one repetition.
- */
-interface Watch {
-  net: NetCollector;
-  stack: PerfStack;
-  page: Page;
-  delayed: (r: NetRequest) => boolean;
-  /** Stale CDP entries dropped (T5), for the result. */
-  stale: { n: number };
-}
-
-const SHORT_QUIET_MS = 500;
-const MAIN_IDLE_MS = 500;
-const MAIN_LAG_BUSY_MS = 50;
-
-/**
- * The one rule both settle (R2-1..R2-4) and quiet use, from `start` on:
- *  - no non-delayed short request in flight, and none started for 500 ms
- *    (R2-2/R2-3: delayed ones are the mock's, not the design's);
- *  - every open /events stream has forwarded a frame with seq at or past
- *    the newest event it owes up to the log head read at `start` (read from
- *    the database, not the page), or owes none (R2-1; a live-only stream
- *    starting at head is caught up at once);
- *  - the main thread answered the lag probe within 50 ms for 500 ms (R2-4).
- * Resolves with the instant all three first held — the latest of the last
- * short request's start or end, the frame that caught a stream up, and the
- * last laggy probe sample — not counting the quiet windows themselves.
- */
-async function waitRule(w: Watch, start: number, head: number, capMs: number): Promise<{ at: number; capped: boolean }> {
-  const deadline = Date.now() + capMs;
-  const targets = new Map<number, number>();
-  const caughtAt = new Map<number, number>();
-  for (;;) {
-    const now = Date.now();
-    const snap = await w.stack.proxy.snapshot();
-    const proxyOpen = snap.requests.filter((r) => r.end === undefined && !r.sse);
-    const socketsFree = peakIn(snap.timeline, now - 5000, now) < SOCKETS_PER_ORIGIN;
-    w.stale.n += w.net.dropStale((r) => proxyOpen.some((p) => p.method === r.method && p.path === r.path && p.query === r.query), socketsFree);
-
-    // Short requests.
-    const shorts = [...w.net.requests.values()].filter((r) => !isLongLived(r) && !w.delayed(r) && (r.end === undefined || r.end >= start));
-    const inFlight = shorts.some((r) => r.end === undefined);
-    const lastShort = Math.max(start, ...shorts.map((r) => Math.max(r.start, r.end ?? 0)));
-    const shortOk = !inFlight && now - lastShort >= SHORT_QUIET_MS;
-
-    // /events caught up to head.
-    let eventsOk = true;
-    let eventsAt = start;
-    for (const r of snap.requests) {
-      if (!(r.sse && !r.held && r.path === "/events") || r.end !== undefined) continue;
-      if (!targets.has(r.id)) {
-        const q = new URLSearchParams(r.query);
-        const since = Number(q.get("since") ?? 0);
-        targets.set(r.id, await streamTarget(w.stack, since, head, (q.get("types") ?? "").split(",").filter(Boolean)));
-      }
-      const target = targets.get(r.id)!;
-      if (target > 0 && r.maxSeq < target) {
-        eventsOk = false;
-        continue;
-      }
-      if (!caughtAt.has(r.id)) caughtAt.set(r.id, target > 0 ? (r.lastByte ?? now) : Math.max(r.start, start));
-      eventsAt = Math.max(eventsAt, caughtAt.get(r.id)!);
-    }
-
-    // Main thread.
-    const lag = await lagSince(w.page, start - 1000).catch(() => [] as [number, number][]);
-    const latest = lag.length ? lag[lag.length - 1][0] : 0;
-    const busy = lag.filter((x) => x[1] >= MAIN_LAG_BUSY_MS && x[0] >= start);
-    const lastBusy = busy.length ? busy[busy.length - 1][0] : start;
-    const mainOk = latest >= Date.now() - 200 && Date.now() - lastBusy >= MAIN_IDLE_MS;
-
-    if (shortOk && eventsOk && mainOk) return { at: Math.max(lastShort, eventsAt, lastBusy), capped: false };
-    if (now > deadline) return { at: now, capped: true };
-    await sleep(50);
-  }
-}
-
 function pct(xs: number[], q: number): number {
   if (xs.length === 0) return 0;
   const s = [...xs].sort((a, b) => a - b);
   return s[Math.min(s.length - 1, Math.max(0, Math.ceil(q * s.length) - 1))];
+}
+
+const isEvents = (r: ProxyRequest) => r.sse && !r.held && r.path === "/events";
+
+/**
+ * Pairs each request the page made with the proxy's record of it (same
+ * method, path and query, arrived at or after the page started it). A page
+ * request with no partner that hasn't failed or closed is still queued in
+ * the browser, waiting for a socket.
+ */
+function matchRequests(page: PageReq[], proxy: ProxyRequest[], origin: string): Map<number, ProxyRequest | undefined> {
+  const used = new Set<number>();
+  const out = new Map<number, ProxyRequest | undefined>();
+  const byKey = new Map<string, ProxyRequest[]>();
+  for (const p of proxy) {
+    const k = `${p.method} ${p.path}${p.query}`;
+    (byKey.get(k) ?? byKey.set(k, []).get(k)!).push(p);
+  }
+  for (const r of [...page].sort((a, b) => a.start - b.start)) {
+    if (!r.url.startsWith(origin)) continue;
+    const u = new URL(r.url);
+    const cands = byKey.get(`${r.method} ${u.pathname}${u.search}`) ?? [];
+    const m = cands.find((p) => !used.has(p.id) && p.start >= r.start - 20);
+    if (m) used.add(m.id);
+    out.set(r.id, m);
+  }
+  return out;
 }
 
 /** /events SSE bytes, frames and connects between two proxy snapshots. */
@@ -218,7 +185,7 @@ function eventsBetween(a: ProxySnapshot, b: ProxySnapshot) {
   let connects = 0;
   const per: { r: ProxyRequest; bytes: number; frames: number; isNew: boolean }[] = [];
   for (const r of b.requests) {
-    if (!(r.sse && !r.held && r.path === "/events")) continue;
+    if (!isEvents(r)) continue;
     const old = before.get(r.id);
     const db = r.bytes - (old?.bytes ?? 0);
     const df = r.frames - (old?.frames ?? 0);
@@ -254,29 +221,6 @@ function peakIn(timeline: [number, number][], from: number, to: number): number 
   return Math.max(peak, prev);
 }
 
-/**
- * When each short request got a socket (M4): CDP's sendStart if it got a
- * response; else when the proxy saw it arrive (a delayed or unanswered
- * one), matched by method, path and query; else its cancel time; else the
- * window's end.
- */
-function queuedUntil(reqs: NetRequest[], proxyReqs: ProxyRequest[], t1: number): Map<string, number> {
-  const used = new Set<number>();
-  const out = new Map<string, number>();
-  for (const r of [...reqs].sort((a, b) => a.start - b.start)) {
-    if (r.sent !== undefined) {
-      out.set(r.id, r.sent);
-      continue;
-    }
-    const p = proxyReqs.find((x) => !used.has(x.id) && x.method === r.method && x.path === r.path && x.query === r.query && x.start >= r.start - 50);
-    if (p) {
-      used.add(p.id);
-      out.set(r.id, p.start);
-    } else out.set(r.id, Math.min(r.end ?? t1, t1));
-  }
-  return out;
-}
-
 /** Most requests waiting for a socket at once. */
 function maxDepth(intervals: [number, number][]): number {
   const edges: [number, number][] = [];
@@ -289,6 +233,109 @@ function maxDepth(intervals: [number, number][]): number {
     max = Math.max(max, d);
   }
   return max;
+}
+
+/** Everything the settle/quiet rule watches in one repetition. */
+export interface Watch {
+  stack: PerfStack;
+  page: Page;
+  delayed: (method: string, path: string) => boolean;
+  /** Worst CDP lag seen by probe reads since the last reset (F4). */
+  cdpLag: { max: number };
+  /** Streams settled by the byte-idle fallback (no `id:` lines; F5). */
+  fallbacks: { n: number };
+}
+
+const SHORT_QUIET_MS = 500;
+const MAIN_IDLE_MS = 500;
+const BYTE_IDLE_MS = 1500;
+
+/**
+ * The one rule both settle and quiet use, from `start` on, with every
+ * input taken from the page probe and the proxy — never CDP's network
+ * events, which reach the harness late during a big replay (round 3):
+ *  - no non-delayed short request in flight at the proxy, none still queued
+ *    in the browser (a page request the proxy hasn't seen), and none
+ *    started for 500 ms;
+ *  - every open /events stream has forwarded a frame at or past the newest
+ *    seq it owes up to `head` (read from the database), or owes none; an
+ *    /events EventSource still queued in the browser owes; a stream with
+ *    bytes but no `id:` lines falls back to 1.5 s of byte idle (counted);
+ *  - the page's lag probe has had no sample over 100 ms for 500 ms, judged
+ *    in page time from the probe's own record, so a late read is still
+ *    right.
+ * Resolves with the instant all three first held, not counting the quiet
+ * windows themselves.
+ */
+export async function waitRule(w: Watch, start: number, head: number, capMs: number): Promise<{ at: number; capped: boolean }> {
+  const deadline = Date.now() + capMs;
+  const targets = new Map<number, number>();
+  const caughtAt = new Map<number, number>();
+  const fellBack = new Set<number>();
+  for (;;) {
+    const snap = await w.stack.proxy.snapshot();
+    const probe = await readProbe(w.page, start - 60_000);
+    const received = Date.now();
+    w.cdpLag.max = Math.max(w.cdpLag.max, received - probe.pageNow);
+    const now = Math.max(received, probe.pageNow);
+    const match = matchRequests(probe.reqs, snap.requests, w.stack.appURL);
+
+    // Short requests: at the proxy, and queued in the browser.
+    let lastShort = start;
+    let busy = false;
+    for (const r of snap.requests) {
+      if (r.sse || r.held || w.delayed(r.method, r.path)) continue;
+      if (r.end === undefined) busy = true;
+      if (r.end === undefined || r.end >= start) lastShort = Math.max(lastShort, r.start, r.end ?? 0);
+    }
+    let eventsQueued = false;
+    for (const r of probe.reqs) {
+      if (match.get(r.id) || r.failed !== undefined || r.closed !== undefined || r.headers !== undefined) continue;
+      const u = new URL(r.url);
+      if (w.delayed(r.method, u.pathname)) continue;
+      if (r.kind === "es") {
+        if (u.pathname === "/events") eventsQueued = true;
+        continue;
+      }
+      busy = true;
+      lastShort = Math.max(lastShort, r.start);
+    }
+    const shortOk = !busy && now - lastShort >= SHORT_QUIET_MS;
+
+    // /events caught up to head.
+    let eventsOk = !eventsQueued;
+    let eventsAt = start;
+    for (const r of snap.requests) {
+      if (!isEvents(r) || r.end !== undefined) continue;
+      if (!targets.has(r.id)) {
+        const q = new URLSearchParams(r.query);
+        targets.set(r.id, await streamTarget(w.stack, Number(q.get("since") ?? 0), head, (q.get("types") ?? "").split(",").filter(Boolean)));
+      }
+      const target = targets.get(r.id)!;
+      if (target > 0 && r.maxSeq < target) {
+        // F5: bytes flowing but no id: lines at all — wait for byte idle instead.
+        if (r.maxSeq === 0 && r.bytes > 0 && r.lastByte !== undefined && now - r.lastByte >= BYTE_IDLE_MS) {
+          if (!fellBack.has(r.id)) {
+            fellBack.add(r.id);
+            w.fallbacks.n++;
+          }
+        } else {
+          eventsOk = false;
+          continue;
+        }
+      }
+      if (!caughtAt.has(r.id)) caughtAt.set(r.id, target > 0 ? (r.lastByte ?? now) : Math.max(r.start, start));
+      eventsAt = Math.max(eventsAt, caughtAt.get(r.id)!);
+    }
+
+    // Main thread, in page time: the probe is alive and calm.
+    const lastBusy = Math.max(probe.lastBusy, start);
+    const mainOk = probe.lastSample >= probe.pageNow - 250 && probe.lastSample - lastBusy >= MAIN_IDLE_MS;
+
+    if (shortOk && eventsOk && mainOk) return { at: Math.max(lastShort, eventsAt, lastBusy), capped: false };
+    if (Date.now() > deadline) return { at: Date.now(), capped: true };
+    await sleep(50);
+  }
 }
 
 /**
@@ -309,6 +356,155 @@ async function closeElectron(app: Awaited<ReturnType<typeof electron.launch>>): 
   const closed = app.close().catch(() => {});
   const timedOut = await Promise.race([closed.then(() => false), sleep(10_000).then(() => true)]);
   if (timedOut || proc.exitCode === null) proc.kill("SIGKILL");
+}
+
+/** Everything a repetition owns, booted: the stack, a browser page with the probe, and the watch. */
+export interface Rig {
+  stack: PerfStack;
+  page: Page;
+  context: BrowserContext;
+  browserPid: number;
+  watch: Watch;
+  metrics: MainThreadMetrics;
+  /** Every URL the page requested (Playwright's own request events), for the live-port check. */
+  urls: string[];
+  ctx: ScenarioCtx;
+  teardown(): Promise<void>;
+}
+
+/** Boots a repetition's stack and browser (or Electron). Registers teardown with abortActive. */
+export async function bootRig(opts: { plan: Plan; build: Build; mode: DelayMode; tag: string; manifest: Manifest; fastModelURL?: string }): Promise<Rig> {
+  const { plan, build, mode, tag, manifest } = opts;
+  const delays = mode === "on" ? plan.delays : "off";
+  const rules = parseDelays(delays);
+  let stack: PerfStack | undefined;
+  let server: BrowserServer | undefined;
+  let browser: Browser | undefined;
+  let context: BrowserContext | undefined;
+  let electronApp: Awaited<ReturnType<typeof electron.launch>> | undefined;
+  let electronUserData: string | undefined;
+  const metrics = new MainThreadMetrics();
+  let tornDown = false;
+  const teardown = async () => {
+    if (tornDown) return;
+    tornDown = true;
+    await metrics.detach();
+    if (electronApp) await closeElectron(electronApp);
+    else {
+      await context?.close().catch(() => {});
+      await browser?.close().catch(() => {});
+      await server?.close().catch(() => {});
+    }
+    if (electronUserData) rmSync(electronUserData, { recursive: true, force: true });
+    await stack?.teardown();
+  };
+  active = teardown;
+  try {
+    stack = await bootPerfStack({
+      build,
+      seededDB: plan.seededDB,
+      transcriptsDir: plan.transcriptsDir,
+      delays,
+      holdOutput: plan.holdOutput,
+      tag,
+      fastModelURL: opts.fastModelURL,
+    });
+    if (manifest.parent?.running?.length) await waitDelegatesConcluded(stack, manifest.parent.id);
+    let page: Page;
+    let browserPid: number;
+    if (plan.browser === "electron") {
+      if (!build.uiDir) throw new Error("electron mode needs the build's ui dir (dist-electron)");
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const electronBin = require("electron") as unknown as string;
+      electronUserData = mkdtempSync(path.join(tmpdir(), "mads-perf-electron-"));
+      electronApp = await electron.launch({
+        executablePath: electronBin,
+        args: [build.uiDir],
+        env: {
+          ...(process.env as Record<string, string>),
+          VITE_ROUTER_URL: stack.appURL,
+          MADS_HOME: stack.homeDir,
+          MADS_USER_DATA_DIR: electronUserData,
+          ELECTRON_DISABLE_SANDBOX: "1",
+        },
+      });
+      browserPid = electronApp.process().pid!;
+      stack.own(browserPid, "electron");
+      context = electronApp.context();
+      await context.addInitScript(PROBE_INIT);
+      page = await electronApp.firstWindow();
+      // Main's ROUTER_BASE is VITE_ROUTER_URL: the window must load from the proxy, never the 17373 default.
+      await page.waitForLoadState("domcontentloaded");
+      if (!page.url().startsWith(stack.appURL)) throw new Error(`FATAL: Electron window loaded ${page.url()}, not the proxy ${stack.appURL}`);
+    } else {
+      server = await chromium.launchServer({
+        channel: "chromium",
+        // Every origin but the proxy's goes to a dead proxy: the live ports
+        // are unreachable. <-loopback> drops Chromium's implicit loopback
+        // bypass; the proxy origin bypasses and keeps its own 6-socket pool.
+        args: [...CHROMIUM_ARGS, "--proxy-server=127.0.0.1:1", `--proxy-bypass-list=<-loopback>;127.0.0.1:${stack.proxy.port}`],
+      });
+      browserPid = server.process().pid!;
+      stack.own(browserPid, "chromium");
+      browser = await chromium.connect(server.wsEndpoint());
+      context = await browser.newContext({
+        extraHTTPHeaders: { Authorization: `Bearer ${stack.token}` },
+        viewport: { width: 1440, height: 900 },
+      });
+      await context.addInitScript(PROBE_INIT);
+      page = await context.newPage();
+    }
+    for (const c of childrenOf(browserPid)) stack.own(c, "browser-child");
+    const urls: string[] = [];
+    page.on("request", (r) => urls.push(r.url()));
+    await metrics.attach(page);
+    const watch: Watch = {
+      stack,
+      page,
+      delayed: (m, p) => delayFor(rules, m, p) > 0,
+      cdpLag: { max: 0 },
+      fallbacks: { n: 0 },
+    };
+    const st = stack;
+    const ctx: ScenarioCtx = {
+      page,
+      stack,
+      manifest,
+      browser: plan.browser,
+      quiesce: async () => {
+        const r = await waitRule(watch, Date.now(), await logHead(st), PREPARE_CAP_MS);
+        if (r.capped) throw new Error("page never went quiet (a request in flight or queued, a stream behind head, or a busy main thread)");
+      },
+    };
+    return { stack, page, context, browserPid, watch, metrics, urls, ctx, teardown };
+  } catch (err) {
+    await teardown();
+    throw err;
+  }
+}
+
+/** The page asked for a live port: never allowed. */
+export function liveHits(urls: string[]): string[] {
+  return urls.filter((u) => LIVE_PORT.test(u));
+}
+
+/** Waits for a leg's armed marker, returning [page time, harness time]. */
+async function waitMarker(w: Watch, name: string): Promise<[number, number]> {
+  const deadline = Date.now() + MARKER_CAP_MS;
+  for (;;) {
+    const p = await readProbe(w.page, Number.MAX_SAFE_INTEGER);
+    w.cdpLag.max = Math.max(w.cdpLag.max, Date.now() - p.pageNow);
+    if (p.markers[name]) return [p.markers[name], Date.now()];
+    if (Date.now() > deadline) throw new Error(`marker ${name} never held`);
+    await sleep(25);
+  }
+}
+
+function redact(s: string, man: Manifest): string {
+  let out = s;
+  const names = [...man.sessions.map((x) => x.name), ...(man.parent?.running ?? []).map((d) => d.description)].filter(Boolean);
+  for (const n of names.sort((a, b) => b.length - a.length)) out = out.split(n).join("<redacted>");
+  return out.replace(/ses_[0-9a-f]+/g, "ses_<redacted>");
 }
 
 export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenario; rep: number; mode: DelayMode }): Promise<Result> {
@@ -332,164 +528,68 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
     windowCapped: false,
     socketOwners: [],
     browserForeign: [],
+    checks: [],
     requests: [],
   };
-  const delays = mode === "on" ? plan.delays : "off";
-  const rules = parseDelays(delays);
-  const delayed = (r: NetRequest) => delayFor(rules, r.method, r.path) > 0;
-  let stack: PerfStack | undefined;
-  let server: BrowserServer | undefined;
-  let browser: Browser | undefined;
-  let context: BrowserContext | undefined;
-  let electronApp: Awaited<ReturnType<typeof electron.launch>> | undefined;
-  let electronUserData: string | undefined;
-  let net: NetCollector | undefined;
-  let tornDown = false;
-  const teardown = async () => {
-    if (tornDown) return;
-    tornDown = true;
-    await net?.detach();
-    if (electronApp) await closeElectron(electronApp);
-    else {
-      await context?.close().catch(() => {});
-      await browser?.close().catch(() => {});
-      await server?.close().catch(() => {});
-    }
-    if (electronUserData) rmSync(electronUserData, { recursive: true, force: true });
-    await stack?.teardown();
-  };
-  active = teardown;
+  let rig: Rig | undefined;
   let fatal: Error | undefined;
   try {
-    stack = await bootPerfStack({
-      build,
-      seededDB: plan.seededDB,
-      transcriptsDir: plan.transcriptsDir,
-      delays,
-      holdOutput: plan.holdOutput,
-      tag,
-    });
-    await waitDelegatesConcluded(stack, manifest.parent.id);
-
-    let page: Page;
-    let browserPid: number;
-    if (plan.browser === "electron") {
-      if (!build.uiDir) throw new Error("electron mode needs the build's ui dir (dist-electron)");
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const electronBin = require("electron") as unknown as string;
-      electronUserData = mkdtempSync(path.join(tmpdir(), "mads-perf-electron-"));
-      electronApp = await electron.launch({
-        executablePath: electronBin,
-        args: [build.uiDir],
-        env: {
-          ...(process.env as Record<string, string>),
-          VITE_ROUTER_URL: stack.appURL,
-          MADS_HOME: stack.homeDir,
-          MADS_USER_DATA_DIR: electronUserData,
-          ELECTRON_DISABLE_SANDBOX: "1",
-        },
-      });
-      browserPid = electronApp.process().pid!;
-      stack.own(browserPid, "electron");
-      context = electronApp.context();
-      await context.addInitScript(LONG_TASK_INIT);
-      await context.addInitScript(LAG_PROBE_INIT);
-      page = await electronApp.firstWindow();
-      // Main's ROUTER_BASE is VITE_ROUTER_URL: the window must have loaded from the proxy, never the 17373 default.
-      await page.waitForLoadState("domcontentloaded");
-      if (!page.url().startsWith(stack.appURL)) throw new Error(`FATAL: Electron window loaded ${page.url()}, not the proxy ${stack.appURL}`);
-    } else {
-      // A browser per repetition, launched as a server so its pid is known
-      // (and registered) the moment it exists.
-      server = await chromium.launchServer({
-        channel: "chromium",
-        // Every origin but the proxy's goes to a dead proxy: the live ports
-        // are unreachable. <-loopback> drops Chromium's implicit loopback
-        // bypass; the proxy origin bypasses and keeps its own 6-socket pool.
-        args: [...CHROMIUM_ARGS, "--proxy-server=127.0.0.1:1", `--proxy-bypass-list=<-loopback>;127.0.0.1:${stack.proxy.port}`],
-      });
-      browserPid = server.process().pid!;
-      stack.own(browserPid, "chromium");
-      browser = await chromium.connect(server.wsEndpoint());
-      context = await browser.newContext({
-        extraHTTPHeaders: { Authorization: `Bearer ${stack.token}` },
-        viewport: { width: 1440, height: 900 },
-      });
-      await context.addInitScript(LONG_TASK_INIT);
-      await context.addInitScript(LAG_PROBE_INIT);
-      page = await context.newPage();
-    }
-    if (plan.legacyRouteGuard) {
-      // The old guard, for the B1 comparison only.
-      await context.route(/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]):(17373|17374|17380)\//, (route) => route.abort());
-    }
-    for (const c of childrenOf(browserPid)) stack.own(c, "browser-child");
-    net = new NetCollector(stack.appURL, plan.cdpSse);
-    await net.attach(page);
-    const watch: Watch = { net, stack, page, delayed, stale: { n: 0 } };
-
-    const ctx: ScenarioCtx = {
-      page,
-      stack,
-      manifest,
-      browser: plan.browser,
-      quiesce: async () => {
-        const from = Date.now();
-        const r = await waitRule(watch, from, await logHead(stack!), PREPARE_CAP_MS);
-        if (r.capped) {
-          const open = net!.shortInFlight(delayed).map((x) => `${x.method} ${routeOf(x.path)} (${x.type})`);
-          throw new Error(`page never went quiet; still in flight: ${open.join(", ") || "none (a stream behind head, or a busy main thread)"}`);
-        }
-      },
-    };
+    rig = await bootRig({ plan, build, mode, tag, manifest });
+    const { stack, page, watch, metrics, ctx } = rig;
     await scenario.prepare(ctx);
     if (scenario.id !== "1-cold-load") await ctx.quiesce();
 
-    const procs = new ProcSampler(stack.pids, ["router"], (pid) => stack!.own(pid, "router-child"));
-    const socks = new SocketSampler(stack.proxy.port, browserPid);
+    const procs = new ProcSampler(stack.pids, ["router"], (pid) => stack.own(pid, "router-child"));
+    const socks = new SocketSampler(stack.proxy.port, rig.browserPid);
     await procs.start();
     socks.start();
     const t0 = Date.now();
-    net.startWindow(t0);
     const snap0 = await stack.proxy.snapshot();
-
     let prevSnap = snap0;
+    let cdpLagAll = 0;
+
     for (const leg of scenario.legs) {
       const head = await logHead(stack);
-      const m0 = await net.mainThread();
+      const m0 = await metrics.read();
+      watch.cdpLag.max = 0;
       const clickAt = Date.now();
+      const spec = leg.marker(ctx, clickAt);
+      // A navigation replaces the document: arm in the next one too.
+      if (leg.navigates) await rig.context.addInitScript(`window.__perf && window.__perf.arm(${JSON.stringify(leg.name)}, ${JSON.stringify(spec)});`);
+      await arm(page, leg.name, spec);
       await leg.act(ctx);
-      await leg.ready(ctx);
-      const markerAt = Date.now();
+      const [markerAt, markerSeen] = await waitMarker(watch, leg.name);
       const rule = await waitRule(watch, clickAt, head, SETTLE_CAP_MS);
       if (rule.capped) result.windowCapped = true;
       const settledAt = Math.max(markerAt, rule.at);
-      const m1 = await net.mainThread();
-      const lag = (await lagSince(page, clickAt)).filter((x) => x[0] <= settledAt).map((x) => x[1]);
+      const m1 = await metrics.read();
+      const series = await probeSeries(page, clickAt);
+      const lag = series.lag.filter((x) => x[0] <= settledAt).map((x) => x[1]);
       const domNodes = await page.evaluate(() => document.getElementsByTagName("*").length).catch(() => 0);
+      const legLag = watch.cdpLag.max;
+      cdpLagAll = Math.max(cdpLagAll, legLag);
       if (leg.quiesceAfter) await ctx.quiesce();
       const snap = await stack.proxy.snapshot();
       const ev = eventsBetween(prevSnap, snap);
       prevSnap = snap;
-      const lastByte = Math.max(
-        0,
-        ...snap.requests.filter((r) => r.path === "/events" && r.sse && r.lastByte !== undefined && r.lastByte >= clickAt).map((r) => r.lastByte!),
-      );
+      const lastByte = Math.max(0, ...snap.requests.filter((r) => isEvents(r) && r.lastByte !== undefined && r.lastByte >= clickAt).map((r) => r.lastByte!));
       result.legs.push({
         name: leg.name,
-        markerMs: markerAt - clickAt,
+        markerMs: Math.round(markerAt - clickAt),
+        markerSeenMs: markerSeen - clickAt,
         settledMs: Math.round(settledAt - clickAt),
         lastEventsByteMs: lastByte ? lastByte - clickAt : 0,
         taskMs: Math.round(m1.taskMs - m0.taskMs),
         scriptMs: Math.round(m1.scriptMs - m0.scriptMs),
         lagMaxMs: Math.max(0, ...lag),
         lagP95Ms: pct(lag, 0.95),
+        cdpLagMaxMs: Math.round(legLag),
         domNodes,
         eventsBytes: ev.bytes,
         eventsFrames: ev.frames,
         eventsConnects: ev.connects,
       });
-      if (process.env.PERF_DEBUG) {
+      if (process.env.PERF_DEBUG && !plan.realism) {
         const dir = path.join(plan.runDir, "debug");
         mkdirSync(dir, { recursive: true });
         await page.screenshot({ path: path.join(dir, `${tag}-${result.legs.length}.png`) }).catch(() => {});
@@ -499,26 +599,20 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
     if ((await waitRule(watch, Date.now(), await logHead(stack), WINDOW_CAP_MS)).capped) result.windowCapped = true;
     const t1 = Date.now();
     const snap1 = await stack.proxy.snapshot();
+    const probe = await readProbe(page, t0 - 1);
+    const series = await probeSeries(page, t0);
     await socks.stop();
     const proc = await procs.stop();
 
-    // The live app must never have been in reach (B1b): fail the run loudly.
-    const live = net.foreign.filter((u) => LIVE_PORT.test(u));
+    // The live app must never have been in reach: fail the run loudly.
+    const live = [...liveHits(rig.urls), ...[...socks.foreign].filter((x) => /:(17373|17374|17380)$/.test(x))];
     if (live.length) {
-      fatal = new Error(`LIVE PORT CONTACTED by the page: ${live.join(", ")}`);
+      fatal = new Error(`LIVE PORT CONTACTED: ${live.join(", ")}`);
       throw fatal;
     }
-    result.browserForeign = [...new Set([...socks.foreign, ...net.foreign])];
-    const liveSock = [...socks.foreign].filter((x) => /:(17373|17374|17380)$/.test(x));
-    if (liveSock.length) {
-      fatal = new Error(`LIVE PORT CONNECTION by the browser (lsof): ${liveSock.join(", ")}`);
-      throw fatal;
-    }
+    result.browserForeign = [...socks.foreign];
 
-    // --- Deterministic counts.
-    const reqs = net.window(t0, t1);
-    const started = reqs.filter((r) => r.start >= t0);
-    const shorts = started.filter((r) => !isLongLived(r));
+    // --- Deterministic counts, from the proxy.
     const ev = eventsBetween(snap0, snap1);
     for (const p of ev.per) {
       const q = new URLSearchParams(p.r.query);
@@ -530,52 +624,63 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       });
     }
     const proxyNew = snap1.requests.filter((r) => r.start >= t0);
-    const batchProxy = proxyNew.filter((r) => !r.sse && r.path === "/events");
-    for (const r of shorts) {
+    const shortsProxy = proxyNew.filter((r) => !r.sse && !r.held);
+    for (const r of shortsProxy) {
       const k = `${r.method} ${routeOf(r.path)}`;
       result.requestsByRoute[k] = (result.requestsByRoute[k] ?? 0) + 1;
     }
+    const batch = shortsProxy.filter((r) => r.path === "/events");
     result.det = {
-      cdp_stale_dropped: watch.stale.n,
       events_stream_bytes_proxy: ev.bytes,
-      events_stream_bytes: reqs.filter(isEventsStream).reduce((a, r) => a + r.windowDecoded, 0),
       events_stream_frames: ev.frames,
       events_stream_connects: ev.connects,
       events_from_zero: ev.per.filter((p) => p.isNew && !new URLSearchParams(p.r.query).has("since")).length,
-      events_batch_requests: batchProxy.length,
-      events_batch_bytes: batchProxy.reduce((a, r) => a + r.bytes, 0),
-      requests_short: shorts.length,
+      events_batch_requests: batch.length,
+      events_batch_bytes: batch.reduce((a, r) => a + r.bytes, 0),
+      requests_short: shortsProxy.length,
       requests_delayed: proxyNew.filter((r) => r.delayMs > 0).length,
       output_streams_held: proxyNew.filter((r) => r.held).length,
       peak_busy_sockets_proxy: peakIn(snap1.timeline, t0, t1),
-      peak_connections_cdp: net.peakConnections(t0, t1),
       peak_sockets_lsof: socks.peak,
     };
-    if (plan.cdpSse) result.det.events_stream_messages_cdp = reqs.filter(isEventsStream).reduce((a, r) => a + r.windowSseMessages, 0);
+    result.legs.forEach((l, i) => (result.det[`leg${i + 1}_events_bytes`] = l.eventsBytes));
 
-    // --- Queueing (M3/M4): until a socket, a cancel, or the window's end.
-    const until = queuedUntil(shorts, proxyNew.filter((r) => !r.sse), t1);
+    // --- Queueing: page request → the proxy saw it (or its cancel, or the window's end).
+    const match = matchRequests(probe.reqs, snap1.requests, stack.appURL);
     const waits: number[] = [];
     const intervals: [number, number][] = [];
-    for (const r of shorts) {
-      const u = until.get(r.id)!;
-      const w = Math.max(0, u - r.start);
+    const addWait = (route: string, start: number, until: number) => {
+      const w = Math.max(0, until - start);
       waits.push(w);
-      intervals.push([r.start, u]);
-      const k = `${r.method} ${routeOf(r.path)}`;
-      const b = (result.queuedByRoute[k] ??= { n: 0, p50: 0, max: 0 });
+      intervals.push([start, until]);
+      const b = (result.queuedByRoute[route] ??= { n: 0, p50: 0, max: 0 });
       b.n++;
       b.max = Math.max(b.max, Math.round(w));
+    };
+    const perRoute = new Map<string, number[]>();
+    for (const r of probe.reqs) {
+      if (r.start < t0 || r.start > t1 || !r.url.startsWith(stack.appURL)) continue;
+      const m = match.get(r.id);
+      const until = m ? m.start : Math.min(r.failed ?? r.closed ?? t1, t1);
+      const route = `${r.method} ${routeOf(new URL(r.url).pathname)}`;
+      addWait(route, r.start, until);
+      (perRoute.get(route) ?? perRoute.set(route, []).get(route)!).push(Math.max(0, until - r.start));
     }
-    for (const [k, b] of Object.entries(result.queuedByRoute)) {
-      b.p50 = Math.round(pct(shorts.filter((r) => `${r.method} ${routeOf(r.path)}` === k).map((r) => Math.max(0, until.get(r.id)! - r.start)), 0.5));
+    // Scripts, styles, the document: resource timing (they aren't fetches).
+    for (const [name, initiator, start, reqStart] of series.res) {
+      if (initiator === "fetch" || initiator === "xmlhttprequest" || initiator === "other" || !name.startsWith(stack.appURL)) continue;
+      if (reqStart > 0) addWait(`GET ${routeOf(new URL(name).pathname)}`, start, reqStart);
     }
-    const lt = await longTasks(page, t0, t1);
+    for (const [k, xs] of perRoute) result.queuedByRoute[k].p50 = Math.round(pct(xs, 0.5));
+    const longs = series.long.filter((x) => x[0] <= t1);
     result.timing = {
       settled_ms: result.legs.reduce((a, l) => a + l.settledMs, 0),
+      marker_ms: result.legs.reduce((a, l) => a + l.markerMs, 0),
       main_task_ms: result.legs.reduce((a, l) => a + l.taskMs, 0),
       main_script_ms: result.legs.reduce((a, l) => a + l.scriptMs, 0),
       lag_max_ms: Math.max(0, ...result.legs.map((l) => l.lagMaxMs)),
+      cdp_lag_max_ms: Math.round(cdpLagAll),
+      byte_idle_fallbacks: watch.fallbacks.n,
       last_events_byte_ms: Math.max(0, ...ev.per.map((p) => (p.r.lastByte ?? 0) - t0)),
       window_ms: t1 - t0,
       all_sockets_busy_ms: Math.round(timeAtLeast(snap1.timeline, SOCKETS_PER_ORIGIN, t0, t1)),
@@ -585,42 +690,42 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       queued_p95_ms: Math.round(pct(waits, 0.95)),
       queued_max_ms: Math.round(Math.max(0, ...waits)),
       queued_over_1s: waits.filter((w) => w > 1000).length,
-      cancelled: shorts.filter((r) => r.failed === "canceled").length,
-      unanswered_at_end: shorts.filter((r) => r.end === undefined).length,
-      longtask_total_ms: lt.totalMs,
-      longtask_count: lt.count,
+      cancelled: probe.reqs.filter((r) => r.start >= t0 && r.failed !== undefined).length,
+      unanswered_at_end: shortsProxy.filter((r) => r.end === undefined && r.delayMs === 0).length,
+      longtask_total_ms: Math.round(longs.reduce((a, x) => a + x[1], 0)),
       router_cpu_ms: proc.router?.cpuMs ?? 0,
       data_cpu_ms: proc.data?.cpuMs ?? 0,
       children_cpu_ms: proc["router-children"]?.cpuMs ?? 0,
       router_peak_rss_mb: proc.router?.peakRssMB ?? 0,
       data_peak_rss_mb: proc.data?.peakRssMB ?? 0,
     };
-    result.legs.forEach((l, i) => {
-      result.timing[`leg${i + 1}_settled_ms`] = l.settledMs;
-      result.det[`leg${i + 1}_events_bytes`] = l.eventsBytes;
-    });
+    result.legs.forEach((l, i) => (result.timing[`leg${i + 1}_settled_ms`] = l.settledMs));
     result.socketOwners = [...socks.owners];
-    result.requests = reqs.map((r) => [
+    result.requests = shortsProxy.map((r) => [
       `${r.method} ${routeOf(r.path)}`,
-      r.type,
       Math.round(r.start - t0),
-      until.has(r.id) ? Math.round(until.get(r.id)! - r.start) : null,
+      null,
       r.end === undefined ? null : Math.round(r.end - r.start),
-      r.failed ?? r.status ?? null,
+      r.status ?? null,
     ]);
-    result.ok = true;
+
+    // The live-event smoke: something changed through the API shows within 2 s.
+    if (scenario.smoke) result.checks.push(await scenario.smoke(ctx));
+    result.ok = result.checks.every((c) => c.ok);
+    if (!result.ok) result.error = `smoke failed: ${result.checks.filter((c) => !c.ok).map((c) => `${c.name}: ${c.detail}`).join("; ")}`;
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err);
-    const pages = context?.pages() ?? [];
-    if (pages[0]) {
+    const pages = rig?.context.pages() ?? [];
+    if (pages[0] && !plan.realism) {
       const shot = path.join(plan.runDir, "failures", `${tag}.png`);
       mkdirSync(path.dirname(shot), { recursive: true });
       await pages[0].screenshot({ path: shot, fullPage: true }).catch(() => {});
     }
   } finally {
-    await teardown();
+    await rig?.teardown();
     active = undefined;
   }
+  if (plan.realism && result.error) result.error = redact(result.error, manifest);
   if (fatal) throw fatal;
   return result;
 }

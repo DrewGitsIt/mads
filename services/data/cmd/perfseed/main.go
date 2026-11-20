@@ -18,6 +18,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -33,6 +34,8 @@ func main() {
 		err = runCalibrate(os.Args[2:])
 	case "scale":
 		err = runScale(os.Args[2:])
+	case "realism":
+		err = runRealism(os.Args[2:])
 	default:
 		usage()
 	}
@@ -144,4 +147,33 @@ func writeJSONTo(f *os.File, v any) error {
 	}
 	_, err = f.Write(append(b, '\n'))
 	return err
+}
+
+func runRealism(args []string) error {
+	fs := flag.NewFlagSet("realism", flag.ExitOnError)
+	dbPath := fs.String("db", "", "the COPY to prepare (made with sqlite3 -readonly <live> .backup); never the live database")
+	safe := fs.String("safe-root", "", "empty scratch dir every record path is pointed at")
+	manifest := fs.String("manifest", "", "manifest for the scenarios (holds session names: keep it in a temp dir)")
+	summary := fs.String("summary", "", "counts-and-sizes summary for the report")
+	_ = fs.Parse(args)
+	if *dbPath == "" || *safe == "" || *manifest == "" || *summary == "" {
+		return fmt.Errorf("realism: -db, -safe-root, -manifest and -summary are required")
+	}
+	home, _ := os.UserHomeDir()
+	if abs, _ := filepath.Abs(*dbPath); home != "" && strings.HasPrefix(abs, filepath.Join(home, ".mads")+string(filepath.Separator)) {
+		return fmt.Errorf("realism: refusing %s: it is under ~/.mads; prepare a copy, never the live database", abs)
+	}
+	db, err := openCopy(*dbPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+	m, sum, err := realism(context.Background(), db, *safe)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(*manifest, m); err != nil {
+		return err
+	}
+	return writeJSON(*summary, sum)
 }

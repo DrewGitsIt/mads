@@ -1,0 +1,294 @@
+package main
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"net/url"
+	"strings"
+
+	"github.com/drewkidwell/mads/services/data/internal/store"
+)
+
+// Realism mode (docs/PERF-HARNESS-PLAN.md, phase 4): the workload is a COPY
+// of a real database, taken by run.sh with `sqlite3 -readonly <live>
+// ".backup <copy>"`. This prepares that copy — and only the copy — so a
+// hermetic stack can boot on it and touch nothing real:
+//
+//   - schema: a copy from a newer build is stepped down to this build's
+//     schema, for the one known case (0035 mesh_peers, which main lacks);
+//   - paths: every absolute path in a record's JSON (session cwd/dir/
+//     worktree dirs, workspace repos, delegate worktrees and transcripts,
+//     config dirs) is pointed at an empty scratch dir, so no git or
+//     worktree work can reach a real repo; shadow_dir is dropped, so the
+//     Data Service's shadow sweep has nothing to delete. Event payloads are
+//     left alone: they are what the bus replays, byte for byte, and nothing
+//     executes on them;
+//   - one delegate of the parent is marked running, so the Router's boot
+//     sweep concludes it and the rail shows it (scenario 3), as it does
+//     after a real restart.
+//
+// It writes the manifest the scenarios need (to a temp dir the runner
+// deletes) and a summary with counts and sizes only, for the report.
+
+type realismSummary struct {
+	TotalEvents int              `json:"total_events"`
+	TotalBytes  int64            `json:"total_bytes"`
+	Counts      map[string]int   `json:"counts"`
+	Bytes       map[string]int64 `json:"bytes"`
+	Sessions    int              `json:"sessions"`
+	Delegates   int              `json:"delegates"`
+	Downgraded  []int            `json:"schema_steps_down,omitempty"`
+	Rewritten   int              `json:"paths_rewritten"`
+	Notes       []string         `json:"notes,omitempty"`
+}
+
+func openCopy(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", "file:"+url.PathEscape(path)+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	return db, db.Ping()
+}
+
+// knownStepsDown are the schema steps a copy may be taken back over: the
+// version and the SQL that undoes it. Anything else is refused.
+var knownStepsDown = map[int]string{
+	35: `DROP TABLE IF EXISTS mesh_peers`,
+}
+
+func realism(ctx context.Context, db *sql.DB, safeRoot string) (*Manifest, *realismSummary, error) {
+	sum := &realismSummary{}
+	maxKnown, err := store.MaxVersion(store.Migrations())
+	if err != nil {
+		return nil, nil, err
+	}
+	var v int
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE(max(version),0) FROM schema_migrations`).Scan(&v); err != nil {
+		return nil, nil, err
+	}
+	for ; v > maxKnown; v-- {
+		q, ok := knownStepsDown[v]
+		if !ok {
+			return nil, nil, fmt.Errorf("realism: the copy is schema v%d; this build knows v%d and has no step down from v%d", v, maxKnown, v)
+		}
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			return nil, nil, err
+		}
+		if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = ?`, v); err != nil {
+			return nil, nil, err
+		}
+		sum.Downgraded = append(sum.Downgraded, v)
+	}
+
+	// Paths, in every table whose records are JSON.
+	tables, err := tablesWithData(ctx, db)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, t := range tables {
+		n, err := rewritePaths(ctx, db, t, safeRoot)
+		if err != nil {
+			return nil, nil, fmt.Errorf("realism: %s: %w", t, err)
+		}
+		sum.Rewritten += n
+	}
+
+	// Scenario sessions: rail-visible (not set aside), most events first.
+	type cand struct {
+		id, name     string
+		events, subs int
+		delegates    int
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT s.id, json_extract(s.data,'$.name'),
+		       (SELECT count(*) FROM events e WHERE e.session_id = s.id),
+		       (SELECT count(*) FROM events e WHERE e.session_id = s.id AND e.type = 'session.subagent_event'),
+		       (SELECT count(*) FROM delegates d WHERE d.session_id = s.id)
+		FROM sessions s
+		WHERE COALESCE(json_extract(s.data,'$.aside'), 0) = 0
+		ORDER BY 3 DESC`)
+	if err != nil {
+		return nil, nil, err
+	}
+	var cands []cand
+	for rows.Next() {
+		var c cand
+		var name sql.NullString
+		if err := rows.Scan(&c.id, &name, &c.events, &c.subs, &c.delegates); err != nil {
+			_ = rows.Close()
+			return nil, nil, err
+		}
+		c.name = name.String
+		cands = append(cands, c)
+	}
+	_ = rows.Close()
+	if len(cands) < 2 {
+		return nil, nil, fmt.Errorf("realism: fewer than two rail-visible sessions")
+	}
+	m := &Manifest{Profile: "realism"}
+	var parent *cand
+	for i := range cands {
+		if cands[i].delegates > 0 && (parent == nil || cands[i].subs > parent.subs) {
+			parent = &cands[i]
+		}
+	}
+	var picks []cand
+	for _, c := range cands {
+		if parent != nil && c.id == parent.id {
+			continue
+		}
+		if c.name != "" {
+			picks = append(picks, c)
+		}
+		if len(picks) == 2 {
+			break
+		}
+	}
+	if len(picks) < 2 {
+		return nil, nil, fmt.Errorf("realism: no two named rail-visible sessions")
+	}
+	m.SwitchA = ManifestRef{ID: picks[0].id, Name: picks[0].name}
+	m.SwitchB = ManifestRef{ID: picks[1].id, Name: picks[1].name}
+	m.Sessions = []ManifestRef{m.SwitchA, m.SwitchB}
+	rail := []string{m.SwitchA.ID, m.SwitchB.ID}
+	if parent != nil {
+		m.Parent = ManifestParent{ManifestRef: ManifestRef{ID: parent.id, Name: parent.name}, Delegates: parent.delegates}
+		m.Sessions = append(m.Sessions, m.Parent.ManifestRef)
+		rail = append(rail, parent.id)
+		// Its most recently started delegate goes back to running.
+		var id, harness, desc string
+		var raw string
+		err := db.QueryRowContext(ctx, `SELECT id, harness_id, data FROM delegates WHERE session_id = ? ORDER BY started_at DESC LIMIT 1`, parent.id).Scan(&id, &harness, &raw)
+		if err != nil {
+			return nil, nil, err
+		}
+		var d map[string]any
+		if err := json.Unmarshal([]byte(raw), &d); err != nil {
+			return nil, nil, err
+		}
+		d["state"] = "running"
+		delete(d, "ended_at")
+		delete(d, "reason")
+		desc, _ = d["description"].(string)
+		b, _ := json.Marshal(d)
+		if _, err := db.ExecContext(ctx, `UPDATE delegates SET state = 'running', data = ? WHERE id = ?`, string(b), id); err != nil {
+			return nil, nil, err
+		}
+		m.Parent.Running = []ManifestDelegate{{HarnessID: harness, Description: desc}}
+		sum.Notes = append(sum.Notes, "one delegate of the parent marked running so the boot sweep surfaces it in the rail")
+	} else {
+		sum.Notes = append(sum.Notes, "no session with delegates: scenario 3 can't run")
+	}
+	m.Rail = &ManifestRail{IDs: rail}
+
+	m.Counts, m.Bytes, err = statsByType(ctx, db)
+	if err != nil {
+		return nil, nil, err
+	}
+	for t, n := range m.Counts {
+		m.TotalEvents += n
+		m.TotalBytes += m.Bytes[t]
+	}
+	sum.TotalEvents, sum.TotalBytes, sum.Counts, sum.Bytes = m.TotalEvents, m.TotalBytes, m.Counts, m.Bytes
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sessions`).Scan(&sum.Sessions); err != nil {
+		return nil, nil, err
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM delegates`).Scan(&sum.Delegates); err != nil {
+		return nil, nil, err
+	}
+	if _, err := db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		return nil, nil, err
+	}
+	return m, sum, nil
+}
+
+func tablesWithData(ctx context.Context, db *sql.DB) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table'
+		AND EXISTS (SELECT 1 FROM pragma_table_info(sqlite_master.name) WHERE name = 'data')`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// rewritePaths points every absolute-path string in table's JSON records
+// at safeRoot and drops shadow_dir. Returns how many strings it changed.
+func rewritePaths(ctx context.Context, db *sql.DB, table, safeRoot string) (int, error) {
+	rows, err := db.QueryContext(ctx, `SELECT rowid, data FROM "`+table+`"`)
+	if err != nil {
+		return 0, err
+	}
+	type upd struct {
+		rowid int64
+		data  string
+	}
+	var ups []upd
+	n := 0
+	for rows.Next() {
+		var id int64
+		var raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		var v any
+		if json.Unmarshal([]byte(raw), &v) != nil {
+			continue
+		}
+		c := 0
+		v = walkPaths(v, safeRoot, &c)
+		if c > 0 {
+			b, _ := json.Marshal(v)
+			ups = append(ups, upd{id, string(b)})
+			n += c
+		}
+	}
+	_ = rows.Close()
+	for _, u := range ups {
+		if _, err := db.ExecContext(ctx, `UPDATE "`+table+`" SET data = ? WHERE rowid = ?`, u.data, u.rowid); err != nil {
+			return 0, err
+		}
+	}
+	return n, nil
+}
+
+func walkPaths(v any, safe string, n *int) any {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, e := range x {
+			if k == "shadow_dir" {
+				delete(x, k)
+				*n++
+				continue
+			}
+			x[k] = walkPaths(e, safe, n)
+		}
+		return x
+	case []any:
+		for i, e := range x {
+			x[i] = walkPaths(e, safe, n)
+		}
+		return x
+	case string:
+		// A path: "/" itself, or rooted with at least one more segment
+		// ("/compact"-style command names are left alone).
+		if x == "/" || (strings.HasPrefix(x, "/") && strings.Count(x, "/") > 1) || strings.HasPrefix(x, "~/") {
+			*n++
+			return safe
+		}
+		return x
+	}
+	return v
+}

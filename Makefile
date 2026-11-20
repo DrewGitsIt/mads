@@ -147,10 +147,11 @@ ui-smoke: ui-deps
 # a temp `git worktree add`), seeds one workload, runs the scenarios ABBA on
 # hermetic stacks behind the delay proxy, and writes perf-results/<stamp>/.
 # Every scenario runs with the proxy's delays on and off (MODES=on,off).
-# Also: SCENARIOS=1,3b  PERF_DELAYS=<regex>=<ms>,...  PERF_HOLD_OUTPUT=0  PERF_CDP_SSE=1.
+# Also: SCENARIOS=1,3b  CHECKS=a,b|none  REALISM=1 (a read-only backup of ~/.mads/mads.db)
+#       PERF_DELAYS=<regex>=<ms>,...  PERF_HOLD_OUTPUT=0.
 # No ui-deps prerequisite: run.sh installs deps only where they are missing.
 ui-perf:
-	BASE="$(BASE)" CAND="$(CAND)" PROFILE="$(PROFILE)" N="$(N)" BROWSER="$(BROWSER)" SCENARIOS="$(SCENARIOS)" MODES="$(MODES)" \
+	BASE="$(BASE)" CAND="$(CAND)" PROFILE="$(PROFILE)" N="$(N)" BROWSER="$(BROWSER)" SCENARIOS="$(SCENARIOS)" MODES="$(MODES)" CHECKS="$(CHECKS)" REALISM="$(REALISM)" \
 		sh ui/e2e/perf/run.sh
 
 # Release gate: cross-platform build matrix + install/update smokes against

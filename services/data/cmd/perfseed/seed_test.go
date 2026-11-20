@@ -338,3 +338,45 @@ func TestSeedDelegateTranscriptReadsAsClaudeCode(t *testing.T) {
 		t.Fatal("the no-file delegate has a file")
 	}
 }
+
+func TestRealismPreparesTheCopy(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "copy.db")
+	if _, err := Seed(context.Background(), path, testProfile(), SeedOptions{RepoDir: "/tmp/perf-repo/x", Now: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := openCopy(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	// A shadow store recorded on a session: the copy must not keep it.
+	if _, err := db.Exec(`UPDATE sessions SET data = json_set(data, '$.shadow_dir', '/home/someone/.local/share/x') WHERE rowid = 1`); err != nil {
+		t.Fatal(err)
+	}
+	before, _, _ := statsByType(context.Background(), db)
+	m, sum, err := realism(context.Background(), db, "/tmp/perf-safe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var leaked int
+	if err := db.QueryRow(`SELECT count(*) FROM sessions WHERE data LIKE '%/tmp/perf-repo%' OR data LIKE '%shadow_dir%'`).Scan(&leaked); err != nil {
+		t.Fatal(err)
+	}
+	if leaked != 0 || sum.Rewritten == 0 {
+		t.Fatalf("paths left in sessions: %d (rewritten %d)", leaked, sum.Rewritten)
+	}
+	var running int
+	if err := db.QueryRow(`SELECT count(*) FROM delegates WHERE session_id = ? AND state = 'running'`, m.Parent.ID).Scan(&running); err != nil {
+		t.Fatal(err)
+	}
+	if running < 1 || len(m.Parent.Running) != 1 || m.Rail == nil || len(m.Rail.IDs) != 3 || m.SwitchA.ID == m.SwitchB.ID {
+		t.Fatalf("manifest: %+v", m)
+	}
+	// Events are untouched: the replay is the thing measured.
+	for typ, n := range before {
+		if m.Counts[typ] != n {
+			t.Fatalf("%s: %d events before, %d after", typ, n, m.Counts[typ])
+		}
+	}
+}

@@ -13,7 +13,6 @@ import type { Manifest } from "./scenarios";
 
 const DET_LABELS: Record<string, string> = {
   events_stream_bytes_proxy: "/events stream bytes sent (proxy)",
-  events_stream_bytes: "/events bytes the page received (CDP — not authoritative: undercounts on closed or delayed streams)",
   events_stream_frames: "/events SSE frames (proxy)",
   events_stream_messages_cdp: "/events SSE messages (CDP)",
   events_stream_connects: "/events (re)connects",
@@ -25,12 +24,13 @@ const DET_LABELS: Record<string, string> = {
   output_streams_held: "/output streams held open by the proxy (heartbeat comments only, no data)",
   peak_busy_sockets_proxy: "peak busy sockets (proxy, authoritative; secondary)",
   peak_sockets_lsof: "peak sockets to the proxy (lsof, authoritative; secondary)",
-  peak_connections_cdp: "peak connections (CDP — not authoritative: misses requests the proxy holds)",
-  cdp_stale_dropped: "CDP entries dropped as stale (no end reported; harness bookkeeping)",
 };
 
 const TIMING_LABELS: Record<string, string> = {
   settled_ms: "click → settled, all legs (ms)",
+  marker_ms: "click → marker, in page time, all legs (ms)",
+  cdp_lag_max_ms: "harness's CDP lag, worst probe read (ms; diagnostic)",
+  byte_idle_fallbacks: "/events streams settled by byte-idle fallback (no id: lines)",
   main_task_ms: "main-thread task time, all legs (CDP TaskDuration, ms)",
   main_script_ms: "main-thread script time, all legs (CDP ScriptDuration, ms)",
   lag_max_ms: "worst main-thread lag (50 ms probe, ms)",
@@ -122,7 +122,7 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
   lines.push(
     `- browser: ${plan.browser}; N = ${plan.n}; delay modes: ${modes.join(", ")} ` +
       `(on = ${plan.delays || "defaults: repos 10 s, changeset 6 s, worktree/refresh 16 s"}); ` +
-      `/output held open: ${plan.holdOutput ? "yes" : "no"}${plan.legacyRouteGuard ? "; LEGACY context.route guard ON (B1 comparison)" : ""}`,
+      `/output held open: ${plan.holdOutput ? "yes" : "no"}${plan.realism ? "; REALISM: a sanitised copy of a real database (no names in this report)" : ""}`,
   );
   if (manifest) {
     lines.push(
@@ -143,6 +143,10 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
   for (const sid of plan.scenarios) {
     for (const mode of modes) {
       const rs = results.filter((r) => r.scenario === sid && (r.mode ?? "on") === mode);
+      if (rs.length === 0 && plan.realism) {
+        lines.push(`## ${sid} — delays ${mode}`, "", "- not run (realism: no suitable data)", "");
+        continue;
+      }
       lines.push(`## ${sid} — delays ${mode}`, "");
       const missing: string[] = [];
       for (const l of labels) {
@@ -169,6 +173,8 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
       for (const k of headline) row(`**${TIMING_LABELS[k]}**`, labels.map((l) => timingCell(by(l).map((r) => r.timing[k]))));
       const legNames = ok[0].legs.map((l) => l.name);
       legNames.forEach((n, i) => {
+        row(`leg “${n}” click → marker, page time (ms)`, labels.map((l) => timingCell(by(l).map((r) => r.legs[i]?.markerMs ?? NaN))));
+        row(`leg “${n}” click → marker seen by harness (ms; diagnostic)`, labels.map((l) => timingCell(by(l).map((r) => r.legs[i]?.markerSeenMs ?? NaN))));
         row(`leg “${n}” click → settled (ms)`, labels.map((l) => timingCell(by(l).map((r) => r.legs[i]?.settledMs ?? NaN))));
         row(`leg “${n}” click → last /events byte (ms)`, labels.map((l) => timingCell(by(l).map((r) => r.legs[i]?.lastEventsByteMs ?? NaN))));
         row(`leg “${n}” /events bytes`, labels.map((l) => detCell(by(l).map((r) => r.legs[i]?.eventsBytes ?? NaN), "bytes")));
@@ -177,6 +183,7 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
           const sc = timingCell(by(l).map((r) => r.legs[i]?.scriptMs ?? NaN));
           return { text: `${t.text} / ${sc.text}`, value: t.value };
         }));
+        row(`leg “${n}” CDP lag, worst read (ms; diagnostic)`, labels.map((l) => timingCell(by(l).map((r) => r.legs[i]?.cdpLagMaxMs ?? NaN))));
         row(`leg “${n}” lag p95 / max (ms)`, labels.map((l) => {
           const p = timingCell(by(l).map((r) => r.legs[i]?.lagP95Ms ?? NaN));
           const mx = timingCell(by(l).map((r) => r.legs[i]?.lagMaxMs ?? NaN));
@@ -212,12 +219,45 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
       lines.push("");
     }
   }
+  // Correctness checks, per build; and the live-event smoke after each scenario.
+  const checkRs = results.filter((r) => r.scenario.startsWith("check:"));
+  if (plan.checks.length) {
+    lines.push("## Correctness checks", "");
+    lines.push(cand ? `| check | ${base} | ${cand} |` : `| check | ${base} |`, cand ? "|---|---|---|" : "|---|---|");
+    const regressions: string[] = [];
+    for (const c of plan.checks) {
+      const cell = (l: string) => {
+        const r = checkRs.find((x) => x.scenario === `check:${c}` && x.build === l);
+        if (!r) return { ok: undefined as boolean | undefined, steps: undefined as Result["checks"] | undefined, text: "✗ missing" };
+        const detail =
+          r.checks.map((x) => `${x.ok ? "✓" : x.knownOnMain ? "✗ (known on main)" : "✗"} ${x.name}${x.detail ? ` (${x.detail})` : ""}`).join("; ") || r.error || "";
+        return { ok: r.ok, steps: r.checks, text: `${r.ok ? "✓" : "✗"} ${detail}` };
+      };
+      const b = cell(base);
+      const k = cand ? cell(cand) : undefined;
+      // Flag any step the candidate fails that base passes.
+      for (const st of k?.steps ?? []) {
+        const bs = (b.steps ?? []).find((x) => x.name === st.name);
+        if (bs?.ok && !st.ok) regressions.push(`${c}: ${st.name}`);
+      }
+      lines.push(cand ? `| ${c} | ${b.text} | ${k!.text} |` : `| ${c} | ${b.text} |`);
+    }
+    const known = [...new Set(checkRs.flatMap((r) => r.checks.filter((x) => x.knownOnMain && !x.ok).map((x) => `${r.scenario.slice(6)} “${x.name}”: ${x.knownOnMain}`)))];
+    if (known.length) lines.push("", "Known to fail on main (not counted against the run):", ...known.map((x) => `- ${x}`));
+    if (regressions.length) lines.splice(lines.indexOf("## Correctness checks") + 1, 0, "", `**⚠⚠ CANDIDATE REGRESSION: passes on base, fails on cand: ${regressions.join(", ")}**`);
+    lines.push("");
+  }
+  const smokes = results.filter((r) => !r.scenario.startsWith("check:") && r.checks?.length);
+  if (smokes.length) {
+    const failed = smokes.filter((r) => r.checks.some((c) => !c.ok));
+    lines.push(`Live-event smoke after each scenario: ${smokes.length - failed.length} / ${smokes.length} passed` + (failed.length ? ` — ✗ ${failed.map((r) => `${r.scenario} ${r.mode} ${r.build}#${r.rep}`).join(", ")}` : ""), "");
+  }
   return lines.join("\n");
 }
 
 /** Whether every planned repetition exists and succeeded. */
 export function allOk(plan: Plan, results: Result[]): boolean {
-  const want = plan.scenarios.length * (plan.modes ?? ["on"]).length * plan.n * plan.builds.length;
+  const want = (plan.scenarios.length * (plan.modes ?? ["on"]).length * plan.n + plan.checks.length) * plan.builds.length;
   return results.length === want && results.every((r) => r.ok);
 }
 

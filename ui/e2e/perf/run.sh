@@ -3,7 +3,10 @@
 #
 #   make ui-perf BASE=<ref> CAND=<ref|worktree dir> PROFILE=S|M|L|XL N=5 BROWSER=chromium|electron
 #   also: SCENARIOS=1,3b  MODES=on,off (default both)  PERF_DELAYS=<regex>=<ms>,...
-#         PERF_HOLD_OUTPUT=0  PERF_CDP_SSE=1  PERF_LEGACY_ROUTE_GUARD=1 (B1 comparison only)
+#         PERF_HOLD_OUTPUT=0  CHECKS=a,b,c,d,e|none (default all; none in realism)
+#         REALISM=1 — the workload is a read-only backup of ~/.mads/mads.db
+#           (REAL_DB to override), prepared by `perfseed realism` and deleted
+#           with the run's temp dir; nothing real is committed or reported.
 #
 # Builds each side's Go binaries and UI (VITE_ROUTER_URL="", same-origin)
 # into its own temp dir: a ref is checked out detached with `git worktree
@@ -30,8 +33,9 @@ SCENARIOS=${SCENARIOS:-}
 MODES=${MODES:-on,off}
 PERF_DELAYS=${PERF_DELAYS:-}
 PERF_HOLD_OUTPUT=${PERF_HOLD_OUTPUT:-1}
-PERF_CDP_SSE=${PERF_CDP_SSE:-}
-PERF_LEGACY_ROUTE_GUARD=${PERF_LEGACY_ROUTE_GUARD:-}
+REALISM=${REALISM:-}
+REAL_DB=${REAL_DB:-$HOME/.mads/mads.db}
+CHECKS=${CHECKS:-$([ -n "$REALISM" ] && echo none || echo a,b,c,d,e)}
 # Checkouts the harness must never run from, build in or install into (the
 # live app runs from them): the dirs themselves and anything under them.
 PERF_FORBIDDEN_DIRS=${PERF_FORBIDDEN_DIRS:-$HOME/repo/mads:$HOME/repo/mads-mesh}
@@ -224,24 +228,42 @@ OVERLAY="$TMP/perfseed-overlay.json"
 } >"$OVERLAY"
 (cd "$BASE_SRC" && go build -overlay "$OVERLAY" -o "$TMP/perfseed" ./services/data/cmd/perfseed)
 
-# One workload per run: a git repo for the workspace, then the database and
-# the parent's delegate transcript.
 WL="$TMP/workload"
-mkdir -p "$WL/repo"
-git -C "$WL/repo" init -q -b main
-git -C "$WL/repo" -c user.name=perf -c user.email=perf@perf.test commit -q --allow-empty -m "perf workspace"
-"$TMP/perfseed" seed -db "$WL/mads.db" -profile "$PROFILE_JSON" -repo "$WL/repo" -transcripts "$WL/claude-projects" -manifest "$WL/manifest.json"
-cp "$WL/manifest.json" "$RUN_DIR/manifest.json"
+mkdir -p "$WL"
+if [ -n "$REALISM" ]; then
+	# Phase 4: a read-only online backup of the real database into this
+	# run's temp dir (deleted with it). The live file is only ever opened
+	# with -readonly; no other ~/.mads file is touched. perfseed then
+	# prepares the COPY: schema stepped down to BASE's, every record path
+	# pointed at an empty scratch dir, shadow dirs dropped.
+	[ -f "$REAL_DB" ] || die "no database at $REAL_DB"
+	sqlite3 -readonly "$REAL_DB" ".backup '$WL/mads.db'"
+	mkdir -p "$WL/safe"
+	"$TMP/perfseed" realism -db "$WL/mads.db" -safe-root "$WL/safe" -manifest "$WL/manifest.json" -summary "$RUN_DIR/workload.json"
+	TRANSCRIPTS=""
+	PROFILE=realism
+else
+	# One workload per run: a git repo for the workspace, then the database
+	# and the parent's delegate transcript.
+	mkdir -p "$WL/repo"
+	git -C "$WL/repo" init -q -b main
+	git -C "$WL/repo" -c user.name=perf -c user.email=perf@perf.test commit -q --allow-empty -m "perf workspace"
+	"$TMP/perfseed" seed -db "$WL/mads.db" -profile "$PROFILE_JSON" -repo "$WL/repo" -transcripts "$WL/claude-projects" -manifest "$WL/manifest.json"
+	cp "$WL/manifest.json" "$RUN_DIR/manifest.json"
+	TRANSCRIPTS="$WL/claude-projects"
+fi
 
 scen_json="[]"
 [ -n "$SCENARIOS" ] && scen_json="[\"$(echo "$SCENARIOS" | sed 's/,/","/g')\"]"
 modes_json="[\"$(echo "$MODES" | sed 's/,/","/g')\"]"
+checks_json="[]"
+[ "$CHECKS" != none ] && [ -n "$CHECKS" ] && checks_json="[\"$(echo "$CHECKS" | sed 's/,/","/g')\"]"
 cat >"$RUN_DIR/plan.json" <<EOF
 {
   "runDir": "$RUN_DIR",
   "seededDB": "$WL/mads.db",
   "manifestPath": "$WL/manifest.json",
-  "transcriptsDir": "$WL/claude-projects",
+  "transcriptsDir": "$TRANSCRIPTS",
   "builds": $BUILDS,
   "scenarios": $scen_json,
   "n": $N,
@@ -249,8 +271,8 @@ cat >"$RUN_DIR/plan.json" <<EOF
   "modes": $modes_json,
   "delays": "$PERF_DELAYS",
   "holdOutput": $([ "$PERF_HOLD_OUTPUT" = 0 ] && echo false || echo true),
-  "cdpSse": $([ -n "$PERF_CDP_SSE" ] && echo true || echo false),
-  "legacyRouteGuard": $([ -n "$PERF_LEGACY_ROUTE_GUARD" ] && echo true || echo false),
+  "checks": $checks_json,
+  "realism": $([ -n "$REALISM" ] && echo true || echo false),
   "meta": {"profile": "$PROFILE", "harness": "$(git -C "$ROOT" rev-parse --short HEAD)", "host": "$(uname -sm)"}
 }
 EOF

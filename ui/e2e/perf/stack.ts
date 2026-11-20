@@ -6,6 +6,7 @@ import path from "node:path";
 import { readTokenFile } from "../lib/auth";
 import { cleanEnv, spawnListening, waitHealth, type ListeningProc } from "../lib/topology";
 import { startDelayProxy, type DelayProxy } from "./proxyClient";
+import { PIPELINE_SCENARIO } from "./fixtures";
 
 /**
  * One repetition's stack: the build's own data/router binaries on ephemeral
@@ -140,6 +141,8 @@ export async function bootPerfStack(opts: {
   delays: string;
   holdOutput: boolean;
   tag: string;
+  /** A Fast Model endpoint for the Router (checks only; scenarios run without one, so jobs skip). */
+  fastModelURL?: string;
 }): Promise<PerfStack> {
   const reg = registry(opts.tag);
   const tmpDir = mkdtempSync(path.join(tmpdir(), "mads-perf-run-"));
@@ -166,6 +169,10 @@ export async function bootPerfStack(opts: {
   env.MADS_AGENT_BIN_DIR = agentBinDir;
 
   const bin = (n: string) => path.join(opts.build.binDir, n);
+  // Pipeline runs the Router launches use the fake provider with the perf
+  // script (fixtures.ts: the pinned task's slow executor).
+  const pipelineScenario = path.join(tmpDir, "pipeline-scenario.yaml");
+  writeFileSync(pipelineScenario, PIPELINE_SCENARIO);
   const procs: ListeningProc[] = [];
   let proxy: DelayProxy | undefined;
   const cleanup = async () => {
@@ -194,7 +201,8 @@ export async function bootPerfStack(opts: {
         "-session-cmd",
         `${bin("session")} -data-url ${dataURL}`,
         "-pipeline-cmd",
-        bin("pipeline"),
+        `${bin("pipeline")} -fake-scenario ${pipelineScenario}`,
+        ...(opts.fastModelURL ? ["-fastmodel-base-url", opts.fastModelURL] : []),
         "-mads-home",
         homeDir,
         "-ui-dist",
