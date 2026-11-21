@@ -221,52 +221,13 @@ describe("subscribeToEvents", () => {
     expect(received).toEqual([1, 2, 3]);
   });
 
-  // Regression, 2026-09-30: a subscriber type the running Data Service hadn't
-  // registered got the whole shared stream refused, and the reconnect loop
-  // retried the same URL forever — every live view in the window froze.
-  it("drops a type the server refuses and reconnects at once without it", async () => {
-    const fetchMock = withHead(async (url: string) => {
-      const types = new URL(url).searchParams.get("types") ?? "";
-      if (!types.includes("session.queue_changed")) return new Response("[]", { status: 200 });
-      return new Response(
-        JSON.stringify({
-          errors: [
-            {
-              field: "types",
-              message: '"session.queue_changed" is neither a registered event type nor a domain wildcard like "task.*"',
-            },
-          ],
-        }),
-        { status: 422 },
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const onSession = vi.fn();
-    subscribe({ types: ["session.updated"] }, onSession);
-    subscribe({ types: ["session.queue_changed"] }, () => {});
-    const refused = FakeEventSource.instances.at(-1)!;
-    expect(new URL(refused.url).searchParams.get("types")).toBe("session.updated,session.queue_changed");
-
-    refused.simulateError();
-    await vi.waitFor(() => expect(FakeEventSource.instances.filter((s) => !s.closed)).toHaveLength(1));
-
-    const retried = FakeEventSource.instances.find((s) => !s.closed)!;
-    expect(retried).not.toBe(refused);
-    expect(new URL(retried.url).searchParams.get("types")).toBe("session.updated");
-    expect(getBusHealth().ignoredTypes).toEqual(["session.queue_changed"]);
-    retried.emit("session.updated", JSON.stringify(envelope(5, "session.updated")));
-    expect(onSession).toHaveBeenCalledTimes(1);
-  });
-
-  it("leaves the ordinary backoff in charge when the probe finds nothing refused", async () => {
+  it("backs off after a connect error, then reconnects", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", withHead());
     subscribe({ types: ["session.created"] }, () => {});
     FakeEventSource.instances[0].simulateError();
     await vi.advanceTimersByTimeAsync(0);
     expect(FakeEventSource.instances).toHaveLength(1);
-    expect(getBusHealth().ignoredTypes).toEqual([]);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(FakeEventSource.instances).toHaveLength(2);
   });
@@ -722,38 +683,6 @@ describe("subscribeToEvents", () => {
     ]);
   });
   describe("resilience", () => {
-    it("ignores a probe that answers for an earlier life of the bus (after teardown and a resubscribe)", async () => {
-      vi.useFakeTimers();
-      let answerProbe!: (r: Response) => void;
-      vi.stubGlobal(
-        "fetch",
-        withHead((url) =>
-          new URL(url).searchParams.get("since") === String(Number.MAX_SAFE_INTEGER)
-            ? new Promise<Response>((r) => (answerProbe = r))
-            : Promise.resolve(new Response("[]")),
-        ),
-      );
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const un = subscribe({ types: ["session.queue_changed"] }, () => {});
-      FakeEventSource.instances[0].simulateError(); // the probe goes out
-      un();
-      unsubscribes.splice(0); // teardown: a new life
-      subscribe({ types: ["session.queue_changed"] }, () => {});
-      await vi.advanceTimersByTimeAsync(0);
-      const open = FakeEventSource.instances.length;
-
-      answerProbe(
-        new Response(
-          JSON.stringify({ errors: [{ field: "types", message: '"session.queue_changed" is neither a registered event type' }] }),
-          { status: 422 },
-        ),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      expect(getBusHealth().ignoredTypes).toEqual([]);
-      expect(FakeEventSource.instances).toHaveLength(open);
-      expect(warn).not.toHaveBeenCalled();
-    });
-
     it("resumes from the log's end when, after a drop, the log turns out to have been reset below the cursor", async () => {
       vi.useFakeTimers();
       let head = 40;
