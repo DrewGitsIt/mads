@@ -1,4 +1,6 @@
+import { spawn } from "node:child_process";
 import type { Locator, Page } from "@playwright/test";
+import type { ProxySnapshot } from "./proxyClient";
 import type { MarkerSpec } from "./probe";
 import type { PerfStack } from "./stack";
 import type { CheckResult } from "./measure";
@@ -63,6 +65,12 @@ export interface Scenario {
   legs: Leg[];
   /** The live-event smoke run after the measured window (seeded and realism alike). */
   smoke?(ctx: ScenarioCtx): Promise<CheckResult>;
+  /**
+   * Numbers prepare measured outside the window (scenario 8's append
+   * phase), merged into the result: `det` for counts and bytes, `timing`
+   * for durations.
+   */
+  prepStats?(): { det: Record<string, number>; timing: Record<string, number> };
 }
 
 // --- Selectors. Only what main already renders: the baseline is main as-is,
@@ -71,6 +79,9 @@ export interface Scenario {
 const T = Number(process.env.PERF_PREPARE_WAIT_MS ?? 30_000);
 /** Scenario 7b's outage (PERF_OFFLINE_S, default 20). */
 const OFFLINE_S = Number(process.env.PERF_OFFLINE_S ?? 20);
+/** Scenario 8's appended event count (PERF_LONGLIVED_N) and pace (PERF_LONGLIVED_RATE, events/s; 0 = unpaced). */
+const LONGLIVED_N = Number(process.env.PERF_LONGLIVED_N ?? 50_000);
+const LONGLIVED_RATE = Number(process.env.PERF_LONGLIVED_RATE ?? 2000);
 const rail = (p: Page) => p.locator('[aria-label="Session list"]');
 const railCard = (p: Page, id: string) => rail(p).locator(`[data-rail-card][data-rail-id="${id}"]`);
 /** The open session's header: its rename button carries its name, from GET /sessions/{id}. */
@@ -282,6 +293,7 @@ export const SCENARIOS: Scenario[] = [
     smoke: renameSmoke,
   },
   pinnedScenario(),
+  longLivedScenario(),
   {
     id: "7b-offline",
     title: "Offline for a while, then back (connections refused: backoff, health, probes)",
@@ -380,6 +392,106 @@ function pinnedScenario(): Scenario {
       retroLeg,
       sessionsLeg,
     ],
+    smoke: renameSmoke,
+  };
+}
+
+/** /events bytes, frames and new streams the proxy forwarded between two snapshots. */
+function eventsDelta(a: ProxySnapshot, b: ProxySnapshot): { bytes: number; frames: number; connects: number } {
+  const before = new Map(a.requests.map((r) => [r.id, r]));
+  let bytes = 0;
+  let frames = 0;
+  let connects = 0;
+  for (const r of b.requests) {
+    if (!r.sse || r.held || r.path !== "/events") continue;
+    const old = before.get(r.id);
+    if (!old) connects++;
+    bytes += r.bytes - (old?.bytes ?? 0);
+    frames += r.frames - (old?.frames ?? 0);
+  }
+  return { bytes, frames, connects };
+}
+
+/**
+ * Appends n events through the stack's own Data Service (POST /events) with
+ * `perfseed append` (PERF_PERFSEED, built by run.sh): the profile's live
+ * type mix (PERF_PROFILE_JSON), payloads shaped like the seeder's.
+ */
+async function appendEvents(ctx: ScenarioCtx, n: number): Promise<{ events: number; payload_bytes: number; elapsed_ms: number }> {
+  const bin = process.env.PERF_PERFSEED;
+  const profile = process.env.PERF_PROFILE_JSON;
+  if (!bin || !profile) throw new Error("8: the workload has no such append source (PERF_PERFSEED / PERF_PROFILE_JSON unset: run through make ui-perf, not realism)");
+  const args = ["append", "-url", ctx.stack.dataURL, "-profile", profile, "-manifest", "-", "-n", String(n), "-rate", String(LONGLIVED_RATE)];
+  return await new Promise((resolve, reject) => {
+    const p = spawn(bin, args, { env: { ...process.env, MADS_PERF_TOKEN: ctx.stack.token }, stdio: ["pipe", "pipe", "pipe"] });
+    if (p.pid) ctx.stack.own(p.pid, "perfseed-append");
+    let out = "";
+    let err = "";
+    p.stdout.on("data", (b) => (out += b));
+    p.stderr.on("data", (b) => (err += b));
+    p.on("error", reject);
+    p.on("close", (code) => {
+      if (code !== 0) return reject(new Error(`perfseed append exited ${code}: ${err.trim().slice(-400)}`));
+      try {
+        resolve(JSON.parse(out));
+      } catch (e) {
+        reject(new Error(`perfseed append: bad summary: ${String(e)}`));
+      }
+    });
+    p.stdin.end(JSON.stringify(m()));
+  });
+}
+
+/**
+ * Scenario 8: a window left open a long time. The window loads on the
+ * Sessions surface with the typical parent open (no delegate yet — so
+ * session.subagent_event is not in the bus union), then PERF_LONGLIVED_N
+ * events arrive live through the Data Service (the append phase: live
+ * traffic every design pays, reported apart as prep_*), and the page
+ * catches up and goes quiet. The measured leg is 3t's: open that parent's
+ * delegate, the first widen to session.subagent_event in an old window.
+ */
+function longLivedScenario(): Scenario {
+  let stats: { det: Record<string, number>; timing: Record<string, number> } = { det: {}, timing: {} };
+  const row = (ctx: ScenarioCtx): Locator => {
+    const d = m().typical?.with_file ?? m().typical?.running[0];
+    if (!d) throw new Error("8: the workload has no such delegate (a typical parent; seed with -transcripts)");
+    return ctx.page.getByTestId("delegate-rows").getByRole("button", { name: new RegExp(escapeRe(d.description)) }).first();
+  };
+  return {
+    id: "8-long-lived-window",
+    title: `Long-lived window: ${LONGLIVED_N} events arrive live, then open the first delegate (typical parent)`,
+    prepare: async (ctx) => {
+      stats = { det: {}, timing: {} };
+      const p = m().typical;
+      if (!p) throw new Error("8: the workload has no such parent (typical)");
+      await load(ctx);
+      await ctx.quiesce();
+      await openSession(ctx, p.id, p.name);
+      await row(ctx).waitFor({ state: "visible", timeout: 30_000 });
+      await ctx.quiesce();
+      const s0 = await ctx.stack.proxy.snapshot();
+      const t0 = Date.now();
+      const sum = await appendEvents(ctx, LONGLIVED_N);
+      const t1 = Date.now();
+      // Caught up to the new head and quiet (the settle rule, from the append's end).
+      await ctx.quiesce();
+      const t2 = Date.now();
+      const ev = eventsDelta(s0, await ctx.stack.proxy.snapshot());
+      await row(ctx).waitFor({ state: "visible", timeout: 30_000 });
+      stats = {
+        det: {
+          prep_append_events: sum.events,
+          prep_append_payload_bytes: sum.payload_bytes,
+          prep_events_stream_bytes: ev.bytes,
+          prep_events_frames: ev.frames,
+          prep_events_connects: ev.connects,
+        },
+        timing: { prep_append_ms: t1 - t0, prep_catchup_ms: t2 - t1 },
+      };
+    },
+    prepStats: () => stats,
+    legs: [{ name: "open delegate", act: (ctx) => row(ctx).click(), marker: () => ({ kind: "delegate" }) }],
     smoke: renameSmoke,
   };
 }

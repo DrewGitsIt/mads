@@ -108,7 +108,7 @@ export interface Result {
   /** Timings. */
   timing: Record<string, number>;
   /** /events stream (re)connects in the window and the cursor each resumed from. */
-  eventsConnects: { since: number | null; types: number; bytes: number; frames: number }[];
+  eventsConnects: { since: number | null; from?: number | null; types: number; bytes: number; frames: number }[];
   requestsByRoute: Record<string, number>;
   queuedByRoute: Record<string, { n: number; p50: number; max: number }>;
   windowCapped: boolean;
@@ -676,6 +676,8 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       const q = new URLSearchParams(p.r.query);
       result.eventsConnects.push({
         since: p.isNew ? (q.has("since") ? Number(q.get("since")) : 0) : null,
+        // `from=head` on the URL, or the server's own `: start <seq>`.
+        from: p.isNew ? (p.r.declaredStart ?? (q.has("from") ? -1 : null)) : null,
         types: (q.get("types") ?? "").split(",").filter(Boolean).length,
         bytes: p.bytes,
         frames: p.frames,
@@ -704,6 +706,8 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       peak_sockets_lsof: socks.peak,
     };
     result.legs.forEach((l, i) => (result.det[`leg${i + 1}_events_bytes`] = l.eventsBytes));
+    const prep = scenario.prepStats?.();
+    if (prep) Object.assign(result.det, prep.det);
 
     // --- Queueing: page request → the proxy saw it (or its cancel, or the window's end).
     const match = matchRequests(probe.reqs, snap1.requests, stack.appURL);
@@ -765,6 +769,7 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       port_drain_wait_ms: rig.drainMs,
     };
     result.legs.forEach((l, i) => (result.timing[`leg${i + 1}_settled_ms`] = l.settledMs));
+    if (prep) Object.assign(result.timing, prep.timing);
     result.socketOwners = [...socks.owners];
     result.requests = shortsProxy.map((r) => [
       `${r.method} ${routeOf(r.path)}`,

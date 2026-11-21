@@ -27,6 +27,11 @@ const DET_LABELS: Record<string, string> = {
   output_streams_held: "/output streams held open by the proxy (heartbeat comments only, no data)",
   peak_busy_sockets_proxy: "peak busy sockets (proxy, authoritative; secondary)",
   peak_sockets_lsof: "peak sockets to the proxy (lsof, authoritative; secondary)",
+  prep_append_events: "append phase (before the window): events posted to the Data Service",
+  prep_append_payload_bytes: "append phase: payload bytes posted",
+  prep_events_stream_bytes: "append phase: /events bytes to the page (live traffic, not in the window)",
+  prep_events_frames: "append phase: /events frames to the page",
+  prep_events_connects: "append phase: /events (re)connects",
 };
 
 const TIMING_LABELS: Record<string, string> = {
@@ -56,6 +61,8 @@ const TIMING_LABELS: Record<string, string> = {
   data_peak_rss_mb: "Data Service peak RSS (MB)",
   data_conns_closed: "connections to the Data Service closed by clients, boot + window (TIME_WAIT: only the last ~30 s, so long windows undercount)",
   port_drain_wait_ms: "harness wait for TIME_WAIT to drain before boot (ms; not measured time)",
+  prep_append_ms: "append phase: posting time (ms; not measured time)",
+  prep_catchup_ms: "append phase: last post → page caught up and quiet (ms; not measured time)",
 };
 
 const isBytes = (k: string) => k.includes("bytes");
@@ -209,7 +216,9 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
         if (!first) continue;
         if (first.eventsConnects.length) {
           const parts = first.eventsConnects.map(
-            (c) => `${c.since === null ? "open before" : c.since === 0 ? "since=0" : `since=${c.since}`} (${c.types} types): ${fmtNum(c.bytes, true)}, ${c.frames} frames`,
+            (c) =>
+              `${c.since === null ? "open before" : c.since === 0 ? "since=0" : `since=${c.since}`}` +
+              `${c.from === -1 ? " from=head" : c.from != null ? ` start=${c.from}` : ""} (${c.types} types): ${fmtNum(c.bytes, true)}, ${c.frames} frames`,
           );
           lines.push(`- ${l} /events streams (rep ${first.rep}): ${parts.join("; ")}`);
         }

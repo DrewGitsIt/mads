@@ -3,6 +3,7 @@
 #
 #   make ui-perf BASE=<ref> CAND=<ref|worktree dir> PROFILE=S|M|L|XL N=5 BROWSER=chromium|electron
 #   also: SCENARIOS=1,3b  MODES=on,off (default both)  PERF_DELAYS=<regex>=<ms>,...
+#         PERF_LONGLIVED_N=50000 PERF_LONGLIVED_RATE=2000 (scenario 8's appended events, events/s)
 #         PERF_HOLD_OUTPUT=0  PERF_PROBE=0 (lite probe everywhere) or PERF_PROBE_CAND=0 (cand only)
 #         CHECKS=a,b,c,d,e|none (default all; none in realism)
 #         REALISM=1 — the workload is a read-only backup of ~/.mads/mads.db
@@ -311,7 +312,11 @@ if [ -n "$REALISM" ]; then
 	WATCH_PID=$!
 fi
 # GIT_CEILING_DIRECTORIES: no git a stack runs can discover a repo above the run's temp tree.
+# PERF_PERFSEED / PERF_PROFILE_JSON: scenario 8 appends live events with
+# `perfseed append` (not in realism: there is no profile to draw from).
+PERF_PROFILE_FOR_APPEND=$([ -n "$REALISM" ] || echo "$PROFILE_JSON")
 (cd "$ROOT/ui" && TMPDIR="$TMP/tmp" PERF_PIDS_DIR="$PIDS" PERF_PLAN="$RUN_DIR/plan.json" PERF_GIT_CEILING="$TMP" \
+	PERF_PERFSEED="$TMP/perfseed" PERF_PROFILE_JSON="$PERF_PROFILE_FOR_APPEND" \
 	npx playwright test --config e2e/perf/playwright.perf.config.ts)
 pw=$?
 if [ -n "$REALISM" ]; then

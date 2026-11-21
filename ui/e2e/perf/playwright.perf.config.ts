@@ -19,7 +19,8 @@ export default defineConfig({
   // registry and fails every later test at once, so nothing is measured
   // beside what it left running.
   reporter: [["list"]],
-  timeout: 10 * 60_000,
+  // PERF_TEST_TIMEOUT_MS: scenario 8 at a large PERF_LONGLIVED_N needs longer.
+  timeout: Number(process.env.PERF_TEST_TIMEOUT_MS ?? 10 * 60_000),
   use: { trace: "off", screenshot: "off", video: "off" },
   // Each repetition launches its own browser (measure.ts: full Chromium,
   // background networking off), so nothing here launches one.
