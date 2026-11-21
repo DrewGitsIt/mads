@@ -135,7 +135,7 @@ export function probeInit(full: boolean): string {
     esAfter: (s) => P.reqs.some((r) => r.kind === "es" && r.start >= s.after && new URL(r.url).pathname === "/events"),
     cardText: (s) => { const c = document.querySelector('[data-rail-card][data-rail-id="' + s.id + '"]'); return !!c && c.textContent.includes(s.text); },
     text: (s) => [...document.querySelectorAll(s.sel)].some((e) => visible(e) && s.any.some((t) => e.textContent.trim() === t)),
-    exists: (s) => visible(document.querySelector(s.sel)),
+    exists: (s) => (s.n ? [...document.querySelectorAll(s.sel)].filter(visible).length >= s.n : visible(document.querySelector(s.sel))),
     esOpenAfter: (s) => P.reqs.some((r) => r.kind === "es" && r.open >= s.after && new URL(r.url).pathname === "/events"),
   };
   // Checked at most once per frame while anything is armed, and a marker
@@ -160,7 +160,14 @@ export function probeInit(full: boolean): string {
     }
   };
   P.arm = (name, spec) => { delete P.markers[name]; P.armed[name] = spec; check(); };
-  const mo = () => new MutationObserver(schedule).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+  // A sync spec is checked in the observer callback itself, the microtask
+  // after the DOM change: an element React mounts and removes within a few
+  // milliseconds (a later task) is still caught, which a frame isn't.
+  const onMutate = () => {
+    for (const k in P.armed) { if (P.armed[k].sync) { check(); break; } }
+    schedule();
+  };
+  const mo = () => new MutationObserver(onMutate).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
   if (document.documentElement) mo(); else document.addEventListener("DOMContentLoaded", mo);
   // Backstop for a marker that holds with no mutation (a request-only one).
   setInterval(() => { for (const _ in P.armed) { check(); return; } }, 100);
@@ -177,7 +184,8 @@ export type MarkerSpec =
   | { kind: "cardText"; id: string; text: string }
   | { kind: "text"; sel: string; any: string[] }
   | { kind: "esOpenAfter"; after: number }
-  | { kind: "exists"; sel: string };
+  /** n: at least n visible matches. sync: checked on every DOM mutation, not once a frame (a short-lived element). */
+  | { kind: "exists"; sel: string; n?: number; sync?: boolean };
 
 export interface PageReq {
   id: number;

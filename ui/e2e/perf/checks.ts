@@ -175,10 +175,37 @@ export const CHECKS: Check[] = [
     title: "a session with a running pipeline shows it running, after a reload",
     run: async ({ page, rig }) => {
       const fx = await liveFixture(rig.stack, { pipeline: true });
+      const sid = fx.session.id;
+      // The server's count: in-progress tasks the run claimed (moved to
+      // in_progress with actor "pipeline"), what the badge counts.
+      const serverCount = async () => {
+        const tasks = await router<{ id: string; status: string }[]>(rig.stack, "GET", `/tasks?session_id=${sid}&status=in_progress`);
+        const claims = await router<{ task_id?: string; actor?: string; payload?: { to?: string } }[]>(
+          rig.stack,
+          "GET",
+          `/events?session_id=${sid}&types=task.status_changed`,
+        );
+        const claimed = new Set(claims.filter((e) => e.actor === "pipeline" && e.payload?.to === "in_progress").map((e) => e.task_id));
+        return tasks.filter((t) => claimed.has(t.id)).length;
+      };
       const running = async () => {
-        await card(page, fx.session.id).click();
-        await page.getByTestId("tasks-run-badge").waitFor({ state: "visible", timeout: T });
-        return `badge ${(await page.getByTestId("tasks-run-badge").innerText()).trim()}`;
+        await card(page, sid).click();
+        const badge = page.getByTestId("tasks-run-badge");
+        await badge.waitFor({ state: "visible", timeout: T });
+        // The running flag can land (a REST seed) before the task count:
+        // the badge is a bare spinner until the count is known.
+        const want = await serverCount();
+        if (want === 0) throw new Error("the server has no task claimed by the pipeline (fixture failed)");
+        const deadline = Date.now() + 2_000;
+        let got = "";
+        for (;;) {
+          got = (await badge.innerText().catch(() => "")).trim();
+          if (/^\d+$/.test(got) || Date.now() >= deadline) break;
+          await page.waitForTimeout(50);
+        }
+        if (!/^\d+$/.test(got)) throw new Error(`the badge showed no task count within 2 s (text "${got}"; server: ${want} running)`);
+        if (Number(got) !== want) throw new Error(`the badge counts ${got} running, the server ${want}`);
+        return `badge ${got}`;
       };
       return [
         await step("after opening the session", async () => {
@@ -200,13 +227,21 @@ export const CHECKS: Check[] = [
     // the session sits in "Starting agent" long enough to reload mid-way.
     env: { MADS_FAKE_START_DELAY_MS: process.env.PERF_PROVISION_DELAY_MS ?? "10000" },
     run: async ({ page, rig }) => {
-      // The strip (role=status "Session provisioning") with its step spans.
+      // The strip (role=status "Session provisioning") with its step spans
+      // (five; four when the hook step is skipped). Checked on every DOM
+      // mutation: POST /sessions answers only once the runner's Start is
+      // done (the session child logs "listening on" after it), so on main
+      // the strip mounts after the last step and its replayed
+      // provider_ready unmounts it some 20 ms later — between two frames,
+      // which a once-a-frame check missed now and then.
       const armSteps = (name: string) =>
         page.evaluate(
           (n) =>
             (window as unknown as { __perf: { arm(n: string, s: unknown): void } }).__perf.arm(n, {
               kind: "exists",
-              sel: '[aria-label="Session provisioning"] span',
+              sel: '[aria-label="Session provisioning"] > span',
+              n: 4,
+              sync: true,
             }),
           name,
         );
