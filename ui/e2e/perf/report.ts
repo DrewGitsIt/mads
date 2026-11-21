@@ -297,7 +297,7 @@ export function renderChecks(plan: Plan, checkRs: Result[]): string[] {
     for (const row of compareCheck(b, k, !!cand)) {
       if (row.status === "REGRESSION" && !UI_ONLY_CHECKS.has(full)) regressions.push(`${full}: ${row.step}`);
       if (row.status === "FIXED") fixed.push(`${full}: ${row.step}`);
-      const st = row.status === "pass" ? "✓ pass" : row.status === "known-fail" ? "✗ known on main" : row.status === "FIXED" ? "★ FIXED" : row.status === "REGRESSION" ? "⚠ REGRESSION" : `✗ ${row.status}`;
+      const st = row.status === "pass" ? "✓ pass" : row.status === "known-fail" ? "✗ known-fail, still failing" : row.status === "FIXED" ? "★ FIXED" : row.status === "REGRESSION" ? "⚠ REGRESSION" : `✗ ${row.status}`;
       lines.push(cand ? `| ${label} | ${row.step} | ${st} | ${row.base} | ${row.cand} |` : `| ${label} | ${row.step} | ${st} | ${row.base} |`);
     }
     for (const s of [...(b?.checks ?? []), ...(k?.checks ?? [])]) if (s.knownOnMain && !s.ok) known.push(`${full} “${s.name}”: ${s.knownOnMain}`);
