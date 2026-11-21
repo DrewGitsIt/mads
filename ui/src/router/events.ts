@@ -505,25 +505,44 @@ export function subscribeToEvents(
  * Whether `env` happened at or after `since` (a Date.now() value) — for the
  * notice-style side effects a subscriber should fire only for news.
  *
- * The cursor outlives teardown and trails the head while the carried types
- * are quiet, so a resumed or widened connection delivers what happened while
- * this subscriber wasn't looking. Folding those into state is right (it
- * converges on the log); popping an error banner or staging a sticky
- * "Done" for them is not. Gate those on the subscriber's mount time:
+ * Folding a delivered event into state is always right (it converges on the
+ * log); popping an error banner or staging a sticky "Done" is only right for
+ * what happened while this window was open. Gate those on the window's
+ * notice epoch, not the subscriber's own mount time:
  *
- *   const mountedAt = Date.now();               // when the effect subscribes
- *   ...if (happenedSince(env, mountedAt)) notify();
+ *   const since = windowNoticesSince();          // when the effect subscribes
+ *   ...if (happenedSince(env, since)) notify();
+ *
+ * The cursor outlives teardown, so a surface round trip (Sessions → Retro →
+ * Sessions) resumes and delivers what happened while the surface was gone.
+ * Those are news to the user — a session that finished during the visit
+ * still owes its "Done · your turn" — so a gate keyed to the remount would
+ * lose them. Notices are lost only across a reload or a new window, where
+ * the cursor starts again at the head.
  *
  * By time, not by seq: a seq boundary would need the log's head at the
- * moment of subscribing (the cursor trails it, so "seq > the cursor at
- * subscribe" admits exactly the stale events this filters), which is a
- * request per subscribe. The Data Service stamps envelopes with the same
- * machine's clock the window reads. An envelope without a readable stamp
- * counts as news.
+ * moment of subscribing (the cursor trails it), which is a request per
+ * subscribe. The Data Service stamps envelopes with the same machine's clock
+ * the window reads. An envelope without a readable stamp counts as news.
  */
 export function happenedSince(env: Envelope, since: number): boolean {
   const at = Date.parse(env.timestamp);
   return !Number.isFinite(at) || at >= since;
+}
+
+// When the first notice-gated subscriber in this window subscribed; see
+// windowNoticesSince. Never reset in production: it lives as long as the
+// window (and the cursor) does.
+let noticesSince: number | undefined;
+
+/**
+ * The window's notice epoch for happenedSince: set by the first call, the
+ * same value for the window's life after that (surface round trips and
+ * remounts included). Reset only by resetEventsBusForTests.
+ */
+export function windowNoticesSince(): number {
+  if (noticesSince === undefined) noticesSince = Date.now();
+  return noticesSince;
 }
 
 /**
@@ -536,6 +555,7 @@ export function resetEventsBusForTests(primeCursor?: number): void {
   teardown();
   subscriptions.clear();
   cursor = primeCursor;
+  noticesSince = undefined;
   recheckHead = false;
   warnedLogReset = false;
   ready = newReady();

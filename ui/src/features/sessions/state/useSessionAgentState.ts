@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { router } from "../../../router/client";
-import { eventsReady, happenedSince, subscribeToEvents } from "../../../router/events";
+import { eventsReady, happenedSince, subscribeToEvents, windowNoticesSince } from "../../../router/events";
 import { DEFAULT_DELEGATE_FADE_MS } from "../rail/DelegateRows";
 import { isLiveDelegate } from "../../../router/delegateLive";
 import type { SessionAgentState } from "../rail/railGroups";
@@ -161,11 +161,10 @@ function pruneRecent(fold: Fold, fadeMs: number, now: number): void {
 }
 
 /**
- * `news`: the envelope happened since this window subscribed. A resumed or
- * widened connection also brings what happened while it wasn't looking
- * (router/events.ts happenedSince); that folds into state like anything
- * else, but stages no sticky notice ("Done · your turn", "Crashed") — the
- * same as after a reload.
+ * `news`: the envelope happened since this window's notice epoch
+ * (router/events.ts windowNoticesSince). Anything older folds into state
+ * like anything else but stages no sticky notice ("Done · your turn",
+ * "Crashed") — the same as after a reload.
  */
 function apply(fold: Fold, env: Envelope, fadeMs: number, news = true): void {
   // Parsed, not string-compared: RFC3339Nano drops trailing zeros, so ".1Z" sorts after ".12Z".
@@ -218,7 +217,8 @@ function apply(fold: Fold, env: Envelope, fadeMs: number, news = true): void {
       // A crash ends whatever was in flight — nothing is working, parked or
       // waiting on the user any more. The idle marker is deliberate: it stops
       // a stale working mirror on the record from re-animating the card.
-      fold.crashed = news;
+      // Only ever sets: an old crash (not news) must not clear a newer one.
+      if (news) fold.crashed = true;
       fold.done = false;
       fold.live = { state: "idle", since: env.timestamp };
       clearInFlight(fold);
@@ -390,7 +390,10 @@ export function useSessionAgentState(
   const publish = useCallback(() => setStates(project(folds.current, sessionsRef.current)), []);
 
   useEffect(() => {
-    const mountedAt = Date.now();
+    // The window's notice epoch, not this mount's: after a surface round trip
+    // the resumed connection brings what finished while the rail was gone,
+    // and that is still news (router/events.ts windowNoticesSince).
+    const noticesSince = windowNoticesSince();
     const unsubscribe = subscribeToEvents({ types: AGENT_STATE_EVENT_TYPES }, (env) => {
       if (!env.session_id) return;
       let fold = folds.current.get(env.session_id);
@@ -398,7 +401,7 @@ export function useSessionAgentState(
         fold = emptyFold();
         folds.current.set(env.session_id, fold);
       }
-      apply(fold, env, fadeRef.current, happenedSince(env, mountedAt));
+      apply(fold, env, fadeRef.current, happenedSince(env, noticesSince));
       // A turn that ends in the session you're looking at was never news.
       if (env.session_id === openRef.current) fold.done = false;
       publish();

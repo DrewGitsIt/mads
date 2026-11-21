@@ -110,9 +110,9 @@ describe("ConversationTab — keyed conversation", () => {
     expect(screen.getAllByText("and then the docs")).toHaveLength(1);
   });
 
-  // A resumed connection brings queue changes from before this tab mounted;
-  // the queue folds them, but an old failure is not this tab's to report.
-  it("folds an old queue_changed but reports only a failure that happened since it mounted", async () => {
+  // A resumed connection can bring queue changes from before the window's
+  // notice epoch; the queue folds them, but an old failure is not reported.
+  it("folds an old queue_changed but reports only a failure since the window's first mount", async () => {
     const client = new FakeRouterClient();
     vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
     await mount(client);
@@ -136,6 +136,38 @@ describe("ConversationTab — keyed conversation", () => {
     expect(screen.queryByText(/Couldn't send your queued message/)).toBeNull();
 
     send(new Date(Date.now() + 1000).toISOString(), "queued just now");
+    await waitFor(() => expect(screen.getByText(/Couldn't send your queued message: boom/)).toBeTruthy());
+  });
+
+  // A surface round trip: the tab unmounts, the bus resumes on return and
+  // delivers a failure from while it was gone. The queue shows the message
+  // gone either way; without the banner it would read as sent. The gate is
+  // the window's notice epoch, not this mount.
+  it("reports a queued-message failure that happened during a tab trip", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
+    const firstMount = render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy());
+    firstMount.unmount();
+    const duringTrip = new Date().toISOString();
+    await new Promise((r) => setTimeout(r, 5));
+
+    FakeEventSource.instances = [];
+    await mount(client);
+    const source = FakeEventSource.instances.find((s) => s.url.includes("session.queue_changed"))!;
+    act(() => {
+      source.emit(
+        "session.queue_changed",
+        JSON.stringify({
+          seq: nextSeq++,
+          timestamp: duringTrip,
+          type: "session.queue_changed",
+          actor: "system",
+          session_id: "session-active",
+          payload: { queued: [], failed: { id: "q0", text: "x" }, error: "boom" },
+        }),
+      );
+    });
     await waitFor(() => expect(screen.getByText(/Couldn't send your queued message: boom/)).toBeTruthy());
   });
 

@@ -264,10 +264,10 @@ describe("useSessionAgentState", () => {
     });
   });
 
-  // The cursor outlives teardown, so coming back to the rail resumes from
-  // where it left off and delivers what happened meanwhile. That folds into
-  // state, but stages no sticky notice: it isn't news to this window.
-  it("folds a turn's end or a crash from before it mounted, without staging 'Done' or 'Crashed'", async () => {
+  // An envelope older than the window's notice epoch (the first rail mount:
+  // a cursor that trails the head can still carry one) folds into state but
+  // stages no sticky notice: it isn't news to this window.
+  it("folds a turn's end or a crash from before the window's first mount, without staging 'Done' or 'Crashed'", async () => {
     const { result } = renderHook(() => useSessionAgentState());
     working("s1", "Working…", "2026-09-28T08:00:00Z");
     idle("s1", "2026-09-28T08:30:00Z"); // before the 09:00 mount
@@ -283,6 +283,34 @@ describe("useSessionAgentState", () => {
     emit("session.crashed", "s2", { reason: "exit status 1" }, "2026-09-28T09:31:00Z");
     await waitFor(() => expect(result.current.s1?.done).toBe(true));
     expect(result.current.s2?.crashed).toBe(true);
+  });
+
+  // The cursor outlives teardown, so coming back to the rail (Sessions →
+  // Retro → Sessions) resumes from where it left off and delivers what
+  // happened meanwhile. That is news: the epoch is the window's first
+  // mount, not this one, so only a reload loses it.
+  it("stages 'Done' and 'Crashed' for what finished during a tab trip", async () => {
+    const first = renderHook(() => useSessionAgentState());
+    working("s1", "Working…", "2026-09-28T09:10:00Z");
+    working("s2", "Working…", "2026-09-28T09:10:00Z");
+    first.unmount(); // off to Retro: the bus tears down, the cursor stays
+
+    vi.setSystemTime(new Date("2026-09-28T10:00:00Z"));
+    const { result } = renderHook(() => useSessionAgentState());
+    idle("s1", "2026-09-28T09:30:00Z"); // finished while the rail was gone
+    emit("session.crashed", "s2", { reason: "exit status 1" }, "2026-09-28T09:40:00Z");
+    await waitFor(() => expect(result.current.s1?.done).toBe(true));
+    expect(result.current.s2?.crashed).toBe(true);
+  });
+
+  it("never lets an old crash clear a newer one", async () => {
+    const { result } = renderHook(() => useSessionAgentState());
+    emit("session.crashed", "s1", { reason: "exit status 1" }, "2026-09-28T10:00:00Z");
+    await waitFor(() => expect(result.current.s1?.crashed).toBe(true));
+    // A crash stamped before the notice epoch, delivered after the news one.
+    emit("session.crashed", "s1", { reason: "exit status 1" }, "2026-09-28T08:00:00Z");
+    await act(async () => {});
+    expect(result.current.s1?.crashed).toBe(true);
   });
 
   it("names the oldest park when two are outstanding", async () => {

@@ -6,7 +6,7 @@ import { Toast } from "../components/Toast/Toast";
 import type { RouterClient, SessionEventSource } from "../router/client";
 import { CommitRefusedError, TransportSwitchError } from "../router/client";
 import { coalesce, type Coalescer } from "../router/coalesce";
-import { eventsReady, happenedSince, subscribeToEvents } from "../router/events";
+import { eventsReady, happenedSince, subscribeToEvents, windowNoticesSince } from "../router/events";
 import { getAllEvents } from "../router/eventPages";
 import { refreshSessionRepos, useSessionRepos } from "../router/repoStateStore";
 import { contextWindowForModel, countsTokens } from "../router/modelDisplay";
@@ -1082,15 +1082,17 @@ export function ConversationTab({
     queueHeardRef.current = false;
     let cancelled = false;
     // A resumed connection can bring queue changes from before this tab
-    // mounted: the queue folds them, but a failure that old was never this
-    // tab's to report (router/events.ts happenedSince).
-    const mountedAt = Date.now();
+    // mounted (a surface round trip). The queue folds them; the failure
+    // banner is gated on the window's notice epoch, not this mount: a queued
+    // message that failed while the tab was gone would otherwise vanish from
+    // the queue as if it had been sent (router/events.ts windowNoticesSince).
+    const noticesSince = windowNoticesSince();
     const unsubscribe = subscribeToEvents({ sessionId, types: ["session.queue_changed"] }, (envelope) => {
       const change = envelope.payload as Partial<QueueChanged> | undefined;
       if (!change) return;
       queueHeardRef.current = true;
       convDispatch({ type: "queued", queued: change.queued ?? [] });
-      if (!happenedSince(envelope, mountedAt)) return;
+      if (!happenedSince(envelope, noticesSince)) return;
       if (change.failed?.attribution) {
         const from = change.failed.attribution.source_name || "mads";
         setSendError(`Couldn't deliver the queued message from ${from}: ${change.error ?? "unknown error"}`);
