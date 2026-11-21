@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { RouterHTTPError, RouterValidationError, type RouterClient } from "../../../router/client";
-import { resetBulkLinksSupport } from "../../../router/fetchLinks";
+import { RouterValidationError, type RouterClient } from "../../../router/client";
 import { FakeRouterClient } from "../../../router/fixtures";
 import type { Link, LinkCadence, Session } from "../../../router/types";
 import {
@@ -406,22 +405,6 @@ describe("applyLinkDraft", () => {
       deleteLink: vi.fn(() => Promise.reject(new Error("router request failed: 404 not found"))),
     });
     expect(await applyLinkDraft(client, ops())).toEqual({ appliedCount: 3, total: 3 });
-  });
-
-  it("refetches per session when the bulk route is missing", async () => {
-    const fresh = [link("p", "a", "leader")];
-    const client = mockClient({
-      updateLink: vi.fn(() => Promise.reject(new Error("router request failed: 502 bad gateway"))),
-      listLinks: vi.fn(() => Promise.reject(new RouterHTTPError(404, "404 page not found"))),
-      getSessionLinks: vi.fn((id: string) => Promise.resolve(id === "a" || id === "p" ? fresh : [])),
-    });
-    try {
-      const r = await applyLinkDraft(client, ops());
-      expect(r.fresh!.links).toEqual(fresh);
-      expect(client.getSessionLinks).toHaveBeenCalledTimes(4);
-    } finally {
-      resetBulkLinksSupport();
-    }
   });
 
   it("still reports the failure when the refetch fails too", async () => {

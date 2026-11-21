@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { LINK_REFETCH_COALESCE_MS, LINK_REFETCH_MAX_WAIT_MS, useSessionLinks } from "./useSessionLinks";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import { router, RouterHTTPError } from "../../../router/client";
-import { resetBulkLinksSupport } from "../../../router/fetchLinks";
 import { FLAGS } from "../../../featureFlags";
 import type { Link } from "../../../router/types";
 
@@ -30,7 +29,6 @@ describe("useSessionLinks", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     FLAGS.linkedSessions = false;
-    resetBulkLinksSupport();
   });
 
   it("reads every session's links in one bulk request", async () => {
@@ -85,8 +83,6 @@ describe("useSessionLinks", () => {
     let seq = 0;
     let getLinks: MockInstance<(ids: string[]) => Promise<Link[]>>;
     let perSession: MockInstance<(id: string) => Promise<Link[]>>;
-    // Only the missing-bulk-route tests may read per session.
-    let perSessionAllowed = false;
     // Server-side truth: GET /links?session_ids= returns each touching link once.
     let serverLinks: Link[] = [];
     const linksFor = (ids: string[]) =>
@@ -96,13 +92,12 @@ describe("useSessionLinks", () => {
       vi.useFakeTimers();
       seq = 0;
       serverLinks = [];
-      perSessionAllowed = false;
       getLinks = vi.spyOn(router, "listLinks").mockImplementation((ids) => Promise.resolve(linksFor(ids)));
       perSession = vi.spyOn(router, "getSessionLinks").mockRejectedValue(new Error("use listLinks"));
     });
 
     afterEach(() => {
-      if (!perSessionAllowed) expect(perSession).not.toHaveBeenCalled();
+      expect(perSession).not.toHaveBeenCalled();
       perSession.mockRestore();
       getLinks.mockRestore();
       vi.useRealTimers();
@@ -251,27 +246,6 @@ describe("useSessionLinks", () => {
 
       expect(getLinks).toHaveBeenCalledTimes(1);
       expect(result.current).toEqual([link]);
-    });
-
-    it("falls back to per-session reads after a 404, and stays there", async () => {
-      perSessionAllowed = true;
-      const l12 = makeLink({ id: "l12", granting_session_id: "s1", subject_session_id: "s2" });
-      serverLinks = [l12];
-      getLinks.mockRejectedValue(new RouterHTTPError(404, "404 page not found"));
-      perSession.mockImplementation((id) => Promise.resolve(linksFor([id])));
-      const { result } = renderHook(() => useSessionLinks(["s1", "s2", "s3"]));
-      await tick();
-      expect(getLinks).toHaveBeenCalledTimes(1);
-      expect(perSession.mock.calls.map(([id]) => id).sort()).toEqual(["s1", "s2", "s3"]);
-      expect(result.current).toEqual([l12]);
-
-      const l23 = makeLink({ id: "l23", granting_session_id: "s2", subject_session_id: "s3" });
-      serverLinks = [l12, l23];
-      emitLink({ granting_session_id: "s2", subject_session_id: "s3" }, "link.created");
-      await tick(LINK_REFETCH_COALESCE_MS);
-      expect(getLinks).toHaveBeenCalledTimes(1);
-      expect(perSession).toHaveBeenCalledTimes(5);
-      expect(byId(result.current)).toEqual([l12, l23]);
     });
 
     it("keeps the cache on a 500 and never reads per session", async () => {
