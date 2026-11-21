@@ -2,9 +2,10 @@
 // Same jsdom rationale as ConversationTab.test.tsx: ChatRenderer renders
 // markdown through DOMPurify, which doesn't sanitize under happy-dom.
 //
-// The tab's session-record refetch: the bus replays its durable log on
-// connect, and one GET /sessions/:id per replayed event (245 link events →
-// ~250 reads from this tab alone) is what it used to cost.
+// The tab's session-record refetch: a reconnect can bring a burst of
+// session events (everything since the bus's cursor), and one
+// GET /sessions/:id per event (245 link events → ~250 reads from this tab
+// alone) is what it used to cost.
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";

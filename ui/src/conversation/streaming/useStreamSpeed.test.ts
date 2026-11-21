@@ -4,8 +4,8 @@ import { useStreamSpeed } from "./streamSpeed";
 import { FakeRouterClient, fixtureConfig } from "../../router/fixtures";
 import { FakeEventSource } from "../../router/testFakeEventSource";
 
-// The bus replays its durable log on connect: 30 config.updated on a fresh
-// load each used to cost a GET /config.
+// A reconnect can bring a burst of config.updated (everything since the
+// bus's cursor): 30 of them each used to cost a GET /config.
 describe("useStreamSpeed", () => {
   let seq = 2_000_000;
   const emitConfigUpdated = () => {

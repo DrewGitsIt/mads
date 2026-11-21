@@ -52,8 +52,8 @@ const READY_TIMEOUT_MS = 10_000;
 //   dropped as already delivered (the log is one seq-ordered stream, resumed
 //   strictly after the cursor).
 // - The first connect reads GET /events/head and starts the cursor there, so
-//   it never starts from the beginning of the log. since is omitted only
-//   when the log was empty (head 0) — which means the same thing.
+//   it never starts from the beginning of the log (since=0 only when the
+//   log was empty, which means the same thing).
 // - Widening (a subscriber brings a type the open connection doesn't carry),
 //   a drop, and a queue overflow all reconnect with since=<cursor>. A newly
 //   carried type gets only its events after the cursor — never its history.
@@ -306,7 +306,7 @@ function buildUrl(types: string[], since: number): string {
   // to the page's own origin in that case.
   const url = new URL("/events", ROUTER_BASE || window.location.origin);
   url.searchParams.set("types", types.join(","));
-  if (since > 0) url.searchParams.set("since", String(since));
+  url.searchParams.set("since", String(since));
   return url.toString();
 }
 
@@ -474,9 +474,10 @@ function enterIncompatible(detail: string): void {
 }
 
 function openSource(): void {
+  if (cursor === undefined) return; // only ever called once the head is known
   const types = unionTypes();
   connectedTypes = new Set(types);
-  source = new EventSource(buildUrl(types, cursor ?? 0));
+  source = new EventSource(buildUrl(types, cursor));
   for (const type of types) source.addEventListener(type, handleFrame as EventListener);
   source.addEventListener("open", () => {
     consecutiveFailures = 0;
@@ -637,8 +638,8 @@ export function windowNoticesSince(): number {
 /**
  * Test hook: forget everything, the cursor and readiness included.
  * `primeCursor` sets the cursor (and readiness) as if a head read had
- * returned it, so a first subscribe opens synchronously — since omitted at
- * 0 — which is what feature tests expect; undefined exercises the head read.
+ * returned it, so a first subscribe opens synchronously (since=<primeCursor>),
+ * which is what feature tests expect; undefined exercises the head read.
  */
 export function resetEventsBusForTests(primeCursor?: number): void {
   teardown();

@@ -34,8 +34,9 @@ function renderWorkspace(props: Partial<Parameters<typeof SessionWorkspace>[0]> 
   );
 }
 
-// The bus replays its durable log on connect, so the shell's
-// refetch-on-session-event saw one GET /sessions/:id per replayed event.
+// A reconnect can bring a burst of session events (everything since the
+// bus's cursor); the shell's refetch-on-session-event once cost one
+// GET /sessions/:id per event.
 describe("SessionWorkspace session refetch", () => {
   let seq = 1_000_000;
   const emitSessionUpdated = (sessionId: string) => {

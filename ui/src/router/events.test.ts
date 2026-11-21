@@ -54,13 +54,13 @@ describe("subscribeToEvents", () => {
     vi.useRealTimers();
   });
 
-  it("builds the /events URL with the union of subscribed types and no since param on first connect", () => {
+  it("builds the /events URL with the union of subscribed types and since=<cursor>", () => {
     subscribe({ types: ["session.created", "task.created"] }, () => {});
 
     const source = FakeEventSource.instances[0];
     const url = new URL(source.url);
     expect(url.pathname).toBe("/events");
-    expect(url.searchParams.get("since")).toBeNull();
+    expect(url.searchParams.get("since")).toBe("0");
     expect(url.searchParams.get("types")).toBe("session.created,task.created");
   });
 
@@ -186,7 +186,7 @@ describe("subscribeToEvents", () => {
     expect(onEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({ seq: 2 }));
   });
 
-  it("drops and reconnects rather than growing the dispatch queue unbounded, replaying every seq exactly once after", async () => {
+  it("drops and reconnects rather than growing the dispatch queue unbounded, delivering every seq exactly once after", async () => {
     vi.useFakeTimers();
     const received: number[] = [];
     let triggered = false;
@@ -347,7 +347,7 @@ describe("subscribeToEvents", () => {
       expect(new URL(FakeEventSource.instances[1].url).searchParams.get("since")).toBe("42");
     });
 
-    it("never sends since=0 or opens without since across head, widen, drop and teardown", async () => {
+    it("never connects from the start of the log (since=0) once the head is past it, across head, widen, drop and teardown", async () => {
       stubHead(3);
       vi.useFakeTimers();
       const un = subscribe({ types: ["session.created"] }, () => {});
@@ -491,11 +491,11 @@ describe("subscribeToEvents", () => {
       expect(getBusHealth().state).toBe("incompatible");
     });
 
-    it("omits since only when the head says the log is empty", async () => {
+    it("connects with since=0 when the head says the log is empty", async () => {
       stubHead(0);
       subscribe({ types: ["session.created"] }, () => {});
       await vi.waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
-      expect(new URL(FakeEventSource.instances[0].url).searchParams.get("since")).toBeNull();
+      expect(new URL(FakeEventSource.instances[0].url).searchParams.get("since")).toBe("0");
       expect(getEventsCursorForTests()).toBe(0);
     });
 

@@ -56,8 +56,8 @@ describe("useLiveActivity", () => {
     expect(result.current.activeSessionCount).toBe(wantActive);
   });
 
-  // The bus replays its durable log on connect: one listSessions +
-  // metricsPipelineRuns per replayed session.*/pipeline.* event, before.
+  // A reconnect can bring a burst (everything since the bus's cursor): one
+  // listSessions + metricsPipelineRuns per session.*/pipeline.* event, before.
   it("collapses a burst of 200 matching events into at most 2 refetches", async () => {
     vi.useFakeTimers();
     try {
