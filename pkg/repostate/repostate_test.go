@@ -2,6 +2,7 @@ package repostate
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/drewkidwell/mads/pkg/contracts"
 )
 
 func run(t *testing.T, dir string, args ...string) string {
@@ -254,4 +257,109 @@ func TestWatcherSurvivesAPanickingCallback(t *testing.T) {
 	r.waitFor(t, gitDir, 1, "the change whose callback panics")
 	commit(t, repo, "two.txt")
 	r.waitFor(t, gitDir, 2, "the next change")
+}
+
+// TestCacheSharedComputeOutlivesOneCaller: two callers wait on one compute;
+// the first cancelling returns it at once without failing the second, and
+// only when the last waiter leaves is the compute's context cancelled.
+func TestCacheSharedComputeOutlivesOneCaller(t *testing.T) {
+	repo, _ := fixture(t)
+	c := NewCache()
+	release := make(chan struct{})
+	started := make(chan context.Context, 4)
+	var calls sync.WaitGroup
+	c.computeFn = func(ctx context.Context, top, _ string) (contracts.RepoWorktree, error) {
+		started <- ctx
+		select {
+		case <-release:
+			return contracts.RepoWorktree{Path: top, Branch: "main"}, nil
+		case <-ctx.Done():
+			return contracts.RepoWorktree{}, ctx.Err()
+		}
+	}
+
+	ctxA, cancelA := context.WithCancel(context.Background())
+	type answer struct {
+		w   contracts.RepoWorktree
+		err error
+	}
+	a, b := make(chan answer, 1), make(chan answer, 1)
+	calls.Add(2)
+	go func() { defer calls.Done(); w, err := c.Get(ctxA, repo); a <- answer{w, err} }()
+	computeCtx := <-started
+	go func() { defer calls.Done(); w, err := c.Get(context.Background(), repo); b <- answer{w, err} }()
+	waitWaiters(t, c, 2)
+
+	cancelA()
+	if got := <-a; !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("cancelled caller = %+v, want context.Canceled", got)
+	}
+	if computeCtx.Err() != nil {
+		t.Fatal("one caller's cancel cancelled the shared compute")
+	}
+	close(release)
+	if got := <-b; got.err != nil || got.w.Branch != "main" {
+		t.Fatalf("other caller = %+v, want the compute's answer", got)
+	}
+	calls.Wait()
+	if len(started) != 0 {
+		t.Fatalf("%d extra computes, want one shared", len(started))
+	}
+	// And it was cached for the next ask.
+	if w, err := c.Get(context.Background(), repo); err != nil || w.Branch != "main" || len(started) != 0 {
+		t.Fatalf("after = %+v, %v; want a cache hit", w, err)
+	}
+}
+
+// TestCacheLastCallerCancelStopsCompute: when every waiter has gone, the
+// compute is cancelled (its git commands die with it) and nothing is cached.
+func TestCacheLastCallerCancelStopsCompute(t *testing.T) {
+	repo, _ := fixture(t)
+	c := NewCache()
+	started := make(chan context.Context, 4)
+	c.computeFn = func(ctx context.Context, _ string, _ string) (contracts.RepoWorktree, error) {
+		started <- ctx
+		<-ctx.Done()
+		return contracts.RepoWorktree{}, ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := c.Get(ctx, repo); done <- err }()
+	computeCtx := <-started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	select {
+	case <-computeCtx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("compute still running after its last waiter left")
+	}
+	// A later ask starts a fresh compute rather than joining the dead one.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	go func() { _, _ = c.Get(ctx2, repo) }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no fresh compute after the cancelled one")
+	}
+}
+
+func waitWaiters(t *testing.T, c *Cache, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		got := 0
+		for _, cl := range c.computing {
+			got += cl.waiters
+		}
+		c.mu.Unlock()
+		if got == n {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("waiters never reached %d", n)
 }

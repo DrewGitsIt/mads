@@ -138,13 +138,23 @@ type Cache struct {
 	// epoch counts invalidations: a Compute that started before one is
 	// returned but not cached, since it may have read the repo mid-change.
 	epoch uint64
+	// computeFn stands in for Compute/ComputeBranch in tests; nil is them.
+	computeFn func(ctx context.Context, top, branch string) (contracts.RepoWorktree, error)
 }
 
 type call struct {
 	done chan struct{}
 	w    contracts.RepoWorktree
 	err  error
+	// waiters counts the callers still waiting on done (guarded by
+	// Cache.mu); the last to give up cancels the compute.
+	waiters int
+	cancel  context.CancelFunc
 }
+
+// computeTimeout bounds one shared compute, which runs detached from any
+// one caller's context: callers come and go, the compute answers them all.
+const computeTimeout = 2 * time.Minute
 
 // NewCache returns an empty cache.
 func NewCache() *Cache {
@@ -162,6 +172,12 @@ func (c *Cache) GetBranch(ctx context.Context, path, branch string) (contracts.R
 	return c.get(ctx, path, branch)
 }
 
+// get serves a hit from the cache and collapses concurrent misses for one
+// key into one compute. That compute is shared, so it runs under its own
+// context (computeTimeout), not the first caller's: one caller cancelling
+// (a view switched away) returns that caller at once with its ctx's error
+// but doesn't fail the others. Once every waiter has gone, the compute is
+// cancelled, which kills its git commands.
 func (c *Cache) get(ctx context.Context, path, branch string) (contracts.RepoWorktree, error) {
 	top, err := sessionwt.Toplevel(ctx, path)
 	if err != nil {
@@ -176,29 +192,54 @@ func (c *Cache) get(ctx context.Context, path, branch string) (contracts.RepoWor
 		c.mu.Unlock()
 		return w, nil
 	}
-	if cl, ok := c.computing[key]; ok {
-		c.mu.Unlock()
-		<-cl.done
-		return cl.w, cl.err
+	cl, ok := c.computing[key]
+	if !ok {
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), computeTimeout)
+		cl = &call{done: make(chan struct{}), cancel: cancel}
+		c.computing[key] = cl
+		go c.compute(cctx, cl, key, top, branch, c.epoch)
 	}
-	cl := &call{done: make(chan struct{})}
-	c.computing[key] = cl
-	epoch := c.epoch
+	cl.waiters++
 	c.mu.Unlock()
 
-	if branch == "" {
+	select {
+	case <-cl.done:
+		return cl.w, cl.err
+	case <-ctx.Done():
+		c.mu.Lock()
+		cl.waiters--
+		last := cl.waiters == 0
+		if last && c.computing[key] == cl {
+			// Nobody is left to answer: a later ask starts afresh.
+			delete(c.computing, key)
+		}
+		c.mu.Unlock()
+		if last {
+			cl.cancel()
+		}
+		return contracts.RepoWorktree{}, ctx.Err()
+	}
+}
+
+func (c *Cache) compute(ctx context.Context, cl *call, key, top, branch string, epoch uint64) {
+	defer cl.cancel()
+	switch {
+	case c.computeFn != nil:
+		cl.w, cl.err = c.computeFn(ctx, top, branch)
+	case branch == "":
 		cl.w, cl.err = Compute(ctx, top)
-	} else {
+	default:
 		cl.w, cl.err = ComputeBranch(ctx, top, branch)
 	}
 	c.mu.Lock()
-	delete(c.computing, key)
-	if cl.err == nil && c.epoch == epoch {
+	if c.computing[key] == cl {
+		delete(c.computing, key)
+	}
+	if cl.err == nil && ctx.Err() == nil && c.epoch == epoch {
 		c.byPath[key] = cl.w
 	}
 	c.mu.Unlock()
 	close(cl.done)
-	return cl.w, cl.err
 }
 
 // Invalidate drops every cached checkout of the repo whose shared git dir

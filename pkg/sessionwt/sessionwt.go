@@ -27,6 +27,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // BranchPrefix is the namespace of session branches. The pipeline's task
@@ -62,6 +63,9 @@ func Git(ctx context.Context, dir string, args ...string) (string, error) {
 	return git(ctx, dir, nil, args...)
 }
 
+// gitWaitDelay is how long a killed git's output pipe may stay open behind it.
+const gitWaitDelay = 2 * time.Second
+
 func git(ctx context.Context, dir string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
@@ -69,6 +73,10 @@ func git(ctx context.Context, dir string, env []string, args ...string) (string,
 		"GIT_AUTHOR_NAME=mads-session", "GIT_AUTHOR_EMAIL=session@mads.local",
 		"GIT_COMMITTER_NAME=mads-session", "GIT_COMMITTER_EMAIL=session@mads.local")
 	cmd.Env = append(cmd.Env, env...)
+	// A cancelled ctx (the request that asked went away) kills git; this
+	// bounds the wait for a hook or helper it started that still holds the
+	// output pipe, so the caller returns rather than waiting that out.
+	cmd.WaitDelay = gitWaitDelay
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("git %s: %v\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))

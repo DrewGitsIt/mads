@@ -132,6 +132,11 @@ func (s *server) computeChangeSet(ctx context.Context, sess contracts.Session, v
 	if err != nil {
 		return contracts.ChangeSet{}, nil, err
 	}
+	// Cancelled mid-build (the view that asked went away), git's failures
+	// degraded into the set: not an answer to cache for the diff gate.
+	if err := ctx.Err(); err != nil {
+		return contracts.ChangeSet{}, nil, err
+	}
 	s.changesets.put(sess.ID, vs, set)
 	return set, ledger, nil
 }
