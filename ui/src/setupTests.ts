@@ -68,4 +68,6 @@ afterEach(async () => {
   (await import("./router/repoStateStore")).resetRepoStateStoreForTests?.();
   // And the window-wide change sets the rail and the Changes tab share.
   (await import("./files/useChangeSet")).resetChangeSetStoreForTests?.();
+  // And the per-session worktree recounts (in flight, and when each last finished).
+  (await import("./conversation/Worktree/worktreeRefresh")).resetWorktreeRefreshForTests?.();
 });
