@@ -80,6 +80,12 @@ func git(ctx context.Context, dir string, env []string, args ...string) (string,
 	// output pipe, so the caller returns rather than waiting that out.
 	cmd.WaitDelay = gitWaitDelay
 	out, err := cmd.CombinedOutput()
+	// WaitDelay also fires after a clean exit when a hook left a job holding
+	// the pipe (a post-checkout that backgrounds something): git succeeded,
+	// and so did the command.
+	if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Success() {
+		err = nil
+	}
 	if err != nil {
 		return string(out), fmt.Errorf("git %s: %v\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}

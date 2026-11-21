@@ -146,8 +146,13 @@ func countRange(ctx context.Context, dir string, revs ...string) (int, error) {
 // prompt, no credential manager dialog, ssh in batch mode unless the user
 // configured their own ssh command — so a sign-in failure comes back as
 // git's message instead of a hang.
+//
+// It runs detached from ctx's cancellation, bounded by timeout alone: a
+// fetch or push writes refs, and one killed mid-write (a Push dialog
+// closed on its preview's fetch) can leave a refs/remotes/... .lock behind
+// that fails the next. The caller may stop waiting; git finishes.
 func netGit(ctx context.Context, dir string, timeout time.Duration, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
 	full := append([]string{"-c", "mads.sessionId="}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
