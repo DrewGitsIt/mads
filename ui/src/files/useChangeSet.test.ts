@@ -1,5 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { abortError } from "../router/client";
 import { FakeRouterClient } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import type { ChangeSet } from "../router/types";
@@ -146,5 +147,36 @@ describe("useChangeSet's shared store", () => {
     rerender({ id: "session-other" });
     expect(result.current.changeSet).toBeNull();
     expect(result.current.loading).toBe(true);
+  });
+
+  it("gives a reader arriving before an aborted fetch settles a fresh read of its own", async () => {
+    const c = new FakeRouterClient();
+    const fresh = await new FakeRouterClient().getChangeSet(SID);
+    // The first read settles late after its abort (a slow socket teardown).
+    let settleAborted!: () => void;
+    let calls = 0;
+    vi.spyOn(c, "getChangeSet").mockImplementation((_id, _vs, opts) => {
+      calls++;
+      if (calls > 1) return Promise.resolve(structuredClone(fresh));
+      return new Promise((_, reject) => {
+        opts?.signal?.addEventListener("abort", () => {
+          settleAborted = () => reject(abortError());
+        });
+      });
+    });
+    const first = renderHook(() => useChangeSet(c, SID));
+    await settle();
+    expect(calls).toBe(1);
+    first.unmount();
+    const second = renderHook(() => useChangeSet(c, SID));
+    await settle();
+    // Still single-flight: nothing beside the aborted read.
+    expect(calls).toBe(1);
+    await act(async () => settleAborted());
+    await settle();
+    expect(calls).toBe(2);
+    expect(second.result.current.loading).toBe(false);
+    expect(second.result.current.error).toBeUndefined();
+    expect(second.result.current.changeSet?.files.length).toBe(fresh.files.length);
   });
 });

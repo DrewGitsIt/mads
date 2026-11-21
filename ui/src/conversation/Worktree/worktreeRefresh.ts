@@ -16,9 +16,16 @@ export const WORKTREE_REFRESH_FOCUS_SKIP_MS = 30_000;
 interface Entry {
   client: RouterClient;
   /** The recount in flight, shared by every mount showing the session. */
-  inFlight?: { ctl: AbortController; holders: number };
+  inFlight?: Flight;
   /** When the last recount for this session finished (ok or not), by Date.now(). */
   finishedAt?: number;
+}
+
+interface Flight {
+  ctl: AbortController;
+  holders: number;
+  /** Settles when the recount does (answered, failed or aborted). */
+  settled: Promise<void>;
 }
 
 // Window-wide, per session: ConversationTab remounts on every switch, and a
@@ -39,34 +46,39 @@ function entryFor(client: RouterClient, sessionId: string): Entry {
  * as session.updated), joining one already in flight. A "focus" ask is
  * skipped when one finished within WORKTREE_REFRESH_FOCUS_SKIP_MS. Returns
  * a release: when every asker has released, a recount still running is
- * aborted (the view went away; the next open recounts again).
+ * aborted (the view went away; the next open recounts again), and
+ * `settled`, for when releasing no longer matters.
  */
 export function requestWorktreeRefresh(
   client: RouterClient,
   sessionId: string,
   reason: "open" | "focus",
-): () => void {
+): { release: () => void; settled: Promise<void> } {
   const e = entryFor(client, sessionId);
   if (!e.inFlight) {
     if (reason === "focus" && e.finishedAt !== undefined && Date.now() - e.finishedAt < WORKTREE_REFRESH_FOCUS_SKIP_MS) {
-      return () => {};
+      return { release: () => {}, settled: Promise.resolve() };
     }
-    const flight = { ctl: new AbortController(), holders: 0 };
+    const ctl = new AbortController();
+    const flight: Flight = {
+      ctl,
+      holders: 0,
+      settled: client
+        .refreshWorktreeCounts(sessionId, { signal: ctl.signal })
+        // Best-effort, an abort included: the next turn end recounts anyway.
+        .catch(() => {})
+        .finally(() => {
+          if (e.inFlight !== flight) return;
+          e.inFlight = undefined;
+          if (!ctl.signal.aborted) e.finishedAt = Date.now();
+        }),
+    };
     e.inFlight = flight;
-    client
-      .refreshWorktreeCounts(sessionId, { signal: flight.ctl.signal })
-      // Best-effort, an abort included: the next turn end recounts anyway.
-      .catch(() => {})
-      .finally(() => {
-        if (e.inFlight !== flight) return;
-        e.inFlight = undefined;
-        if (!flight.ctl.signal.aborted) e.finishedAt = Date.now();
-      });
   }
   const flight = e.inFlight;
   flight.holders++;
   let released = false;
-  return () => {
+  const release = () => {
     if (released) return;
     released = true;
     flight.holders--;
@@ -74,7 +86,11 @@ export function requestWorktreeRefresh(
     e.inFlight = undefined;
     flight.ctl.abort();
   };
+  return { release, settled: flight.settled };
 }
+
+// Releases a mounted view still holds, window-wide (tests check none leak).
+let held = 0;
 
 /**
  * Recounts the on-screen session's Commit/Land counts when it opens and when
@@ -84,17 +100,35 @@ export function requestWorktreeRefresh(
  */
 export function useWorktreeRefresh(client: RouterClient, sessionId: string): void {
   useEffect(() => {
-    const releases: (() => void)[] = [requestWorktreeRefresh(client, sessionId, "open")];
-    const onFocus = () => releases.push(requestWorktreeRefresh(client, sessionId, "focus"));
+    // Only the recounts still running are held: each is dropped once it settles.
+    const releases = new Set<() => void>();
+    const ask = (reason: "open" | "focus") => {
+      const { release, settled } = requestWorktreeRefresh(client, sessionId, reason);
+      releases.add(release);
+      held++;
+      void settled.then(() => {
+        if (releases.delete(release)) held--;
+      });
+    };
+    ask("open");
+    const onFocus = () => ask("focus");
     window.addEventListener("focus", onFocus);
     return () => {
       window.removeEventListener("focus", onFocus);
       for (const release of releases) release();
+      held -= releases.size;
+      releases.clear();
     };
   }, [client, sessionId]);
 }
 
+/** How many releases mounted views still hold: only recounts still running. */
+export function heldWorktreeRefreshesForTests(): number {
+  return held;
+}
+
 export function resetWorktreeRefreshForTests(): void {
+  held = 0;
   for (const e of entries.values()) e.inFlight?.ctl.abort();
   entries.clear();
 }

@@ -1,7 +1,12 @@
 import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeRouterClient } from "../../router/fixtures";
-import { WORKTREE_REFRESH_FOCUS_SKIP_MS, requestWorktreeRefresh, useWorktreeRefresh } from "./worktreeRefresh";
+import {
+  WORKTREE_REFRESH_FOCUS_SKIP_MS,
+  heldWorktreeRefreshesForTests,
+  requestWorktreeRefresh,
+  useWorktreeRefresh,
+} from "./worktreeRefresh";
 
 const SID = "session-active";
 
@@ -48,7 +53,7 @@ describe("worktreeRefresh", () => {
     expect(signals[0].aborted).toBe(true);
     await flush();
     // An aborted recount doesn't count as finished: the next focus recounts.
-    const release = requestWorktreeRefresh(c, SID, "focus");
+    const { release } = requestWorktreeRefresh(c, SID, "focus");
     expect(c.refreshWorktreeCountsCalls).toEqual([SID, SID]);
     release();
   });
@@ -79,5 +84,23 @@ describe("worktreeRefresh", () => {
     renderHook(() => useWorktreeRefresh(c, SID));
     renderHook(() => useWorktreeRefresh(c, "other"));
     expect(c.refreshWorktreeCountsCalls).toEqual([SID, "other"]);
+  });
+
+  it("holds a release only while its recount runs: many focuses don't pile up", async () => {
+    const c = new FakeRouterClient();
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { unmount } = renderHook(() => useWorktreeRefresh(c, SID));
+    await flush();
+    for (let i = 0; i < 20; i++) {
+      now += WORKTREE_REFRESH_FOCUS_SKIP_MS + 1;
+      window.dispatchEvent(new Event("focus"));
+      window.dispatchEvent(new Event("focus")); // skipped or joined
+      await flush();
+    }
+    expect(c.refreshWorktreeCountsCalls).toHaveLength(21);
+    expect(heldWorktreeRefreshesForTests()).toBe(0);
+    unmount();
+    expect(heldWorktreeRefreshesForTests()).toBe(0);
   });
 });
