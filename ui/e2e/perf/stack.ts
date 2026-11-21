@@ -101,6 +101,38 @@ function sqlite(db: string, q: string): Promise<string> {
   });
 }
 
+/** Loopback TIME_WAIT sockets: all of them, and those whose far end is `port` (a stack's Data Service). */
+export function timeWait(port?: number): { all: number; to: number } {
+  let out = "";
+  try {
+    out = execFileSync("netstat", ["-an", "-p", "tcp"], { encoding: "utf8", maxBuffer: 64 << 20 });
+  } catch {
+    return { all: 0, to: 0 };
+  }
+  let all = 0;
+  let to = 0;
+  for (const line of out.split("\n")) {
+    if (!line.includes("TIME_WAIT")) continue;
+    all++;
+    if (port && line.split(/\s+/)[4]?.endsWith(`.${port}`)) to++;
+  }
+  return { all, to };
+}
+
+/**
+ * Waits (up to 120 s) until loopback TIME_WAIT sockets are under
+ * PERF_TIME_WAIT_MAX (default 4000) of the 16k ephemeral ports, so one
+ * repetition's connection churn (the Router opens thousands of short
+ * connections to the Data Service at L) can't exhaust the ports the next
+ * one needs (net::ERR_ADDRESS_INVALID, "fetch failed"). Returns ms waited.
+ */
+export async function waitPortsDrained(): Promise<number> {
+  const max = Number(process.env.PERF_TIME_WAIT_MAX ?? 4000);
+  const t0 = Date.now();
+  while (timeWait().all > max && Date.now() - t0 < 120_000) await new Promise((r) => setTimeout(r, 1000));
+  return Date.now() - t0;
+}
+
 /** The log's head seq, read straight from the repetition's database (not through the page). */
 export async function logHead(stack: PerfStack): Promise<number> {
   return Number((await sqlite(stack.dbPath, "SELECT COALESCE(max(seq),0) FROM events")) || 0);

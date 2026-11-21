@@ -54,6 +54,8 @@ const TIMING_LABELS: Record<string, string> = {
   children_cpu_ms: "session/pipeline children CPU (ms)",
   router_peak_rss_mb: "Router peak RSS (MB)",
   data_peak_rss_mb: "Data Service peak RSS (MB)",
+  data_conns_closed: "connections to the Data Service closed by clients, boot + window (TIME_WAIT)",
+  port_drain_wait_ms: "harness wait for TIME_WAIT to drain before boot (ms; not measured time)",
 };
 
 const isBytes = (k: string) => k.includes("bytes");

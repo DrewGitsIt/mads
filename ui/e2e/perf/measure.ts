@@ -8,7 +8,7 @@ import { resolveCheck } from "./checkNames";
 import { arm, probeFor, probeSeries, readProbe, type MarkerSpec, type PageReq } from "./probe";
 import type { ProxyRequest, ProxySnapshot } from "./proxyClient";
 import { SCENARIOS, scenarioById, useManifest, type Manifest, type Scenario, type ScenarioCtx } from "./scenarios";
-import { bootPerfStack, childrenOf, logHead, streamTarget, waitDelegatesConcluded, type Build, type PerfStack } from "./stack";
+import { bootPerfStack, childrenOf, logHead, streamTarget, timeWait, waitDelegatesConcluded, waitPortsDrained, type Build, type PerfStack } from "./stack";
 
 export type DelayMode = "on" | "off";
 
@@ -408,6 +408,8 @@ export interface Rig {
   /** Every URL the page requested (Playwright's own request events), for the live-port check. */
   urls: string[];
   ctx: ScenarioCtx;
+  /** How long the boot waited for the previous repetition's TIME_WAIT sockets to drain. */
+  drainMs: number;
   teardown(): Promise<void>;
 }
 
@@ -422,6 +424,8 @@ export async function bootRig(opts: {
   env?: Record<string, string>;
 }): Promise<Rig> {
   const { plan, build, mode, tag, manifest } = opts;
+  const drainMs = await waitPortsDrained();
+  if (drainMs > 1000) console.log(`${tag}: waited ${Math.round(drainMs / 1000)} s for loopback TIME_WAIT sockets to drain`);
   const delays = mode === "on" ? plan.delays : "off";
   const rules = parseDelays(delays);
   let stack: PerfStack | undefined;
@@ -528,7 +532,7 @@ export async function bootRig(opts: {
         if (r.capped) throw new Error(`page never went quiet: ${r.reason}`);
       },
     };
-    return { stack, page, context, browserPid, watch, metrics, urls, ctx, teardown };
+    return { stack, page, context, browserPid, watch, metrics, urls, ctx, drainMs, teardown };
   } catch (err) {
     await teardown();
     throw err;
@@ -752,6 +756,11 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       children_cpu_ms: proc["router-children"]?.cpuMs ?? 0,
       router_peak_rss_mb: proc.router?.peakRssMB ?? 0,
       data_peak_rss_mb: proc.data?.peakRssMB ?? 0,
+      // Connections to this stack's Data Service closed by their client in
+      // the last ~30 s (TIME_WAIT; its port is new per repetition): boot
+      // and window churn, mostly the Router's.
+      data_conns_closed: timeWait(Number(new URL(stack.dataURL).port)).to,
+      port_drain_wait_ms: rig.drainMs,
     };
     result.legs.forEach((l, i) => (result.timing[`leg${i + 1}_settled_ms`] = l.settledMs));
     result.socketOwners = [...socks.owners];
