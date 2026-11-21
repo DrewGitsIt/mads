@@ -4,6 +4,7 @@ import { SessionWorkspace, openTasksTitle } from "./SessionWorkspace";
 import { FakeRouterClient } from "../../../router/fixtures";
 import { FakePipelineClient } from "../../../pipeline/client/fixtures";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
+import { holdEventsHead } from "../../../router/testEventsBarrier";
 import { makeFakeShellHost } from "../../../conversation/ShellDock/fakeShellHost";
 import { resetShellDockCache } from "../../../conversation/ShellDock/dockState";
 import { task } from "../../../tasks/Metro/testTasks";
@@ -146,6 +147,33 @@ describe("SessionWorkspace", () => {
       const tasksTab = await screen.findByRole("tab", { name: "Tasks" });
       await waitFor(() => expect(within(tasksTab).queryByTestId("tasks-run-badge")).toBeTruthy());
       expect(runs).toHaveBeenCalledWith(SESSION_ID);
+    });
+
+    // After a load the run is known only from REST: no pipeline.started is
+    // replayed, so the count has to come from the REST catch-up too.
+    it("seeds the run's running count from REST after a load, with no replay", async () => {
+      const tasks = [
+        task("claimed", { session_id: SESSION_ID, status: "in_progress" }),
+        task("mine", { session_id: SESSION_ID, status: "in_progress" }),
+      ];
+      const pipelineClient = new FakePipelineClient(tasks);
+      pipelineClient.runs = [running];
+      pipelineClient.runEvents = [
+        { seq: 10, timestamp: "2026-10-19T10:00:00Z", type: "pipeline.started", session_id: SESSION_ID, actor: "pipeline", payload: { run_id: "r1" } },
+        { seq: 11, timestamp: "2026-10-19T10:00:00Z", type: "task.status_changed", session_id: SESSION_ID, actor: "pipeline", task_id: "claimed", payload: { from: "ready", to: "in_progress" } },
+      ];
+      const routerClient = new FakeRouterClient(undefined, undefined, undefined, undefined, tasks);
+      vi.spyOn(routerClient, "metricsPipelineRuns").mockResolvedValue([running]);
+      const head = holdEventsHead();
+      renderWorkspace({ routerClient, pipelineClient, openTaskBreakdown: { running: 2, ready: 0, blocked: 0 } });
+      const tasksTab = await screen.findByRole("tab", { name: "Tasks" });
+      await act(async () => {});
+      expect(within(tasksTab).queryByTestId("tasks-run-badge")).toBeNull();
+      await head.release(20);
+      await waitFor(() => expect(within(tasksTab).getByTestId("tasks-run-badge").textContent).toBe("1"));
+      expect(within(tasksTab).getByTestId("tasks-run-badge").getAttribute("title")).toBe(
+        "Pipeline running · 1 task running",
+      );
     });
 
     it("lets a run event heard first outrank the seed (live wins)", async () => {
