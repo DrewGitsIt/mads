@@ -82,6 +82,10 @@ One process, one session — no `:id` in any path.
 - `DELETE /queue/{id}` — drop one before it's delivered; 204, or 404 if it isn't queued
   (it may have just gone out).
 - `POST /interrupt` — stops the in-flight turn, if any. 503 if not ready.
+- `POST /worktree/refresh` — recounts the header's Commit/Land counts through the runner's
+  coalesced turn-end recount, answering 204 once a recount started after the ask has
+  published (503 while shutting down). The Router routes `POST /sessions/{id}/worktree/refresh`
+  here while the child is live, and recounts itself otherwise.
 - `GET /worktree`, `POST /commit`, `POST /commit/undo`, `POST /land` — the session's
   Commit and Land while it is live (docs/SESSION-WORKTREES-DESIGN.md D3, D5, D6), forwarded
   by the Router, which adds `?pipeline=1` when a pipeline run is active. Bodies are the

@@ -143,14 +143,30 @@ func (s *server) handleSessionWorktree(w http.ResponseWriter, r *http.Request) {
 
 // handleSessionWorktreeRefresh recounts the session's header counts (D4)
 // and publishes them, for a commit or merge made outside mads that no turn
-// end has counted yet. The Router runs it itself even with a live child:
-// it gates on nothing the child knows, and it is the same recount either
-// would run, read off the same record. No wake lock, like status.
+// end has counted yet. With a live child it asks the child, whose recount
+// is the coalesced one turn ends use: a refresh beside a turn-end recount
+// joins it instead of running a second git status over the same repos.
+// The Router recounts itself when there is no child, or when the child
+// can't (one started before it had the route, or shutting down). No wake
+// lock, like status. Either way: 204, the counts arriving as session.updated.
 func (s *server) handleSessionWorktreeRefresh(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, err := s.data.Session(r.Context(), id); err != nil {
 		writeError(w, err)
 		return
+	}
+	if addr, ok := s.sup.SessionAddr(id); ok {
+		status, _, err := callChild(r.Context(), addr, http.MethodPost, "/worktree/refresh", nil)
+		if err == nil && status >= 200 && status < 300 {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Context().Err() != nil {
+			return // the caller went away; nobody reads the answer
+		}
+		if err != nil || status != http.StatusNotFound && status != http.StatusMethodNotAllowed && status != http.StatusServiceUnavailable {
+			log.Printf("worktree refresh: session %s child: status %d, %v; recounting in the Router", id, status, err)
+		}
 	}
 	if err := s.worktreeOps().Recount(r.Context(), id); err != nil {
 		writeErrMsg(w, http.StatusInternalServerError, "worktree refresh: ", err)

@@ -45,6 +45,14 @@ var (
 	// nothing until the caller gives up.
 	permModeMu sync.Mutex
 	permMode   string
+
+	// worktreeRefreshes counts POST /worktree/refresh (read back over GET
+	// /test/worktree-refreshes) — the Router routes a session's refresh to
+	// its live child. worktreeRefreshMissing makes the route answer 404, as
+	// a child started before it had the route would.
+	worktreeRefreshMu      sync.Mutex
+	worktreeRefreshes      int
+	worktreeRefreshMissing bool
 )
 
 func main() {
@@ -247,6 +255,32 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = fmt.Fprint(w, `{"status":"accepted"}`)
+	})
+	mux.HandleFunc("POST /worktree/refresh", func(w http.ResponseWriter, r *http.Request) {
+		worktreeRefreshMu.Lock()
+		missing := worktreeRefreshMissing
+		if !missing {
+			worktreeRefreshes++
+		}
+		worktreeRefreshMu.Unlock()
+		if missing {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /test/worktree-refreshes", func(w http.ResponseWriter, r *http.Request) {
+		worktreeRefreshMu.Lock()
+		n := worktreeRefreshes
+		worktreeRefreshMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, "%d\n", n)
+	})
+	mux.HandleFunc("POST /test/worktree-refresh-missing", func(w http.ResponseWriter, r *http.Request) {
+		worktreeRefreshMu.Lock()
+		worktreeRefreshMissing = true
+		worktreeRefreshMu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
 	})
 	// Test-only read-back: the real Session Service has no equivalent, but
 	// boot_test.go runs testchild as a separate OS process and can't share

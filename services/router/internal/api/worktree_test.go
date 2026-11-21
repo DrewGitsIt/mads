@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
@@ -505,5 +506,60 @@ func TestWorktreeRefreshRecountsHeader(t *testing.T) {
 
 	if resp := postJSON(t, srv.URL+"/sessions/ses_missing/worktree/refresh", struct{}{}); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("unknown session: status %d, want 404", resp.StatusCode)
+	}
+}
+
+// POST /worktree/refresh with a live child goes to the child's coalesced
+// recount (the one turn ends use) rather than a second one in the Router;
+// a child without the route (started by an older build) falls back to the
+// Router's own recount. 204 either way.
+func TestWorktreeRefreshRoutesToLiveChild(t *testing.T) {
+	data := dataclient.New(datatest.Start(t), "router")
+	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
+	t.Cleanup(func() { sup.Shutdown(context.Background()) })
+	srv := httptest.NewServer(api.New(testOptions(t, data, sup)))
+	t.Cleanup(srv.Close)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "refresh routing", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}](t, resp)
+	id := created.Session.ID
+	addr, ok := sup.SessionAddr(id)
+	if !ok {
+		t.Fatal("no live child; this test needs one")
+	}
+	childRefreshes := func() int {
+		t.Helper()
+		resp, err := childsock.Client.Get(childsock.URL(addr, "/test/worktree-refreshes"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return decodeJSON[int](t, resp)
+	}
+
+	url := srv.URL + "/sessions/" + id + "/worktree/refresh"
+	if resp := postJSON(t, url, nil); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("refresh: status %d, want 204", resp.StatusCode)
+	}
+	if n := childRefreshes(); n != 1 {
+		t.Fatalf("child recounts = %d, want 1 (routed to the child)", n)
+	}
+
+	resp, err := childsock.Client.Post(childsock.URL(addr, "/test/worktree-refresh-missing"), "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp := postJSON(t, url, nil); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("refresh with an older child: status %d, want 204 from the Router's own recount", resp.StatusCode)
+	}
+	if n := childRefreshes(); n != 1 {
+		t.Errorf("child recounts = %d, want still 1", n)
 	}
 }

@@ -492,3 +492,56 @@ func TestProvisioningReportsModeAndHook(t *testing.T) {
 		})
 	}
 }
+
+// RecountWorktree (POST /worktree/refresh, routed here by the Router for a
+// live child) answers once a recount that started after the ask has
+// published, so a commit made by hand shows in the record on return; asks
+// landing together share the coalesced recount; after Shutdown it refuses.
+func TestRecountWorktreeWaitsForAFreshRecount(t *testing.T) {
+	repo := t.TempDir()
+	initRepo(t, repo)
+	h := newWTHarness(t, contracts.Session{Dir: repo, Isolation: contracts.IsolationWorktree}, fake.Scenario{})
+	if err := h.boot(); err != nil {
+		t.Fatal(err)
+	}
+	h.waitCounts(0, 0)
+
+	dir := h.record().WorktreeDir
+	if err := os.WriteFile(filepath.Join(dir, "by-hand.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", "by-hand.txt")
+	gitRun(t, dir, "commit", "-q", "-m", "by hand")
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 5)
+	for range 5 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- h.runner.RecountWorktree(context.Background())
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("RecountWorktree: %v", err)
+		}
+	}
+	if rec := h.record(); rec.UnlandedCount != 1 {
+		t.Fatalf("unlanded = %d on return, want 1: the answer must follow a fresh recount", rec.UnlandedCount)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := h.runner.RecountWorktree(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled ask: %v", err)
+	}
+
+	r := h.runner
+	h.stop()
+	if err := r.RecountWorktree(context.Background()); !errors.Is(err, ErrCountsClosed) {
+		t.Errorf("after Shutdown: %v, want ErrCountsClosed", err)
+	}
+}

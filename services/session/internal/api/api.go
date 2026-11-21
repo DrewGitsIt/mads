@@ -39,6 +39,7 @@ func New(r *runner.Runner) http.Handler {
 	mux.HandleFunc("POST /interrupt", s.handleInterrupt)
 	mux.HandleFunc("POST /compact", s.handleCompact)
 	mux.HandleFunc("GET /worktree", s.handleWorktreeStatus)
+	mux.HandleFunc("POST /worktree/refresh", s.handleWorktreeRefresh)
 	mux.HandleFunc("POST /commit", s.handleCommit)
 	mux.HandleFunc("POST /commit/undo", s.handleUndoCommit)
 	mux.HandleFunc("POST /land", s.handleLand)
@@ -193,6 +194,23 @@ func (s *server) handleWorktreeStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+// handleWorktreeRefresh recounts the header counts (D4) through the
+// runner's coalesced recount, the one turn ends use: the Router routes
+// POST /sessions/{id}/worktree/refresh here while this child is live, so a
+// refresh landing beside a turn-end recount joins it rather than running a
+// second git status. 204 once a recount started after the ask has finished.
+func (s *server) handleWorktreeRefresh(w http.ResponseWriter, r *http.Request) {
+	if err := s.runner.RecountWorktree(r.Context()); err != nil {
+		if errors.Is(err, runner.ErrCountsClosed) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+			return
+		}
+		writeRunnerError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleAddNote owes the agent a note on its next turn (the Router has

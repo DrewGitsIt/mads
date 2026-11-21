@@ -160,6 +160,9 @@ type Runner struct {
 	countsAgain   bool
 	countsClosed  bool
 	countsWG      sync.WaitGroup
+	// countsWaiters are RecountWorktree callers waiting on the next recount
+	// to start; each run takes the ones queued before it and answers them.
+	countsWaiters []chan error
 
 	// shadowStore is this session's shadow git store, built in Start when
 	// ShadowRoot is set (nil otherwise). Every shadow.Store method is
@@ -911,6 +914,10 @@ func (r *Runner) RefreshWorktreeCounts(ctx context.Context) error {
 func (r *Runner) refreshCountsAsync() {
 	r.countsMu.Lock()
 	if r.countsClosed {
+		for _, w := range r.countsWaiters {
+			w <- ErrCountsClosed
+		}
+		r.countsWaiters = nil
 		r.countsMu.Unlock()
 		return
 	}
@@ -936,12 +943,25 @@ func (r *Runner) refreshCountsAsync() {
 			}
 		}()
 		for {
-			if err := r.RefreshWorktreeCounts(ctx); err != nil && ctx.Err() == nil {
+			r.countsMu.Lock()
+			waiters := r.countsWaiters
+			r.countsWaiters = nil
+			r.countsMu.Unlock()
+			err := r.RefreshWorktreeCounts(ctx)
+			if err != nil && ctx.Err() == nil {
 				log.Printf("runner: refresh worktree counts: %v", err)
+			}
+			for _, w := range waiters {
+				w <- err
 			}
 			r.countsMu.Lock()
 			if !r.countsAgain || ctx.Err() != nil {
 				r.countsRunning = false
+				// Shutdown: whoever still waits gets the cancellation.
+				for _, w := range r.countsWaiters {
+					w <- context.Canceled
+				}
+				r.countsWaiters = nil
 				r.countsMu.Unlock()
 				return
 			}
@@ -949,6 +969,33 @@ func (r *Runner) refreshCountsAsync() {
 			r.countsMu.Unlock()
 		}
 	}()
+}
+
+// ErrCountsClosed is RecountWorktree after Shutdown began.
+var ErrCountsClosed = errors.New("runner: shutting down, worktree counts closed")
+
+// RecountWorktree is POST /worktree/refresh: a recount through the same
+// coalesced path as the turn-end one (refreshCountsAsync), answered once a
+// recount that started after this call has finished. One asked for while a
+// recount runs joins the rerun queued behind it instead of starting a
+// second git status beside it. ctx ending returns early with its error;
+// the recount itself, shared with the turn end, carries on.
+func (r *Runner) RecountWorktree(ctx context.Context) error {
+	done := make(chan error, 1)
+	r.countsMu.Lock()
+	if r.countsClosed {
+		r.countsMu.Unlock()
+		return ErrCountsClosed
+	}
+	r.countsWaiters = append(r.countsWaiters, done)
+	r.countsMu.Unlock()
+	r.refreshCountsAsync()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // deliverLocked marks a turn as in-flight. Must be called with r.mu held;
