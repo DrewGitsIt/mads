@@ -80,6 +80,9 @@ func TestAllPermissionRequestsAggregatesLiveSessions(t *testing.T) {
 		if req["status"] != "pending" || req["tool"] == nil {
 			t.Errorf("request %v lost its child fields", req)
 		}
+		if _, ok := req["input"]; ok {
+			t.Errorf("request %v carries its tool input; the aggregate drops it", req)
+		}
 	}
 	want := []string{live[0] + "/req-1", live[0] + "/req-2", live[1] + "/req-1", live[1] + "/req-2"}
 	if strings.Join(order, " ") != strings.Join(want, " ") {

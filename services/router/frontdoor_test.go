@@ -347,3 +347,27 @@ func TestViteDevProxyCoversEveryRouterPrefix(t *testing.T) {
 		}
 	}
 }
+
+// TestWindowWideReadsAreTheUsers: the window-wide GET /permission-requests
+// (every live session's pending requests) and GET /events/head are the
+// user's alone — a session's scoped token is refused (403), the install
+// token is let through. TestEveryRouterRouteNeedsTheToken covers them in
+// bulk; this names them, since one hands out every session's state at once.
+func TestWindowWideReadsAreTheUsers(t *testing.T) {
+	s := newRouterStack(t)
+	scoped, err := s.auth.scoped.Mint("x1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/permission-requests", "/events/head"} {
+		if w := s.do(t, "GET", path, withBearer(scoped)); w.Code != http.StatusForbidden {
+			t.Errorf("GET %s with a scoped token: %d, want 403", path, w.Code)
+		}
+		if w := s.do(t, "GET", path, nil); w.Code != http.StatusUnauthorized {
+			t.Errorf("GET %s with no token: %d, want 401", path, w.Code)
+		}
+		if w := s.do(t, "GET", path, withBearer(s.tokens.Token())); w.Code != http.StatusOK {
+			t.Errorf("GET %s with the install token: %d, want 200 (%s)", path, w.Code, w.Body)
+		}
+	}
+}

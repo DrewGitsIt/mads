@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionAgentState } from "./useSessionAgentState";
 import { router } from "../../../router/client";
-import { resetEventsBusForTests } from "../../../router/events";
+import { holdEventsHead } from "../../../router/testEventsBarrier";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import type { AgentState, Delegate, DelegateState, Session, SessionPermissionRequest } from "../../../router/types";
 
@@ -76,6 +76,11 @@ const MID_TURN: AgentState = {
 
 describe("useSessionAgentState", () => {
   beforeEach(() => {
+    // The fixtures' envelopes are stamped 2026-09-28T10:00Z and after: mount
+    // the hook before them, so they read as news (a sticky notice is staged
+    // only for what happened since the window subscribed). Only Date is
+    // faked; timers run as usual.
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-09-28T09:00:00Z") });
     seq = 0;
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
@@ -85,6 +90,7 @@ describe("useSessionAgentState", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -224,17 +230,11 @@ describe("useSessionAgentState", () => {
     // so an event committed after the snapshot can't fall below the cursor
     // and be lost, and one heard before the snapshot answers wins over it.
     it("reads the seed only after the head, and an event between subscribe and snapshot is neither lost nor overridden", async () => {
-      resetEventsBusForTests(); // the production first connect: head unknown
-      let head!: (r: Response) => void;
-      vi.stubGlobal(
-        "fetch",
-        vi.fn((url: string) =>
-          new URL(url).pathname === "/events/head" ? new Promise<Response>((r) => (head = r)) : Promise.resolve(new Response("[]")),
-        ),
-      );
+      const head = holdEventsHead();
       let answer!: (v: SessionPermissionRequest[]) => void;
       vi.mocked(router.listPermissionRequests).mockReturnValue(new Promise((r) => (answer = r)));
-      vi.mocked(router.listDelegatesEndedAfter).mockClear();
+      let answerDelegates!: (v: Delegate[]) => void;
+      vi.mocked(router.listDelegatesEndedAfter).mockReset().mockReturnValue(new Promise((r) => (answerDelegates = r)));
       const { result } = renderHook(() => useSessionAgentState());
       await act(async () => {});
       expect(router.listPermissionRequests).not.toHaveBeenCalled();
@@ -242,10 +242,16 @@ describe("useSessionAgentState", () => {
       expect(FakeEventSource.instances).toHaveLength(0);
 
       seq = 10;
-      await act(async () => head(new Response('{"seq":10}')));
+      await head.release(10);
       await waitFor(() => expect(router.listPermissionRequests).toHaveBeenCalledTimes(1));
       expect(router.listDelegatesEndedAfter).toHaveBeenCalledTimes(1);
       expect(new URL(FakeEventSource.instances[0].url).searchParams.get("since")).toBe("10");
+
+      // The cold read, likewise: a delegate that finished after it was read
+      // stays finished.
+      delegate("s1", "d1", "completed", { ended_at: "2026-09-28T10:00:00Z" });
+      await act(async () => answerDelegates([record("s1", "d1")]));
+      expect(result.current.s1?.subagents).toBe(0);
 
       // Both after the cursor, both before the snapshot answers: r1 resolved
       // (the snapshot, read earlier, still has it) and r2 newly parked (the
@@ -256,6 +262,27 @@ describe("useSessionAgentState", () => {
       expect(result.current.s1?.awaitingTool).toBe("Edit");
       expect(result.current.s1?.awaitingSince).toBe("2026-09-28T10:05:00Z");
     });
+  });
+
+  // The cursor outlives teardown, so coming back to the rail resumes from
+  // where it left off and delivers what happened meanwhile. That folds into
+  // state, but stages no sticky notice: it isn't news to this window.
+  it("folds a turn's end or a crash from before it mounted, without staging 'Done' or 'Crashed'", async () => {
+    const { result } = renderHook(() => useSessionAgentState());
+    working("s1", "Working…", "2026-09-28T08:00:00Z");
+    idle("s1", "2026-09-28T08:30:00Z"); // before the 09:00 mount
+    emit("session.crashed", "s2", { reason: "exit status 1" }, "2026-09-28T08:40:00Z");
+    emit("session.permission_requested", "s2", { request_id: "r9", tool: "Bash" }, "2026-09-28T08:35:00Z");
+    await act(async () => {});
+    expect(result.current.s1?.done).toBeUndefined();
+    expect(result.current.s1?.workingSince).toBeUndefined(); // the state still folded: idle
+    expect(result.current.s2?.crashed).toBeUndefined();
+
+    // Then news: the same transitions after the mount do stage them.
+    idle("s1", "2026-09-28T09:30:00Z");
+    emit("session.crashed", "s2", { reason: "exit status 1" }, "2026-09-28T09:31:00Z");
+    await waitFor(() => expect(result.current.s1?.done).toBe(true));
+    expect(result.current.s2?.crashed).toBe(true);
   });
 
   it("names the oldest park when two are outstanding", async () => {
@@ -395,6 +422,9 @@ describe("useSessionAgentState", () => {
   it("holds a waiting delegate as live — counted apart from running, never faded", async () => {
     // "0 min": a finished record would be gone at once; a waiting one isn't finished.
     const { result } = renderHook(() => useSessionAgentState([], undefined, 0));
+    // Mounted at 09:00 (beforeEach); the fade check reads the clock, which
+    // must be past every ended_at here.
+    vi.setSystemTime(new Date("2026-09-28T11:00:00Z"));
     delegate("s1", "m", "running");
     delegate("s1", "kid", "running", { parent_harness_id: "m" });
     await waitFor(() => expect(result.current.s1?.subagents).toBe(2));

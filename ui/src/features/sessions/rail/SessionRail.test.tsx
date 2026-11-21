@@ -1320,14 +1320,14 @@ describe("SessionRail status subscription", () => {
     return <SessionRail sessions={sessions} openTaskCounts={{}} agentStates={agentStates} />;
   }
 
-  function emitAgentState(sessionId: string, payload: unknown, seq = 1) {
+  function emitAgentState(sessionId: string, payload: unknown, seq = 1, timestamp = "2026-09-28T13:40:00Z") {
     const source = FakeEventSource.instances.filter((i) => !i.closed)[0];
     act(() => {
       source.emit(
         "session.agent_state",
         JSON.stringify({
           seq,
-          timestamp: "2026-09-28T13:40:00Z",
+          timestamp,
           type: "session.agent_state",
           actor: "agent",
           session_id: sessionId,
@@ -1347,7 +1347,10 @@ describe("SessionRail status subscription", () => {
 
     // The turn's end — reported whether or not the turn produced a digest
     // delta, which is what session.turn_ended could not promise.
-    emitAgentState("s7", { state: "idle", since: "2026-09-28T13:40:00Z" });
+    // Stamped now: "Done" is staged only for a turn that ended since the
+    // rail subscribed.
+    const now = new Date().toISOString();
+    emitAgentState("s7", { state: "idle", since: now }, 1, now);
 
     await waitFor(() => expect(statusOf("session 7").textContent).toBe("Done · your turn"));
     expect(statusOf("session 3").textContent).toBe("Idle");

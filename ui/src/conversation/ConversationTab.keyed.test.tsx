@@ -13,6 +13,7 @@ import { FakeRouterClient } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import { requestStreamReattach } from "./streamReattachSignal";
 import { frames, page } from "./keyed/testFrames";
+import { holdEventsHead } from "../router/testEventsBarrier";
 
 vi.mock("@monaco-editor/react", () => ({
   Editor: () => <textarea data-testid="fake-monaco-editor" />,
@@ -107,6 +108,59 @@ describe("ConversationTab — keyed conversation", () => {
     expect(screen.queryByText("and then the docs")).toBeNull();
     act(() => void source.user("and then the docs", { queued: true }));
     expect(screen.getAllByText("and then the docs")).toHaveLength(1);
+  });
+
+  // A resumed connection brings queue changes from before this tab mounted;
+  // the queue folds them, but an old failure is not this tab's to report.
+  it("folds an old queue_changed but reports only a failure that happened since it mounted", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
+    await mount(client);
+    const source = FakeEventSource.instances.find((s) => s.url.includes("session.queue_changed"))!;
+    const send = (timestamp: string, text: string) =>
+      act(() => {
+        source.emit(
+          "session.queue_changed",
+          JSON.stringify({
+            seq: nextSeq++,
+            timestamp,
+            type: "session.queue_changed",
+            actor: "system",
+            session_id: "session-active",
+            payload: { queued: [{ id: "q1", text, queued_at: timestamp }], failed: { id: "q0", text: "x" }, error: "boom" },
+          }),
+        );
+      });
+    send("2020-01-01T00:00:00Z", "queued long ago");
+    expect(screen.getByText("queued long ago")).toBeTruthy();
+    expect(screen.queryByText(/Couldn't send your queued message/)).toBeNull();
+
+    send(new Date(Date.now() + 1000).toISOString(), "queued just now");
+    await waitFor(() => expect(screen.getByText(/Couldn't send your queued message: boom/)).toBeTruthy());
+  });
+
+  // The ready barrier (router/events.ts eventsReady): the record, the event
+  // history, the delegates and the queue merge with live bus events, so none
+  // is read until the bus knows its cursor.
+  it("reads the record, history, delegates and queue only after the bus's head", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
+    const reads = {
+      session: vi.spyOn(client, "getSession"),
+      history: vi.spyOn(client, "getEvents"),
+      delegates: vi.spyOn(client, "getSessionDelegates"),
+      queue: vi.spyOn(client, "getQueue"),
+    };
+    const head = holdEventsHead();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    await waitFor(() => expect(client.v2Sources.length).toBeGreaterThan(0));
+    for (const read of Object.values(reads)) expect(read).not.toHaveBeenCalled();
+
+    await head.release(5);
+    await waitFor(() => {
+      for (const read of Object.values(reads)) expect(read).toHaveBeenCalled();
+    });
+    expect(reads.history).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "session-active" }));
   });
 
   describe("the queue seed (the bus never replays queue_changed)", () => {

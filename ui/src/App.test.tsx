@@ -75,7 +75,8 @@ describe("App", () => {
   // record ("Sleeping", a stale context %) and nothing said it was stale. The
   // warning is the shell's, above whichever surface is showing.
   it("warns that live updates are paused once the event stream keeps failing", async () => {
-    vi.stubGlobal("fetch", routedFetch({ "GET /config": fixtureConfig }));
+    // A reconnect after a drop re-reads the log's head first (a reset log).
+    vi.stubGlobal("fetch", routedFetch({ "GET /config": fixtureConfig, "GET /events/head": { seq: 0 } }));
     render(<App />);
     await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
     expect(screen.queryByText("Live updates paused")).toBeNull();

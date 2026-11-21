@@ -14,6 +14,19 @@ function envelope(seq: number, type = "session.created"): Envelope {
   return { seq, timestamp: "2026-07-15T00:00:00Z", type, actor: "user", session_id: "s1" };
 }
 
+/**
+ * A fetch that answers GET /events/head with the bus's own cursor (the log
+ * unchanged — what a reconnect after a drop rechecks) and anything else
+ * with `rest`.
+ */
+function withHead(rest: (url: string) => Promise<Response> = async () => new Response("[]", { status: 200 })) {
+  return vi.fn((url: string) =>
+    new URL(url).pathname === "/events/head"
+      ? Promise.resolve(new Response(JSON.stringify({ seq: getEventsCursorForTests() ?? 0 }), { status: 200 }))
+      : rest(url),
+  );
+}
+
 describe("subscribeToEvents", () => {
   const unsubscribes: (() => void)[] = [];
 
@@ -26,6 +39,7 @@ describe("subscribeToEvents", () => {
   beforeEach(() => {
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", withHead());
   });
 
   afterEach(() => {
@@ -143,7 +157,7 @@ describe("subscribeToEvents", () => {
     expect(second).toHaveBeenCalledWith(expect.objectContaining({ seq: 11 }));
   });
 
-  it("delivers every seq exactly once across a dropped connection resumed via cursor", () => {
+  it("delivers every seq exactly once across a dropped connection resumed via cursor", async () => {
     vi.useFakeTimers();
     const onEvent = vi.fn();
     subscribe({ types: ["session.created"] }, onEvent);
@@ -154,7 +168,7 @@ describe("subscribeToEvents", () => {
 
     first.simulateError();
     expect(first.closed).toBe(true);
-    vi.advanceTimersByTime(30_000); // clears any backoff/jitter delay
+    await vi.advanceTimersByTimeAsync(30_000); // clears any backoff/jitter delay (and the head recheck)
 
     expect(FakeEventSource.instances).toHaveLength(2);
     const second = FakeEventSource.instances[1];
@@ -170,7 +184,7 @@ describe("subscribeToEvents", () => {
     expect(onEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({ seq: 2 }));
   });
 
-  it("drops and reconnects rather than growing the dispatch queue unbounded, replaying every seq exactly once after", () => {
+  it("drops and reconnects rather than growing the dispatch queue unbounded, replaying every seq exactly once after", async () => {
     vi.useFakeTimers();
     const received: number[] = [];
     let triggered = false;
@@ -195,7 +209,7 @@ describe("subscribeToEvents", () => {
     expect(received).toEqual([1]);
     expect(first.closed).toBe(true);
 
-    vi.advanceTimersByTime(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
     expect(FakeEventSource.instances).toHaveLength(2);
     const second = FakeEventSource.instances[1];
     expect(new URL(second.url).searchParams.get("since")).toBe("1");
@@ -209,7 +223,7 @@ describe("subscribeToEvents", () => {
   // registered got the whole shared stream refused, and the reconnect loop
   // retried the same URL forever — every live view in the window froze.
   it("drops a type the server refuses and reconnects at once without it", async () => {
-    const fetchMock = vi.fn(async (url: string) => {
+    const fetchMock = withHead(async (url: string) => {
       const types = new URL(url).searchParams.get("types") ?? "";
       if (!types.includes("session.queue_changed")) return new Response("[]", { status: 200 });
       return new Response(
@@ -245,7 +259,7 @@ describe("subscribeToEvents", () => {
 
   it("leaves the ordinary backoff in charge when the probe finds nothing refused", async () => {
     vi.useFakeTimers();
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
+    vi.stubGlobal("fetch", withHead());
     subscribe({ types: ["session.created"] }, () => {});
     FakeEventSource.instances[0].simulateError();
     await vi.advanceTimersByTimeAsync(0);
@@ -257,7 +271,7 @@ describe("subscribeToEvents", () => {
 
   it("reports failing after repeated connect errors, and live again once data flows", async () => {
     vi.useFakeTimers();
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
+    vi.stubGlobal("fetch", withHead());
     const seen: string[] = [];
     const stop = subscribeToBusHealth((h) => seen.push(h.state));
     subscribe({ types: ["session.created"] }, () => {});
@@ -398,12 +412,15 @@ describe("subscribeToEvents", () => {
     it("eventsReady resolves once the head lands, and stays resolved across drop, widen and teardown", async () => {
       vi.useFakeTimers();
       let answer!: (r: Response) => void;
+      let heads = 0;
       vi.stubGlobal(
         "fetch",
         vi.fn((url: string) =>
-          new URL(url).pathname === "/events/head"
-            ? new Promise<Response>((r) => (answer = r))
-            : Promise.resolve(new Response("[]", { status: 200 })),
+          new URL(url).pathname !== "/events/head"
+            ? Promise.resolve(new Response("[]", { status: 200 }))
+            : ++heads === 1
+              ? new Promise<Response>((r) => (answer = r))
+              : Promise.resolve(new Response('{"seq":12}', { status: 200 })),
         ),
       );
       let readied = 0;
@@ -425,9 +442,12 @@ describe("subscribeToEvents", () => {
       void eventsReady().then(() => (after = true));
       await vi.advanceTimersByTimeAsync(0);
       expect(after).toBe(true);
-      // And nothing reads the head again: the cursor is known.
+      // The cursor is known: the only head read since is the recheck the
+      // drop asked for, on the next connect.
       subscribe({ types: ["session.created"] }, () => {});
-      expect(vi.mocked(fetch).mock.calls.filter(([u]) => new URL(String(u)).pathname === "/events/head")).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(heads).toBe(2);
+      expect(readied).toBe(1);
       expect(new URL(FakeEventSource.instances.at(-1)!.url).searchParams.get("since")).toBe("12");
     });
   });
@@ -442,7 +462,7 @@ describe("subscribeToEvents", () => {
       vi.useFakeTimers();
       // Every backoff draws its full window, so a pending retry is plainly pending.
       vi.spyOn(Math, "random").mockReturnValue(0.999);
-      vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
+      vi.stubGlobal("fetch", withHead());
     });
 
     afterEach(() => {
@@ -477,6 +497,7 @@ describe("subscribeToEvents", () => {
       const before = FakeEventSource.instances.length;
 
       window.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(0); // the head recheck a drop asks for; no time passes
       expect(FakeEventSource.instances).toHaveLength(before + 1);
       expect(new URL(FakeEventSource.instances.at(-1)!.url).searchParams.get("since")).toBe("6");
 
@@ -494,6 +515,7 @@ describe("subscribeToEvents", () => {
       setVisibility("hidden");
       expect(FakeEventSource.instances).toHaveLength(1);
       setVisibility("visible");
+      await vi.advanceTimersByTimeAsync(0); // the head recheck a drop asks for; no time passes
       expect(FakeEventSource.instances).toHaveLength(2);
     });
 
@@ -528,6 +550,36 @@ describe("subscribeToEvents", () => {
 
       subscribe({ types: ["session.created"] }, () => {});
       expect(add.mock.calls.filter(([t]) => t === "online")).toHaveLength(2);
+    });
+
+    it("ignores online/visible while a head read is pending — no second head read", async () => {
+      resetEventsBusForTests();
+      let heads = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) =>
+          new URL(url).pathname === "/events/head" ? (heads++, new Promise<Response>(() => {})) : Promise.resolve(new Response("[]")),
+        ),
+      );
+      subscribe({ types: ["session.created"] }, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      window.dispatchEvent(new Event("online"));
+      setVisibility("visible");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(heads).toBe(1);
+      expect(FakeEventSource.instances).toHaveLength(0);
+    });
+
+    // Deliberate: a widen is the subscriber asking for a type now, so it
+    // reopens at once even while the open connection hasn't said "open"
+    // yet — it is not a retry, so there is no backoff to respect.
+    it("widens at once even while the open connection is still connecting", () => {
+      subscribe({ types: ["session.created"] }, () => {});
+      const connecting = FakeEventSource.instances[0]; // never emitted "open"
+      subscribe({ types: ["task.created"] }, () => {});
+      expect(connecting.closed).toBe(true);
+      expect(FakeEventSource.instances).toHaveLength(2);
+      expect(new URL(FakeEventSource.instances[1].url).searchParams.get("types")).toBe("session.created,task.created");
     });
 
     it("re-reads the head at once on coming back online after a failed head read", async () => {
@@ -578,5 +630,134 @@ describe("subscribeToEvents", () => {
       "task.created",
       "turn.started",
     ]);
+  });
+  describe("resilience", () => {
+    it("ignores a probe that answers for an earlier life of the bus (after teardown and a resubscribe)", async () => {
+      vi.useFakeTimers();
+      let answerProbe!: (r: Response) => void;
+      vi.stubGlobal(
+        "fetch",
+        withHead((url) =>
+          new URL(url).searchParams.get("since") === String(Number.MAX_SAFE_INTEGER)
+            ? new Promise<Response>((r) => (answerProbe = r))
+            : Promise.resolve(new Response("[]")),
+        ),
+      );
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const un = subscribe({ types: ["session.queue_changed"] }, () => {});
+      FakeEventSource.instances[0].simulateError(); // the probe goes out
+      un();
+      unsubscribes.splice(0); // teardown: a new life
+      subscribe({ types: ["session.queue_changed"] }, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      const open = FakeEventSource.instances.length;
+
+      answerProbe(
+        new Response(
+          JSON.stringify({ errors: [{ field: "types", message: '"session.queue_changed" is neither a registered event type' }] }),
+          { status: 422 },
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getBusHealth().ignoredTypes).toEqual([]);
+      expect(FakeEventSource.instances).toHaveLength(open);
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("resumes from the log's end when, after a drop, the log turns out to have been reset below the cursor", async () => {
+      vi.useFakeTimers();
+      let head = 40;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) =>
+          new URL(url).pathname === "/events/head"
+            ? Promise.resolve(new Response(JSON.stringify({ seq: head })))
+            : Promise.resolve(new Response("[]")),
+        ),
+      );
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const onEvent = vi.fn();
+      subscribe({ types: ["session.created"] }, onEvent);
+      FakeEventSource.instances[0].emit("session.created", JSON.stringify(envelope(40)));
+
+      head = 3; // the Data Service came back with a fresh log
+      FakeEventSource.instances[0].simulateError();
+      await vi.advanceTimersByTimeAsync(30_000);
+      const resumed = FakeEventSource.instances.at(-1)!;
+      expect(new URL(resumed.url).searchParams.get("since")).toBe("3");
+      resumed.emit("session.created", JSON.stringify(envelope(4)));
+      expect(onEvent).toHaveBeenLastCalledWith(expect.objectContaining({ seq: 4 }));
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      // Once only, however many times it happens.
+      head = 1;
+      resumed.simulateError();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(new URL(FakeEventSource.instances.at(-1)!.url).searchParams.get("since")).toBe("1");
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the cursor when the log only moved on during a drop", async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) =>
+          Promise.resolve(new Response(new URL(url).pathname === "/events/head" ? '{"seq":90}' : "[]")),
+        ),
+      );
+      subscribe({ types: ["session.created"] }, () => {});
+      FakeEventSource.instances[0].emit("session.created", JSON.stringify(envelope(8)));
+      FakeEventSource.instances[0].simulateError();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(new URL(FakeEventSource.instances.at(-1)!.url).searchParams.get("since")).toBe("8");
+    });
+
+    it("gives up on a head read after 10 s, as a failed connect, and retries", async () => {
+      resetEventsBusForTests();
+      vi.useFakeTimers();
+      let heads = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string, init?: RequestInit) => {
+          if (new URL(url).pathname !== "/events/head") return Promise.resolve(new Response("[]"));
+          if (++heads > 1) return Promise.resolve(new Response('{"seq":5}'));
+          // Hangs until aborted.
+          return new Promise<Response>((_, reject) =>
+            init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))),
+          );
+        }),
+      );
+      subscribe({ types: ["session.created"] }, () => {});
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(FakeEventSource.instances).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(heads).toBe(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(heads).toBe(2);
+      expect(FakeEventSource.instances).toHaveLength(1);
+      expect(new URL(FakeEventSource.instances[0].url).searchParams.get("since")).toBe("5");
+    });
+
+    it("drops what the old connection queued when a subscriber widens mid-drain — the new one redelivers it, and nothing of the new type is skipped", () => {
+      const sessions: number[] = [];
+      const tasks: number[] = [];
+      let widened = false;
+      subscribe({ types: ["session.created"] }, (env) => {
+        sessions.push(env.seq);
+        if (widened) return;
+        widened = true;
+        // A burst arrives while this is handled, and the handler widens.
+        FakeEventSource.instances[0].emit("session.created", JSON.stringify(envelope(12)));
+        subscribe({ types: ["task.created"] }, (e) => tasks.push(e.seq));
+      });
+      FakeEventSource.instances[0].emit("session.created", JSON.stringify(envelope(10)));
+      const fresh = FakeEventSource.instances[1];
+      expect(new URL(fresh.url).searchParams.get("since")).toBe("10");
+      // The new connection resumes from 10: task 11 is owed and must arrive.
+      fresh.emit("task.created", JSON.stringify(envelope(11, "task.created")));
+      fresh.emit("session.created", JSON.stringify(envelope(12)));
+      expect(tasks).toEqual([11]);
+      expect(sessions).toEqual([10, 12]);
+    });
   });
 });

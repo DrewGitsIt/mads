@@ -12,13 +12,16 @@ interface Subscription {
   onEvent: (envelope: Envelope) => void;
 }
 
-// Generous margin, not a tuning knob: a reconnect after a long gap (a sleep,
-// a Retro round trip) resumes from the cursor and can bring a few hundred
-// envelopes at once. SSE has no app-level backpressure; if the dispatch queue
+// The dispatch queue only grows when a subscriber's onEvent makes more frames
+// arrive while it is still running (EventSource delivers one frame per task
+// otherwise, so a burst after a reconnect drains as it comes). Generous
+// margin, not a tuning knob. SSE has no app-level backpressure; if the queue
 // would ever exceed this, the durable log + cursor is the recovery mechanism,
 // not an in-memory buffer — drop the connection and resume from the cursor
 // rather than buffer unboundedly.
 const MAX_QUEUE = 500;
+// How long a GET /events/head may take before it counts as a failed connect.
+const HEAD_TIMEOUT_MS = 10_000;
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_MAX_MS = 30000;
 
@@ -70,9 +73,19 @@ let cursor: number | undefined;
 // Bumped by every connect attempt and teardown, so a head read that lands
 // after either can't open a connection nobody asked for.
 let connectGen = 0;
-// The first connect is waiting on GET /events/head. It reads the subscriber
-// union when the head lands, so subscribes in the meantime fold into it.
+// A connect is waiting on GET /events/head (the first one, or a recheck after
+// an error). It reads the subscriber union when the head lands, so
+// subscribes in the meantime fold into it.
 let headPending = false;
+// Set by a failed connection: the next connect re-reads the head first, in
+// case the Data Service's log was reset (wiped, or swapped for another)
+// while this window stayed open — a cursor above the new log's end would
+// otherwise skip everything until the new log caught up with it.
+let recheckHead = false;
+let warnedLogReset = false;
+// Bumped at teardown: a probe that answers for an earlier life of the bus
+// (before the last subscriber left) is ignored.
+let lifeGen = 0;
 let reconnectAttempt = 0;
 // Types the server refused to filter on — dropped from the connection's
 // union for the rest of this bus's life (see probeRejectedTypes). A refused
@@ -223,15 +236,24 @@ async function probeRejectedTypes(types: string[]): Promise<string[]> {
 }
 
 async function fetchHead(): Promise<number> {
-  const res = await fetch(new URL("/events/head", ROUTER_BASE || window.location.origin).toString(), {
-    headers: { Accept: "application/json" },
-  });
-  if (!res.ok) throw new Error(`GET /events/head: ${res.status}`);
-  const body = (await res.json()) as { seq?: unknown };
-  if (typeof body.seq !== "number" || !Number.isFinite(body.seq) || body.seq < 0) {
-    throw new Error("GET /events/head: no seq");
+  // A head read that hangs would hold every connect (and the ready barrier)
+  // forever: give up after HEAD_TIMEOUT_MS, which counts as a failed connect.
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), HEAD_TIMEOUT_MS);
+  try {
+    const res = await fetch(new URL("/events/head", ROUTER_BASE || window.location.origin).toString(), {
+      headers: { Accept: "application/json" },
+      signal: abort.signal,
+    });
+    if (!res.ok) throw new Error(`GET /events/head: ${res.status}`);
+    const body = (await res.json()) as { seq?: unknown };
+    if (typeof body.seq !== "number" || !Number.isFinite(body.seq) || body.seq < 0) {
+      throw new Error("GET /events/head: no seq");
+    }
+    return body.seq;
+  } finally {
+    clearTimeout(timer);
   }
-  return body.seq;
 }
 
 function buildUrl(types: string[], since: number): string {
@@ -288,11 +310,13 @@ function handleFrame(e: MessageEvent<string>): void {
 function onConnectError(): void {
   consecutiveFailures++;
   if (consecutiveFailures >= FAILING_AFTER) setHealth("failing");
+  recheckHead = true;
   const attempted = unionTypes();
+  const life = lifeGen;
   scheduleReconnect();
   void probeRejectedTypes(attempted).then((refused) => {
     const fresh = refused.filter((t) => !rejectedTypes.has(t));
-    if (fresh.length === 0 || subscriptions.size === 0) return;
+    if (fresh.length === 0 || subscriptions.size === 0 || life !== lifeGen) return;
     for (const t of fresh) rejectedTypes.add(t);
     console.warn(
       `events: the server refused ${fresh.join(", ")}; live updates continue without ${fresh.length === 1 ? "it" : "them"}`,
@@ -322,20 +346,37 @@ function openConnection(): void {
   source = null;
   if (reconnectTimer) clearTimeout(reconnectTimer);
   reconnectTimer = undefined;
+  // Whatever the old connection queued is redelivered by the new one (it
+  // resumes from the cursor, which only dispatching advances). Dispatching
+  // it anyway could push the cursor past events of a type the new
+  // connection adds, and they would then be dropped as already seen.
+  queue = [];
   const gen = ++connectGen;
-  if (cursor !== undefined) {
+  if (cursor !== undefined && !recheckHead) {
     openSource();
     return;
   }
   // First connect on this window: learn where the log ends and start there.
+  // After a failed connection: check the log still reaches the cursor.
   // A failed read is a failed connect — same backoff, same health.
   headPending = true;
   fetchHead().then(
     (head) => {
       if (gen !== connectGen) return;
       headPending = false;
-      cursor = head;
-      markReady();
+      recheckHead = false;
+      if (cursor === undefined) {
+        cursor = head;
+        markReady();
+      } else if (head < cursor) {
+        // The log is behind us: it was reset. Nothing past its end exists,
+        // so resume from its end rather than wait for it to pass the old one.
+        if (!warnedLogReset) {
+          warnedLogReset = true;
+          console.warn(`events: the event log restarted below this window's cursor (${head} < ${cursor}); resuming from ${head}`);
+        }
+        cursor = head;
+      }
       if (subscriptions.size > 0) openSource();
     },
     () => {
@@ -401,6 +442,7 @@ function teardown(): void {
   source?.close();
   source = null;
   connectGen++;
+  lifeGen++;
   headPending = false;
   connectedTypes = new Set();
   rejectedTypes = new Set();
@@ -460,6 +502,31 @@ export function subscribeToEvents(
 }
 
 /**
+ * Whether `env` happened at or after `since` (a Date.now() value) — for the
+ * notice-style side effects a subscriber should fire only for news.
+ *
+ * The cursor outlives teardown and trails the head while the carried types
+ * are quiet, so a resumed or widened connection delivers what happened while
+ * this subscriber wasn't looking. Folding those into state is right (it
+ * converges on the log); popping an error banner or staging a sticky
+ * "Done" for them is not. Gate those on the subscriber's mount time:
+ *
+ *   const mountedAt = Date.now();               // when the effect subscribes
+ *   ...if (happenedSince(env, mountedAt)) notify();
+ *
+ * By time, not by seq: a seq boundary would need the log's head at the
+ * moment of subscribing (the cursor trails it, so "seq > the cursor at
+ * subscribe" admits exactly the stale events this filters), which is a
+ * request per subscribe. The Data Service stamps envelopes with the same
+ * machine's clock the window reads. An envelope without a readable stamp
+ * counts as news.
+ */
+export function happenedSince(env: Envelope, since: number): boolean {
+  const at = Date.parse(env.timestamp);
+  return !Number.isFinite(at) || at >= since;
+}
+
+/**
  * Test hook: forget everything, the cursor and readiness included.
  * `primeCursor` sets the cursor (and readiness) as if a head read had
  * returned it, so a first subscribe opens synchronously — since omitted at
@@ -469,6 +536,8 @@ export function resetEventsBusForTests(primeCursor?: number): void {
   teardown();
   subscriptions.clear();
   cursor = primeCursor;
+  recheckHead = false;
+  warnedLogReset = false;
   ready = newReady();
   if (primeCursor !== undefined) markReady();
   health = { state: "connecting", ignoredTypes: [] };

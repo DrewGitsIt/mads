@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { router } from "../../../router/client";
-import { eventsReady, subscribeToEvents } from "../../../router/events";
+import { eventsReady, happenedSince, subscribeToEvents } from "../../../router/events";
 import { DEFAULT_DELEGATE_FADE_MS } from "../rail/DelegateRows";
 import { isLiveDelegate } from "../../../router/delegateLive";
 import type { SessionAgentState } from "../rail/railGroups";
@@ -160,7 +160,14 @@ function pruneRecent(fold: Fold, fadeMs: number, now: number): void {
   }
 }
 
-function apply(fold: Fold, env: Envelope, fadeMs: number): void {
+/**
+ * `news`: the envelope happened since this window subscribed. A resumed or
+ * widened connection also brings what happened while it wasn't looking
+ * (router/events.ts happenedSince); that folds into state like anything
+ * else, but stages no sticky notice ("Done · your turn", "Crashed") — the
+ * same as after a reload.
+ */
+function apply(fold: Fold, env: Envelope, fadeMs: number, news = true): void {
   // Parsed, not string-compared: RFC3339Nano drops trailing zeros, so ".1Z" sorts after ".12Z".
   if (env.timestamp && (!fold.heardAt || Date.parse(env.timestamp) > Date.parse(fold.heardAt))) {
     fold.heardAt = env.timestamp;
@@ -189,7 +196,7 @@ function apply(fold: Fold, env: Envelope, fadeMs: number): void {
       // ends — retiring it here is what used to read a busy session "Ready".
       fold.pending.clear();
       fold.parksClearedLive = true;
-      fold.done = true;
+      if (news) fold.done = true;
       return;
     }
     case "session.activity_changed": {
@@ -211,7 +218,7 @@ function apply(fold: Fold, env: Envelope, fadeMs: number): void {
       // A crash ends whatever was in flight — nothing is working, parked or
       // waiting on the user any more. The idle marker is deliberate: it stops
       // a stale working mirror on the record from re-animating the card.
-      fold.crashed = true;
+      fold.crashed = news;
       fold.done = false;
       fold.live = { state: "idle", since: env.timestamp };
       clearInFlight(fold);
@@ -383,6 +390,7 @@ export function useSessionAgentState(
   const publish = useCallback(() => setStates(project(folds.current, sessionsRef.current)), []);
 
   useEffect(() => {
+    const mountedAt = Date.now();
     const unsubscribe = subscribeToEvents({ types: AGENT_STATE_EVENT_TYPES }, (env) => {
       if (!env.session_id) return;
       let fold = folds.current.get(env.session_id);
@@ -390,7 +398,7 @@ export function useSessionAgentState(
         fold = emptyFold();
         folds.current.set(env.session_id, fold);
       }
-      apply(fold, env, fadeRef.current);
+      apply(fold, env, fadeRef.current, happenedSince(env, mountedAt));
       // A turn that ends in the session you're looking at was never news.
       if (env.session_id === openRef.current) fold.done = false;
       publish();

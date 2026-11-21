@@ -896,6 +896,7 @@ export interface PermissionRequest {
 
 // One entry of the Router's window-wide GET /permission-requests: a live
 // session child's pending request, tagged with the session it belongs to.
+// It never carries `input` (the Router drops it: the rail names only the tool).
 export interface SessionPermissionRequest extends PermissionRequest {
   session_id: string;
 }

@@ -17,6 +17,11 @@ import (
 // A var only so tests can shorten it.
 var permissionRequestsChildTimeout = 2 * time.Second
 
+// permissionRequestsFanOut caps how many children are asked at once, so a
+// window with very many live sessions doesn't open a socket to every one of
+// them in the same instant.
+const permissionRequestsFanOut = 16
+
 // handleAllPermissionRequests answers GET /permission-requests: every live
 // session child's still-pending permission requests in one response, each
 // tagged with its session_id. The UI's event bus is live-only (it never
@@ -31,6 +36,10 @@ var permissionRequestsChildTimeout = 2 * time.Second
 // carry that session's next request or resolution. Sessions without a live
 // child have nothing pending (requests live in the child's memory). Order is
 // deterministic: by session_id, then request id.
+//
+// Each request goes out without its tool `input`: the rail names only the
+// tool, and an input (a whole file for an Edit) can be large. The chat's
+// per-session GET /sessions/{id}/permission-requests still carries it.
 func (s *server) handleAllPermissionRequests(w http.ResponseWriter, r *http.Request) {
 	out := []map[string]any{}
 	if s.sup == nil {
@@ -39,19 +48,27 @@ func (s *server) handleAllPermissionRequests(w http.ResponseWriter, r *http.Requ
 	}
 	addrs := s.sup.SessionAddrs()
 	var (
-		mu sync.Mutex
-		wg sync.WaitGroup
+		mu  sync.Mutex
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, permissionRequestsFanOut)
 	)
 	for sessionID, addr := range addrs {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-r.Context().Done():
+				return
+			}
 			ctx, cancel := context.WithTimeout(r.Context(), permissionRequestsChildTimeout)
 			defer cancel()
 			reqs := fetchChildPermissionRequests(ctx, addr)
 			mu.Lock()
 			defer mu.Unlock()
 			for _, req := range reqs {
+				delete(req, "input")
 				req["session_id"] = sessionID
 				out = append(out, req)
 			}

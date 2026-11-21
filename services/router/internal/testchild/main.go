@@ -295,7 +295,7 @@ func main() {
 		}
 		// Out of id order, so the Router's own sort is what the test sees.
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `[{"id":"req-2","tool":"Edit","status":"pending"},{"id":"req-1","tool":"Bash","status":"pending"}]`)
+		_, _ = io.WriteString(w, `[{"id":"req-2","tool":"Edit","status":"pending","input":{"file_path":"a.go"}},{"id":"req-1","tool":"Bash","status":"pending","input":{"command":"ls"}}]`)
 	})
 	log.Fatal(http.Serve(ln, mux))
 }

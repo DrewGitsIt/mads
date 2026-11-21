@@ -7,7 +7,7 @@ import {
   SESSIONS_FETCH_TIMEOUT_MS,
   subscribeSessions,
 } from "./sessionsStore";
-import { resetEventsBusForTests } from "./events";
+import { holdEventsHead } from "./testEventsBarrier";
 import { FakeEventSource } from "./testFakeEventSource";
 import type { Session } from "./types";
 
@@ -60,13 +60,10 @@ describe("sessionsStore", () => {
   // before the bus read its head would never be heard. So the mount read
   // waits for the head, and sees that change itself.
   it("reads after the bus's head, so a change landing between subscribe and head is still shown", async () => {
-    resetEventsBusForTests(); // the production first connect: head unknown
-    const head = deferred<Response>();
     let server = [makeSession("s1", "inactive")];
-    const fetchMock = vi.fn((url: string) =>
-      new URL(url).pathname === "/events/head" ? head.promise : Promise.resolve(ok(server)),
-    );
+    const fetchMock = vi.fn(() => Promise.resolve(ok(server)));
     vi.stubGlobal("fetch", fetchMock);
+    const head = holdEventsHead();
 
     const { result } = renderHook(() => useSessionsList());
     await act(async () => {});
@@ -75,7 +72,7 @@ describe("sessionsStore", () => {
     // s1 wakes (its session.updated is seq 7) before the head is read, so
     // the stream starts after it and never delivers it.
     server = [makeSession("s1", "active")];
-    await act(async () => head.resolve(ok({ seq: 7 })));
+    await head.release(7);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
