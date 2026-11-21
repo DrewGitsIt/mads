@@ -83,7 +83,9 @@ func NewHandler(opts Options, door func(classify func(r *http.Request) string) *
 	if layer != nil && layer.Wrap != nil {
 		inner = layer.Wrap(mux)
 	}
-	return door(Classify(mux, layer)).Wrap(withCORS(allowed, inner))
+	classify := Classify(mux, layer)
+	// no-store outside the layer, so its own answers (/peers/...) get it too.
+	return door(classify).Wrap(withCORS(allowed, withNoStore(classify, inner)))
 }
 
 // ownSession holds a scoped caller to its own session: the path's {id}

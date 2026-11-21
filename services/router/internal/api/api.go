@@ -152,7 +152,8 @@ func New(opts Options) http.Handler {
 	if allowed == nil {
 		allowed = func(string) bool { return false }
 	}
-	return withCORS(allowed, NewMux(opts))
+	mux := NewMux(opts)
+	return withCORS(allowed, withNoStore(Classify(mux, nil), mux))
 }
 
 // NewMux builds the Router's route table without the CORS wrapper. Exported
