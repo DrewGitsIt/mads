@@ -605,6 +605,16 @@ sanctioned idiom for live SSE updates alongside the `RouterClient` singleton
 for request/response calls. The server always names the
 SSE `event:` field after the envelope's own type (never a generic `message`
 event), so callers must pass the explicit `types` they want to receive.
+The bus is live-only: it reads `GET /events/head`, connects with
+`since=<head>` and resumes from its own cursor after that, so it never
+replays history (a `/events/head` 404/405 means the Router or Data Service
+predates the UI: the "Restart mads" banner). History comes from REST. A
+consumer that reads state on mount does it in four steps: (1) subscribe,
+(2) `await eventsReady()`, (3) read over REST, (4) merge the read with
+whatever events arrived meanwhile (live wins, or dedupe by seq). Why
+that order loses nothing is written as THE CONTRACT at the top of
+`events.ts`; `eventsReadyGuard.test.ts` fails any subscriber that skips the
+barrier unless it's on its live-only allowlist.
 `src/router/types.ts` hand-mirrors the `pkg/contracts` wire shapes actually
 consumed by the UI (snake_case fields, matching the JSON on the wire — no
 camelCase translation layer). Like the component kit and `tokens.css`, this

@@ -73,6 +73,9 @@ the UI) and the other services (writes via lease, event append via outbox).
   seq-ordered. Plain request: one JSON batch (capped at 500; page with `since`).
   With `Accept: text/event-stream`: history replay from the cursor, then live pushes;
   each SSE message's `id` is the event seq, so clients resume with `since=<last id>`.
+- `GET /events/head` — `{"seq": N}`, the log's current max seq (0 when empty). A client
+  that seeds its state over REST streams with `since=<head>` from then on, so the stream
+  never replays history to it.
 
 Task routes (spec §3–§4; mutations carry `X-Mads-Actor`, defaulting to `user`):
 

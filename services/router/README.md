@@ -224,6 +224,15 @@ pattern lookup.
   `id:`/`event:`/`data:` framing the Data Service uses, so a reconnecting client's
   `since=<last id>` resumes without gaps whether it's talking to the Data Service directly
   or through Router.
+- `GET /events/head` — proxies the Data Service's `GET /events/head`: `{"seq": N}`, the
+  log's current max seq. The UI's event bus reads it before its first connect and streams
+  with `since=N`, so it never replays history (`ui/src/router/events.ts`).
+- `GET /permission-requests` — every live session child's still-pending permission
+  requests in one response, each tagged with its `session_id` and without its tool `input`
+  (the per-session `GET /sessions/{id}/permission-requests` still carries it). The rail
+  seeds "Needs approval" from this once on mount. Children are asked concurrently, each
+  within 2 s; one that fails or times out contributes nothing, and its live events still
+  carry its next request.
 - `GET /sessions/{id}/output`, `GET /pipelines/{id}/output` — the UI's data-plane
   subscription point: a byte-transparent reverse proxy to the running child's own
   `GET /output` SSE endpoint. 404 if the session/pipeline isn't currently running.
