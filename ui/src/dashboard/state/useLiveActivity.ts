@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { coalesce } from "../../router/coalesce";
-import { subscribeToEvents } from "../../router/events";
+import { eventsReady, subscribeToEvents } from "../../router/events";
 import type { MetricsClient } from "../client/metricsClient";
 
 // session.* domain, same list as useSessionsList.ts. pipeline.* domain, same
@@ -51,10 +51,15 @@ export function useLiveActivity(client: MetricsClient): UseLiveActivity {
     };
     // A reconnect can bring a burst (everything since the bus's cursor):
     // coalesce it, and any live one, into a run or two rather than a pair of
-    // fetches per event. The mount fetch is immediate.
+    // fetches per event. The mount fetch goes first, once the bus is ready.
     const refresh = coalesce(refetch);
-    refresh.now();
     const unsubscribe = subscribeToEvents({ types: LIVE_EVENT_TYPES }, () => refresh.request());
+    // The mount read waits for the bus's ready barrier (router/events.ts
+    // eventsReady), subscribed first: the bus never replays, so a read served
+    // before it fixes its cursor could miss an event landing in between.
+    void eventsReady().then(() => {
+      if (!cancelled) refresh.now();
+    });
     return () => {
       cancelled = true;
       refresh.cancel();

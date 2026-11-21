@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { RouterClient } from "../../router/client";
-import { subscribeToEvents } from "../../router/events";
+import { eventsReady, subscribeToEvents } from "../../router/events";
 import type { SessionAuth } from "../../router/types";
 
 const AUTH_EVENT_TYPES = ["account.auth_changed"];
@@ -33,8 +33,13 @@ export function useSessionAuth(
         () => !cancelled && setAuth(undefined),
       );
     }
-    load();
     const unsubscribe = subscribeToEvents({ types: AUTH_EVENT_TYPES }, load);
+    // The mount read waits for the bus's ready barrier (router/events.ts
+    // eventsReady), subscribed first: the bus never replays, so a read served
+    // before it fixes its cursor could miss an event landing in between.
+    void eventsReady().then(() => {
+      if (!cancelled) load();
+    });
     return () => {
       cancelled = true;
       unsubscribe();

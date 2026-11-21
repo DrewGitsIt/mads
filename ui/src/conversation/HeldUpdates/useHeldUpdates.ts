@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RouterClient } from "../../router/client";
-import { subscribeToEvents } from "../../router/events";
+import { eventsReady, subscribeToEvents } from "../../router/events";
 import type { HeldUpdate } from "../../router/types";
 
 const HELD_EVENT_TYPES = ["session.updated"];
@@ -55,8 +55,17 @@ export function useHeldUpdates(
     setLists({ held: NONE, discarded: NONE });
   }, [routerClient, sessionId]);
 
+  // Behind the bus's ready barrier (router/events.ts eventsReady), like
+  // every read that live events keep current: the subscription below is
+  // registered first (same commit), so nothing lands unseen in between.
   useEffect(() => {
-    if (latest.current.waiting > 0 || latest.current.listed) load();
+    let cancelled = false;
+    void eventsReady().then(() => {
+      if (!cancelled && (latest.current.waiting > 0 || latest.current.listed)) load();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [load, waiting, token]);
 
   useEffect(

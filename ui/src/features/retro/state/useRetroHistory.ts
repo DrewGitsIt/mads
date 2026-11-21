@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { router } from "../../../router/client";
-import { subscribeToEvents } from "../../../router/events";
+import { eventsReady, subscribeToEvents } from "../../../router/events";
 import { RETRO_LIST_EVENT_TYPES } from "../events";
 import type { Retro } from "../../../router/types";
 
@@ -30,11 +30,18 @@ export function useRetroHistory(): UseRetroHistory {
 
   useEffect(() => {
     mounted.current = true;
-    void refetch();
+    let live = true;
     const unsubscribe = subscribeToEvents({ types: RETRO_LIST_EVENT_TYPES }, () => {
       void refetch();
     });
+    // The mount read waits for the bus's ready barrier (router/events.ts
+    // eventsReady), subscribed first: the bus never replays, so a read served
+    // before it fixes its cursor could miss an event landing in between.
+    void eventsReady().then(() => {
+      if (live) void refetch();
+    });
     return () => {
+      live = false;
       mounted.current = false;
       unsubscribe();
     };

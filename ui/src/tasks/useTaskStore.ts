@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { RouterClient } from "../router/client";
-import { subscribeToEvents } from "../router/events";
+import { eventsReady, subscribeToEvents } from "../router/events";
 import type { Task } from "../router/types";
 
 export interface TaskStore {
@@ -33,10 +33,6 @@ export function useTaskStore(routerClient: RouterClient, sessionId: string): Tas
 
   useEffect(() => {
     let cancelled = false;
-    routerClient.listTasks(sessionId).then((t) => {
-      if (!cancelled) setTasks(t);
-    });
-
     const unsubscribe = subscribeToEvents({ sessionId, types: TASK_STORE_EVENT_TYPES }, (envelope) => {
       if (!envelope.task_id) return;
 
@@ -55,6 +51,14 @@ export function useTaskStore(routerClient: RouterClient, sessionId: string): Tas
         });
       });
     });
+    // The mount read waits for the bus's ready barrier (router/events.ts
+    // eventsReady), subscribed first: the bus never replays, so a read served
+    // before it fixes its cursor could miss an event landing in between.
+    void eventsReady()
+      .then(() => (cancelled ? undefined : routerClient.listTasks(sessionId)))
+      .then((t) => {
+        if (!cancelled && t) setTasks(t);
+      });
 
     return () => {
       cancelled = true;

@@ -506,10 +506,19 @@ export function usePipelineRun(sessionId: string, client: PipelineClient): UsePi
     }
   }, [client, sessionId]);
 
+  // The mount read waits for the bus's ready barrier (router/events.ts
+  // eventsReady): onEvent's refetches keep it live, and the bus never
+  // replays, so a read served before it fixes its cursor could miss an
+  // event landing in between. The subscription (useResumingRunFold) is
+  // registered in the same commit, before the barrier lets this start.
   useEffect(() => {
     mounted.current = true;
-    void refetchTasks();
+    let live = true;
+    void eventsReady().then(() => {
+      if (live) void refetchTasks();
+    });
     return () => {
+      live = false;
       mounted.current = false;
     };
   }, [refetchTasks]);

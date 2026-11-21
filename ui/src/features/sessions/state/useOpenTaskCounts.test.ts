@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useOpenTaskCounts } from "./useOpenTaskCounts";
+import { resetEventsBusForTests } from "../../../router/events";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import type { Task } from "../../../router/types";
 
@@ -48,6 +49,34 @@ describe("useOpenTaskCounts", () => {
         s2: { running: 1, ready: 1, blocked: 1 },
       }),
     );
+  });
+
+  // The bus never replays: a task that changed after the mount read but
+  // before the bus read its head would never be heard. So the mount read
+  // waits for the head, and sees that change itself.
+  it("reads after the bus's head, so a change landing between subscribe and head is still counted", async () => {
+    resetEventsBusForTests(); // the production first connect: head unknown
+    let head!: (r: Response) => void;
+    let server = [makeTask({ id: "t1", session_id: "s1", status: "ready" })];
+    const fetchMock = vi.fn((url: string) =>
+      new URL(url).pathname === "/events/head"
+        ? new Promise<Response>((r) => (head = r))
+        : Promise.resolve(new Response(JSON.stringify(server), { status: 200 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const tasksCalls = () => fetchMock.mock.calls.filter(([url]) => new URL(url).pathname === "/tasks").length;
+
+    const { result } = renderHook(() => useOpenTaskCounts());
+    await act(async () => {});
+    expect(tasksCalls()).toBe(0);
+
+    // t1 starts running (task.status_changed seq 4) before the head is read:
+    // the stream starts after it and never delivers it.
+    server = [makeTask({ id: "t1", session_id: "s1", status: "in_progress" })];
+    await act(async () => head(new Response('{"seq":4}', { status: 200 })));
+    await waitFor(() => expect(result.current).toEqual({ s1: { running: 1, ready: 0, blocked: 0 } }));
+    expect(tasksCalls()).toBe(1);
+    expect(new URL(FakeEventSource.instances[0].url).searchParams.get("since")).toBe("4");
   });
 
   it("refetches on a task.status_changed event", async () => {

@@ -456,8 +456,18 @@ export function ConversationTab({
     // so a stale mode carried over from whatever session was mounted before
     // this one must never leak into this session's initial render.
     setTransport({ status: "idle", mode: "chat" });
-    void routerClient
-      .getSession(sessionId)
+    // The record, the event history and the delegates below all merge with
+    // live bus events (the session refetch, tool_status_changed,
+    // delegate_changed), so they wait for the bus's ready barrier
+    // (router/events.ts eventsReady): the bus never replays, and a read
+    // served before its cursor is fixed could miss an event that lands in
+    // between. Those subscriptions are later effects of this same commit;
+    // React runs a commit's effects in one go, so they are all registered
+    // before even an already-resolved barrier lets these reads start.
+    const ready = eventsReady();
+    void ready
+      // Unmounted meanwhile: never read, and never settle (no error to show).
+      .then(() => (cancelled ? new Promise<never>(() => {}) : routerClient.getSession(sessionId)))
       .then((s) => {
         if (!cancelled) {
           setSession(s);
@@ -507,14 +517,6 @@ export function ConversationTab({
         setPermissionRequests(new Map(reqs.map((r) => [r.id, r])));
       })
       .catch(() => {});
-    // The two reads below merge with live bus events (tool_status_changed,
-    // delegate_changed), so they wait for the bus's ready barrier
-    // (router/events.ts eventsReady): the bus never replays, and a read
-    // served before its cursor is fixed could miss an event that lands in
-    // between. Those subscriptions are later effects of this same commit;
-    // React runs a commit's effects in one go, so they are all registered
-    // before even an already-resolved barrier lets these reads start.
-    const ready = eventsReady();
     // History parity (T17): the control-plane event log is the only
     // historical source for task lifecycles, compaction and out-of-band
     // status changes — the provider transcript omits them. Merge live-wins:

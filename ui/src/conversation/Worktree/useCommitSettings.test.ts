@@ -24,10 +24,12 @@ describe("useCommitSettings", () => {
     vi.unstubAllGlobals();
   });
 
-  it("collapses a burst of 200 config.updated into at most 2 reloads; the mount read is immediate", async () => {
+  it("collapses a burst of 200 config.updated into at most 2 reloads; the mount read goes out once the bus is ready", async () => {
     const client = new FakeRouterClient();
     const getConfig = vi.spyOn(client, "getConfig");
     renderHook(() => useCommitSettings(client));
+    // Behind the bus's ready barrier: a microtask after mount.
+    await act(async () => {});
     expect(getConfig).toHaveBeenCalledTimes(1);
     await act(() => vi.advanceTimersByTimeAsync(0));
     act(() => {

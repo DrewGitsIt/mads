@@ -1,6 +1,6 @@
 import { router } from "./client";
 import { coalesce } from "./coalesce";
-import { subscribeToEvents } from "./events";
+import { eventsReady, subscribeToEvents } from "./events";
 import { SESSION_EVENT_TYPES } from "./sessionEventTypes";
 import type { Session } from "./types";
 
@@ -100,8 +100,14 @@ async function fetchSessions(): Promise<void> {
 let coalescer = coalesce(fetchSessions);
 
 function start(): void {
-  coalescer.now();
+  const gen = generation;
   unsubscribeBus = subscribeToEvents({ types: SESSION_EVENT_TYPES }, () => coalescer.request());
+  // The mount read waits for the bus's ready barrier (router/events.ts
+  // eventsReady), subscribed first: the bus never replays, so a read served
+  // before it fixes its cursor could miss an event landing in between.
+  void eventsReady().then(() => {
+    if (gen === generation) coalescer.now();
+  });
 }
 
 function stop(): void {

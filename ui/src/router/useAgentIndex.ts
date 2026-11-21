@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { RouterClient } from "./client";
-import { subscribeToEvents } from "./events";
+import { eventsReady, subscribeToEvents } from "./events";
 import { agentIndex } from "./agentRef";
 import type { AgentIndex } from "./agentRef";
 
@@ -24,8 +24,13 @@ export function useAgentIndex(routerClient: RouterClient): AgentIndex | undefine
         () => !cancelled && setIndex((cur) => cur ?? agentIndex([])),
       );
     }
-    load();
     const unsubscribe = subscribeToEvents({ types: AGENT_EVENT_TYPES }, load);
+    // The mount read waits for the bus's ready barrier (router/events.ts
+    // eventsReady), subscribed first: the bus never replays, so a read served
+    // before it fixes its cursor could miss an event landing in between.
+    void eventsReady().then(() => {
+      if (!cancelled) load();
+    });
     return () => {
       cancelled = true;
       unsubscribe();

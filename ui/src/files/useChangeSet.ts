@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RouterClient } from "../router/client";
-import { subscribeToEvents } from "../router/events";
+import { eventsReady, subscribeToEvents } from "../router/events";
 import { useRepoChanged } from "../router/repoStateStore";
 import type { ChangeBaselineId, ChangeSet } from "../router/types";
 
@@ -75,8 +75,19 @@ export function useChangeSet(routerClient: RouterClient, sessionId: string, vs: 
       });
   }, [routerClient, sessionId, vs]);
 
+  // The mount read waits for the bus's ready barrier (router/events.ts
+  // eventsReady): the bus never replays, so a read served before it fixes
+  // its cursor could miss an event landing in between. The subscription is
+  // a later effect of the same commit, registered before the barrier lets
+  // this read start.
   useEffect(() => {
-    fetchNow();
+    let cancelled = false;
+    void eventsReady().then(() => {
+      if (!cancelled) fetchNow();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [fetchNow]);
 
   // A new session must not show the previous session's files.

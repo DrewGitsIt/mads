@@ -7,6 +7,7 @@ import {
   SESSIONS_FETCH_TIMEOUT_MS,
   subscribeSessions,
 } from "./sessionsStore";
+import { resetEventsBusForTests } from "./events";
 import { FakeEventSource } from "./testFakeEventSource";
 import type { Session } from "./types";
 
@@ -55,6 +56,34 @@ describe("sessionsStore", () => {
     vi.restoreAllMocks();
   });
 
+  // The bus never replays: a session that changed after the mount read but
+  // before the bus read its head would never be heard. So the mount read
+  // waits for the head, and sees that change itself.
+  it("reads after the bus's head, so a change landing between subscribe and head is still shown", async () => {
+    resetEventsBusForTests(); // the production first connect: head unknown
+    const head = deferred<Response>();
+    let server = [makeSession("s1", "inactive")];
+    const fetchMock = vi.fn((url: string) =>
+      new URL(url).pathname === "/events/head" ? head.promise : Promise.resolve(ok(server)),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useSessionsList());
+    await act(async () => {});
+    expect(sessionsCalls(fetchMock)).toBe(0);
+
+    // s1 wakes (its session.updated is seq 7) before the head is read, so
+    // the stream starts after it and never delivers it.
+    server = [makeSession("s1", "active")];
+    await act(async () => head.resolve(ok({ seq: 7 })));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(new URL(FakeEventSource.instances[0].url).searchParams.get("since")).toBe("7");
+    expect(sessionsCalls(fetchMock)).toBe(1);
+    expect(result.current.sessions[0]?.activity).toBe("active");
+  });
+
   it("two mounted readers share ONE GET /sessions", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(ok([makeSession("s1")])));
     vi.stubGlobal("fetch", fetchMock);
@@ -95,6 +124,7 @@ describe("sessionsStore", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { result } = renderHook(() => useSessionsList());
+    await act(async () => {}); // the mount read waits a tick for the bus's ready barrier
     expect(sessionsCalls(fetchMock)).toBe(1);
     act(() => {
       emitUpdated(1);
@@ -259,6 +289,7 @@ describe("sessionsStore", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { result } = renderHook(() => useSessionsList());
+    await act(async () => {}); // the mount read waits a tick for the bus's ready barrier
     act(() => emitUpdated(1)); // lands mid-flight: one follow-up once it ends
     await act(async () => {
       await vi.advanceTimersByTimeAsync(SESSIONS_FETCH_TIMEOUT_MS - 1);

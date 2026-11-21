@@ -141,7 +141,6 @@ export function SessionWorkspace({
       ),
     );
     sessionFetch.current = fetcher;
-    fetcher.now();
     setRunning(false);
     // Set once a run event is heard: it outranks the run seed below.
     let heardRun = false;
@@ -159,11 +158,17 @@ export function SessionWorkspace({
         // shared subscription — this shell has nothing to do with it.
       },
     );
-    // The bus never replays pipeline.started, so a run already going when
-    // this shell mounted comes from the run history: read behind the bus's
-    // ready barrier (router/events.ts eventsReady), and outranked by any run
-    // event heard first.
-    void eventsReady()
+    // Both mount reads wait for the bus's ready barrier (router/events.ts
+    // eventsReady), subscribed first: the bus never replays, so a read served
+    // before it fixes its cursor could miss an event landing in between.
+    // The record's read is the fetcher's; the run history seeds the
+    // run-in-flight flag (pipeline.started is never replayed either), and
+    // any run event heard first outranks it.
+    const ready = eventsReady();
+    void ready.then(() => {
+      if (!cancelled) fetcher.now();
+    });
+    void ready
       .then(() => (cancelled ? [] : routerClient.metricsPipelineRuns(sessionId)))
       .then((runs) => {
         if (!cancelled && !heardRun) setRunning(runs.some((r) => r.outcome === "running"));

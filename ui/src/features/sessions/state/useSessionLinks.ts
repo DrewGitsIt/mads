@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { router } from "../../../router/client";
 import { fetchLinksFor, type LinkChunk } from "../../../router/fetchLinks";
-import { subscribeToEvents } from "../../../router/events";
+import { eventsReady, subscribeToEvents } from "../../../router/events";
 import { FLAGS, subscribeFlags } from "../../../featureFlags";
 import type { Envelope, Link } from "../../../router/types";
 
@@ -47,10 +47,18 @@ export function useSessionLinks(sessionIds: string[]): Link[] {
   }, [sync, idsKey]);
 
   useEffect(() => {
-    sync.start();
+    let live = true;
     const unsubscribeEvents = subscribeToEvents({ types: LINK_EVENT_TYPES }, (env) => sync.onEvent(env));
+    // start()'s full read waits for the bus's ready barrier (router/events.ts
+    // eventsReady), subscribed first: the bus never replays, so a read served
+    // before it fixes its cursor could miss a link event landing in between.
+    // Until then the sync is inactive, so events and flag flips wait for it.
+    void eventsReady().then(() => {
+      if (live) sync.start();
+    });
     const unsubscribeFlags = subscribeFlags(() => sync.onFlags());
     return () => {
+      live = false;
       unsubscribeEvents();
       unsubscribeFlags();
       sync.stop();

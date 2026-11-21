@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { RouterClient } from "../router/client";
-import { subscribeToEvents } from "../router/events";
+import { eventsReady, subscribeToEvents } from "../router/events";
 import type { Workspace } from "../router/types";
 import { resolveWorkspaceRef, workspaceIndex } from "../router/workspaceRef";
 
@@ -32,10 +32,14 @@ export function useWorkspaceForRef(
       if (!cancelled) setWorkspaces(list);
     }
 
-    void load();
-
     const unsubscribe = subscribeToEvents({ types: WORKSPACE_EVENT_TYPES }, () => {
       void load();
+    });
+    // The mount read waits for the bus's ready barrier (router/events.ts
+    // eventsReady), subscribed first: the bus never replays, so a read served
+    // before it fixes its cursor could miss an event landing in between.
+    void eventsReady().then(() => {
+      if (!cancelled) void load();
     });
 
     return () => {

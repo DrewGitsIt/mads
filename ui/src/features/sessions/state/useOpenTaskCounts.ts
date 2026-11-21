@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { router } from "../../../router/client";
-import { subscribeToEvents } from "../../../router/events";
+import { eventsReady, subscribeToEvents } from "../../../router/events";
 import type { OpenTaskBreakdown } from "../rail/railGroups";
 import type { TaskStatus } from "../../../router/types";
 
@@ -35,7 +35,7 @@ export function useOpenTaskCounts(): Record<string, OpenTaskBreakdown> {
 
   useEffect(() => {
     mounted.current = true;
-    void refetch();
+    let live = true;
     // A reconnecting/backfilling SSE stream can dispatch a large burst of
     // task.* events in one go (e.g. everything since the bus's cursor after a long disconnect) —
     // debounce so that burst collapses into a single refetch instead of one
@@ -45,7 +45,14 @@ export function useOpenTaskCounts(): Record<string, OpenTaskBreakdown> {
       clearTimeout(timer);
       timer = setTimeout(() => void refetch(), 50);
     });
+    // The mount read waits for the bus's ready barrier (router/events.ts
+    // eventsReady), subscribed first: the bus never replays, so a read served
+    // before it fixes its cursor could miss an event landing in between.
+    void eventsReady().then(() => {
+      if (live) void refetch();
+    });
     return () => {
+      live = false;
       mounted.current = false;
       clearTimeout(timer);
       unsubscribe();

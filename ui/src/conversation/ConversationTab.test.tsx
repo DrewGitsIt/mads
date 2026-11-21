@@ -837,7 +837,9 @@ describe("ConversationTab", () => {
     };
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(new Response(JSON.stringify([link]), { status: 200 })),
+      // A fresh Response per call: a body reads once, and more than one GET
+      // goes out through fetch on mount.
+      vi.fn().mockImplementation(async () => new Response(JSON.stringify([link]), { status: 200 })),
     );
     const client = new FakeRouterClient();
     vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));

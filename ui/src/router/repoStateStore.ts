@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import type { RouterClient } from "./client";
 import { coalesce, type Coalescer } from "./coalesce";
-import { subscribeToEvents } from "./events";
+import { eventsReady, subscribeToEvents } from "./events";
 import type { Envelope, RepoChangedPayload, SessionRepoState } from "./types";
 
 export interface SessionReposSnapshot {
@@ -143,6 +143,19 @@ function syncBus(): void {
   }
 }
 
+/**
+ * The entry's load, once the bus is ready (router/events.ts eventsReady):
+ * the bus never replays, so a read served before it fixes its cursor could
+ * miss a repo.changed landing in between. Dropped if the entry stopped (or
+ * was replaced) meanwhile.
+ */
+function loadWhenReady(e: Entry): void {
+  const gen = e.generation;
+  void eventsReady().then(() => {
+    if (gen === e.generation && entries.get(e.sessionId) === e && active(e)) e.coalescer.now();
+  });
+}
+
 function stopEntry(e: Entry): void {
   e.generation++;
   e.coalescer.cancel();
@@ -173,7 +186,7 @@ function entryFor(client: RouterClient, sessionId: string): Entry {
     for (const listener of e.listeners) listener();
   }
   entries.set(sessionId, e);
-  if (existing && active(e)) e.coalescer.now();
+  if (existing && active(e)) loadWhenReady(e);
   return e;
 }
 
@@ -181,9 +194,10 @@ function attach(e: Entry, set: Set<() => void>, listener: () => void): () => voi
   const wasActive = active(e);
   set.add(listener);
   if (!wasActive) {
-    // First reader: load, or revalidate the snapshot kept from before.
-    e.coalescer.now();
+    // First reader: load, or revalidate the snapshot kept from before —
+    // subscribed first, the read behind the bus's ready barrier.
     syncBus();
+    loadWhenReady(e);
   }
   return () => {
     if (!set.delete(listener)) return;

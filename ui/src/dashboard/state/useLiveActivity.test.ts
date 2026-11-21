@@ -65,7 +65,8 @@ describe("useLiveActivity", () => {
       const listSessions = vi.spyOn(client, "listSessions");
       const runs = vi.spyOn(client, "metricsPipelineRuns");
       const { result } = renderHook(() => useLiveActivity(client));
-      expect(listSessions).toHaveBeenCalledTimes(1); // the mount fetch is immediate
+      await act(async () => {}); // the mount fetch waits a tick for the bus's ready barrier
+      expect(listSessions).toHaveBeenCalledTimes(1);
       await act(() => vi.advanceTimersByTimeAsync(0));
       expect(result.current.loading).toBe(false);
 

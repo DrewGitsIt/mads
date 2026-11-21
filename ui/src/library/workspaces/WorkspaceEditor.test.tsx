@@ -48,7 +48,9 @@ describe("WorkspaceEditor", () => {
   it("stores the selected template's name into defaults.template", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
+      // A fresh Response per call: a body reads once, and more than one GET
+      // can go out on mount.
+      vi.fn().mockImplementation(async () =>
         new Response(
           JSON.stringify([{ id: "t1", name: "deploy", source: "x", created_at: "t", updated_at: "t" }]),
           { status: 200 },

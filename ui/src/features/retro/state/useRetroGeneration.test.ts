@@ -57,6 +57,29 @@ describe("useRetroGeneration", () => {
     expect(result.current.phase).toBe("completed");
   });
 
+  // Subscribed before the POST: the job's first events can land before the
+  // POST answers with its retro_id, and the bus never replays them.
+  it("keeps the job's events that land before the POST answers, and only its own", async () => {
+    let answer!: (r: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((r) => (answer = r))));
+    const { result } = renderHook(() => useRetroGeneration());
+    let started!: Promise<void>;
+    act(() => {
+      started = result.current.start(["s1"], "");
+    });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const source = FakeEventSource.instances[0];
+    act(() => {
+      source.emit("retro.progress", envelope("retro.progress", { retro_id: "other", step: "generating" }));
+      source.emit("retro.progress", envelope("retro.progress", { retro_id: "retro-1", step: "gathering" }));
+    });
+    await act(async () => {
+      answer(new Response(JSON.stringify({ job_id: "job-1", retro_id: "retro-1" }), { status: 202 }));
+      await started;
+    });
+    expect(result.current.phase).toBe("gathering");
+  });
+
   it("ignores events for a different retro_id", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ job_id: "job-1", retro_id: "retro-1" }), { status: 202 }),

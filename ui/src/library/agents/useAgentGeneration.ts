@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { router } from "../../router/client";
-import { subscribeToEvents } from "../../router/events";
+import { eventsReady, subscribeToEvents } from "../../router/events";
 import type { Agent, GenerateAgentBody, Similar } from "../../router/types";
 
 export interface UseAgentGeneration {
@@ -47,6 +47,9 @@ export function useAgentGeneration(): UseAgentGeneration {
     setDraft(null);
     setSimilar(null);
     try {
+      // Started only once the bus is ready (router/events.ts eventsReady):
+      // the bus never replays, so the draft could otherwise land unheard.
+      await eventsReady();
       const result = await router.generateAgent(body);
       jobId.current = result.job_id;
     } catch (err) {

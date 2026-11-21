@@ -105,6 +105,7 @@ describe("SessionWorkspace session refetch", () => {
       .mockReturnValueOnce(slow.promise)
       .mockResolvedValue({ ...base, name: "Fresh" });
     renderWorkspace({ routerClient });
+    await act(async () => {}); // the mount fetch waits a tick for the bus's ready barrier
 
     // The mount fetch is in flight; an update arrives meanwhile.
     act(() => emitSessionUpdated(SESSION_ID));

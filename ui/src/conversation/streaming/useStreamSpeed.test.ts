@@ -26,10 +26,12 @@ describe("useStreamSpeed", () => {
     vi.unstubAllGlobals();
   });
 
-  it("reads once on mount, immediately", async () => {
+  it("reads once on mount, as soon as the bus is ready", async () => {
     const client = new FakeRouterClient();
     const getConfig = vi.spyOn(client, "getConfig").mockResolvedValue({ ...fixtureConfig, stream_speed: "slow" });
     const { result } = renderHook(() => useStreamSpeed(client));
+    // Behind the bus's ready barrier: a microtask after mount.
+    await act(async () => {});
     expect(getConfig).toHaveBeenCalledTimes(1);
     await act(() => vi.advanceTimersByTimeAsync(0));
     expect(result.current.speed).toBe("slow");
