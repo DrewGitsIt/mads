@@ -81,8 +81,8 @@ export function useStreamSpeed(client: RouterClient): StreamPace {
           setPace((cur) => (cur.speed === speed && cur.wpm === wpm ? cur : { speed, wpm }));
         })
         .catch(() => {});
-    // The bus replays its durable log on connect, so a fresh mount sees a
-    // burst of config.updated: coalesce those into a run or two (≤ 500 ms
+    // A reconnect can bring a burst of config.updated (everything since the
+    // bus's cursor): coalesce those into a run or two (≤ 500 ms
     // late at worst) instead of one GET /config each. The mount read is
     // immediate.
     const reload = coalesce(load);

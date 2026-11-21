@@ -49,9 +49,9 @@ export function useLiveActivity(client: MetricsClient): UseLiveActivity {
         if (!cancelled) setLoading(false);
       }
     };
-    // The bus replays its durable log on connect: coalesce that burst (and
-    // any live one) into a run or two rather than a pair of fetches per
-    // event. The mount fetch is immediate.
+    // A reconnect can bring a burst (everything since the bus's cursor):
+    // coalesce it, and any live one, into a run or two rather than a pair of
+    // fetches per event. The mount fetch is immediate.
     const refresh = coalesce(refetch);
     refresh.now();
     const unsubscribe = subscribeToEvents({ types: LIVE_EVENT_TYPES }, () => refresh.request());

@@ -26,8 +26,9 @@ const RETRY_MAX_MS = 30_000;
 const INITIAL: SessionsSnapshot = { sessions: [], loading: true, error: null };
 
 // One GET /sessions for the whole window, however many hooks read it. The
-// bus connects with no `since`, so a fresh window replays the entire event
-// log — thousands of session.* events in a few seconds. Fetching per event,
+// bus once connected with no `since`, so a fresh window replayed the entire
+// event log — thousands of session.* events in a few seconds; a reconnect
+// after a long gap still brings everything since its cursor. Fetching per event,
 // per mounted hook, once fired ~9,000 GETs on load and starved the browser
 // of sockets; here every event only asks the coalescer, which runs at most
 // one fetch at a time. The snapshot outlives the last listener so a remount

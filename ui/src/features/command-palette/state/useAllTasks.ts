@@ -20,7 +20,7 @@ export function useAllTasks(): Task[] {
     mounted.current = true;
     void refetch();
     // A reconnecting/backfilling SSE stream can dispatch a large burst of
-    // task.* events in one go (e.g. full history replay on connect) —
+    // task.* events in one go (e.g. everything since the bus's cursor after a long disconnect) —
     // debounce so that burst collapses into a single refetch instead of one
     // GET /tasks per event.
     let timer: ReturnType<typeof setTimeout> | undefined;

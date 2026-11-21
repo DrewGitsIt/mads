@@ -17,9 +17,10 @@ export interface UseSessionsList {
  * Reads the shared session list — one window-wide store (router/sessionsStore)
  * however many components call this, kept live via the session.* SSE domain.
  * Event payloads vary per type and don't always carry the full session, so
- * events trigger a plain refetch, coalesced and single-flight: the bus replays
- * the whole event log on load, and a fetch per event per hook once meant
- * thousands of GET /sessions in a few seconds.
+ * events trigger a plain refetch, coalesced and single-flight: a reconnect can
+ * bring a burst, and a fetch per event per hook once meant thousands of
+ * GET /sessions in a few seconds (when the bus still replayed the whole log
+ * on load).
  */
 export function useSessionsList(): UseSessionsList {
   const { sessions, loading, error } = useSyncExternalStore(subscribeSessions, getSessionsSnapshot);
