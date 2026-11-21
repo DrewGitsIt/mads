@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads event bus: replay → live-only</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface-1: #fcfcfb;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --before: #86b6ef;   /* blue 250: before (main) */
+    --after: #1c5cab;    /* blue 550: after (live-only) */
+    --bar: #2a78d6;      /* blue 450: single series */
+    --bad: #e34948;
+    --good-text: #006300;
+    --chip-old: #fbe9e4;
+    --chip-new: #e3eefb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #ffffff;
+      --text-secondary: #c3c2b7; --text-muted: #898781; --grid: #2c2c2a; --axis: #383835;
+      --border: rgba(255,255,255,0.10); --before: #184f95; --after: #6da7ec; --bar: #3987e5;
+      --bad: #e66767; --good-text: #0ca30c; --chip-old: #3a2420; --chip-new: #1b2a3d;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #ffffff;
+    --text-secondary: #c3c2b7; --text-muted: #898781; --grid: #2c2c2a; --axis: #383835;
+    --border: rgba(255,255,255,0.10); --before: #184f95; --after: #6da7ec; --bar: #3987e5;
+    --bad: #e66767; --good-text: #0ca30c; --chip-old: #3a2420; --chip-new: #1b2a3d;
+  }
+  body { margin: 0; background: var(--page); }
+  .viz-root { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--text-primary);
+    background: var(--page); max-width: 980px; margin: 0 auto; padding: 32px 24px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 18px; margin: 40px 0 8px; }
+  h3 { font-size: 15px; margin: 0 0 8px; }
+  p, li { color: var(--text-secondary); max-width: 760px; }
+  .sub { color: var(--text-muted); margin: 0 0 24px; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+  .tile .v { font-size: 28px; font-weight: 600; color: var(--text-primary); }
+  .tile .l { font-size: 13px; color: var(--text-secondary); }
+  .tile .d { font-size: 13px; color: var(--good-text); }
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .flow { display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+  .step { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--surface-1); }
+  .step b { color: var(--text-primary); }
+  .old .step.hot { background: var(--chip-old); }
+  .new .step.key { background: var(--chip-new); }
+  .arrow { text-align: center; color: var(--text-muted); line-height: 1; }
+  .tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary); margin-right: 4px; }
+  .legend { display: flex; gap: 16px; font-size: 13px; color: var(--text-secondary); margin: 4px 0 8px; }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+  svg text { font-family: inherit; }
+  .tip { position: fixed; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); display: none; z-index: 10; }
+  .tip .t { color: var(--text-primary); font-weight: 600; }
+  .tip .r { color: var(--text-secondary); }
+  table { border-collapse: collapse; font-size: 13px; margin-top: 8px; width: 100%; }
+  th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--text-primary); font-weight: 600; }
+  details { margin-top: 8px; color: var(--text-secondary); font-size: 13px; }
+  summary { cursor: pointer; }
+  .note { font-size: 13px; color: var(--text-muted); }
+  @media (max-width: 760px) { .compare, .tiles { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="viz-root">
+
+<h1>Event bus: from replay-on-connect to live-only</h1>
+<p class="sub">Branch <code>event-bus-live-fixes</code> · measured 2026-11-21 with the local perf harness (300k-event log, Chromium, git delays off unless noted) · full conditions and tables in <code>docs/EVENT-BUS-PERF-RESULTS.md</code></p>
+
+<div class="card">
+  <h3>The work in brief</h3>
+  <p>Every mads window shares one SSE connection to <code>GET /events</code> (the “bus”). On <code>main</code> that bus resent the event log <b>from seq 0</b> whenever it (re)connected: on load, on every session switch (a bug), when a view added a new event type (e.g. opening a delegate), and when you came back to the Sessions tab. With a ~300k-event log that is 30–330&nbsp;MB per action, seconds of main-thread work to dispatch it, and one of Chromium’s 6 sockets held while small requests queue behind it.</p>
+  <p>The new bus is <b>live-only</b>: it reads the log head, connects from there, and never resends history. Views load their state over REST, after a <code>ready</code> barrier that makes the order 100% safe. Approvals, queue, pipeline-running and provisioning, which only arrived by replay, now have REST snapshots. Reconnects back off at most 2&nbsp;s (2 × the measured restart time) and wake immediately on <code>online</code>/visibility.</p>
+</div>
+
+<div class="tiles">
+  <div class="card tile"><div class="l">Bytes resent on /events</div><div class="v">0 B</div><div class="d">was 31–328 MB per action</div></div>
+  <div class="card tile"><div class="l">Open a heavy delegate (your data)</div><div class="v">0.55 s</div><div class="d">was 15.6 s</div></div>
+  <div class="card tile"><div class="l">Cold load (your data)</div><div class="v">0.14 s</div><div class="d">was 2.9 s</div></div>
+  <div class="card tile"><div class="l">Recovery after a 20 s outage</div><div class="v">0.3–1.4 s</div><div class="d">was 2.3–6.0 s after the network returned</div></div>
+</div>
+
+<h2>Old design vs new design</h2>
+<div class="compare">
+  <div class="card old">
+    <h3>main: replay on every (re)connect</h3>
+    <div class="flow">
+      <div class="step"><span class="tag">load</span><span class="tag">switch*</span><span class="tag">new type</span><span class="tag">tab return</span><br>the bus (re)connects</div>
+      <div class="arrow">↓</div>
+      <div class="step hot"><b>cursor = min over types</b>; a type never received counts as 0 → <b>since = 0</b></div>
+      <div class="arrow">↓</div>
+      <div class="step hot">Data Service streams <b>the whole log</b> for every subscribed type: 31–328 MB, 50k–165k frames</div>
+      <div class="arrow">↓</div>
+      <div class="step hot">renderer parses and dispatches every frame (up to ~20 s main thread); already-seen ones are dropped <i>after</i> download</div>
+      <div class="arrow">↓</div>
+      <div class="step">views also do their own REST reads, which queue behind the busy sockets (6 per origin)</div>
+    </div>
+    <p class="note">* a switch reconnected even with no new types: the bus compared against current subscribers, not what the open connection carried. Leaving the Sessions tab also threw the cursors away.</p>
+  </div>
+  <div class="card new">
+    <h3>new: live-only with a ready barrier</h3>
+    <div class="flow">
+      <div class="step key"><b>GET /events/head</b> → H (once per window; ~1–3 ms)</div>
+      <div class="arrow">↓</div>
+      <div class="step key">connect <b>since = H</b>; cursor = H → <b>eventsReady()</b> resolves</div>
+      <div class="arrow">↓</div>
+      <div class="step">each view: subscribe → <b>await ready</b> → REST snapshot → merge (live wins / dedupe by seq) — nothing between H and the snapshot can be lost</div>
+      <div class="arrow">↓</div>
+      <div class="step">only new events flow; a new type, a drop, or a tab return resumes <b>from the cursor</b>, never from 0</div>
+      <div class="arrow">↓</div>
+      <div class="step">down? backoff ≤ 2 s, instant retry on <code>online</code>/visible; head 404 → “Restart mads” banner; Router logs Data outages</div>
+    </div>
+    <p class="note">Every one of ~38 subscriber files is held to this by a guard test; 33 mount readers are covered by a barrier table test.</p>
+  </div>
+</div>
+
+<h2>Bottleneck 1: bytes resent per action</h2>
+<p>What the Data Service sends on <code>/events</code> during each action on <code>main</code>. The new bus sends <b>0 B</b> in every one.</p>
+<div class="card"><svg id="bytes" role="img" aria-label="Bytes resent per action on main"></svg>
+  <details><summary>Table</summary><table id="bytes-t"></table></details></div>
+
+<h2>Bottleneck 2: time until the view is settled</h2>
+<p>Click → data shown, requests answered, stream caught up and main thread idle. Log scale: each gridline is a step of roughly ×2–×2.5.</p>
+<div class="legend"><span><span class="sw" style="background:var(--before)"></span>main</span><span><span class="sw" style="background:var(--after)"></span>live-only</span></div>
+<div class="card"><svg id="settled" role="img" aria-label="Settled time per action, main vs live-only"></svg>
+  <details><summary>Table</summary><table id="settled-t"></table></details></div>
+
+<h2>Bottleneck 3: main-thread work (jank)</h2>
+<p>Renderer task time during the action: what the window spends parsing and dispatching. On <code>main</code> this is mostly the replay.</p>
+<div class="legend"><span><span class="sw" style="background:var(--before)"></span>main</span><span><span class="sw" style="background:var(--after)"></span>live-only</span></div>
+<div class="card"><svg id="task" role="img" aria-label="Main-thread task time per action, main vs live-only"></svg>
+  <details><summary>Table</summary><table id="task-t"></table></details></div>
+
+<h2>What is left: socket starvation from slow git routes</h2>
+<div class="card">
+  <p>With the git routes mocked at their live speeds (<code>repos</code> 10 s, <code>changeset</code> 6 s, <code>worktree/refresh</code> 16 s), a session switch settles in the same time on both builds (14.8 s → 15.1 s). With the replay gone, those slow requests go out sooner and small requests wait behind them, so total queued time rises (84 s → 140 s across a switch) while main-thread work drops (1.5 s → 0.6 s). <b>The bus is no longer the bottleneck; the git routes are.</b> That is the next piece of work (timeouts, cancellation, request ordering, faster routes).</p>
+</div>
+
+<div class="tip" id="tip"></div>
+
+<script>
+const fmtMs = v => v >= 1000 ? (v/1000).toFixed(v >= 10000 ? 1 : 2).replace(/\.?0+$/,'') + ' s' : Math.round(v) + ' ms';
+const rows = [
+  // label, bytes MB (main), settled main, settled new, task main, task new
+  ['Cold load',                   30.9,  1921,  158, 1555, 107],
+  ['Session switch',              99.1,  1963,  344,  971, 138],
+  ['Open delegate, heavy parent', 196.6, 21691, 218, 20062, 126],
+  ['Open delegate, typical parent', 196.6, 2434, 74, 1149,  64],
+  ['Delegate, no transcript file', 196.6, 14942, 546, 13639, 282],
+  ['Retro → Sessions',            32.1,   753,  121,  408,  68],
+  ['Pinned streams (dock + Tasks)', 327.8, 5434, 817, 2421, 387],
+  ['Network drop and resume',     49.5,  1255,  645,  419,  25],
+  ['Long-lived window, first delegate', 227.2, 3465, 76, 1748, 76],
+  ['Launchpad (control)',          0,      93,   90,   43,  39],
+];
+const css = n => getComputedStyle(document.querySelector('.viz-root')).getPropertyValue(n).trim();
+const tip = document.getElementById('tip');
+function showTip(e, html) { tip.innerHTML = html; tip.style.display = 'block';
+  const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8); tip.style.left = x + 'px'; tip.style.top = (e.clientY + 14) + 'px'; }
+function hideTip() { tip.style.display = 'none'; }
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, parent, text) { const n = document.createElementNS(NS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]); if (text != null) n.textContent = text; parent && parent.appendChild(n); return n; }
+const LABEL_W = 230, W = 900, ROW = 30, TOP = 8, BOTTOM = 28;
+
+function table(id, head, body) { const t = document.getElementById(id);
+  t.innerHTML = '<tr>' + head.map(h => '<th>' + h + '</th>').join('') + '</tr>' +
+    body.map(r => '<tr>' + r.map(c => '<td>' + c + '</td>').join('') + '</tr>').join(''); }
+
+function bytesChart() {
+  const svg = document.getElementById('bytes'); svg.innerHTML = '';
+  const data = rows.filter(r => r[1] > 0).sort((a, b) => b[1] - a[1]);
+  const H = TOP + data.length * ROW + BOTTOM; svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('width', '100%');
+  const max = 350, x = v => LABEL_W + (v / max) * (W - LABEL_W - 80);
+  [0, 100, 200, 300].forEach(t => { el('line', { x1: x(t), x2: x(t), y1: TOP, y2: H - BOTTOM, stroke: css('--grid') }, svg);
+    el('text', { x: x(t), y: H - 8, 'text-anchor': 'middle', 'font-size': 12, fill: css('--text-muted') }, svg, t + ' MB'); });
+  data.forEach((r, i) => { const y = TOP + i * ROW;
+    el('text', { x: LABEL_W - 10, y: y + ROW / 2 + 4, 'text-anchor': 'end', 'font-size': 13, fill: css('--text-secondary') }, svg, r[0]);
+    const w = Math.max(2, x(r[1]) - x(0)), bh = 14, by = y + (ROW - bh) / 2;
+    el('path', { d: `M${x(0)},${by} h${w - 4} a4,4 0 0 1 4,4 v${bh - 8} a4,4 0 0 1 -4,4 h${-(w - 4)} z`, fill: css('--bar') }, svg);
+    el('text', { x: x(r[1]) + 6, y: by + bh - 3, 'font-size': 12, fill: css('--text-secondary') }, svg, r[1] + ' MB');
+    const hit = el('rect', { x: 0, y, width: W, height: ROW, fill: 'transparent' }, svg);
+    hit.addEventListener('mousemove', e => showTip(e, `<div class="t">${r[0]}</div><div class="r">main: ${r[1]} MB resent</div><div class="r">live-only: 0 B</div>`));
+    hit.addEventListener('mouseleave', hideTip); });
+  el('line', { x1: x(0), x2: x(0), y1: TOP, y2: H - BOTTOM, stroke: css('--axis') }, svg);
+  table('bytes-t', ['Action', 'main', 'live-only'], data.map(r => [r[0], r[1] + ' MB', '0 B']));
+}
+
+function dumbbell(id, iMain, iNew, ticks, word) {
+  const svg = document.getElementById(id); svg.innerHTML = '';
+  const data = rows.slice().sort((a, b) => b[iMain] - a[iMain]);
+  const H = TOP + data.length * ROW + BOTTOM; svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('width', '100%');
+  const lo = Math.log10(ticks[0]), hi = Math.log10(ticks[ticks.length - 1]);
+  const x = v => LABEL_W + ((Math.log10(v) - lo) / (hi - lo)) * (W - LABEL_W - 70);
+  ticks.forEach(t => { el('line', { x1: x(t), x2: x(t), y1: TOP, y2: H - BOTTOM, stroke: css('--grid') }, svg);
+    el('text', { x: x(t), y: H - 8, 'text-anchor': 'middle', 'font-size': 12, fill: css('--text-muted') }, svg, fmtMs(t)); });
+  data.forEach((r, i) => { const y = TOP + i * ROW + ROW / 2, a = r[iMain], b = r[iNew];
+    el('text', { x: LABEL_W - 10, y: y + 4, 'text-anchor': 'end', 'font-size': 13, fill: css('--text-secondary') }, svg, r[0]);
+    el('line', { x1: x(b), x2: x(a), y1: y, y2: y, stroke: css('--axis'), 'stroke-width': 2 }, svg);
+    el('circle', { cx: x(a), cy: y, r: 5, fill: css('--before'), stroke: css('--surface-1'), 'stroke-width': 2 }, svg);
+    el('circle', { cx: x(b), cy: y, r: 5, fill: css('--after'), stroke: css('--surface-1'), 'stroke-width': 2 }, svg);
+    if (a / b >= 3) el('text', { x: x(a) + 10, y: y + 4, 'font-size': 12, fill: css('--text-secondary') }, svg, '×' + Math.round(a / b) + ' ' + word);
+    const hit = el('rect', { x: 0, y: y - ROW / 2, width: W, height: ROW, fill: 'transparent' }, svg);
+    hit.addEventListener('mousemove', e => showTip(e, `<div class="t">${r[0]}</div><div class="r">main: ${fmtMs(a)}</div><div class="r">live-only: ${fmtMs(b)}</div>`));
+    hit.addEventListener('mouseleave', hideTip); });
+  table(id + '-t', ['Action', 'main', 'live-only'], data.map(r => [r[0], fmtMs(r[iMain]), fmtMs(r[iNew])]));
+}
+
+function draw() { bytesChart(); dumbbell('settled', 2, 3, [50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000], 'faster');
+  dumbbell('task', 4, 5, [20, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000], 'less'); }
+draw();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
+</script>
+</div>
+</body>
+</html>
