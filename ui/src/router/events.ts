@@ -33,6 +33,17 @@ const BACKOFF_MAX_MS = 2000;
 // How long a job action (useRetroGeneration, useAgentGeneration,
 // useRegistryJob) waits for the bus before giving up; see eventsReadyWithin.
 const READY_TIMEOUT_MS = 10_000;
+// Before the first cursor, how long the head read must keep failing before
+// health says "failing": the Data Service can come up a beat behind the
+// Router at startup, and a banner that flashes for that says nothing.
+const COLD_FAILING_AFTER_MS = 1000;
+// Envelopes are stamped by the producer, which can stamp a moment before the
+// Data Service commits (and so before the head read that fixed the cursor
+// sees it); the notice window opens this much before the first head read.
+const NOTICE_SLACK_MS = 2000;
+// Stream opens that fail in a row, each after a head read that answered,
+// before the console says the Router may be refusing a subscribed type.
+const REFUSED_OPEN_LOG_AFTER = 3;
 
 // One EventSource per window, shared by every control-plane subscriber —
 // several independent hooks (the rail's task counts, a session workspace's
@@ -102,6 +113,15 @@ let incompatible = false;
 // The first head read failed and the window is still waiting for its first
 // cursor: logged once on the way in, once on the way out.
 let waitingLogged = false;
+// Pending while the first head read has failed and the window has no cursor
+// yet: fires COLD_FAILING_AFTER_MS after that first failure.
+let coldFailingTimer: ReturnType<typeof setTimeout> | undefined;
+// Whether the open EventSource has fired "open".
+let sourceOpened = false;
+// Stream connects that failed before "open" with no open in between; reset
+// by an open and by a failed head read (then it's the services, not a type).
+let failedOpens = 0;
+let refusedOpenLogged = false;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let queue: Envelope[] = [];
 let draining = false;
@@ -160,16 +180,33 @@ export function eventsReady(): Promise<void> {
 export const EVENTS_NOT_READY_MESSAGE = "Live updates aren't connected yet. Try again in a moment.";
 
 /**
+ * What the "incompatible" state means to the user: App.tsx's banner, and
+ * what a job action says at once rather than "try again".
+ */
+export const EVENTS_INCOMPATIBLE_MESSAGE =
+  "mads services are older than this window, so live updates and lists can't load. Restart mads (scripts/app.sh --restart) and reload.";
+
+/**
  * eventsReady, for an action the user is waiting on (a job's Start button):
  * rejects with EVENTS_NOT_READY_MESSAGE after `timeoutMs` instead of
- * leaving the button spinning while the services are down.
+ * leaving the button spinning while the services are down, and at once with
+ * EVENTS_INCOMPATIBLE_MESSAGE when the bus is (or becomes) "incompatible",
+ * which no amount of waiting fixes.
  */
 export function eventsReadyWithin(timeoutMs: number = READY_TIMEOUT_MS): Promise<void> {
+  if (incompatible) return Promise.reject(new Error(EVENTS_INCOMPATIBLE_MESSAGE));
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let unlisten: (() => void) | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(EVENTS_NOT_READY_MESSAGE)), timeoutMs);
+    unlisten = subscribeToBusHealth((h) => {
+      if (h.state === "incompatible") reject(new Error(EVENTS_INCOMPATIBLE_MESSAGE));
+    });
   });
-  return Promise.race([ready, timeout]).finally(() => clearTimeout(timer));
+  return Promise.race([ready, timeout]).finally(() => {
+    clearTimeout(timer);
+    unlisten?.();
+  });
 }
 
 function unionTypes(): string[] {
@@ -284,6 +321,9 @@ function dispatchOne(env: Envelope): void {
 }
 
 function handleFrame(e: MessageEvent<string>): void {
+  sourceOpened = true; // a frame proves the stream opened
+  failedOpens = 0;
+  refusedOpenLogged = false;
   queue.push(JSON.parse(e.data) as Envelope);
   if (queue.length > MAX_QUEUE) {
     // Never buffer unboundedly — drop what's queued and resume from the
@@ -306,6 +346,20 @@ function handleFrame(e: MessageEvent<string>): void {
 }
 
 function onConnectError(): void {
+  if (!sourceOpened) {
+    // The head read before this connect answered (every failed connect
+    // rechecks it), yet the stream never opened. Repeatedly, that is most
+    // likely the Router refusing the request itself (a 400 for a type it
+    // doesn't know, from a UI bug) rather than an outage, which the banner
+    // can't tell apart: name the type set so it can be checked.
+    failedOpens++;
+    if (failedOpens >= REFUSED_OPEN_LOG_AFTER && !refusedOpenLogged) {
+      refusedOpenLogged = true;
+      console.error(
+        `events: the event stream failed to open ${failedOpens} times in a row while GET /events/head answers — the Router may be refusing a subscribed type (types: ${[...connectedTypes].join(",")})`,
+      );
+    }
+  }
   consecutiveFailures++;
   if (consecutiveFailures >= FAILING_AFTER) setHealth("failing");
   recheckHead = true;
@@ -336,6 +390,9 @@ function openConnection(): void {
   // connection adds, and they would then be dropped as already seen.
   queue = [];
   const gen = ++connectGen;
+  // The window's notice epoch opens with its first head read (see
+  // windowNoticesSince), unless a notice-gated subscriber already asked.
+  if (cursor === undefined && noticesSince === undefined) noticesSince = Date.now() - NOTICE_SLACK_MS;
   if (cursor !== undefined && !recheckHead) {
     openSource();
     return;
@@ -351,6 +408,7 @@ function openConnection(): void {
       recheckHead = false;
       if (cursor === undefined) {
         cursor = head;
+        clearColdFailing();
         markReady();
         if (waitingLogged) {
           waitingLogged = false;
@@ -375,13 +433,21 @@ function openConnection(): void {
         return;
       }
       consecutiveFailures++;
+      failedOpens = 0; // the services are down; not a refused type
       // Before the first cursor every view is waiting on the barrier, so
-      // say so at once rather than after FAILING_AFTER misses.
+      // say so once the head has been failing for COLD_FAILING_AFTER_MS
+      // (not after FAILING_AFTER misses, which a fast retry can reach in
+      // milliseconds, and not on the first miss, which a cold start makes).
       if (cursor === undefined) {
-        setHealth("failing");
-        if (!waitingLogged) {
-          waitingLogged = true;
-          console.error(`events: can't read the event log's head (${errorText(err)}); retrying — views wait until it answers`);
+        if (!waitingLogged && !coldFailingTimer) {
+          const detail = errorText(err);
+          coldFailingTimer = setTimeout(() => {
+            coldFailingTimer = undefined;
+            if (cursor !== undefined || incompatible || subscriptions.size === 0) return;
+            setHealth("failing");
+            waitingLogged = true;
+            console.error(`events: can't read the event log's head (${detail}); retrying — views wait until it answers`);
+          }, COLD_FAILING_AFTER_MS);
         }
       } else if (consecutiveFailures >= FAILING_AFTER) {
         setHealth("failing");
@@ -399,8 +465,14 @@ function openConnection(): void {
  * reconnects, the ready barrier stays shut, and health says "incompatible"
  * so the shell explains why every view is waiting (App.tsx's banner).
  */
+function clearColdFailing(): void {
+  if (coldFailingTimer) clearTimeout(coldFailingTimer);
+  coldFailingTimer = undefined;
+}
+
 function enterIncompatible(detail: string): void {
   incompatible = true;
+  clearColdFailing();
   if (reconnectTimer) clearTimeout(reconnectTimer);
   reconnectTimer = undefined;
   source?.close();
@@ -416,9 +488,13 @@ function openSource(): void {
   if (cursor === undefined) return; // only ever called once the head is known
   const types = unionTypes();
   connectedTypes = new Set(types);
+  sourceOpened = false;
   source = new EventSource(buildUrl(types, cursor));
   for (const type of types) source.addEventListener(type, handleFrame as EventListener);
   source.addEventListener("open", () => {
+    sourceOpened = true;
+    failedOpens = 0;
+    refusedOpenLogged = false;
     consecutiveFailures = 0;
     setHealth("live");
   });
@@ -469,6 +545,8 @@ function teardown(): void {
   headPending = false;
   connectedTypes = new Set();
   consecutiveFailures = 0;
+  clearColdFailing();
+  failedOpens = 0;
   queue = [];
   draining = false;
   listenForWake(false);
@@ -557,18 +635,23 @@ export function happenedSince(env: Envelope, since: number): boolean {
   return !Number.isFinite(at) || at >= since;
 }
 
-// When the first notice-gated subscriber in this window subscribed; see
-// windowNoticesSince. Never reset in production: it lives as long as the
-// window (and the cursor) does.
+// When this window's notice window opened; see windowNoticesSince. Never
+// reset in production: it lives as long as the window (and the cursor) does.
 let noticesSince: number | undefined;
 
 /**
- * The window's notice epoch for happenedSince: set by the first call, the
- * same value for the window's life after that (surface round trips and
- * remounts included). Reset only by resetEventsBusForTests.
+ * The window's notice epoch for happenedSince: when the window's first head
+ * read was sent (which fixes the cursor), less NOTICE_SLACK_MS for
+ * producer-stamped timestamps — the same value for the window's life after
+ * that (surface round trips and remounts included). Not the first
+ * notice-gated subscriber's mount: a window that opens on Retro fixes its
+ * cursor there, and the rail mounting later is delivered everything after
+ * that cursor, stamped before the rail mounted, which is still news. Called
+ * before any head read was sent, it opens the window then instead. Reset
+ * only by resetEventsBusForTests.
  */
 export function windowNoticesSince(): number {
-  if (noticesSince === undefined) noticesSince = Date.now();
+  if (noticesSince === undefined) noticesSince = Date.now() - NOTICE_SLACK_MS;
   return noticesSince;
 }
 
@@ -587,6 +670,8 @@ export function resetEventsBusForTests(primeCursor?: number): void {
   warnedLogReset = false;
   incompatible = false;
   waitingLogged = false;
+  sourceOpened = false;
+  refusedOpenLogged = false;
   ready = newReady();
   if (primeCursor !== undefined) markReady();
   health = { state: "connecting" };

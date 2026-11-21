@@ -16,6 +16,7 @@ import { applyMotion } from "./features/settings/theme/applyMotion";
 import { FirstRunWizard } from "./onboarding/FirstRunWizard";
 import { setFlags } from "./featureFlags";
 import { router, RouterUnauthorizedError } from "./router/client";
+import { EVENTS_INCOMPATIBLE_MESSAGE } from "./router/events";
 import { useBusHealth } from "./router/useBusHealth";
 import type { Config } from "./router/types";
 import { LibrarySurface } from "./library/LibrarySurface";
@@ -226,7 +227,7 @@ export function App() {
           active={busHealth.state === "incompatible"}
           tone="bad"
           title="Restart mads"
-          description="mads services are older than this window, so live updates and lists can't load. Restart mads (scripts/app.sh --restart) and reload."
+          description={EVENTS_INCOMPATIBLE_MESSAGE}
           action={{ label: "Reload", onClick: () => window.location.reload() }}
         />
         <div className={styles.surface}>

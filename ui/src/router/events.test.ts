@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  EVENTS_INCOMPATIBLE_MESSAGE,
   EVENTS_NOT_READY_MESSAGE,
   eventsReady,
   eventsReadyWithin,
   getBusHealth,
   getEventsCursorForTests,
+  happenedSince,
   resetEventsBusForTests,
   subscribeToBusHealth,
   subscribeToEvents,
+  windowNoticesSince,
 } from "./events";
 import { FakeEventSource } from "./testFakeEventSource";
 import type { Envelope } from "./types";
@@ -353,7 +356,7 @@ describe("subscribeToEvents", () => {
       expect(FakeEventSource.instances).toHaveLength(0);
     });
 
-    it("reports failing from the first failed head read while nothing is ready yet, and keeps retrying", async () => {
+    it("reports failing once the head has failed for 1 s while nothing is ready yet, and keeps retrying", async () => {
       vi.useFakeTimers();
       const error = vi.spyOn(console, "error").mockImplementation(() => {});
       const info = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -369,9 +372,18 @@ describe("subscribeToEvents", () => {
       );
       let readied = false;
       void eventsReady().then(() => (readied = true));
+      vi.spyOn(Math, "random").mockReturnValue(0.1); // retries well inside the 1 s
       subscribe({ types: ["session.created"] }, () => {});
       await vi.advanceTimersByTimeAsync(0);
-      expect(getBusHealth().state).toBe("failing"); // views are waiting: say so at once
+      expect(heads).toBe(1);
+      expect(getBusHealth().state).toBe("connecting"); // a cold start can miss once
+      await vi.advanceTimersByTimeAsync(999);
+      expect(heads).toBeGreaterThan(2); // past the two-miss mark, still within 1 s
+      expect(getBusHealth().state).toBe("connecting");
+      expect(error).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(getBusHealth().state).toBe("failing"); // views are waiting: say so
+      expect(error).toHaveBeenCalledTimes(1); // logged as it enters the state
       await vi.advanceTimersByTimeAsync(120_000);
       expect(heads).toBeGreaterThan(2);
       expect(readied).toBe(false);
@@ -386,6 +398,26 @@ describe("subscribeToEvents", () => {
       expect(new URL(FakeEventSource.instances[0].url).searchParams.get("since")).toBe("5");
       expect(info).toHaveBeenCalledTimes(1);
       expect(error).toHaveBeenCalledTimes(1);
+    });
+
+    it("never shows failing for a cold start whose head answers within 1 s", async () => {
+      vi.useFakeTimers();
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(Math, "random").mockReturnValue(0.1); // retries at 100, then 200 ms
+      let heads = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => (++heads <= 2 ? new Response("", { status: 502 }) : new Response('{"seq":5}', { status: 200 }))),
+      );
+      const states: string[] = [];
+      const unlisten = subscribeToBusHealth((h) => states.push(h.state));
+      subscribe({ types: ["session.created"] }, () => {});
+      await vi.advanceTimersByTimeAsync(900); // two misses, then the head lands at 300 ms
+      expect(FakeEventSource.instances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      unlisten();
+      expect(states).not.toContain("failing");
+      expect(error).not.toHaveBeenCalled();
     });
 
     it("keeps the two-miss grace for failed head reads once the cursor is known", async () => {
@@ -423,6 +455,61 @@ describe("subscribeToEvents", () => {
       down = false;
       await vi.advanceTimersByTimeAsync(30_000);
       await expect(eventsReadyWithin(10)).resolves.toBeUndefined();
+    });
+
+    it("eventsReadyWithin rejects at once with the restart message when the services are incompatible", async () => {
+      vi.useFakeTimers();
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      let answer!: (r: Response) => void;
+      vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((r) => (answer = r))));
+      subscribe({ types: ["session.created"] }, () => {});
+      // Already waiting when the head turns out to be missing: rejects then,
+      // not 10 s later.
+      const waiting = eventsReadyWithin(10_000).then(
+        () => "ready",
+        (err: Error) => err.message,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      answer(new Response("", { status: 404 }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getBusHealth().state).toBe("incompatible");
+      expect(await waiting).toBe(EVENTS_INCOMPATIBLE_MESSAGE);
+      // Asked afterwards: rejects without waiting at all.
+      let settled = "";
+      eventsReadyWithin(10_000).catch((err: Error) => (settled = err.message));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(settled).toBe(EVENTS_INCOMPATIBLE_MESSAGE);
+    });
+
+    it("opens the notice window when the first head read is sent, so a rail mounted after Retro still gets its notices", async () => {
+      vi.useFakeTimers();
+      const t0 = Date.parse("2026-11-21T12:00:00Z");
+      vi.setSystemTime(t0);
+      stubHead(10);
+      // The window opens on Retro: a subscriber with no notices.
+      const retro = subscribe({ types: ["retro.completed"] }, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getEventsCursorForTests()).toBe(10);
+      retro();
+      unsubscribes.splice(unsubscribes.indexOf(retro), 1); // teardown; the cursor stays
+
+      // A minute later the rail mounts and resumes from the cursor.
+      vi.setSystemTime(t0 + 60_000);
+      const since = windowNoticesSince();
+      const seen: Envelope[] = [];
+      subscribe({ types: ["session.agent_state"] }, (env) => seen.push(env));
+      await vi.advanceTimersByTimeAsync(0);
+      const stamped = (seq: number, at: number): Envelope => ({
+        ...envelope(seq, "session.agent_state"),
+        timestamp: new Date(at).toISOString(),
+      });
+      const es = FakeEventSource.instances.at(-1)!;
+      es.emit("session.agent_state", JSON.stringify(stamped(11, t0 + 30_000))); // while Retro was up
+      es.emit("session.agent_state", JSON.stringify(stamped(12, t0 - 1_000))); // stamped just before the head read
+      es.emit("session.agent_state", JSON.stringify(stamped(13, t0 - 10_000))); // well before: not news
+      expect(seen.map((e) => happenedSince(e, since))).toEqual([true, true, false]);
+      expect(windowNoticesSince()).toBe(since); // fixed for the window's life
     });
 
     it.each([404, 405])("stops for good when the head answers %i — the services predate this UI", async (status) => {
@@ -537,6 +624,7 @@ describe("subscribeToEvents", () => {
     });
 
     it("reconnects at once, from the cursor, on coming back online", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {}); // the refused-open hint
       subscribe({ types: ["session.created"] }, () => {});
       FakeEventSource.instances[0].emit("session.created", JSON.stringify(envelope(6)));
       // Grow the backoff well past a second.
@@ -714,6 +802,29 @@ describe("subscribeToEvents", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       expect(new URL(FakeEventSource.instances.at(-1)!.url).searchParams.get("since")).toBe("1");
       expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it("names the subscribed types once the stream fails to open 3 times in a row while the head answers", async () => {
+      vi.useFakeTimers();
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      subscribe({ types: ["session.created", "task.bogus"] }, () => {});
+      const failOpen = async () => {
+        FakeEventSource.instances.at(-1)!.simulateError(); // a 400: never opened
+        await vi.advanceTimersByTimeAsync(30_000); // head recheck answers, reopens
+      };
+      await failOpen();
+      await failOpen();
+      expect(error).not.toHaveBeenCalled();
+      await failOpen();
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error.mock.calls[0][0]).toContain("types: session.created,task.bogus");
+      await failOpen();
+      expect(error).toHaveBeenCalledTimes(1); // once per streak
+
+      // An open resets the streak; drops after an open don't count.
+      FakeEventSource.instances.at(-1)!.emit("open", "");
+      for (let i = 0; i < 2; i++) await failOpen();
+      expect(error).toHaveBeenCalledTimes(1);
     });
 
     it("keeps the cursor when the log only moved on during a drop", async () => {
