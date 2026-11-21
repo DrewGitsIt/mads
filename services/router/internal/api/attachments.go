@@ -96,6 +96,10 @@ func (s *server) handleDeleteAttachment(ownerOf attachmentOwnerFunc) http.Handle
 	}
 }
 
+// attachmentCacheControl is for an attachment's bytes and its thumbnail,
+// neither of which ever changes under its id.
+const attachmentCacheControl = "private, max-age=31536000, immutable"
+
 // handleGetAttachment serves the original file, for opening a thumbnail
 // full size. inline, so an image or text file shows rather than downloads;
 // anything else (HTML, SVG, ...) downloads. The file's bytes are whoever
@@ -116,6 +120,10 @@ func (s *server) handleGetAttachment(ownerOf attachmentOwnerFunc) http.HandlerFu
 			return
 		}
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": a.Name}))
+		// Written once (O_EXCL) under a random id that's never reused, like
+		// its thumbnail: the browser may keep it (and the API's no-store
+		// default mustn't make every view re-download it).
+		w.Header().Set("Cache-Control", attachmentCacheControl)
 		http.ServeFile(safeserve.Writer(w), r, a.Path)
 	}
 }
@@ -135,7 +143,7 @@ func (s *server) handleGetAttachmentThumbnail(ownerOf attachmentOwnerFunc) http.
 			return
 		}
 		// Attachment ids are never reused, so a thumbnail never changes.
-		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+		w.Header().Set("Cache-Control", attachmentCacheControl)
 		http.ServeFile(safeserve.Writer(w), r, p)
 	}
 }
