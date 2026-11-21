@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CommitRefusedError, FetchRouterClient, MAX_LINK_SESSION_IDS, MoveRefusedError, RouterHTTPError, RouterValidationError, SessionWakeError } from "./client";
+import { CommitRefusedError, FetchRouterClient, isAbortError, MAX_LINK_SESSION_IDS, MoveRefusedError, RouterHTTPError, RouterValidationError, SessionWakeError } from "./client";
 import type { Agent } from "./types";
 
 function mockFetchOnce(body: unknown, ok = true, status = 200) {
@@ -178,6 +178,45 @@ describe("FetchRouterClient", () => {
     const cs = await client.getChangeSet("s1", "main");
     expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/changeset?vs=main");
     expect(cs.baseline).toBe("main");
+  });
+
+  it("passes a caller's AbortSignal to fetch on the git-backed reads and the recount", async () => {
+    const ctl = new AbortController();
+    const signal = ctl.signal;
+    const client = new FetchRouterClient("http://router.local");
+    const cases: [() => Promise<unknown>, string, string?][] = [
+      [() => client.getChangeSet("s1", "main", { signal }), "http://router.local/sessions/s1/changeset?vs=main"],
+      [() => client.getSessionRepos("s1", { signal }), "http://router.local/sessions/s1/repos"],
+      [() => client.getCommitPlan("s1", { signal }), "http://router.local/sessions/s1/commit-plan"],
+      [() => client.getPushPreview("s1", { repo: "/r", signal }), "http://router.local/sessions/s1/push?repo=%2Fr"],
+      [() => client.getLandPreview("s1", { base: "main", signal }), "http://router.local/sessions/s1/land?base=main"],
+      [() => client.refreshWorktreeCounts("s1", { signal }), "http://router.local/sessions/s1/worktree/refresh", "POST"],
+    ];
+    for (const [call, url, method] of cases) {
+      const fetchMock = mockFetchOnce({});
+      await call();
+      const [gotUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(gotUrl).toBe(url);
+      expect(init.signal).toBe(signal);
+      if (method) expect(init.method).toBe(method);
+    }
+  });
+
+  it("rejects with an AbortError fetch raises when the signal aborts", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) =>
+        new Promise((_, reject) =>
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))),
+        ),
+      ),
+    );
+    const ctl = new AbortController();
+    const p = new FetchRouterClient("http://router.local").getChangeSet("s1", undefined, { signal: ctl.signal });
+    ctl.abort();
+    const err = await p.catch((e: unknown) => e);
+    expect(isAbortError(err)).toBe(true);
+    expect(isAbortError(new Error("router unreachable"))).toBe(false);
   });
 
   it("getChangeSet omits vs when not given", async () => {

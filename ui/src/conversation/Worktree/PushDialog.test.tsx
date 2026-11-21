@@ -440,4 +440,27 @@ describe("PushDialog — several repos (D5 \"Several repos\", layout B)", () => 
     await waitFor(() => expect(client.pushPreviewCalls).toEqual([{ sessionId: SID, repo: undefined, target: "branch" }]));
     expect(screen.queryByRole("group", { name: "Repos" })).toBeNull();
   });
+
+  it("aborts its preview read when it closes", async () => {
+    const client = new FakeRouterClient();
+    const signals: AbortSignal[] = [];
+    vi.spyOn(client, "getPushPreview").mockImplementation((_id, opts) => {
+      if (opts?.signal) signals.push(opts.signal);
+      return new Promise(() => {});
+    });
+    const props = {
+      sessionId: SID,
+      routerClient: client,
+      session: { ...fixtureIsolatedSession, uncommitted_count: 0 },
+      target: "branch" as const,
+      onClose: vi.fn(),
+      onPushed: vi.fn(),
+      onAskAgent: vi.fn(),
+    };
+    const { rerender } = render(<PushDialog open {...props} />);
+    await waitFor(() => expect(signals.length).toBeGreaterThan(0));
+    expect(signals.every((s) => !s.aborted)).toBe(true);
+    rerender(<PushDialog open={false} {...props} />);
+    expect(signals.every((s) => s.aborted)).toBe(true);
+  });
 });

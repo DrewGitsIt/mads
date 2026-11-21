@@ -106,21 +106,21 @@ function SinglePush({
   const [notice, setNotice] = useState<string>();
 
   useEffect(() => {
-    let cancelled = false;
+    // Closed, or asked again: the preview's fetch (and the Router's git
+    // fetch behind it) is aborted.
+    const ctl = new AbortController();
     setPreview(null);
     setLoadError(undefined);
     routerClient
-      .getPushPreview(sessionId, { repo: undefined, target })
+      .getPushPreview(sessionId, { repo: undefined, target, signal: ctl.signal })
       .then((p) => {
-        if (!cancelled) setPreview(p);
+        if (!ctl.signal.aborted) setPreview(p);
       })
       .catch((err: unknown) => {
-        if (!cancelled)
+        if (!ctl.signal.aborted)
           setLoadError(err instanceof Error ? err.message : String(err));
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => ctl.abort();
   }, [sessionId, routerClient, target, reload]);
 
   const remote = preview?.remote;
@@ -312,18 +312,22 @@ function MultiPush({
 
   // A preview fetches, so each repo's arrives on its own; a later fetch of
   // the same repo wins over an earlier one still on its way.
-  const loads = useRef(new Map<string, number>());
+  // A later fetch of a repo aborts the one before it; closing aborts them all.
+  const loads = useRef(new Map<string, { n: number; ctl: AbortController }>());
   function load(root: string, repoTarget: PushTarget, notice?: string) {
-    const n = (loads.current.get(root) ?? 0) + 1;
-    loads.current.set(root, n);
+    const prev = loads.current.get(root);
+    prev?.ctl.abort();
+    const n = (prev?.n ?? 0) + 1;
+    const ctl = new AbortController();
+    loads.current.set(root, { n, ctl });
     patch(root, { preview: undefined, loadError: undefined, notice });
     routerClient
-      .getPushPreview(sessionId, { repo: root, target: repoTarget })
+      .getPushPreview(sessionId, { repo: root, target: repoTarget, signal: ctl.signal })
       .then((p) => {
-        if (loads.current.get(root) === n) patch(root, { preview: p });
+        if (loads.current.get(root)?.n === n && !ctl.signal.aborted) patch(root, { preview: p });
       })
       .catch((err: unknown) => {
-        if (loads.current.get(root) === n)
+        if (loads.current.get(root)?.n === n && !ctl.signal.aborted)
           patch(root, {
             loadError: err instanceof Error ? err.message : String(err),
           });
@@ -331,8 +335,12 @@ function MultiPush({
   }
 
   useEffect(() => {
+    const current = loads.current;
     // Every listed repo at once, when the dialog opens.
     for (const r of repos) load(r.root, r.target);
+    return () => {
+      for (const { ctl } of current.values()) ctl.abort();
+    };
     // Mounted per opening; the list is the one it opened with.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

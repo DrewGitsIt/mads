@@ -1,7 +1,9 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeRouterClient, fixtureIsolatedRepoState, fixtureIsolatedSession, fixtureRepoWorktree } from "./fixtures";
+import { abortError } from "./client";
 import {
+  REPO_STATE_FETCH_TIMEOUT_MS,
   getSessionReposSnapshot,
   refreshSessionRepos,
   resetRepoStateStoreForTests,
@@ -150,5 +152,48 @@ describe("repoStateStore (COMMIT-LAND-PUSH D10)", () => {
     act(() => refreshSessionRepos(SID));
     await settle(0);
     expect(spy.mock.calls.length).toBe(calls + 1);
+  });
+  /** A getSessionRepos that never answers, rejecting with an AbortError when its signal aborts (as fetch does). */
+  function hang(c: FakeRouterClient) {
+    const signals: AbortSignal[] = [];
+    const spy = vi.spyOn(c, "getSessionRepos").mockImplementation((_id, opts) => {
+      const signal = opts?.signal;
+      if (signal) signals.push(signal);
+      return new Promise((_, reject) => signal?.addEventListener("abort", () => reject(abortError())));
+    });
+    return { spy, signals };
+  }
+
+  it("aborts the read in flight when its last reader leaves, silently", async () => {
+    const c = client();
+    const { spy, signals } = hang(c);
+    const a = renderHook(() => useSessionRepos(c, SID));
+    const b = renderHook(() => useSessionRepos(c, SID));
+    await settle(0);
+    expect(spy).toHaveBeenCalledTimes(1);
+    a.unmount();
+    expect(signals[0].aborted).toBe(false);
+    b.unmount();
+    expect(signals[0].aborted).toBe(true);
+    await settle(0);
+    // No error surfaced and no retry scheduled for an abort.
+    expect(getSessionReposSnapshot(SID).error).toBeNull();
+    await settle(31_000);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts a timed-out read before its retry, so only one request is ever out", async () => {
+    const c = client();
+    const { spy, signals } = hang(c);
+    const { result } = renderHook(() => useSessionRepos(c, SID));
+    await settle(0);
+    expect(spy).toHaveBeenCalledTimes(1);
+    await settle(REPO_STATE_FETCH_TIMEOUT_MS);
+    expect(signals[0].aborted).toBe(true);
+    expect(result.current.error).toMatch(/timed out/);
+    spy.mockRestore();
+    await settle(31_000);
+    expect(result.current.repos).not.toBeNull();
+    expect(result.current.error).toBeNull();
   });
 });

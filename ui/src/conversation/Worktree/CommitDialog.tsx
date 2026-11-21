@@ -196,6 +196,9 @@ export function CommitDialog({
   const [dropOver, setDropOver] = useState<string | null>(null);
   // Each repo's folders, fetched once per repo and extension while open.
   const folderCache = useRef(new Map<string, MoveFolder[]>());
+  // Aborted when the dialog closes: every plan read this opening started
+  // stops (and the Router's git status behind it).
+  const openCtl = useRef<AbortController | null>(null);
 
   const patch = (
     root: string,
@@ -215,7 +218,8 @@ export function CommitDialog({
 
   useEffect(() => {
     if (!open) return;
-    let cancelled = false;
+    const ctl = new AbortController();
+    openCtl.current = ctl;
     setPlan(null);
     setLoadError(undefined);
     setDrafts({});
@@ -227,9 +231,9 @@ export function CommitDialog({
     setDropOver(null);
     folderCache.current = new Map();
     routerClient
-      .getCommitPlan(sessionId)
+      .getCommitPlan(sessionId, { signal: ctl.signal })
       .then((p) => {
-        if (cancelled) return;
+        if (ctl.signal.aborted) return;
         const target = initialError ? targetOf(p) : undefined;
         setPlan(p);
         setDrafts(
@@ -246,11 +250,12 @@ export function CommitDialog({
         if (initialError && !target) setStrayError(initialError);
       })
       .catch((err: unknown) => {
-        if (!cancelled)
+        if (!ctl.signal.aborted)
           setLoadError(err instanceof Error ? err.message : String(err));
       });
     return () => {
-      cancelled = true;
+      ctl.abort();
+      if (openCtl.current === ctl) openCtl.current = null;
     };
   }, [open, sessionId, routerClient, initialError]);
 
@@ -266,9 +271,11 @@ export function CommitDialog({
   // A repo's files again after a commit that left some (or found none):
   // the others keep what the user did with them.
   function reloadRepo(root: string) {
+    const signal = openCtl.current?.signal;
     routerClient
-      .getCommitPlan(sessionId)
+      .getCommitPlan(sessionId, { signal })
       .then((p) => {
+        if (signal?.aborted) return;
         const files = p.repos.find((r) => r.root === root)?.files ?? [];
         setPlan(
           (cur) =>
@@ -365,9 +372,11 @@ export function CommitDialog({
   // targets as they are now. Every other repo keeps its files, checks and
   // message, as reloadRepo does.
   function reloadAfterMove(root: string, rel: string) {
+    const signal = openCtl.current?.signal;
     routerClient
-      .getCommitPlan(sessionId)
+      .getCommitPlan(sessionId, { signal })
       .then((p) => {
+        if (signal?.aborted) return;
         const fresh = p.repos.find((r) => r.root === root);
         setPlan((cur) => {
           if (!cur) return p;

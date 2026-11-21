@@ -101,20 +101,20 @@ function LandConfirm({
   const [refusal, setRefusal] = useState<LandResult>();
 
   useEffect(() => {
-    let cancelled = false;
+    // Closed, or another branch or base asked for: the preview's fetch is
+    // aborted, so the Router stops its git work.
+    const ctl = new AbortController();
     setPreview(null);
     setLoadError(undefined);
     routerClient
-      .getLandPreview(sessionId, { repo: picked.repo, base })
+      .getLandPreview(sessionId, { repo: picked.repo, base, signal: ctl.signal })
       .then((p) => {
-        if (!cancelled) setPreview(p);
+        if (!ctl.signal.aborted) setPreview(p);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err));
+        if (!ctl.signal.aborted) setLoadError(err instanceof Error ? err.message : String(err));
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => ctl.abort();
   }, [routerClient, sessionId, picked.repo, base]);
 
   function pick(c: LandRepo) {

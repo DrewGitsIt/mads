@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
-import type { RouterClient } from "./client";
+import { isAbortError, type RouterClient } from "./client";
 import { coalesce, type Coalescer } from "./coalesce";
 import { eventsReady, subscribeToEvents } from "./events";
 import type { Envelope, RepoChangedPayload, SessionRepoState } from "./types";
@@ -41,6 +41,8 @@ interface Entry {
   generation: number;
   retryTimer?: ReturnType<typeof setTimeout>;
   retryAttempt: number;
+  /** Aborts the fetch in flight: when the last reader leaves, or its timeout fires before a retry. */
+  inFlight?: AbortController;
   lastJson: string;
 }
 
@@ -68,22 +70,34 @@ function clearRetry(e: Entry): void {
   e.retryTimer = undefined;
 }
 
-function withTimeout<T>(p: Promise<T>): Promise<T> {
+/**
+ * The read, aborted after REPO_STATE_FETCH_TIMEOUT_MS: the abort cancels the
+ * request itself (and, server side, its git work), so the retry that
+ * follows never puts a second request beside a first still running.
+ */
+function withTimeout<T>(run: (signal: AbortSignal) => Promise<T>, ctl: AbortController): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<never>((_, reject) => {
-    timeout = setTimeout(
-      () => reject(new Error("GET /sessions/{id}/repos timed out")),
-      REPO_STATE_FETCH_TIMEOUT_MS,
-    );
+    timeout = setTimeout(() => {
+      // Rejected first, so the race settles as a timeout (retried), not as the abort (silent).
+      reject(new Error("GET /sessions/{id}/repos timed out"));
+      ctl.abort();
+    }, REPO_STATE_FETCH_TIMEOUT_MS);
   });
-  return Promise.race([p, timedOut]).finally(() => clearTimeout(timeout));
+  return Promise.race([run(ctl.signal), timedOut]).finally(() => clearTimeout(timeout));
 }
 
 async function fetchEntry(e: Entry): Promise<void> {
   const gen = e.generation;
   clearRetry(e);
+  e.inFlight?.abort();
+  const ctl = new AbortController();
+  e.inFlight = ctl;
   try {
-    const answer: unknown = await withTimeout(e.client.getSessionRepos(e.sessionId));
+    const answer: unknown = await withTimeout(
+      (signal) => e.client.getSessionRepos(e.sessionId, { signal }),
+      ctl,
+    );
     // Only well-formed entries: a Router without this route, or a stand-in
     // answering every URL alike, mustn't take down a reader.
     const repos = Array.isArray(answer)
@@ -98,6 +112,8 @@ async function fetchEntry(e: Entry): Promise<void> {
     setSnapshot(e, { repos: same ? e.snapshot.repos : repos, error: null });
   } catch (err) {
     if (gen !== e.generation || entries.get(e.sessionId) !== e) return;
+    // Aborted by stopEntry, or by a newer fetch: whoever aborted owns what's next.
+    if (isAbortError(err)) return;
     const error = err instanceof Error ? err.message : String(err);
     // An event-driven refetch alone would leave a failed read standing
     // until the repo next changed.
@@ -111,6 +127,8 @@ async function fetchEntry(e: Entry): Promise<void> {
       e.coalescer.now();
     }, delay);
     if (error !== e.snapshot.error) setSnapshot(e, { ...e.snapshot, error });
+  } finally {
+    if (e.inFlight === ctl) e.inFlight = undefined;
   }
 }
 
@@ -160,6 +178,9 @@ function stopEntry(e: Entry): void {
   e.generation++;
   e.coalescer.cancel();
   clearRetry(e);
+  // Nobody reads it now: let the Router stop its git work.
+  e.inFlight?.abort();
+  e.inFlight = undefined;
 }
 
 /**

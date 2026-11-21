@@ -288,4 +288,28 @@ describe("LandDialog (COMMIT-LAND-PUSH D12)", () => {
       expect(screen.queryByRole("radiogroup")).toBeNull();
     });
   });
+
+  it("aborts its preview read when it closes", async () => {
+    const client = new FakeRouterClient();
+    let signal: AbortSignal | undefined;
+    vi.spyOn(client, "getLandPreview").mockImplementation((_id, opts) => {
+      signal = opts?.signal;
+      return new Promise(() => {});
+    });
+    const props = {
+      sessionId: SID,
+      routerClient: client,
+      session: { ...fixtureIsolatedSession, uncommitted_count: 0 },
+      fastModel: true,
+      onClose: vi.fn(),
+      onLanded: vi.fn(),
+      onResult: vi.fn(),
+      onCommitDialog: vi.fn(),
+    };
+    const { rerender } = render(<LandDialog open {...props} />);
+    await waitFor(() => expect(signal).toBeDefined());
+    expect(signal!.aborted).toBe(false);
+    rerender(<LandDialog open={false} {...props} />);
+    expect(signal!.aborted).toBe(true);
+  });
 });

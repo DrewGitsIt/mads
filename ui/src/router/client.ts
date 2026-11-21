@@ -106,6 +106,33 @@ export interface SessionEventSource {
 }
 
 /**
+ * Per-request options. `signal` aborts the fetch (and, server side, the
+ * request's context, which kills its git commands). A caller that aborts
+ * treats the resulting AbortError as silent: see isAbortError.
+ */
+export interface RequestOptions {
+  signal?: AbortSignal;
+}
+
+/**
+ * True for the rejection an aborted request settles with (a DOMException
+ * named AbortError from fetch, or the signal's own reason). Never shown to
+ * the user: the view that asked has gone or moved on.
+ */
+export function isAbortError(err: unknown): boolean {
+  if (err == null || typeof err !== "object") return false;
+  const name = (err as { name?: unknown }).name;
+  return name === "AbortError";
+}
+
+/** The rejection a fake or wrapper settles with when `signal` aborts, as fetch would. */
+export function abortError(): Error {
+  const err = new Error("The operation was aborted.");
+  err.name = "AbortError";
+  return err;
+}
+
+/**
  * Router API surface the Conversation tab depends on. Several of these
  * routes don't exist on the Router yet (see ui/src/conversation/HANDOFF.md
  * §1) — this interface is the documented contract to build the frontend
@@ -250,7 +277,7 @@ export interface RouterClient {
   /** Working diff for one file; `vs` picks the Changes tab's baseline (the server defaults to "start"). */
   getFileDiff(sessionId: string, path: string, taskId?: string, vs?: ChangeBaselineId): Promise<FileDiff>;
   /** Changes tab / rail (docs/CHANGES-DESIGN.md): everything the session changed against one baseline. */
-  getChangeSet(sessionId: string, vs?: ChangeBaselineId): Promise<ChangeSet>;
+  getChangeSet(sessionId: string, vs?: ChangeBaselineId, opts?: RequestOptions): Promise<ChangeSet>;
   /** Deletes scratch files; the server re-classifies each path and skips anything no longer scratch. */
   deleteScratch(sessionId: string, paths: string[]): Promise<DeleteScratchResult>;
 
@@ -267,9 +294,9 @@ export interface RouterClient {
   /** Runs git status server-side — call when a dialog opens or at confirm time, never per render. `repo` is one of the session's repo roots; empty is its folder's. */
   getWorktreeStatus(sessionId: string, repo?: string): Promise<WorktreeStatus>;
   /** What the Commit dialog lists, across the session's repos (COMMIT-LAND-PUSH D2). Runs git: fetch when the dialog opens. */
-  getCommitPlan(sessionId: string): Promise<CommitPlan>;
+  getCommitPlan(sessionId: string, opts?: RequestOptions): Promise<CommitPlan>;
   /** Recounts the header's Commit/Land counts (cheap; they arrive on the session record). */
-  refreshWorktreeCounts(sessionId: string): Promise<void>;
+  refreshWorktreeCounts(sessionId: string, opts?: RequestOptions): Promise<void>;
   /** Throws CommitRefusedError for a structured refusal (invalid_paths, git_failed, …). */
   commitSession(sessionId: string, req: CommitRequest): Promise<CommitResult>;
   /** Resolves for a refusal too (undone: false, with its reason) — only an unexpected failure throws. */
@@ -279,7 +306,7 @@ export interface RouterClient {
   /** Landed, conflicted and refused all resolve — each is a card. */
   landSession(sessionId: string, req: LandRequest): Promise<LandResult>;
   /** What the Land confirmation shows (COMMIT-LAND-PUSH D12): the base and where it came from, the commits to squash, why it can't run. */
-  getLandPreview(sessionId: string, opts?: { repo?: string; base?: string }): Promise<LandPreview>;
+  getLandPreview(sessionId: string, opts?: { repo?: string; base?: string } & RequestOptions): Promise<LandPreview>;
   /** A Fast Model draft of the landing message. Throws CommitRefusedError (no_fast_model, draft_failed, …). */
   draftLandMessage(sessionId: string, opts?: { repo?: string; base?: string }): Promise<CommitDraft>;
   /** Moves a file from the commit plan's `outside` into a repo (COMMIT-LAND-PUSH D4). Throws MoveRefusedError for a refusal (exists, ignored, …). */
@@ -287,9 +314,9 @@ export interface RouterClient {
   /** Folders in `repo` a file could move into, those already holding `ext` files first. Runs git: fetch once per picker. */
   getMoveFolders(sessionId: string, repo: string, ext?: string): Promise<MoveFolder[]>;
   /** What a Push would send (COMMIT-LAND-PUSH D5). Fetches the remote first: call when the confirmation opens. */
-  getPushPreview(sessionId: string, opts?: { repo?: string; target?: PushTarget }): Promise<PushPreview>;
+  getPushPreview(sessionId: string, opts?: { repo?: string; target?: PushTarget } & RequestOptions): Promise<PushPreview>;
   /** Every repo in the session's set with its branch facts (COMMIT-LAND-PUSH D10). Served from the Router's cache; read through router/repoStateStore. */
-  getSessionRepos(sessionId: string): Promise<SessionRepoState[]>;
+  getSessionRepos(sessionId: string, opts?: RequestOptions): Promise<SessionRepoState[]>;
   /** One checkout's branch facts, by any path inside it. */
   getRepoState(path: string): Promise<RepoWorktree>;
   /** Pushed, refused and conflicted all resolve; only an unexpected failure throws. */
@@ -676,8 +703,11 @@ async function routerGet<T>(
   baseUrl: string,
   path: string,
   params?: Record<string, string | undefined>,
+  signal?: AbortSignal,
 ): Promise<T> {
-  const res = await fetch(buildUrl(baseUrl, path, params));
+  const url = buildUrl(baseUrl, path, params);
+  // No init without a signal: the call stays fetch(url), as every other GET.
+  const res = await (signal ? fetch(url, { signal }) : fetch(url));
   return readJSON<T>(res);
 }
 
@@ -700,26 +730,28 @@ function toCatalog(res: ModelsResponseWire): ModelCatalog {
   };
 }
 
-async function routerPost<T>(baseUrl: string, path: string, body?: unknown): Promise<T> {
+async function routerPost<T>(baseUrl: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${baseUrl}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    ...(signal ? { signal } : {}),
   });
   return readJSON<T>(res);
 }
 
-async function routerPut<T>(baseUrl: string, path: string, body?: unknown): Promise<T> {
+async function routerPut<T>(baseUrl: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${baseUrl}${path}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    ...(signal ? { signal } : {}),
   });
   return readJSON<T>(res);
 }
 
-async function routerDelete<T>(baseUrl: string, path: string): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`, { method: "DELETE" });
+async function routerDelete<T>(baseUrl: string, path: string, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(`${baseUrl}${path}`, { method: "DELETE", ...(signal ? { signal } : {}) });
   return readJSON<T>(res);
 }
 
@@ -1082,8 +1114,8 @@ export class FetchRouterClient implements RouterClient {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/changes`, { path, task_id: taskId, vs });
   }
 
-  async getChangeSet(sessionId: string, vs?: ChangeBaselineId): Promise<ChangeSet> {
-    return routerGet(this.baseUrl, `/sessions/${sessionId}/changeset`, { vs });
+  async getChangeSet(sessionId: string, vs?: ChangeBaselineId, opts: RequestOptions = {}): Promise<ChangeSet> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/changeset`, { vs }, opts.signal);
   }
 
   async deleteScratch(sessionId: string, paths: string[]): Promise<DeleteScratchResult> {
@@ -1108,12 +1140,12 @@ export class FetchRouterClient implements RouterClient {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/worktree`, { repo: repo || undefined });
   }
 
-  async getCommitPlan(sessionId: string): Promise<CommitPlan> {
-    return routerGet(this.baseUrl, `/sessions/${sessionId}/commit-plan`);
+  async getCommitPlan(sessionId: string, opts: RequestOptions = {}): Promise<CommitPlan> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/commit-plan`, undefined, opts.signal);
   }
 
-  async refreshWorktreeCounts(sessionId: string): Promise<void> {
-    return routerPost(this.baseUrl, `/sessions/${sessionId}/worktree/refresh`);
+  async refreshWorktreeCounts(sessionId: string, opts: RequestOptions = {}): Promise<void> {
+    return routerPost(this.baseUrl, `/sessions/${sessionId}/worktree/refresh`, undefined, opts.signal);
   }
 
   async commitSession(sessionId: string, req: CommitRequest): Promise<CommitResult> {
@@ -1155,11 +1187,16 @@ export class FetchRouterClient implements RouterClient {
     return routerPost(this.baseUrl, `/sessions/${sessionId}/land`, req);
   }
 
-  async getLandPreview(sessionId: string, opts: { repo?: string; base?: string } = {}): Promise<LandPreview> {
-    return routerGet(this.baseUrl, `/sessions/${sessionId}/land`, {
-      repo: opts.repo || undefined,
-      base: opts.base || undefined,
-    });
+  async getLandPreview(
+    sessionId: string,
+    opts: { repo?: string; base?: string } & RequestOptions = {},
+  ): Promise<LandPreview> {
+    return routerGet(
+      this.baseUrl,
+      `/sessions/${sessionId}/land`,
+      { repo: opts.repo || undefined, base: opts.base || undefined },
+      opts.signal,
+    );
   }
 
   async draftLandMessage(sessionId: string, opts: { repo?: string; base?: string } = {}): Promise<CommitDraft> {
@@ -1187,15 +1224,20 @@ export class FetchRouterClient implements RouterClient {
     return readJSON<MoveResult>(res);
   }
 
-  async getPushPreview(sessionId: string, opts: { repo?: string; target?: PushTarget } = {}): Promise<PushPreview> {
-    return routerGet(this.baseUrl, `/sessions/${sessionId}/push`, {
-      repo: opts.repo || undefined,
-      target: opts.target,
-    });
+  async getPushPreview(
+    sessionId: string,
+    opts: { repo?: string; target?: PushTarget } & RequestOptions = {},
+  ): Promise<PushPreview> {
+    return routerGet(
+      this.baseUrl,
+      `/sessions/${sessionId}/push`,
+      { repo: opts.repo || undefined, target: opts.target },
+      opts.signal,
+    );
   }
 
-  async getSessionRepos(sessionId: string): Promise<SessionRepoState[]> {
-    return routerGet(this.baseUrl, `/sessions/${sessionId}/repos`);
+  async getSessionRepos(sessionId: string, opts: RequestOptions = {}): Promise<SessionRepoState[]> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/repos`, undefined, opts.signal);
   }
 
   async getRepoState(path: string): Promise<RepoWorktree> {

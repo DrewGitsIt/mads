@@ -603,4 +603,26 @@ describe("CommitDialog — moving a file into a repo (D4)", () => {
     expect(commitButton().textContent).toBe("Commit 1 file");
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it("aborts its plan read when it closes, and shows no error for it", async () => {
+    const client = new FakeRouterClient();
+    let signal: AbortSignal | undefined;
+    vi.spyOn(client, "getCommitPlan").mockImplementation((_id, opts) => {
+      signal = opts?.signal;
+      return new Promise(() => {});
+    });
+    const props = {
+      sessionId: "session-isolated",
+      routerClient: client,
+      fastModel: true,
+      onClose: vi.fn(),
+      onCommitted: vi.fn(),
+      onOpenFile: vi.fn(),
+    };
+    const { rerender } = render(<CommitDialog open {...props} />);
+    await waitFor(() => expect(signal).toBeDefined());
+    expect(signal!.aborted).toBe(false);
+    rerender(<CommitDialog open={false} {...props} />);
+    expect(signal!.aborted).toBe(true);
+  });
 });

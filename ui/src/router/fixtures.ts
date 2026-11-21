@@ -1,7 +1,8 @@
 import type { RouterClient, SessionEventSource } from "./client";
 import { EVENTS_BATCH_LIMIT } from "./eventPages";
 import { isLiveDelegate } from "./delegateLive";
-import { checkLinkSessionIds, CommitRefusedError, MoveRefusedError, RouterValidationError } from "./client";
+import type { RequestOptions } from "./client";
+import { abortError, checkLinkSessionIds, CommitRefusedError, MoveRefusedError, RouterValidationError } from "./client";
 import { FakeEventSource } from "./testFakeEventSource";
 import type {
   Attachment,
@@ -98,6 +99,17 @@ import type {
 import { PRESET_GRANTS } from "./types";
 
 export const fixtureLinks: Link[] = [];
+
+/** Settles as `p`, or rejects with an AbortError once `signal` aborts — as fetch does. */
+function abortable<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return p;
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
 
 export const fixtureSessions: Record<string, Session> = {
   "session-active": {
@@ -1657,17 +1669,23 @@ export class FakeRouterClient implements RouterClient {
     Object.entries(fixtureChangeSets).map(([id, cs]) => [id, structuredClone(cs)]),
   );
   readonly changeSetCalls: { sessionId: string; vs?: ChangeBaselineId }[] = [];
-  /** A function lets a test fail or hold back a fetch. */
+  /** The signal each getChangeSet call carried, in call order. */
+  readonly changeSetSignals: (AbortSignal | undefined)[] = [];
+  /** A function lets a test fail or hold back a fetch. An abort rejects the call with an AbortError either way. */
   changeSetOutcome?: (sessionId: string, vs?: ChangeBaselineId) => Promise<ChangeSet>;
   readonly deleteScratchCalls: { sessionId: string; paths: string[] }[] = [];
   /** Undefined deletes every requested path that is scratch in changeSets. */
   deleteScratchOutcome?: DeleteScratchResult;
 
-  async getChangeSet(sessionId: string, vs?: ChangeBaselineId): Promise<ChangeSet> {
+  async getChangeSet(sessionId: string, vs?: ChangeBaselineId, opts: RequestOptions = {}): Promise<ChangeSet> {
     this.changeSetCalls.push({ sessionId, vs });
-    if (this.changeSetOutcome) return this.changeSetOutcome(sessionId, vs);
+    this.changeSetSignals.push(opts.signal);
+    if (this.changeSetOutcome) return abortable(this.changeSetOutcome(sessionId, vs), opts.signal);
     const cs = this.changeSets.get(sessionId);
-    return cs ? { ...structuredClone(cs), baseline: vs ?? cs.baseline } : emptyChangeSet(vs);
+    return abortable(
+      Promise.resolve(cs ? { ...structuredClone(cs), baseline: vs ?? cs.baseline } : emptyChangeSet(vs)),
+      opts.signal,
+    );
   }
 
   async deleteScratch(sessionId: string, paths: string[]): Promise<DeleteScratchResult> {
@@ -1731,7 +1749,8 @@ export class FakeRouterClient implements RouterClient {
     return structuredClone(this.worktreeStatus);
   }
 
-  async getCommitPlan(sessionId: string): Promise<CommitPlan> {
+  async getCommitPlan(sessionId: string, opts: RequestOptions = {}): Promise<CommitPlan> {
+    if (opts.signal?.aborted) throw abortError();
     this.commitPlanCalls.push(sessionId);
     const plan = structuredClone(this.commitPlan ?? this.planFromStatus());
     // The Router lists move targets only when there's something to move;
@@ -1790,8 +1809,9 @@ export class FakeRouterClient implements RouterClient {
 
   async getPushPreview(
     sessionId: string,
-    opts: { repo?: string; target?: PushTarget } = {},
+    { signal, ...opts }: { repo?: string; target?: PushTarget } & RequestOptions = {},
   ): Promise<PushPreview> {
+    if (signal?.aborted) throw abortError();
     this.pushPreviewCalls.push({ sessionId, ...opts });
     return structuredClone(typeof this.pushPreview === "function" ? this.pushPreview(opts) : this.pushPreview);
   }
@@ -1826,9 +1846,13 @@ export class FakeRouterClient implements RouterClient {
    */
   sessionRepos: Record<string, SessionRepoState[]> = {};
   readonly sessionReposCalls: string[] = [];
+  /** The signal each getSessionRepos call carried, in call order. */
+  readonly sessionReposSignals: (AbortSignal | undefined)[] = [];
 
-  async getSessionRepos(sessionId: string): Promise<SessionRepoState[]> {
+  async getSessionRepos(sessionId: string, opts: RequestOptions = {}): Promise<SessionRepoState[]> {
+    if (opts.signal?.aborted) throw abortError();
     this.sessionReposCalls.push(sessionId);
+    this.sessionReposSignals.push(opts.signal);
     const set = this.sessionRepos[sessionId];
     if (set) return structuredClone(set);
     const session = this.sessions.get(sessionId);
@@ -1885,8 +1909,14 @@ export class FakeRouterClient implements RouterClient {
   }
 
   readonly refreshWorktreeCountsCalls: string[] = [];
-  async refreshWorktreeCounts(sessionId: string): Promise<void> {
+  /** A function lets a test hold back or fail a refresh. An abort rejects the call with an AbortError either way. */
+  refreshWorktreeCountsOutcome?: (sessionId: string) => Promise<void>;
+  async refreshWorktreeCounts(sessionId: string, opts: RequestOptions = {}): Promise<void> {
     this.refreshWorktreeCountsCalls.push(sessionId);
+    if (this.refreshWorktreeCountsOutcome) {
+      return abortable(this.refreshWorktreeCountsOutcome(sessionId), opts.signal);
+    }
+    if (opts.signal?.aborted) throw abortError();
   }
 
   async commitSession(sessionId: string, req: CommitRequest): Promise<CommitResult> {
@@ -1930,7 +1960,11 @@ export class FakeRouterClient implements RouterClient {
     return typeof out === "function" ? out(req) : out;
   }
 
-  async getLandPreview(sessionId: string, opts: { repo?: string; base?: string } = {}): Promise<LandPreview> {
+  async getLandPreview(
+    sessionId: string,
+    { signal, ...opts }: { repo?: string; base?: string } & RequestOptions = {},
+  ): Promise<LandPreview> {
+    if (signal?.aborted) throw abortError();
     this.landPreviewCalls.push({ sessionId, ...opts });
     const out = typeof this.landPreview === "function" ? this.landPreview(opts) : this.landPreview;
     const preview = structuredClone(out);
