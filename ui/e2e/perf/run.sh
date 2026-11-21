@@ -6,6 +6,10 @@
 #         PERF_LONGLIVED_N=50000 PERF_LONGLIVED_RATE=2000 (scenario 8's appended events, events/s)
 #         PERF_HOLD_OUTPUT=0  PERF_PROBE=0 (lite probe everywhere) or PERF_PROBE_CAND=0 (cand only)
 #         CHECKS=a,b,c,d,e|none (default all; none in realism)
+#         GITFX=auto|1|0 — the real-git fixture (perfseed gitfx: local clones of
+#           GITFX_SRC, default ~/repo/mads, which is only ever cloned FROM, never
+#           run in) and the git shim on every stack's PATH. auto: on when a
+#           scenario is 9x or a check is f, g or h. 9x run with delays off only.
 #         REALISM=1 — the workload is a read-only backup of ~/.mads/mads.db
 #           (REAL_DB to override), prepared by `perfseed realism` and deleted
 #           with the run's temp dir; nothing real is committed or reported.
@@ -32,12 +36,21 @@ PROFILE=${PROFILE:-S}
 N=${N:-5}
 BROWSER=${BROWSER:-chromium}
 SCENARIOS=${SCENARIOS:-}
-MODES=${MODES:-on,off}
+# Real-git scenarios alone: delays off (the mock would add to real git).
+case ",$SCENARIOS," in ,,) DEFAULT_MODES=on,off ;; *) DEFAULT_MODES=off; for s in $(echo "$SCENARIOS" | tr ',' ' '); do case "$s" in 9*) ;; *) DEFAULT_MODES=on,off ;; esac; done ;; esac
+MODES=${MODES:-$DEFAULT_MODES}
 PERF_DELAYS=${PERF_DELAYS:-}
 PERF_HOLD_OUTPUT=${PERF_HOLD_OUTPUT:-1}
 REALISM=${REALISM:-}
 REAL_DB=${REAL_DB:-$HOME/.mads/mads.db}
 CHECKS=${CHECKS:-$([ -n "$REALISM" ] && echo none || echo a,b,c,d,e)}
+GITFX=${GITFX:-auto}
+GITFX_SRC=${GITFX_SRC:-$HOME/repo/mads}
+if [ "$GITFX" = auto ]; then
+	GITFX=0
+	for s in $(echo "$SCENARIOS" | tr ',' ' '); do case "$s" in 9*) GITFX=1 ;; esac; done
+	for c in $(echo "$CHECKS" | tr ',' ' '); do case "$c" in f | f-* | g | g-* | h | h-*) GITFX=1 ;; esac; done
+fi
 # Checkouts the harness must never run from, build in or install into (the
 # live app runs from them): the dirs themselves and anything under them.
 PERF_FORBIDDEN_DIRS=${PERF_FORBIDDEN_DIRS:-$HOME/repo/mads:$HOME/repo/mads-mesh}
@@ -74,6 +87,12 @@ PROFILE_JSON="$ROOT/ui/e2e/perf/profiles/$PROFILE.json"
 case "$BROWSER" in chromium | electron) ;; *) die "BROWSER must be chromium or electron" ;; esac
 case "$N" in '' | *[!0-9]*) die "N must be a number" ;; esac
 for m in $(echo "$MODES" | tr ',' ' '); do case "$m" in on | off) ;; *) die "MODES: $m is not on or off" ;; esac; done
+if [ "$GITFX" = 1 ]; then
+	[ -z "$REALISM" ] || die "GITFX and REALISM don't mix"
+	# A file test, not git: the only git run against GITFX_SRC is the clone.
+	[ -e "$GITFX_SRC/.git" ] || [ -f "$GITFX_SRC/HEAD" ] || die "GITFX_SRC $GITFX_SRC is not a git repo"
+	REAL_GIT=$(command -v git) || die "no git on PATH"
+fi
 
 # resolve <spec> → "dir <path>" or "ref <sha>"
 resolve() {
@@ -271,8 +290,20 @@ else
 	git -C "$WL/repo" init -q -b main
 	git -C "$WL/repo" -c user.name=perf -c user.email=perf@perf.test commit -q --allow-empty -m "perf workspace"
 	"$TMP/perfseed" seed -db "$WL/mads.db" -profile "$PROFILE_JSON" -repo "$WL/repo" -transcripts "$WL/claude-projects" -manifest "$WL/manifest.json"
-	cp "$WL/manifest.json" "$RUN_DIR/manifest.json"
 	TRANSCRIPTS="$WL/claude-projects"
+	if [ "$GITFX" = 1 ]; then
+		# The real-git fixture: clones of GITFX_SRC (read only: one clone
+		# --mirror --no-local) into the run's temp tree, sessions and
+		# ledgers into the workload. Every repetition restores it from a
+		# pristine APFS clone (stack.ts restoreGitFx).
+		echo "ui-perf: building the git fixture from $GITFX_SRC (clone only)" >&2
+		mkdir -p "$TMP/gitfx"
+		"$TMP/perfseed" gitfx -db "$WL/mads.db" -manifest "$WL/manifest.json" -shape "$ROOT/ui/e2e/perf/gitfx.shape.json" \
+			-src "$GITFX_SRC" -root "$TMP/gitfx/live" -guard "$TMP"
+		cp -cRp "$TMP/gitfx/live" "$TMP/gitfx/pristine"
+		(cd "$ROOT" && go build -o "$TMP/gitshim/git" ./ui/e2e/perf/gitshim)
+	fi
+	cp "$WL/manifest.json" "$RUN_DIR/manifest.json"
 fi
 
 scen_json="[]"
@@ -295,6 +326,7 @@ cat >"$RUN_DIR/plan.json" <<EOF
   "holdOutput": $([ "$PERF_HOLD_OUTPUT" = 0 ] && echo false || echo true),
   "checks": $checks_json,
   "realism": $([ -n "$REALISM" ] && echo true || echo false),
+  "gitFx": $([ "$GITFX" = 1 ] && printf '{"root": "%s", "pristine": "%s"}' "$TMP/gitfx/live" "$TMP/gitfx/pristine" || echo null),
   "meta": {"profile": "$PROFILE", "harness": "$(git -C "$ROOT" rev-parse --short HEAD)", "host": "$(uname -sm)", "probe": "$([ "${PERF_PROBE:-}" = 0 ] && echo "lite (markers only) on every side" || ([ "${PERF_PROBE_CAND:-}" = 0 ] && echo "full on base, lite (markers only) on cand" || echo full))"}
 }
 EOF
@@ -317,6 +349,8 @@ fi
 PERF_PROFILE_FOR_APPEND=$([ -n "$REALISM" ] || echo "$PROFILE_JSON")
 (cd "$ROOT/ui" && TMPDIR="$TMP/tmp" PERF_PIDS_DIR="$PIDS" PERF_PLAN="$RUN_DIR/plan.json" PERF_GIT_CEILING="$TMP" \
 	PERF_PERFSEED="$TMP/perfseed" PERF_PROFILE_JSON="$PERF_PROFILE_FOR_APPEND" \
+	PERF_GIT_SHIM_DIR="$([ "$GITFX" = 1 ] && echo "$TMP/gitshim")" PERF_REAL_GIT="${REAL_GIT:-}" \
+	PERF_STACK_LOG_DIR="$([ -z "$REALISM" ] && echo "$RUN_DIR/stack-logs")" \
 	npx playwright test --config e2e/perf/playwright.perf.config.ts)
 pw=$?
 if [ -n "$REALISM" ]; then

@@ -31,6 +31,8 @@ export interface PerfStack {
   pids: { router: number; data: number };
   /** This repetition's own database copy (the Data Service's, read-only here). */
   dbPath: string;
+  /** The git shim's call log (gitshim/main.go), when the shim is on PATH. */
+  gitLog?: string;
   /** Records another process this repetition owns (the browser, Electron). */
   own(pid: number, name: string): void;
   teardown(): Promise<void>;
@@ -177,11 +179,17 @@ export async function bootPerfStack(opts: {
   fastModelURL?: string;
   /** Extra environment for the stack's processes (e.g. MADS_FAKE_START_DELAY_MS). */
   env?: Record<string, string>;
+  /** The real-git fixture: restored from its pristine copy before the stack boots. */
+  gitFx?: { root: string; pristine: string };
 }): Promise<PerfStack> {
+  if (opts.gitFx) restoreGitFx(opts.gitFx.root, opts.gitFx.pristine);
   const reg = registry(opts.tag);
   const tmpDir = mkdtempSync(path.join(tmpdir(), "mads-perf-run-"));
   reg.dir(tmpDir);
-  const homeDir = path.join(tmpDir, "home");
+  // A fixture stack's $HOME/$MADS_HOME is the fixture's own home (fresh from
+  // the pristine copy each repetition): the runner puts a session's worktree
+  // at $MADS_HOME/session-worktrees/<id>, where perfseed gitfx made them.
+  const homeDir = opts.gitFx ? path.join(opts.gitFx.root, "home") : path.join(tmpDir, "home");
   const dataDir = path.join(tmpDir, "data");
   mkdirSync(homeDir, { recursive: true });
   mkdirSync(dataDir, { recursive: true });
@@ -207,7 +215,18 @@ export async function bootPerfStack(opts: {
   env.NO_PROXY = env.no_proxy = "127.0.0.1,localhost,::1";
   env.GIT_CEILING_DIRECTORIES = process.env.PERF_GIT_CEILING || path.dirname(tmpDir);
   Object.assign(env, opts.env ?? {});
+  // A fixture session's child finds its shadow store where perfseed gitfx made it.
+  if (opts.gitFx) env.XDG_DATA_HOME = path.join(opts.gitFx.root, "xdg");
   env.MADS_MERGIRAF = path.join(tmpDir, "mergiraf-standin", "mergiraf");
+  // The git shim (PERF_GIT_SHIM_DIR, built by run.sh) ahead of the real git
+  // on every stack process's PATH: one log line per git call.
+  let gitLog: string | undefined;
+  if (process.env.PERF_GIT_SHIM_DIR && process.env.PERF_REAL_GIT) {
+    gitLog = path.join(tmpDir, "git-calls.jsonl");
+    env.PATH = `${process.env.PERF_GIT_SHIM_DIR}:${env.PATH ?? ""}`;
+    env.PERF_REAL_GIT = process.env.PERF_REAL_GIT;
+    env.PERF_GIT_LOG = gitLog;
+  }
   const agentBinDir = path.join(tmpDir, "agent-bin-standins");
   mkdirSync(agentBinDir, { recursive: true });
   env.MADS_AGENT_BIN_DIR = agentBinDir;
@@ -267,6 +286,13 @@ export async function bootPerfStack(opts: {
     );
     procs.push(router);
     reg.pid(router.proc.pid!, "router");
+    // PERF_STACK_LOG_DIR (run.sh: <runDir>/stack-logs): the Router's stderr,
+    // its session children's included, per repetition — for failures.
+    if (process.env.PERF_STACK_LOG_DIR) {
+      mkdirSync(process.env.PERF_STACK_LOG_DIR, { recursive: true });
+      const log = path.join(process.env.PERF_STACK_LOG_DIR, `${opts.tag}-router.log`);
+      router.proc.stderr?.on("data", (c: string | Buffer) => appendFileSync(log, c));
+    }
     const routerURL = `http://${router.addr}`;
     await waitHealth(routerURL);
     await proxy.setTarget(routerURL);
@@ -280,12 +306,59 @@ export async function bootPerfStack(opts: {
       homeDir,
       pids: { router: router.proc.pid!, data: data.proc.pid! },
       dbPath: path.join(dataDir, "mads.db"),
+      gitLog,
       own: (pid, name) => reg.pid(pid, name),
       teardown: cleanup,
     };
   } catch (err) {
     await cleanup();
     throw err;
+  }
+}
+
+/** The harness's own git (never the shim): no user config, no hooks. */
+export function fxGit(dir: string, args: string[], opts: { gitDir?: string; workTree?: string; allowFail?: boolean } = {}): string {
+  const pre = [...(opts.gitDir ? [`--git-dir=${opts.gitDir}`] : []), ...(opts.workTree ? [`--work-tree=${opts.workTree}`] : [])];
+  try {
+    return execFileSync(process.env.PERF_REAL_GIT || "git", [...pre, ...args], {
+      cwd: dir,
+      encoding: "utf8",
+      maxBuffer: 64 << 20,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "perf user", GIT_AUTHOR_EMAIL: "perf@perf.test", GIT_COMMITTER_NAME: "perf user", GIT_COMMITTER_EMAIL: "perf@perf.test" },
+    }).trim();
+  } catch (err) {
+    if (opts.allowFail) return "";
+    throw err;
+  }
+}
+
+/**
+ * Puts the real-git fixture back as perfseed gitfx built it, before a
+ * repetition's stack boots: the tree removed and cloned again from its
+ * pristine copy (APFS clones, mtimes kept), then every checkout's index and
+ * every shadow index refreshed, as they are on a live machine (a copy has
+ * new inodes and ctimes, which would make the first git status of every
+ * checkout — and every changeset, which copies the shadow index — rehash
+ * the whole tree). Both paths must be inside the run's temp tree.
+ */
+export function restoreGitFx(root: string, pristine: string): void {
+  const ceiling = process.env.PERF_GIT_CEILING;
+  if (!ceiling || !root.startsWith(ceiling + path.sep) || !pristine.startsWith(ceiling + path.sep)) {
+    throw new Error(`refusing to restore the git fixture outside the run's temp tree (${root})`);
+  }
+  rmSync(root, { recursive: true, force: true });
+  execFileSync("cp", ["-cRp", pristine, root]);
+  const lsDirs = (d: string) => (existsSync(d) ? execFileSync("ls", [d], { encoding: "utf8" }).split("\n").filter(Boolean).map((x) => path.join(d, x)) : []);
+  for (const c of [...lsDirs(path.join(root, "repos")), ...lsDirs(path.join(root, "home", "session-worktrees"))]) {
+    fxGit(c, ["update-index", "-q", "--refresh"], { allowFail: true });
+  }
+  for (const sess of lsDirs(path.join(root, "xdg", "mads", "shadow"))) {
+    for (const gd of lsDirs(sess)) {
+      if (!existsSync(path.join(gd, "HEAD"))) continue;
+      const wt = fxGit(root, ["config", "mads.root"], { gitDir: gd, allowFail: true });
+      if (wt) fxGit(root, ["update-index", "-q", "--refresh"], { gitDir: gd, workTree: wt, allowFail: true });
+    }
   }
 }
 

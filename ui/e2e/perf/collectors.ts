@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import type { CDPSession, Page } from "@playwright/test";
 
 /**
@@ -208,3 +209,139 @@ export class SocketSampler {
     while (this.busy) await new Promise((r) => setTimeout(r, 20));
   }
 }
+
+// ---------------------------------------------------------------------------
+// Git processes: the shim's exact log, and ps sampling by pid ancestry.
+
+/** One git call as the shim logged it (gitshim/main.go). */
+export interface GitCall {
+  t0: number;
+  t1: number;
+  ppid: number;
+  sub: string;
+  cpu_us: number;
+  exit: number;
+}
+
+export function readGitCalls(file: string | undefined): GitCall[] {
+  if (!file) return [];
+  let text = "";
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return [];
+  }
+  const out: GitCall[] = [];
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    try {
+      out.push(JSON.parse(line) as GitCall);
+    } catch {
+      // a line cut short by a kill
+    }
+  }
+  return out;
+}
+
+export interface GitStats {
+  spawns: number;
+  cpuMs: number;
+  /** Sum of the calls' own durations (a call running beside another counts twice). */
+  wallMs: number;
+  /** Calls whose parent is the Router itself (the rest: session children, pipelines). */
+  router: number;
+  bySub: Record<string, { n: number; cpuMs: number }>;
+}
+
+/** The git calls that started in [from, to] (Unix ms). */
+export function gitStats(calls: GitCall[], from: number, to: number, routerPid: number): GitStats {
+  const s: GitStats = { spawns: 0, cpuMs: 0, wallMs: 0, router: 0, bySub: {} };
+  for (const c of calls) {
+    if (c.t0 < from || c.t0 > to) continue;
+    s.spawns++;
+    s.cpuMs += c.cpu_us / 1000;
+    s.wallMs += c.t1 - c.t0;
+    if (c.ppid === routerPid) s.router++;
+    const b = (s.bySub[c.sub || "?"] ??= { n: 0, cpuMs: 0 });
+    b.n++;
+    b.cpuMs += c.cpu_us / 1000;
+  }
+  s.cpuMs = Math.round(s.cpuMs);
+  for (const b of Object.values(s.bySub)) b.cpuMs = Math.round(b.cpuMs);
+  return s;
+}
+
+/**
+ * Samples `ps` every intervalMs for git processes in the Router's process
+ * tree (its own children and its session/pipeline children's), by pid
+ * ancestry: the most running at once, and how many distinct ones a sample
+ * caught. A git process whose parent is git (the shim's real git, git's
+ * own helpers) is not counted again. Sampling misses most calls (they last
+ * a few ms); the shim's log is the exact count, this the concurrency.
+ */
+export class GitPsSampler {
+  private timer?: ReturnType<typeof setInterval>;
+  private busy = false;
+  peak = 0;
+  readonly seen = new Set<number>();
+  private series: [number, number][] = [];
+  constructor(private readonly rootPid: number) {}
+
+  private async sample(): Promise<void> {
+    if (this.busy) return;
+    this.busy = true;
+    const out = await run("ps", ["-A", "-o", "pid=,ppid=,comm="]);
+    const parent = new Map<number, number>();
+    const comm = new Map<number, string>();
+    for (const line of out.split("\n")) {
+      const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+      if (!m) continue;
+      parent.set(Number(m[1]), Number(m[2]));
+      comm.set(Number(m[1]), m[3].trim());
+    }
+    const isGit = (pid: number) => /(^|\/)git$/.test(comm.get(pid) ?? "");
+    const under = (pid: number) => {
+      for (let p = parent.get(pid), hops = 0; p && hops < 12; p = parent.get(p), hops++) if (p === this.rootPid) return true;
+      return false;
+    };
+    let n = 0;
+    for (const pid of parent.keys()) {
+      if (!isGit(pid) || isGit(parent.get(pid) ?? 0) || !under(pid)) continue;
+      n++;
+      this.seen.add(pid);
+    }
+    this.peak = Math.max(this.peak, n);
+    this.series.push([Date.now(), n]);
+    this.busy = false;
+  }
+
+  start(intervalMs = 100): void {
+    void this.sample();
+    this.timer = setInterval(() => void this.sample(), intervalMs);
+  }
+
+  /** Peak concurrent git processes sampled in [from, to]. */
+  peakIn(from: number, to: number): number {
+    return Math.max(0, ...this.series.filter(([t]) => t >= from && t <= to).map(([, n]) => n));
+  }
+
+  async stop(): Promise<void> {
+    if (this.timer) clearInterval(this.timer);
+    while (this.busy) await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
+/** The git routes the harness reports latency for, by request (method + path). */
+export function gitRoute(method: string, p: string): string | undefined {
+  if (!p.startsWith("/sessions/")) return undefined;
+  if (method === "GET" && /^\/sessions\/[^/]+\/repos$/.test(p)) return "repos";
+  if (method === "GET" && /\/changeset$/.test(p)) return "changeset";
+  if (method === "POST" && /\/worktree\/refresh$/.test(p)) return "worktree/refresh";
+  if (method === "GET" && /^\/sessions\/[^/]+\/worktree$/.test(p)) return "worktree";
+  if (method === "GET" && /\/commit-plan$/.test(p)) return "commit-plan";
+  if (method === "GET" && /^\/sessions\/[^/]+\/push$/.test(p)) return "push";
+  if (method === "GET" && /^\/sessions\/[^/]+\/land$/.test(p)) return "land";
+  return undefined;
+}
+
+export const GIT_ROUTES = ["repos", "changeset", "worktree/refresh", "worktree", "commit-plan", "push", "land"];

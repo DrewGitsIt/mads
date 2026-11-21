@@ -149,9 +149,10 @@ ui-smoke: ui-deps
 # Every scenario runs with the proxy's delays on and off (MODES=on,off).
 # Also: SCENARIOS=1,3b  CHECKS=a,b|none  REALISM=1 (a read-only backup of ~/.mads/mads.db)
 #       PERF_DELAYS=<regex>=<ms>,...  PERF_HOLD_OUTPUT=0.
+#       GITFX=auto|1|0 GITFX_SRC=~/repo/mads (real-git fixture for 9x and checks f-h; cloned from, never run in).
 # No ui-deps prerequisite: run.sh installs deps only where they are missing.
 ui-perf:
-	BASE="$(BASE)" CAND="$(CAND)" PROFILE="$(PROFILE)" N="$(N)" BROWSER="$(BROWSER)" SCENARIOS="$(SCENARIOS)" MODES="$(MODES)" CHECKS="$(CHECKS)" REALISM="$(REALISM)" \
+	BASE="$(BASE)" CAND="$(CAND)" PROFILE="$(PROFILE)" N="$(N)" BROWSER="$(BROWSER)" SCENARIOS="$(SCENARIOS)" MODES="$(MODES)" CHECKS="$(CHECKS)" REALISM="$(REALISM)" GITFX="$(GITFX)" GITFX_SRC="$(GITFX_SRC)" \
 		sh ui/e2e/perf/run.sh
 
 # Release gate: cross-platform build matrix + install/update smokes against
