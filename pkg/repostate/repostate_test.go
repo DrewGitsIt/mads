@@ -363,3 +363,33 @@ func waitWaiters(t *testing.T, c *Cache, n int) {
 	}
 	t.Fatalf("waiters never reached %d", n)
 }
+
+// TestCacheHitSpawnsNoGit: the key is the checkout's top, found by walking
+// the filesystem (sessionwt.Toplevel), so a hit costs no git process; it
+// used to cost a `git rev-parse --show-toplevel` per ask.
+func TestCacheHitSpawnsNoGit(t *testing.T) {
+	repo, _ := fixture(t)
+	c := NewCache()
+	if _, err := c.Get(context.Background(), filepath.Join(repo)); err != nil {
+		t.Fatal(err)
+	}
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("no git")
+	}
+	bin := t.TempDir()
+	log := filepath.Join(bin, "spawns.log")
+	script := "#!/bin/sh\necho \"$*\" >> '" + log + "'\nexec '" + real + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for range 20 {
+		if _, err := c.Get(context.Background(), repo); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if raw, _ := os.ReadFile(log); len(raw) != 0 {
+		t.Errorf("cache hits spawned git:\n%s", raw)
+	}
+}

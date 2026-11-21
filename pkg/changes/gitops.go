@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/gitroot"
 	"github.com/drewkidwell/mads/services/session/shadow"
 )
 
@@ -378,25 +379,14 @@ func noIndexNumstat(ctx context.Context, original, path string) (e numstatEntry,
 
 // repoRootOf finds the git work tree containing dir by walking up from its
 // nearest existing ancestor looking for a .git entry (a dir for a primary
-// checkout, a file for a linked worktree or submodule) — the same answer
-// `git rev-parse --show-toplevel` gives, without a process per directory.
-// "" when dir is in no repo.
+// checkout, a file for a linked worktree or submodule): gitroot.Find's
+// plain walk, without a process per directory. Paths are taken as given
+// (no symlink resolution), matching the ledger's. "" when dir is in no repo.
 func repoRootOf(dir string, cache map[string]string) string {
 	if root, ok := cache[dir]; ok {
 		return root
 	}
-	root := ""
-	for d := dir; ; {
-		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
-			root = d
-			break
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			break
-		}
-		d = parent
-	}
+	root, _ := gitroot.Find(dir)
 	cache[dir] = root
 	return root
 }
