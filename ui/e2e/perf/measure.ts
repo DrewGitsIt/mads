@@ -424,6 +424,8 @@ export async function bootRig(opts: {
   manifest: Manifest;
   fastModelURL?: string;
   env?: Record<string, string>;
+  /** Electron: leave the first window as it loaded, probe or not (the cold-load leg's own reload carries the probe). */
+  coldLoad?: boolean;
 }): Promise<Rig> {
   const { plan, build, mode, tag, manifest } = opts;
   const drainMs = await waitPortsDrained();
@@ -486,11 +488,24 @@ export async function bootRig(opts: {
       browserPid = electronApp.process().pid!;
       stack.own(browserPid, "electron");
       context = electronApp.context();
+      // Playwright has no pre-launch init script for Electron: main may
+      // create and load the first window before this lands, so that first
+      // document can lack the probe. Every later document has it.
       await context.addInitScript(probeFor(build.label));
       page = await electronApp.firstWindow();
+      // firstWindow can return before main's loadURL commits (url ""/about:blank).
       // Main's ROUTER_BASE is VITE_ROUTER_URL: the window must load from the proxy, never the 17373 default.
+      const urlDeadline = Date.now() + 30_000;
+      while (!page.url().startsWith(stack.appURL)) {
+        const u = page.url();
+        if ((u && u !== "about:blank") || Date.now() > urlDeadline) throw new Error(`FATAL: Electron window loaded ${u || "(empty)"}, not the proxy ${stack.appURL}`);
+        await sleep(25);
+      }
       await page.waitForLoadState("domcontentloaded");
-      if (!page.url().startsWith(stack.appURL)) throw new Error(`FATAL: Electron window loaded ${page.url()}, not the proxy ${stack.appURL}`);
+      const probed = await page.evaluate(() => !!(window as unknown as { __perf?: unknown }).__perf);
+      // The cold-load leg reloads (arming via init script) and measures that
+      // document, so its rig must not spend a load on priming.
+      if (!probed && !opts.coldLoad) await page.reload({ waitUntil: "domcontentloaded" });
     } else {
       server = await chromium.launchServer({
         channel: "chromium",
@@ -592,7 +607,7 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
   let rig: Rig | undefined;
   let fatal: Error | undefined;
   try {
-    rig = await bootRig({ plan, build, mode, tag, manifest });
+    rig = await bootRig({ plan, build, mode, tag, manifest, coldLoad: scenario.id === "1-cold-load" });
     const { stack, page, watch, metrics, ctx } = rig;
     await scenario.prepare(ctx);
     if (scenario.id !== "1-cold-load") await ctx.quiesce();
@@ -614,7 +629,9 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       const spec = leg.marker(ctx, clickAt);
       // A navigation replaces the document: arm in the next one too.
       if (leg.navigates) await rig.context.addInitScript(`window.__perf && window.__perf.arm(${JSON.stringify(leg.name)}, ${JSON.stringify(spec)});`);
-      await arm(page, leg.name, spec);
+      // A navigating leg's current document may predate the probe (Electron's
+      // first window); the init script above arms the document it measures.
+      if (!leg.navigates || (await page.evaluate(() => !!(window as unknown as { __perf?: unknown }).__perf))) await arm(page, leg.name, spec);
       await leg.act(ctx);
       const [markerAt, markerSeen] = await waitMarker(watch, leg.name, spec, leg.markerCapMs);
       const rule = await waitRule(watch, clickAt, head, SETTLE_CAP_MS);
