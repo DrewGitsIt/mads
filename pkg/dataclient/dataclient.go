@@ -180,8 +180,9 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 			req.Header.Set(leaseHeader, tok)
 		}
 	}
+	start := c.reach.begin()
 	resp, err := c.http.Do(req)
-	c.reach.observe(ctx, method+" "+stripQuery(path), err)
+	c.reach.observe(ctx, method+" "+stripQuery(path), start, err)
 	if err != nil {
 		return err
 	}
@@ -1162,8 +1163,9 @@ func (c *Client) Stream(ctx context.Context, since int64, sessionID string, type
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	c.authorize(req)
+	start := c.reach.begin()
 	resp, err := (&http.Client{}).Do(req) // no timeout: the stream lives until ctx ends
-	c.reach.observe(ctx, "GET /events (stream)", err)
+	c.reach.observe(ctx, "GET /events (stream)", start, err)
 	if err != nil {
 		return nil, err
 	}

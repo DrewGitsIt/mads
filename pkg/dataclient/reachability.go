@@ -3,8 +3,10 @@ package dataclient
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -16,8 +18,10 @@ const unreachableEvery = 30 * time.Second
 // back through logf: one line on the first failed connect, at most one per
 // 30 s after that while it stays down (with how many failures it left out),
 // and one line on the first call that gets through again. Every request
-// this client (and its As siblings) makes counts, streams included. A call
-// abandoned by its own context (the caller went away) doesn't.
+// this client (and its As siblings) makes counts, streams included. Only a
+// failure to connect counts as unreachable (see isUnreachable): a slow call
+// that hits the client's timeout, or a call abandoned by its own context
+// (the caller went away), says nothing about whether the service is up.
 func WithUnreachableLog(logf func(format string, args ...any)) Option {
 	return func(c *Client) { c.reach = &reachability{logf: logf, now: time.Now} }
 }
@@ -31,31 +35,62 @@ type reachability struct {
 	mu         sync.Mutex
 	down       bool
 	since      time.Time // when the outage started
+	lastFailed time.Time // when the latest failed connect was observed
 	lastLogged time.Time
 	suppressed int
 }
 
-// observe records one request's transport outcome: err is what
-// http.Client.Do returned (nil when the Data Service answered, whatever the
-// status).
-func (r *reachability) observe(ctx context.Context, what string, err error) {
+// begin is the start time to hand observe for a request about to be sent.
+func (r *reachability) begin() time.Time {
+	if r == nil {
+		return time.Time{}
+	}
+	return r.now()
+}
+
+// isUnreachable reports whether err is a failure to reach the Data Service
+// at all: the dial failed (refused, timed out connecting, no route) or the
+// name didn't resolve. Anything after a connection was made (a timeout
+// waiting on a slow answer, a reset mid-response) is not.
+func isUnreachable(err error) bool {
+	var op *net.OpError
+	if errors.As(err, &op) && op.Op == "dial" {
+		return true
+	}
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		return true
+	}
+	return errors.Is(err, syscall.ECONNREFUSED)
+}
+
+// observe records one request's transport outcome: start is what begin
+// returned before the request was sent, err is what http.Client.Do returned
+// (nil when the Data Service answered, whatever the status).
+func (r *reachability) observe(ctx context.Context, what string, start time.Time, err error) {
 	if r == nil {
 		return
 	}
-	if err != nil && (ctx.Err() != nil || errors.Is(err, context.Canceled)) {
+	if err != nil && (ctx.Err() != nil || errors.Is(err, context.Canceled) || !isUnreachable(err)) {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
 	if err == nil {
-		if r.down {
+		// Only a call sent after the latest failure proves the service is
+		// back: one that was already in flight across the outage can land
+		// between two failures and would log a recovery that isn't one.
+		if r.down && start.After(r.lastFailed) {
 			r.down = false
 			r.logf("data service reachable again after %s (%s)", now.Sub(r.since).Round(time.Second), what)
 		}
-		r.suppressed = 0
+		if !r.down {
+			r.suppressed = 0
+		}
 		return
 	}
+	r.lastFailed = now
 	if !r.down {
 		r.down = true
 		r.since = now
