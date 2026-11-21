@@ -401,6 +401,33 @@ describe("subscribeToEvents", () => {
       expect(FakeEventSource.instances).toHaveLength(0);
     });
 
+    it.each([404, 405])("stops for good when the head answers %i — the services predate this UI", async (status) => {
+      vi.useFakeTimers();
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const fetchMock = vi.fn(async () => new Response('{"error":"not found"}', { status }));
+      vi.stubGlobal("fetch", fetchMock);
+      let readied = false;
+      void eventsReady().then(() => (readied = true));
+      subscribe({ types: ["session.created"] }, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getBusHealth().state).toBe("incompatible");
+      expect(error).toHaveBeenCalledTimes(1);
+
+      // No retry loop: not on the backoff, not on wake, not on a new subscribe.
+      await vi.advanceTimersByTimeAsync(120_000);
+      window.dispatchEvent(new Event("online"));
+      subscribe({ types: ["task.created"] }, () => {});
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(FakeEventSource.instances).toHaveLength(0);
+      expect(readied).toBe(false);
+      expect(error).toHaveBeenCalledTimes(1);
+
+      // Terminal across teardown too.
+      for (const u of unsubscribes.splice(0)) u();
+      expect(getBusHealth().state).toBe("incompatible");
+    });
+
     it("omits since only when the head says the log is empty", async () => {
       stubHead(0);
       subscribe({ types: ["session.created"] }, () => {});

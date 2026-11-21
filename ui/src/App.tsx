@@ -222,6 +222,13 @@ export function App() {
           action={{ label: "Reload", onClick: () => window.location.reload() }}
           resolvedTitle="Live updates resumed"
         />
+        <Banner
+          active={busHealth.state === "incompatible"}
+          tone="bad"
+          title="Restart mads"
+          description="mads services are older than this window, so live updates and lists can't load. Restart mads (scripts/app.sh --restart) and reload."
+          action={{ label: "Reload", onClick: () => window.location.reload() }}
+        />
         <div className={styles.surface}>
           <ToastViewport>
             <ErrorBoundary key={activeId}>

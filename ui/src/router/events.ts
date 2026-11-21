@@ -94,6 +94,10 @@ let reconnectAttempt = 0;
 let rejectedTypes = new Set<string>();
 // Consecutive failed connects with no "open" in between. Feeds BusHealth.
 let consecutiveFailures = 0;
+// Terminal: GET /events/head answered 404/405, so the Router or the Data
+// Service predates this UI (it has no head to start a live-only stream
+// from). Nothing connects again until a reload; see enterIncompatible.
+let incompatible = false;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let queue: Envelope[] = [];
 let draining = false;
@@ -165,7 +169,12 @@ function unionTypes(): string[] {
  * first noticed.
  */
 export interface BusHealth {
-  state: "live" | "connecting" | "failing";
+  /**
+   * "incompatible" is terminal: the services are older than this UI (no
+   * GET /events/head), so the bus never connects and eventsReady never
+   * resolves. Only a restart of mads and a reload get out of it.
+   */
+  state: "live" | "connecting" | "failing" | "incompatible";
   /** Types dropped from the stream because the server refused them. */
   ignoredTypes: string[];
 }
@@ -178,6 +187,7 @@ const healthListeners = new Set<(health: BusHealth) => void>();
 let health: BusHealth = { state: "connecting", ignoredTypes: [] };
 
 function setHealth(state: BusHealth["state"]): void {
+  if (incompatible && state !== "incompatible") return; // terminal
   const ignoredTypes = [...rejectedTypes];
   if (state === health.state && ignoredTypes.length === health.ignoredTypes.length) return;
   health = { state, ignoredTypes };
@@ -235,6 +245,9 @@ async function probeRejectedTypes(types: string[]): Promise<string[]> {
   }
 }
 
+/** GET /events/head is missing: the services predate this UI. */
+class IncompatibleServicesError extends Error {}
+
 async function fetchHead(): Promise<number> {
   // A head read that hangs would hold every connect (and the ready barrier)
   // forever: give up after HEAD_TIMEOUT_MS, which counts as a failed connect.
@@ -245,6 +258,9 @@ async function fetchHead(): Promise<number> {
       headers: { Accept: "application/json" },
       signal: abort.signal,
     });
+    if (res.status === 404 || res.status === 405) {
+      throw new IncompatibleServicesError(`GET /events/head: ${res.status}`);
+    }
     if (!res.ok) throw new Error(`GET /events/head: ${res.status}`);
     const body = (await res.json()) as { seq?: unknown };
     if (typeof body.seq !== "number" || !Number.isFinite(body.seq) || body.seq < 0) {
@@ -342,6 +358,7 @@ function scheduleReconnect(): void {
 }
 
 function openConnection(): void {
+  if (incompatible) return;
   source?.close();
   source = null;
   if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -379,14 +396,39 @@ function openConnection(): void {
       }
       if (subscriptions.size > 0) openSource();
     },
-    () => {
+    (err: unknown) => {
       if (gen !== connectGen) return;
       headPending = false;
+      if (err instanceof IncompatibleServicesError) {
+        enterIncompatible(err.message);
+        return;
+      }
       consecutiveFailures++;
       if (consecutiveFailures >= FAILING_AFTER) setHealth("failing");
       scheduleReconnect();
     },
   );
+}
+
+/**
+ * The Router or the Data Service is older than this UI: it has no
+ * GET /events/head, so there is no live-only start point to connect from.
+ * Retrying can't fix that and connecting without a head would bring back
+ * the replay this bus no longer handles, so the bus stops for good: no
+ * reconnects, the ready barrier stays shut, and health says "incompatible"
+ * so the shell explains why every view is waiting (App.tsx's banner).
+ */
+function enterIncompatible(detail: string): void {
+  incompatible = true;
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = undefined;
+  source?.close();
+  source = null;
+  listenForWake(false);
+  console.error(
+    `events: ${detail} — the mads services are older than this window. Restart mads (scripts/app.sh --restart) and reload.`,
+  );
+  setHealth("incompatible");
 }
 
 function openSource(): void {
@@ -411,7 +453,7 @@ function openSource(): void {
 // bus (between attempts) reconnects; one that is connecting or connected is
 // left alone. Listening only while anything is subscribed.
 function wake(): void {
-  if (subscriptions.size === 0 || source || headPending) return;
+  if (incompatible || subscriptions.size === 0 || source || headPending) return;
   reconnectAttempt = 0;
   openConnection();
 }
@@ -477,6 +519,11 @@ export function subscribeToEvents(
 ): () => void {
   const sub: Subscription = { sessionId: params.sessionId, types: params.types, onEvent };
   subscriptions.add(sub);
+  if (incompatible) {
+    return () => {
+      subscriptions.delete(sub);
+    };
+  }
   listenForWake(true);
 
   if (source) {
@@ -558,6 +605,7 @@ export function resetEventsBusForTests(primeCursor?: number): void {
   noticesSince = undefined;
   recheckHead = false;
   warnedLogReset = false;
+  incompatible = false;
   ready = newReady();
   if (primeCursor !== undefined) markReady();
   health = { state: "connecting", ignoredTypes: [] };

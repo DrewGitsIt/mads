@@ -92,6 +92,30 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
   });
 
+  it("says to restart mads when the services are older than this window (no GET /events/head)", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { resetEventsBusForTests } = await import("./router/events");
+    resetEventsBusForTests(); // the production first connect: read the head
+    const fetchMock = vi.fn((input: URL | string) => {
+      const path = new URL(input.toString()).pathname;
+      if (path === "/events/head") return Promise.resolve(new Response('{"error":"not found"}', { status: 404 }));
+      if (path === "/config") return Promise.resolve(new Response(JSON.stringify(fixtureConfig), { status: 200 }));
+      return Promise.resolve(new Response("[]", { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("Restart mads")).toBeTruthy());
+    expect(screen.getByText(/scripts\/app\.sh --restart/)).toBeTruthy();
+    expect(screen.queryByText("Live updates paused")).toBeNull();
+    const headReads = () =>
+      fetchMock.mock.calls.filter(([input]) => new URL(input.toString()).pathname === "/events/head").length;
+    expect(headReads()).toBe(1);
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(headReads()).toBe(1);
+    expect(FakeEventSource.instances).toHaveLength(0);
+    error.mockRestore();
+  });
+
   it("Settings rail item renders SettingsSurface", async () => {
     vi.stubGlobal("fetch", routedFetch({ "GET /config": fixtureConfig }));
     render(<App />);
