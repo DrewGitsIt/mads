@@ -8,19 +8,24 @@
 // vouch for (a bare repo or a .git directory on the way up, a .git file or
 // directory that doesn't look valid, a filesystem boundary, git
 // environment that steers discovery) comes back unsure, and the caller asks
-// git instead.
+// git instead. GIT_CEILING_DIRECTORIES is the exception: the walk applies
+// git's own ceiling rules (see ceilings) rather than deferring to git.
 package gitroot
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // discoveryEnv are the variables that change where git looks for a repo.
 // With any set, the walk can't promise git's answer.
+// GIT_CEILING_DIRECTORIES isn't here: Find honours it itself.
 var discoveryEnv = []string{
-	"GIT_DIR", "GIT_WORK_TREE", "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_COMMON_DIR",
+	"GIT_DIR", "GIT_WORK_TREE", "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_COMMON_DIR",
 }
 
 // Find walks up from dir (taken as given: symlinks aren't resolved; see
@@ -32,7 +37,9 @@ var discoveryEnv = []string{
 // want that.
 //
 // Missing directories are walked past (a deleted file's directory may be
-// gone): the walk starts at the nearest existing ancestor.
+// gone): the walk starts at the nearest existing ancestor, and that is
+// the directory GIT_CEILING_DIRECTORIES is measured from, as git measures
+// from its working directory.
 func Find(dir string) (root string, sure bool) {
 	sure = true
 	for _, name := range discoveryEnv {
@@ -40,11 +47,23 @@ func Find(dir string) (root string, sure bool) {
 			sure = false
 		}
 	}
+	ceils, ok := ceilings(os.Getenv("GIT_CEILING_DIRECTORIES"))
+	if !ok {
+		sure = false
+	}
 	dir = filepath.Clean(dir)
 	var startDev uint64
 	haveDev := false
+	started, ceil := false, -1
 	for d := dir; ; {
+		if started && offset(d) <= ceil {
+			// git doesn't go up into a ceiling directory, or above one.
+			return "", sure
+		}
 		info, err := os.Stat(d)
+		if err == nil && !started {
+			started, ceil = true, longestCeiling(d, ceils)
+		}
 		if err == nil && info.IsDir() {
 			if dev, ok := device(info); ok {
 				if !haveDev {
@@ -78,6 +97,71 @@ func Find(dir string) (root string, sure bool) {
 		}
 		d = parent
 	}
+}
+
+// ceilings is GIT_CEILING_DIRECTORIES as git reads it (setup.c): a
+// list of absolute paths, relative entries ignored. Each entry is resolved
+// to its real path, and one that doesn't exist is dropped (no existing
+// directory can sit under it), until an empty entry: entries after one are
+// taken as written, symlinks unresolved, so a symlinked spelling there
+// never matches. ok is false when an entry can't be resolved for another
+// reason (permissions), where git's answer isn't knowable without git.
+func ceilings(env string) (dirs []string, ok bool) {
+	if env == "" {
+		return nil, true
+	}
+	ok = true
+	literal := false
+	for _, c := range strings.Split(env, string(os.PathListSeparator)) {
+		switch {
+		case c == "":
+			literal = true
+		case !filepath.IsAbs(c):
+		case literal:
+			dirs = append(dirs, c)
+		default:
+			real, err := filepath.EvalSymlinks(c)
+			if err != nil {
+				if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+					ok = false
+				}
+				continue
+			}
+			dirs = append(dirs, real)
+		}
+	}
+	return dirs, ok
+}
+
+// longestCeiling is git's longest_ancestor_length: the offset of the
+// deepest ceiling that is a proper ancestor of path (a ceiling equal to
+// path doesn't count: git always looks in its own working directory),
+// -1 when there's none. A ceiling's single trailing slash is ignored, so
+// "/" has offset 0.
+func longestCeiling(path string, ceils []string) int {
+	if path == "/" {
+		return -1
+	}
+	best := -1
+	for _, c := range ceils {
+		n := len(c)
+		if n > 0 && c[n-1] == '/' {
+			n--
+		}
+		if len(path) > n+1 && path[:n] == c[:n] && path[n] == '/' && n > best {
+			best = n
+		}
+	}
+	return best
+}
+
+// offset is d's offset in git's terms: the length of the path, except the
+// root, which git holds as offset 0.
+func offset(d string) int {
+	if d == string(filepath.Separator) {
+		return 0
+	}
+	return len(d)
 }
 
 // Resolve is dir with symlinks resolved, as git reports paths: the nearest

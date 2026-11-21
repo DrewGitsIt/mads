@@ -135,6 +135,74 @@ func TestToplevelMatchesGit(t *testing.T) {
 	}
 }
 
+// GIT_CEILING_DIRECTORIES is applied by the walk itself, with git's rules,
+// and the answer is git's own under the same environment: a ceiling is
+// never entered or passed, the starting directory is still looked in, an
+// empty entry stops symlink resolution for the entries after it.
+func TestToplevelHonoursCeilingsLikeGit(t *testing.T) {
+	ctx := context.Background()
+	root := toplevelLayout(t) // unresolved: behind a symlink on macOS
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sep := string(os.PathListSeparator)
+	r := func(p string) string { return filepath.Join(real, p) }
+	if err := os.Symlink(r("repo"), filepath.Join(root, "repolink")); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, ceil, dir string
+		inRepo          bool // what git is expected to say, as a check on the case
+	}{
+		{"above the repo", real, "repo/src/deep", true},
+		{"the repo's parent", r(""), "repo/src", true},
+		{"the repo's parent, trailing slash", r("") + "/", "repo/src", true},
+		{"the repo root, from below", r("repo"), "repo/src/deep", false},
+		{"the repo root, from the root", r("repo"), "repo", true},
+		{"the starting dir itself", r("repo/src"), "repo/src", true},
+		{"between start and root", r("repo/src"), "repo/src/deep", false},
+		{"the filesystem root", "/", "repo/src/deep", true},
+		{"multiple, one blocks", r("plain") + sep + r("repo/src") + sep + real, "repo/src/deep", false},
+		{"multiple, none block", r("plain") + sep + r("wt"), "repo/src/deep", true},
+		{"a relative entry is ignored", "repo", "repo/src/deep", true},
+		{"a missing entry is ignored", r("repo/nope"), "repo/src/deep", true},
+		{"unresolved spelling, resolved", filepath.Join(root, "repo"), "repo/src/deep", false},
+		{"symlinked ceiling", filepath.Join(root, "repolink"), "repo/src/deep", false},
+		{"empty entry: symlinked spelling taken as written", sep + filepath.Join(root, "repo"), "repo/src/deep", true},
+		{"empty entry: real spelling still matches", sep + r("repo"), "repo/src/deep", false},
+		{"empty entry: unnormalised entry taken as written", sep + r("repo") + "//", "repo/src/deep", true},
+		{"before an empty entry: resolved", filepath.Join(root, "repolink") + sep + sep + r("plain"), "repo/src/deep", false},
+		{"linked worktree, ceiling at its root", r("wt"), "wt/pkg", false},
+		{"submodule, ceiling between it and the superproject", r("repo/vendor"), "repo/vendor/sub/inner", true},
+		{"outside every repo", real, "plain/sub", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GIT_CEILING_DIRECTORIES", tc.ceil)
+			dir := filepath.Join(root, tc.dir)
+			want := gitToplevel(t, dir)
+			if (want != "") != tc.inRepo {
+				t.Fatalf("git says %q; the case expects inRepo=%v", want, tc.inRepo)
+			}
+			top, walked, werr := walkToplevel(dir)
+			if !walked {
+				t.Fatalf("a ceiling sent the walk to git")
+			}
+			if want == "" {
+				if werr == nil {
+					t.Fatalf("walk = %q, git finds no repo", top)
+				}
+			} else if werr != nil || top != want {
+				t.Fatalf("walk = %q, %v; git says %q", top, werr, want)
+			}
+			if got, err := Toplevel(ctx, dir); (err != nil) != (want == "") || got != want {
+				t.Fatalf("Toplevel = %q, %v; git says %q", got, err, want)
+			}
+		})
+	}
+}
+
 // An unusual layout the walk can't vouch for goes to git: a .git file that
 // isn't a gitdir pointer (git refuses it), a pruned linked worktree.
 func TestToplevelFallsBackToGitWhenUnsure(t *testing.T) {
@@ -216,14 +284,17 @@ func TestRepoTargetsSpawnsNoGitForRoots(t *testing.T) {
 	count := spawnCounter(t)
 
 	// The old cost, for comparison: with discovery env set the walk defers
-	// to git (a ceiling that changes nothing here), one spawn per directory.
-	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Join(root, "no-such-ceiling"))
+	// to git (a setting that changes nothing here), one spawn per directory.
+	t.Setenv("GIT_DISCOVERY_ACROSS_FILESYSTEM", "1")
 	before := count()
 	old := RepoTargets(context.Background(), contracts.Session{ID: "s"}, primary, rows)
 	if spawns := count() - before; spawns != len(rows) {
 		t.Errorf("via git: %d spawns for %d directories, want one each", spawns, len(rows))
 	}
-	t.Setenv("GIT_CEILING_DIRECTORIES", "")
+	t.Setenv("GIT_DISCOVERY_ACROSS_FILESYSTEM", "")
+	// A ceiling no longer sends the walk to git (the perf harness sets one
+	// on every stack).
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(root))
 
 	before = count()
 	got := RepoTargets(context.Background(), contracts.Session{ID: "s"}, primary, rows)
