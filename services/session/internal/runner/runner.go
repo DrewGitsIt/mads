@@ -163,6 +163,9 @@ type Runner struct {
 	// countsWaiters are RecountWorktree callers waiting on the next recount
 	// to start; each run takes the ones queued before it and answers them.
 	countsWaiters []chan error
+	// countsBeforeExitCheck, when set (tests), runs in the recount loop
+	// between a recount and its exit check.
+	countsBeforeExitCheck func()
 
 	// shadowStore is this session's shadow git store, built in Start when
 	// ShadowRoot is set (nil otherwise). Every shadow.Store method is
@@ -913,22 +916,31 @@ func (r *Runner) RefreshWorktreeCounts(ctx context.Context) error {
 // sees everything they would have.
 func (r *Runner) refreshCountsAsync() {
 	r.countsMu.Lock()
+	r.startCountsLocked(nil)
+	r.countsMu.Unlock()
+}
+
+// startCountsLocked asks for a recount, with countsMu held, and queues
+// waiter (if any) for the next recount to start. Queueing and asking
+// under one lock hold is what keeps a waiter from landing between a
+// running loop's last recount and its exit check, which would leave it
+// queued with no run coming.
+func (r *Runner) startCountsLocked(waiter chan error) {
 	if r.countsClosed {
-		for _, w := range r.countsWaiters {
-			w <- ErrCountsClosed
+		if waiter != nil {
+			waiter <- ErrCountsClosed
 		}
-		r.countsWaiters = nil
-		r.countsMu.Unlock()
 		return
+	}
+	if waiter != nil {
+		r.countsWaiters = append(r.countsWaiters, waiter)
 	}
 	if r.countsRunning {
 		r.countsAgain = true
-		r.countsMu.Unlock()
 		return
 	}
 	r.countsRunning = true
 	r.countsWG.Add(1)
-	r.countsMu.Unlock()
 	go func() {
 		defer r.countsWG.Done()
 		// Shutdown cancels a recount mid-flight rather than waiting out a
@@ -954,10 +966,14 @@ func (r *Runner) refreshCountsAsync() {
 			for _, w := range waiters {
 				w <- err
 			}
+			if r.countsBeforeExitCheck != nil {
+				r.countsBeforeExitCheck()
+			}
 			r.countsMu.Lock()
 			if !r.countsAgain || ctx.Err() != nil {
 				r.countsRunning = false
-				// Shutdown: whoever still waits gets the cancellation.
+				// Only a shutdown leaves waiters here: any other ask set
+				// countsAgain with its waiter, and so got the rerun.
 				for _, w := range r.countsWaiters {
 					w <- context.Canceled
 				}
@@ -983,13 +999,8 @@ var ErrCountsClosed = errors.New("runner: shutting down, worktree counts closed"
 func (r *Runner) RecountWorktree(ctx context.Context) error {
 	done := make(chan error, 1)
 	r.countsMu.Lock()
-	if r.countsClosed {
-		r.countsMu.Unlock()
-		return ErrCountsClosed
-	}
-	r.countsWaiters = append(r.countsWaiters, done)
+	r.startCountsLocked(done)
 	r.countsMu.Unlock()
-	r.refreshCountsAsync()
 	select {
 	case err := <-done:
 		return err
