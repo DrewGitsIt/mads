@@ -1228,3 +1228,95 @@
   flex: none;
   color: var(--text2);
 }
+
+/* Mesh mode (docs/MESH-MODE-DESIGN.md D5). The host chip sits in the top
+   row beside the harness mark, so it never adds a line to the card. */
+.hostChip {
+  flex: none;
+  max-width: 9ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 var(--fs-chip) var(--sans);
+  color: var(--text2);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+
+.hostStale {
+  color: var(--text3);
+  border-style: dashed;
+}
+
+.hostUnreachable {
+  opacity: 0.6;
+}
+
+.deviceDown {
+  font: 500 var(--fs-chip) var(--sans);
+  color: var(--warn-fg);
+  margin-left: var(--space-1);
+}
+
+.deviceMenu {
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  padding: var(--space-1);
+}
+
+.deviceOption {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text2);
+  font: 500 var(--fs-sm) var(--sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.deviceOption:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.deviceOptionOn {
+  color: var(--accent);
+}
+
+.deviceOptionNote {
+  margin-left: auto;
+  color: var(--text3);
+  font-size: var(--fs-chip);
+}
+
+.deviceMenuRule {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--line-soft);
+}
+
+.deviceDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text3);
+}
+
+.deviceDotOk {
+  background: var(--ok-fg);
+}
+
+.deviceDotWarn {
+  background: var(--warn-fg);
+}
+
+.deviceDotBad {
+  background: var(--bad-fg);
+}

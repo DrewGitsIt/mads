@@ -65,4 +65,70 @@ describe("eventsReady guard", () => {
     const stale = Object.keys(LIVE_ONLY).filter((rel) => !callers.includes(rel));
     expect(stale, `LIVE_ONLY entries that no longer call subscribeToEvents(: ${stale.join(", ")}`).toEqual([]);
   });
+
+  // Mesh mode: a subscription with a sessionId goes on that session's bus,
+  // which for a remote session is its host's log, with its own barrier. Its
+  // REST read must wait for that bus (eventsReady(<session>)), not this
+  // device's: the local barrier says nothing about where the peer's log
+  // stood when the snapshot was served.
+  //
+  // What this can check, textually: each subscribeToEvents( call's first
+  // argument is an object literal (anything else — a variable, a spread at
+  // the top — can't be read here and must be allowlisted in NON_LITERAL);
+  // a call is session-scoped when `sessionId` appears anywhere inside that
+  // literal; and a file with one must call eventsReady with an argument
+  // that names a session (an identifier or property path containing
+  // "session", e.g. sessionId, open.sessionId) and never bare. It can't
+  // tell which eventsReady call orders which read, nor follow a session id
+  // renamed to something without "session" in it.
+  it("every file that subscribes with a sessionId waits on that session's barrier", () => {
+    const failures: string[] = [];
+    let scoped = 0;
+    for (const file of sourceFiles(SRC)) {
+      if (file === join(SRC, "router", "events.ts")) continue;
+      const body = code(readFileSync(file, "utf8"));
+      const rel = relative(SRC, file);
+      let fileScoped = false;
+      for (const call of body.matchAll(/\bsubscribeToEvents\(\s*/g)) {
+        const at = call.index + call[0].length;
+        if (body[at] !== "{") {
+          if (!(rel in NON_LITERAL)) {
+            failures.push(`${rel}: subscribeToEvents( with a first argument that isn't an object literal: write the params inline, or allowlist the file in NON_LITERAL with a reason.`);
+          }
+          continue;
+        }
+        if (/\bsessionId\b/.test(braced(body, at))) fileScoped = true;
+      }
+      if (!fileScoped) continue;
+      scoped++;
+      if (rel in LIVE_ONLY || rel in SESSION_BARRIER_EXEMPT) continue;
+      const args = [...body.matchAll(/\beventsReady\(([^)]*)\)/g)].map((m) => m[1].trim());
+      if (!args.some((a) => /^[\w.?]*session[\w.?]*$/i.test(a))) {
+        failures.push(`${rel} subscribes with a sessionId but never calls eventsReady(<session id>): pass the session id, so a remote session's read waits for its host's bus.`);
+      }
+      if (args.some((a) => a === "")) {
+        failures.push(`${rel} subscribes with a sessionId and also calls eventsReady() with no session: if that read is ordered against the session's events, pass the id (or exempt it in SESSION_BARRIER_EXEMPT with a reason).`);
+      }
+    }
+    expect(scoped).toBeGreaterThan(10);
+    expect(failures, failures.join("\n")).toEqual([]);
+  });
 });
+
+// The balanced {...} starting at text[open] === "{".
+function braced(text: string, open: number): string {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}" && --depth === 0) return text.slice(open, i + 1);
+  }
+  return text.slice(open);
+}
+
+// Files whose subscribeToEvents( first argument isn't an object literal,
+// with why that's fine. Keyed by path under src/.
+const NON_LITERAL: Record<string, string> = {};
+
+// Files that subscribe with a sessionId and legitimately also wait on this
+// device's barrier (a read ordered against the local log). Keyed by path.
+const SESSION_BARRIER_EXEMPT: Record<string, string> = {};

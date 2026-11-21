@@ -75,14 +75,15 @@ func newToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// checkFile refuses a token file another user owns, or that anyone but its
-// owner can read or write.
-func checkFile(path string, fi os.FileInfo) error {
+// CheckPrivate refuses a file that isn't regular, that another user owns,
+// or that anyone but its owner can read or write. looseHint finishes the
+// error for a loose mode (what to do, given others may have read it).
+func CheckPrivate(path string, fi os.FileInfo, looseHint string) error {
 	if !fi.Mode().IsRegular() {
 		return fmt.Errorf("%s is not a regular file; remove it and restart mads", path)
 	}
 	if perm := fi.Mode().Perm(); perm&0o077 != 0 {
-		return fmt.Errorf("%s is readable or writable by other users (mode %04o); run `chmod 600 %s`, then `mads token rotate`, since others may have read it", path, perm, path)
+		return fmt.Errorf("%s is readable or writable by other users (mode %04o); %s", path, perm, looseHint)
 	}
 	if owner, ok := ownerUID(fi); ok {
 		if uid := os.Getuid(); uid >= 0 && owner != uid {
@@ -92,9 +93,41 @@ func checkFile(path string, fi os.FileInfo) error {
 	return nil
 }
 
+// OpenPrivate opens path for reading only if CheckPrivate passes, checked
+// on the open descriptor so the checks and the bytes read are about the
+// same file even if it is replaced meanwhile. The open never follows a
+// symlink and never blocks (a FIFO planted there would otherwise hang the
+// caller; it is then refused as not a regular file). A missing file is an
+// error matching os.ErrNotExist; a symlink, even a dangling one, is refused.
+func OpenPrivate(path, looseHint string) (*os.File, os.FileInfo, error) {
+	f, err := openNoFollow(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	if err := CheckPrivate(path, fi, looseHint); err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	return f, fi, nil
+}
+
+// checkFile is CheckPrivate for the token file.
+func checkFile(path string, fi os.FileInfo) error {
+	return CheckPrivate(path, fi, tokenLooseHint(path))
+}
+
+func tokenLooseHint(path string) string {
+	return fmt.Sprintf("run `chmod 600 %s`, then `mads token rotate`, since others may have read it", path)
+}
+
 // readChecked reads and validates the token at path.
 func readChecked(path string) (string, os.FileInfo, error) {
-	f, err := os.Open(path) //nolint:gosec // path is $MADS_HOME/local.token
+	f, fi, err := OpenPrivate(path, tokenLooseHint(path))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", nil, fmt.Errorf("%s: %w", path, ErrNoToken)
@@ -102,15 +135,6 @@ func readChecked(path string) (string, os.FileInfo, error) {
 		return "", nil, err
 	}
 	defer func() { _ = f.Close() }()
-	// Stat the open file, not the path, so the checks and the bytes read
-	// are about the same file even if it is replaced meanwhile.
-	fi, err := f.Stat()
-	if err != nil {
-		return "", nil, err
-	}
-	if err := checkFile(path, fi); err != nil {
-		return "", nil, err
-	}
 	raw := make([]byte, 256)
 	n, err := f.Read(raw)
 	if err != nil && n == 0 {
@@ -386,3 +410,16 @@ func FileSource(path string) func() string {
 		return st.Token()
 	}
 }
+
+// EnsureHome makes madsHome a 0700 directory this user owns, exactly as
+// LoadOrCreate does before writing the token: for other owner-only files
+// kept beside it (pkg/devicekey's device key).
+func EnsureHome(madsHome string) error { return ensureHome(madsHome) }
+
+// Flock takes the exclusive cross-process lock LoadOrCreate and Rotate use,
+// on path (created 0600 if needed), for another file's create-once.
+func Flock(path string) (release func() error, err error) { return acquireFlock(path) }
+
+// OwnerUID is the uid owning fi's file; false where there's no portable
+// answer (off unix).
+func OwnerUID(fi os.FileInfo) (int, bool) { return ownerUID(fi) }

@@ -109,7 +109,7 @@ func newSpyStack(t *testing.T) *spyStack {
 		t.Fatal(err)
 	}
 	h := newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "",
-		identity{root: "/src/checkout"}, localguard.New("router", "17373", nil), nil, auth)
+		identity{root: "/src/checkout"}, localguard.New("router", "17373", nil), nil, auth, nil)
 	return &spyStack{routerStack: &routerStack{h: h, home: home, auth: auth, data: data, tokens: tokens}, sup: sup, log: spyLog}
 }
 

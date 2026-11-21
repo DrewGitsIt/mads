@@ -1,0 +1,82 @@
+.anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+.anchor:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.tip {
+  position: absolute;
+  z-index: 60;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translate(-50%, 2px);
+  width: max-content;
+  max-width: 300px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg3);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font: 400 var(--fs-sm) / 1.45 var(--sans);
+  text-align: left;
+  white-space: normal;
+  letter-spacing: 0;
+  text-transform: none;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--dur-fast),
+    transform var(--dur-fast);
+}
+.tip b {
+  font-weight: 650;
+}
+.end .tip {
+  left: auto;
+  right: 0;
+  transform: translateY(2px);
+}
+.start .tip {
+  left: 0;
+  transform: translateY(2px);
+}
+.anchor:hover > .tip,
+.anchor:focus-visible > .tip,
+.anchor:focus-within > .tip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.end:hover > .tip,
+.end:focus-visible > .tip,
+.end:focus-within > .tip,
+.start:hover > .tip,
+.start:focus-visible > .tip,
+.start:focus-within > .tip {
+  transform: none;
+}
+.info {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text3);
+  cursor: pointer;
+}
+.info:hover {
+  color: var(--text);
+}
+.info svg {
+  width: 14px;
+  height: 14px;
+}

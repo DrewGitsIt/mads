@@ -447,7 +447,7 @@ export function useResumingRunFold(
         // The bus never replays history, so the REST catch-up waits for its
         // ready barrier (router/events.ts eventsReady): read any earlier and
         // an event landing before the bus fixes its cursor is in neither.
-        await eventsReady();
+        await eventsReady(sessionId);
         if (!alive) return;
         const runs = await client!.listRuns(sessionId);
         const target = pickRunRef.current(runs);
@@ -516,14 +516,14 @@ export function usePipelineRun(sessionId: string, client: PipelineClient): UsePi
   useEffect(() => {
     mounted.current = true;
     let live = true;
-    void eventsReady().then(() => {
+    void eventsReady(sessionId).then(() => {
       if (live) void refetchTasks();
     });
     return () => {
       live = false;
       mounted.current = false;
     };
-  }, [refetchTasks]);
+  }, [refetchTasks, sessionId]);
 
   const onEnvelope = useCallback(
     (env: Envelope) => {

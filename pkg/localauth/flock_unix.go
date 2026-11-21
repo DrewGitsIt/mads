@@ -3,6 +3,8 @@
 package localauth
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"syscall"
 )
@@ -29,4 +31,14 @@ func ownerUID(fi os.FileInfo) (int, bool) {
 		return 0, false
 	}
 	return int(st.Uid), true
+}
+
+// openNoFollow opens path read-only without following a symlink
+// (O_NOFOLLOW) or blocking (O_NONBLOCK).
+func openNoFollow(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, syscall.ELOOP) {
+		return nil, fmt.Errorf("%s is a symlink, not a regular file; mads doesn't follow links for its private files: remove it and restart mads", path)
+	}
+	return f, err
 }

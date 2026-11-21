@@ -221,6 +221,39 @@ describe("LinkModal with the rail", () => {
     await waitFor(() => expect(document.activeElement).toBe(chain));
   });
 
+  it("greys out another device's session in the picker, and never draws a line to it", () => {
+    const remote = session("r", "Remote", { host: { name: "pop-os", self: false, reachable: true } });
+    render(<Harness client={fakeClient()} sessions={[...SESSIONS, remote]} />);
+    openOn("Deploy");
+    const card = rail().getByText("Remote").closest("[data-rail-card]")!;
+    expect(card.getAttribute("data-link-edit")).toBe("blocked");
+    expect(card.getAttribute("title")).toMatch(/^Different device/);
+    expect(within(card as HTMLElement).getByText("different device")).toBeTruthy();
+    fireEvent.click(card);
+    expect(within(dialog()).queryByRole("group", { name: /^Edit link Deploy . Remote/ })).toBeNull();
+    // A session here still can be.
+    fireEvent.click(rail().getByText("Solo"));
+    expect(within(dialog()).getByRole("group", { name: "Edit link Deploy → Solo" })).toBeTruthy();
+  });
+
+  it("refuses a cross-device line at save, before sending anything", async () => {
+    const client = fakeClient();
+    const spies = [vi.spyOn(client, "createLink"), vi.spyOn(client, "updateLink"), vi.spyOn(client, "deleteLink")];
+    const before = session("r", "Remote");
+    const { rerender } = render(<Harness client={client} sessions={[...SESSIONS, before]} />);
+    openOn("Deploy");
+    fireEvent.click(rail().getByText("Solo"));
+    fireEvent.click(rail().getByText("Remote"));
+    // Only now does the list learn Remote is on another device (All devices
+    // landing late): the draft still carries the line.
+    rerender(
+      <Harness client={client} sessions={[...SESSIONS, { ...before, host: { name: "pop-os", self: false, reachable: true } }]} />,
+    );
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(screen.getAllByText(/Different device/).length).toBeGreaterThan(0));
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+  });
+
   it("peels Esc: the edge editor first, then asks before discarding, listing the changes", () => {
     const client = fakeClient();
     const spies = [vi.spyOn(client, "createLink"), vi.spyOn(client, "updateLink"), vi.spyOn(client, "deleteLink")];

@@ -124,6 +124,30 @@ its `agent.*`/`capability.*`/`workspace.*` event. `GET /agents` backs
 outcomes are recorded as `agent.selected` / `agent.outcome_recorded` events through
 the general event log, not through this registry CRUD surface.
 
+`/peers` (mesh mode) rides the same routes. A row is a device this node views
+(`mesh_url`), a device paired with this host (`fingerprint`, `grant`,
+`pairing`; docs/MESH-AUTH-DESIGN.md A3), or both, all in the row's JSON
+(migration `0035` unchanged; a row from before pairing reads as viewed,
+unpaired). The store keeps a fingerprint on one row (checked in the write
+transaction), validates the grant level and ceilings, owns the `pairing`
+record, and appends `device.paired` / `device.unpaired` /
+`device.grant_changed` beside the `peer.*` event. Granting `admin`
+(including loosening an admin's ceilings) needs the install token presented
+directly, with no `X-Mads-Mesh-Peer` mark from a mesh-relayed request: 403
+otherwise (Q2), checked in the write transaction against the stored row.
+A write relayed for a mesh device also names it (`X-Mads-Mesh-Device`, its
+fingerprint): the device must be paired here at admin, and may only remove a
+device, introduce one (paired-only, `pairing.how` introduction, logged as
+`device.introduced`) or change a device's level (403 otherwise, D5).
+Names may not be `candidates` or start with `per_`. Every registry's `PUT` and
+`DELETE` take `If-Match: <updated_at as read>` for a conditional write: 409
+`stale` if the row changed since (`updated_at` only moves forward per row).
+If-Match must echo `updated_at` exactly as read, as nanosecond RFC 3339: a
+value rounded on the way (a JavaScript `Date` keeps milliseconds) never
+matches and always gets 409. After the clock steps back, a row's
+`updated_at` can be ahead of the clock until the clock catches up.
+`POST` with an id already in use is 422, never a replace.
+
 - `POST /capabilities/{id-or-name}/health` `{healthy, reason?}` — records a capability's
   last-known health (spec §12.6), called by the Session Service's capability runtime
   (`services/session/internal/runner`) on every session start and guided-diagnostics check.

@@ -1,6 +1,7 @@
 import { router } from "./client";
 import { coalesce } from "./coalesce";
 import { eventsReady, subscribeToEvents } from "./events";
+import { effectiveScope, getMeshSnapshot, meshShowsAll, recordSessionHosts, scopePeer, watchMesh } from "./mesh";
 import { SESSION_EVENT_TYPES } from "./sessionEventTypes";
 import type { Session } from "./types";
 
@@ -62,15 +63,22 @@ function listSessionsWithTimeout(): Promise<Session[]> {
       SESSIONS_FETCH_TIMEOUT_MS,
     );
   });
-  return Promise.race([router.listSessions(), timedOut]).finally(() => clearTimeout(timeout));
+  // All devices (mesh mode): the Router merges every visible peer's list,
+  // each row tagged with its host.
+  const opts = meshShowsAll(getMeshSnapshot()) ? ({ scope: "all" } as const) : undefined;
+  return Promise.race([router.listSessions(opts), timedOut]).finally(() => clearTimeout(timeout));
 }
 
 async function fetchSessions(): Promise<void> {
   const gen = generation;
   clearRetry();
   try {
-    const sessions = await listSessionsWithTimeout();
+    const listed = await listSessionsWithTimeout();
     if (gen !== generation) return;
+    recordSessionHosts(listed);
+    // One other device (mesh mode): the merged list, narrowed to its host.
+    const onlyPeer = scopePeer(effectiveScope(getMeshSnapshot()));
+    const sessions = onlyPeer ? listed.filter((s) => s.host?.name === onlyPeer) : listed;
     retryAttempt = 0;
     const json = JSON.stringify(sessions);
     if (json === lastJson && !snapshot.loading && snapshot.error === null) return;
@@ -99,21 +107,67 @@ async function fetchSessions(): Promise<void> {
 
 let coalescer = coalesce(fetchSessions);
 
-function start(): void {
+/**
+ * How often the All devices list re-reads while it's showing. Peers' session
+ * events don't reach this window's bus: streaming every peer's whole
+ * session.* history over a relayed tailnet link on each load would cost far
+ * more than a periodic merged GET (the Router re-reads peers itself, too).
+ */
+export const MESH_POLL_MS = 10_000;
+
+let unsubscribeMesh: (() => void) | null = null;
+let pollTimer: ReturnType<typeof setInterval> | undefined;
+// What the last fetch was for, so a mesh change that doesn't change the
+// list's shape (a peer's rtt) doesn't refetch.
+let lastScope: string = "self";
+
+function syncMesh(): void {
+  const showsAll = meshShowsAll(getMeshSnapshot());
+  const scope = effectiveScope(getMeshSnapshot());
+  if (showsAll && pollTimer === undefined) {
+    pollTimer = setInterval(() => coalescer.request(), MESH_POLL_MS);
+  } else if (!showsAll && pollTimer !== undefined) {
+    clearInterval(pollTimer);
+    pollTimer = undefined;
+  }
+  if (scope !== lastScope) {
+    lastScope = scope;
+    readWhenReady();
+  }
+}
+
+/**
+ * Reads the list now, behind the bus's ready barrier (THE CONTRACT in
+ * router/events.ts). The list's local rows are ordered against this
+ * window's LOCAL bus, which is what session-agnostic eventsReady() is;
+ * peers' rows aren't on this window's bus at all (MESH_POLL_MS polls them).
+ */
+function readWhenReady(): void {
   const gen = generation;
+  void eventsReady().then(() => {
+    if (gen === generation) coalescer.now();
+  });
+}
+
+function start(): void {
+  lastScope = effectiveScope(getMeshSnapshot());
   unsubscribeBus = subscribeToEvents({ types: SESSION_EVENT_TYPES }, () => coalescer.request());
   // The mount read waits for the bus's ready barrier (router/events.ts
   // eventsReady), subscribed first: the bus never replays, so a read served
   // before it fixes its cursor could miss an event landing in between.
-  void eventsReady().then(() => {
-    if (gen === generation) coalescer.now();
-  });
+  readWhenReady();
+  unsubscribeMesh = watchMesh(syncMesh);
+  syncMesh();
 }
 
 function stop(): void {
   generation++;
   unsubscribeBus?.();
   unsubscribeBus = null;
+  unsubscribeMesh?.();
+  unsubscribeMesh = null;
+  if (pollTimer !== undefined) clearInterval(pollTimer);
+  pollTimer = undefined;
   coalescer.cancel();
   clearRetry();
 }
@@ -147,4 +201,5 @@ export function resetSessionsStoreForTests(): void {
   snapshot = INITIAL;
   lastJson = "";
   retryAttempt = 0;
+  lastScope = "self";
 }

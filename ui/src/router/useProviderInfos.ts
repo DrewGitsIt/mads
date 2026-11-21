@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
-import { router } from "./client";
+import type { RouterClient } from "./client";
+import { useHostClient, useHostScope } from "./hostScope";
+import { hostKey } from "./mesh";
 import type { ProviderInfo } from "./types";
 
 /**
@@ -13,28 +15,33 @@ import type { ProviderInfo } from "./types";
  * downgrade.
  */
 
-let inFlight: Promise<ProviderInfo[]> | null = null;
+// Per host ("" for this device): a remote session's capability table is its
+// host's, not this one's (docs/MESH-MODE-DESIGN.md D3b).
+const inFlight = new Map<string, Promise<ProviderInfo[]>>();
 
 /** Test seam: drops any in-flight request so each case starts cold. */
 export function resetProviderInfoCache(): void {
-  inFlight = null;
+  inFlight.clear();
 }
 
-function loadProviderInfos(): Promise<ProviderInfo[]> {
-  if (inFlight) return inFlight;
-  const p = router.listProviders().finally(() => {
-    if (inFlight === p) inFlight = null;
+function loadProviderInfos(client: RouterClient, key: string): Promise<ProviderInfo[]> {
+  const pending = inFlight.get(key);
+  if (pending) return pending;
+  const p = client.listProviders().finally(() => {
+    if (inFlight.get(key) === p) inFlight.delete(key);
   });
-  inFlight = p;
+  inFlight.set(key, p);
   return p;
 }
 
 export function useProviderInfos(): ProviderInfo[] {
   const [infos, setInfos] = useState<ProviderInfo[]>([]);
+  const client = useHostClient();
+  const key = hostKey(useHostScope());
 
   useEffect(() => {
     let cancelled = false;
-    loadProviderInfos()
+    loadProviderInfos(client, key)
       .then((next) => {
         if (!cancelled && Array.isArray(next)) setInfos(next);
       })
@@ -42,7 +49,7 @@ export function useProviderInfos(): ProviderInfo[] {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [client, key]);
 
   return infos;
 }

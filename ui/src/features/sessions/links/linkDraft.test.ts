@@ -11,7 +11,9 @@ import {
   firstDoubleLeader,
   firstLoop,
   leaderOf,
+  DIFFERENT_DEVICE,
   linkBlockedReason,
+  linkBlockedTag,
   loopThrough,
   mergeFreshLinks,
   pairChanges,
@@ -222,6 +224,22 @@ describe("validation", () => {
     expect(linkBlockedReason(a, s("b", { workspace: "w1" }))).toBeUndefined();
     expect(linkBlockedReason(a, s("b", { workspace: "w2", worktree_dir: "/wt/b" }))).toBeUndefined();
     expect(linkBlockedReason(a, a)).toMatch(/itself/);
+  });
+
+  it("refuses a link between devices; a session with no host is this device's", () => {
+    const s = (id: string, host?: Session["host"]): Session => ({ id, name: id, activity: "inactive", created_at: "", updated_at: "", host });
+    const here = s("a");
+    const hereTagged = s("b", { name: "mac", self: true, reachable: true });
+    const pop = s("p", { name: "pop-os", self: false, reachable: true });
+    const pop2 = s("q", { name: "pop-os", self: false, reachable: false });
+    const spark = s("k", { name: "spark", self: false, reachable: true });
+    expect(linkBlockedReason(here, hereTagged)).toBeUndefined();
+    expect(linkBlockedReason(pop, pop2)).toBeUndefined();
+    expect(linkBlockedReason(here, pop)).toBe(DIFFERENT_DEVICE);
+    expect(linkBlockedReason(pop, hereTagged)).toBe(DIFFERENT_DEVICE);
+    expect(linkBlockedReason(pop, spark)).toBe(DIFFERENT_DEVICE);
+    expect(linkBlockedTag(DIFFERENT_DEVICE)).toBe("different device");
+    expect(linkBlockedTag("Each has its own isolated copy of the repo.")).toBe("separate worktree");
   });
 });
 

@@ -5,6 +5,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog/ConfirmDialog";
 import { SegmentedControl, type SegmentedOption } from "../components/SegmentedControl/SegmentedControl";
 import { Toast, type ToastTone } from "../components/Toast/Toast";
 import { getLinkOpener } from "../platform/links";
+import { useIsRemoteHost } from "../router/hostScope";
 import type { RouterClient } from "../router/client";
 import type { ChangeTurn, ChangedFile, FileDiff, Session } from "../router/types";
 import { isIsolated } from "../conversation/Worktree/workState";
@@ -102,6 +103,8 @@ export function ChangesTab({
   active = true,
   session,
 }: ChangesTabProps) {
+  // A session on another device (mesh mode): its paths are over there.
+  const remoteHost = useIsRemoteHost();
   // Shared with the Context Rail's Changes list, so both compare against the same thing.
   const [vs, setVs] = useChangeBaseline(sessionId);
   const { changeSet: cs, loading, error, refetch } = useChangeSet(routerClient, sessionId, vs);
@@ -673,7 +676,7 @@ export function ChangesTab({
                   ? "No changes yet."
                   : "Select a file to see its diff."
             }
-            onOpenInEditor={(p) => getLinkOpener().openFile(p)}
+            onOpenInEditor={(p) => getLinkOpener({ remote: remoteHost }).openFile(p)}
             header={
               selection ? (
                 <>

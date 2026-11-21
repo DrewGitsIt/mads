@@ -102,6 +102,10 @@ func main() {
 		if v, err := strconv.Atoi(r.Header.Get("X-Testchild-Status")); err == nil {
 			status = v
 		}
+		// What reached the child of the mesh's stamps, for the Router's
+		// actor tests.
+		w.Header().Set("X-Testchild-Actor", r.Header.Get("X-Mads-Actor"))
+		w.Header().Set("X-Testchild-Relay", strconv.Quote(r.Header.Get("X-Mads-Mesh-Peer")+r.Header.Get("X-Mads-Mesh-Device")))
 		w.WriteHeader(status)
 		_, _ = w.Write(body)
 	})

@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { router } from "../../../router/client";
 import { fetchLinksFor, type LinkChunk } from "../../../router/fetchLinks";
 import { eventsReady, subscribeToEvents } from "../../../router/events";
+import { peerOfSession } from "../../../router/sessionHosts";
+import { MESH_POLL_MS } from "../../../router/sessionsStore";
 import { FLAGS, subscribeFlags } from "../../../featureFlags";
 import type { Envelope, Link } from "../../../router/types";
 
@@ -15,6 +17,60 @@ const LINK_EVENT_TYPES = ["link.created", "link.updated", "link.deleted"];
 export const LINK_REFETCH_COALESCE_MS = 100;
 /** Upper bound on how long a continuous event stream can defer a flush. */
 export const LINK_REFETCH_MAX_WAIT_MS = 500;
+
+/**
+ * How often links of sessions on other devices (mesh mode) are re-read.
+ * Their link events stay on the peer's bus, never this window's: an
+ * unscoped peer stream would replay the peer's whole link.* history over a
+ * relayed link on every load. So, like the All devices session list
+ * (sessionsStore's MESH_POLL_MS), they're polled: one GET /links for the
+ * visible remote ids, fanned out to their hosts by the Router.
+ */
+export const LINK_PEER_POLL_MS = MESH_POLL_MS;
+
+// One peer-poll clock for every mounted hook (the rail's and each open
+// remote conversation's), paused while the window is hidden and fired at
+// once when it's shown again. Each hook still reads its own ids: the rail's
+// read would cover a conversation's id, but sharing the answers would mean
+// sharing the caches, which apply() keeps per hook on purpose.
+const peerPollers = new Set<LinkSync>();
+let peerPollTimer: ReturnType<typeof setInterval> | undefined;
+
+const pageHidden = () => typeof document !== "undefined" && document.visibilityState === "hidden";
+
+function pollPeers(): void {
+  if (pageHidden()) return;
+  for (const sync of peerPollers) sync.refreshRemote();
+}
+
+function onVisibilityChange(): void {
+  if (!pageHidden()) pollPeers();
+}
+
+function addPeerPoller(sync: LinkSync): () => void {
+  peerPollers.add(sync);
+  if (peerPollTimer === undefined) {
+    peerPollTimer = setInterval(pollPeers, LINK_PEER_POLL_MS);
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisibilityChange);
+  }
+  return () => {
+    peerPollers.delete(sync);
+    if (peerPollers.size > 0 || peerPollTimer === undefined) return;
+    clearInterval(peerPollTimer);
+    peerPollTimer = undefined;
+    if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibilityChange);
+  };
+}
+
+export interface SessionLinksOptions {
+  /**
+   * Every id lives on another device, whether or not the session list has
+   * said so (a remote conversation opened by deep link, or with This device
+   * showing): they're polled too. A dark host costs nothing: the Router
+   * answers for it from what it last read, without dialling it.
+   */
+  remote?: boolean;
+}
 
 /**
  * Keeps every link touching a visible session, read through the bulk
@@ -34,12 +90,14 @@ export const LINK_REFETCH_MAX_WAIT_MS = 500;
  * counter drops results from before unmount or a flag flip; results for ids
  * that left the set mid-flight are skipped. Full refetch only on mount,
  * flag-on, and an unreadable event payload. A failed chunk keeps the cache
- * for its ids.
+ * for its ids. Sessions on other devices are re-read every
+ * LINK_PEER_POLL_MS instead of on events (see there).
  */
-export function useSessionLinks(sessionIds: string[]): Link[] {
+export function useSessionLinks(sessionIds: string[], options: SessionLinksOptions = {}): Link[] {
   const [links, setLinks] = useState<Link[]>([]);
   const [sync] = useState(() => new LinkSync(setLinks));
   const idsKey = [...sessionIds].sort().join(",");
+  sync.allRemote = options.remote ?? false;
 
   // Declared before the lifecycle effect so start() sees the initial ids.
   useEffect(() => {
@@ -57,10 +115,12 @@ export function useSessionLinks(sessionIds: string[]): Link[] {
       if (live) sync.start();
     });
     const unsubscribeFlags = subscribeFlags(() => sync.onFlags());
+    const stopPeerPoll = addPeerPoller(sync);
     return () => {
       live = false;
       unsubscribeEvents();
       unsubscribeFlags();
+      stopPeerPoll();
       sync.stop();
     };
   }, [sync]);
@@ -170,6 +230,19 @@ class LinkSync {
       for (const id of inSet) this.pendingIds.add(id);
     }
     this.schedule();
+  }
+
+  /** Every id is a remote session's (SessionLinksOptions.remote). */
+  allRemote = false;
+
+  // The peer poll: queues every visible id that lives on another device.
+  // None (no mesh, or This device only) is no request.
+  refreshRemote(): void {
+    if (!this.active || !this.enabled) return;
+    const remote = [...this.ids].filter((id) => this.allRemote || peerOfSession(id) !== undefined);
+    if (remote.length === 0) return;
+    for (const id of remote) this.pendingIds.add(id);
+    this.flush();
   }
 
   private schedule(): void {

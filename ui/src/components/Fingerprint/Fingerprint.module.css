@@ -1,0 +1,86 @@
+.chip,
+.groups,
+.full {
+  font-variant-numeric: slashed-zero;
+  font-feature-settings: "zero" 1;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text3);
+  font: 500 11px var(--mono);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.chip:hover,
+.chip[aria-expanded="true"] {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--bg2);
+}
+.popover {
+  width: 300px;
+  padding: var(--space-3);
+}
+.label {
+  font: 600 var(--fs-chip) var(--sans);
+  color: var(--text3);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-bottom: var(--space-2);
+}
+.groups {
+  display: grid;
+  grid-template-columns: repeat(4, auto);
+  justify-content: start;
+  gap: 3px 10px;
+  font: 500 13px/1.5 var(--mono);
+  color: var(--text);
+  letter-spacing: 0.04em;
+}
+.groups span:nth-child(-n + 4),
+.full span:nth-child(-n + 4) {
+  color: var(--accent);
+}
+.full {
+  display: grid;
+  justify-content: start;
+  gap: 2px 8px;
+  font: 500 11.5px/1.5 Menlo, "SF Mono", ui-monospace, monospace;
+  color: var(--text);
+  letter-spacing: 0.03em;
+}
+.big {
+  font-size: 14px;
+  gap: 4px 12px;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg0);
+}
+.help {
+  margin: var(--space-2) 0 0;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

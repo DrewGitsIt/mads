@@ -9,8 +9,11 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 
 	"github.com/drewkidwell/mads/pkg/childsock"
+	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/dataclient"
 )
 
 // handleSessionOutput and handlePipelineOutput forward the UI's data-plane
@@ -71,6 +74,11 @@ func (s *server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// A device's message over the mesh is recorded as that device's: the
+	// session child records the turn itself, under the session's name.
+	rec := &sendRecorder{ResponseWriter: w}
+	w = rec
+	defer s.recordDeviceMessage(r, id, rec)
 	unlock := s.lockWake(id)
 	addr, tracked := s.sup.SessionAddr(id)
 	if !tracked {
@@ -82,14 +90,67 @@ func (s *server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	unlock()
-	if _, forged := body["attached"]; forged {
-		delete(body, "attached")
+	if deleteFold(body, "attached") {
 		if !setMessageBody(w, r, body) {
 			return
 		}
 	}
 	s.clearAsideOnSend(r.Context(), id)
 	s.proxyTo(w, r, addr, "/messages")
+}
+
+// sendRecorder notes a send's status and the start of its answer.
+type sendRecorder struct {
+	http.ResponseWriter
+	status int
+	head   []byte
+}
+
+func (s *sendRecorder) WriteHeader(code int) {
+	if s.status == 0 {
+		s.status = code
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *sendRecorder) Write(b []byte) (int, error) {
+	if s.status == 0 {
+		s.status = http.StatusOK
+	}
+	if room := 4096 - len(s.head); room > 0 {
+		s.head = append(s.head, b[:min(room, len(b))]...)
+	}
+	return s.ResponseWriter.Write(b)
+}
+
+func (s *sendRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// recordDeviceMessage appends session.device_message for a message a
+// paired device sent over the mesh (the relay mark, with the device actor
+// the Mesh Service set) that the session took, sent or queued. The
+// dataclient writes it as that device (docs/MESH-AUTH-DESIGN.md D8). A
+// local send records nothing new.
+func (s *server) recordDeviceMessage(r *http.Request, id string, rec *sendRecorder) {
+	if _, relayed := dataclient.MeshRelay(r.Context()); !relayed || !strings.HasPrefix(r.Header.Get("X-Mads-Actor"), "device:") {
+		return
+	}
+	if rec.status < 200 || rec.status > 299 {
+		return
+	}
+	var answer struct {
+		Status string `json:"status"`
+	}
+	_ = json.Unmarshal(rec.head, &answer)
+	payload, _ := json.Marshal(contracts.DeviceMessage{Queued: answer.Status == "queued"})
+	// The send succeeded whatever the caller does next.
+	ctx := context.WithoutCancel(r.Context())
+	if err := s.data.Append(ctx, &contracts.Envelope{Type: contracts.SessionDeviceMessage, SessionID: id, Payload: payload}); err != nil {
+		log.Printf("router: record %s's message to %s: %v", r.Header.Get("X-Mads-Actor"), id, err)
+	}
 }
 
 // clearAsideOnSend retires the user's "set aside" judgement because the user
@@ -269,6 +330,17 @@ func (s *server) proxyTo(w http.ResponseWriter, r *http.Request, addr, childPath
 	// needs a cookie or a bearer from the page.
 	for _, h := range []string{"Origin", "Referer", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User", "Cookie", "Authorization"} {
 		r2.Header.Del(h)
+	}
+	// Nor the mesh's stamps: what reaches a child is the actor alone, and
+	// only the one the Mesh Service authenticated for a relayed request
+	// (docs/MESH-AUTH-DESIGN.md D8); a local caller's X-Mads-Actor is its
+	// own say-so, so it's dropped.
+	actor := r2.Header.Get("X-Mads-Actor")
+	for _, h := range []string{"X-Mads-Actor", contracts.MeshRelayHeader, contracts.MeshLevelHeader, contracts.MeshDeviceHeader} {
+		r2.Header.Del(h)
+	}
+	if _, relayed := dataclient.MeshRelay(r.Context()); relayed && strings.HasPrefix(actor, "device:") {
+		r2.Header.Set("X-Mads-Actor", actor)
 	}
 	proxy.ServeHTTP(w, r2)
 }

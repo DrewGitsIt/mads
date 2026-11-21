@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { isGoneError } from "../state/selectionFollowsList";
+import { refreshSessions } from "../../../router/sessionsStore";
+import { useIsRemoteHost } from "../../../router/hostScope";
+import { useSessionLive } from "../../../router/mesh";
 import { Button } from "../../../components/Button/Button";
 import { Toast } from "../../../components/Toast/Toast";
 import type { PipelineClient } from "../../../pipeline/client/pipelineClient";
@@ -56,6 +60,18 @@ export interface SessionWorkspaceProps {
   onWake: (session: Session) => void;
   /** Leave this session's workspace for the Launchpad — not a lifecycle action. */
   onClose: () => void;
+  /**
+   * This session is gone (deleted from its menu, or found missing): move to
+   * its neighbour in the rail (SessionsSurface's selection-follows-list).
+   * Falls back to onClose when not given.
+   */
+  onLeave?: () => void;
+  /**
+   * Delete this session, owned by the surface so the pane moves to the
+   * neighbour before the request goes out. Without it, the workspace deletes
+   * and then leaves (or closes) itself.
+   */
+  onDelete?: () => void;
   /** Set for a session just created from the Launchpad — forwarded into the Conversation tab's context only. */
   provisioning?: boolean;
   onProvisioningDone?: () => void;
@@ -84,6 +100,8 @@ export function SessionWorkspace({
   onSleep,
   onWake,
   onClose,
+  onLeave,
+  onDelete,
   provisioning,
   onProvisioningDone,
   pendingFirstMessage,
@@ -99,6 +117,11 @@ export function SessionWorkspace({
   const [menuOpen, setMenuOpen] = useState(false);
   // The shell menu item reads "Open"/"Show"/"Hide" from these two: the host knows whether a shell lives, the dock store whether it is showing.
   const shellDock = useShellDockState(sessionId);
+  const leaveRef = useRef(onLeave);
+  leaveRef.current = onLeave;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const remoteHost = useIsRemoteHost();
   const liveShells = useLiveShells();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [actionError, setActionError] = useState<string>();
@@ -137,7 +160,12 @@ export function SessionWorkspace({
           // changed, or unmounted) is dropped.
           if (!cancelled) setSession(s);
         },
-        () => {},
+        (err: unknown) => {
+          // Gone (deleted elsewhere, on another device, by the CLI): stop
+          // reading it and move on. Anything else is a blip; the next
+          // event retries.
+          if (!cancelled && isGoneError(err)) (leaveRef.current ?? onCloseRef.current)();
+        },
       ),
     );
     sessionFetch.current = fetcher;
@@ -164,7 +192,7 @@ export function SessionWorkspace({
     // The record's read is the fetcher's; the run history seeds the
     // run-in-flight flag (pipeline.started is never replayed either), and
     // any run event heard first outranks it.
-    const ready = eventsReady();
+    const ready = eventsReady(sessionId);
     void ready.then(() => {
       if (!cancelled) fetcher.now();
     });
@@ -206,9 +234,16 @@ export function SessionWorkspace({
 
   async function confirmDelete() {
     setConfirmingDelete(false);
+    if (onDelete) {
+      onDelete();
+      return;
+    }
     try {
       await routerClient.deleteSession(sessionId);
-      onClose();
+      // Mesh mode: a peer's session.deleted doesn't reach this window's bus.
+      refreshSessions();
+      // To its neighbour, not the Launchpad: starting a new session is a choice.
+      (onLeave ?? onClose)();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     }
@@ -277,6 +312,7 @@ export function SessionWorkspace({
 
   return (
     <div className={styles.workspace}>
+      <LiveUpdatesNote sessionId={sessionId} />
       <div className={styles.bar}>
         <span className={styles.name}>
           {editingName && session ? (
@@ -373,13 +409,18 @@ export function SessionWorkspace({
               sessionId={sessionId}
               activity={session.activity}
               shellState={shellMenuState(shellDock.open, liveShells.some((s) => s.sessionId === sessionId))}
-              onToggleShell={() => {
-                setMenuOpen(false);
-                // Shell lives in the (possibly hidden) Conversation tab — surface
-                // it first, then toggle the dock via the cross-tree signal.
-                selectTab("conversation");
-                requestShellToggle();
-              }}
+              // No shell for a session on another device (mesh mode, D7).
+              onToggleShell={
+                remoteHost
+                  ? undefined
+                  : () => {
+                      setMenuOpen(false);
+                      // Shell lives in the (possibly hidden) Conversation tab — surface
+                      // it first, then toggle the dock via the cross-tree signal.
+                      selectTab("conversation");
+                      requestShellToggle();
+                    }
+              }
               onRestartAgent={restartAgent}
               restartingAgent={restarting}
               onSleep={() => {
@@ -459,4 +500,20 @@ export function openTasksTitle(b: OpenTaskBreakdown): string {
     b.blocked > 0 && `${b.blocked} blocked`,
   ].filter(Boolean);
   return `${total} open ${total === 1 ? "task" : "tasks"}: ${parts.join(", ")}`;
+}
+
+/**
+ * A remote session whose host's live updates don't reach this window
+ * (router/events.ts SessionLive): what's shown is what was last read.
+ */
+function LiveUpdatesNote({ sessionId }: { sessionId: string }) {
+  const live = useSessionLive(sessionId);
+  if (live.state === "live" || !live.peer) return null;
+  return (
+    <div className={styles.liveNote} role="status" data-live-updates={live.state}>
+      {live.state === "unavailable"
+        ? `Live updates unavailable from ${live.peer}: its mads is older than this one. What's shown is as of when it was opened.`
+        : `Live updates paused: ${live.peer} doesn't let this device view. They resume when it does.`}
+    </div>
+  );
 }

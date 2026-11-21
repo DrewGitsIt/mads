@@ -163,7 +163,7 @@ func TestWithUnreachableLogCoversDoAndStream(t *testing.T) {
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"seq":7}`))
 	}))
-	srv.Listener.Close()
+	_ = srv.Listener.Close()
 	srv.Listener, err = net.Listen("tcp", addr)
 	if err != nil {
 		t.Skipf("couldn't rebind %s: %v", addr, err)

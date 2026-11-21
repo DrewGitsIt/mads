@@ -209,8 +209,8 @@ func TestMaxVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != 34 {
-		t.Fatalf("MaxVersion(production set) = %d, want 34 (update this literal when a migration is added)", got)
+	if got != 37 {
+		t.Fatalf("MaxVersion(production set) = %d, want 37 (update this literal when a migration is added)", got)
 	}
 
 	// fstest.MapFS can't represent an empty directory (it synthesizes

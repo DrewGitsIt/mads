@@ -100,7 +100,7 @@ export function DelegateView({ sessionId, harnessId, parent, routerClient, onBac
       if (d?.harness_id) setDelegates((cur) => new Map(cur).set(d.harness_id, d));
     });
     const unsubStream = subscribeToEvents({ sessionId, types: DELEGATE_EVENT_TYPES }, (env) => addEnvelopes([env]));
-    const ready = eventsReady();
+    const ready = eventsReady(sessionId);
     ready
       .then(() => (cancelled ? [] : routerClient.getSessionDelegates(sessionId)))
       .then((list) => {
@@ -142,7 +142,7 @@ export function DelegateView({ sessionId, harnessId, parent, routerClient, onBac
     let cancelled = false;
     // Behind the ready barrier like the reads above: this merges with the
     // live session.subagent_event subscription.
-    eventsReady()
+    eventsReady(sessionId)
       .then(() => (cancelled ? [] : getAllEvents(routerClient, { sessionId, types: ["session.subagent_event"] })))
       .then((stream) => {
         if (!cancelled) addEnvelopes(stream);

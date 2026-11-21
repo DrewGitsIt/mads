@@ -1,0 +1,23 @@
+{
+  "id": "per_01hq3z",
+  "name": "pop-os",
+  "dns_name": "pop-os.example.ts.net",
+  "mesh_url": "http://pop-os.example.ts.net:17380",
+  "viewed": true,
+  "fingerprint": "JOYG7DSOHJ3RLUQB2VZ5BKSCG5ROKXNL2YNCYARHR6SWZRWSSTQA",
+  "public_key": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+  "grant": {
+    "level": "chat",
+    "ceilings": {
+      "full_trust_chat": "held",
+      "max_trust": "limited"
+    }
+  },
+  "pairing": {
+    "paired_at": "2026-11-17T09:00:00Z",
+    "paired_by": "user",
+    "how": "accept"
+  },
+  "created_at": "2026-11-17T09:00:00Z",
+  "updated_at": "2026-11-17T09:05:00Z"
+}

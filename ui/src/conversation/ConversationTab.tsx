@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useHostClient, useHostScope, useIsRemoteHost } from "../router/hostScope";
 import { Button } from "../components/Button/Button";
 import { Card } from "../components/Card/Card";
 import { ConfirmDialog } from "../components/ConfirmDialog/ConfirmDialog";
@@ -110,6 +111,9 @@ import { useDelegateFile } from "./activity/useDelegateFile";
 import { HeldUpdates } from "./HeldUpdates/HeldUpdates";
 import { useHeldUpdates } from "./HeldUpdates/useHeldUpdates";
 import { sourceNames, updatesNoun } from "./HeldUpdates/heldText";
+import { RefusedSend } from "./ChatRenderer/RefusedSend";
+import { refusalOf, type RefusedSend as RefusedSendState } from "./ChatRenderer/sendRefusal";
+import { selfStore } from "../router/devices";
 import styles from "./ConversationTab.module.css";
 
 // When the user last dismissed this session's compaction banner — lets a
@@ -212,10 +216,17 @@ export function ConversationTab({
   // sessions (which remounts this tab) don't lose it. Hide is not end: the
   // shell lives in the shell host, this only says whether it is showing.
   const { open: shellOpen, height: shellHeight } = useShellDockState(sessionId);
-  const shellHost = typeof window !== "undefined" ? window.mads?.shell : undefined;
+  // Mesh mode: a session on another device. Its shell would run on THIS
+  // machine (the dock's shell host is this window's Electron), in a folder
+  // that only exists over there, so there is no dock for it until host-side
+  // shells land (docs/MESH-MODE-DESIGN.md D7).
+  const host = useHostScope();
+  const remoteHost = useIsRemoteHost();
+  const hostClient = useHostClient();
+  const shellHost = typeof window !== "undefined" && !remoteHost ? window.mads?.shell : undefined;
   const shellBridge = useMemo(
-    () => shellBridgeProp ?? (shellHost ? new ShellBridge(shellHost, sessionId) : undefined),
-    [shellBridgeProp, shellHost, sessionId],
+    () => (remoteHost ? undefined : (shellBridgeProp ?? (shellHost ? new ShellBridge(shellHost, sessionId) : undefined))),
+    [remoteHost, shellBridgeProp, shellHost, sessionId],
   );
   // Terminal view's compose sheet (⌘E / Ctrl+Shift+E): the line-numbered
   // editor rising from the dock over the xterm, sent as a bracketed paste.
@@ -233,11 +244,19 @@ export function ConversationTab({
   // Why the latest send failed (its HTTP error, or the stream's error
   // frame) — the reason on a send the stream reported unsaved.
   const [sendFailure, setSendFailure] = useState<string>();
+  // The latest send the session's host refused for this device's grant.
+  const [refused, setRefused] = useState<RefusedSendState | null>(null);
+  const [retryingRefused, setRetryingRefused] = useState(false);
+  // This device's name, for Why: read, not subscribed (App's pairing
+  // watcher keeps it loaded).
+  const selfDevice = refused ? selfStore.get().value : undefined;
   // session.workspace is a reference (id or name), not the name the dock's
   // ⎇ segment prints — resolved here, off the session this tab already holds,
   // and kept live by the hook's workspace.* subscription.
   const sessionWorkspace = useWorkspaceForRef(routerClient, session?.workspace);
-  const agents = useAgentIndex(routerClient);
+  // A remote session's agent ids are its host's (mesh mode, D3b): look them
+  // up there. Locally the prop client stays the source, as before.
+  const agents = useAgentIndex(remoteHost ? hostClient : routerClient);
   // The session's login: while it is signed out, a send the harness refused
   // for auth offers Sign in (docs/AUTH-SIGNIN-DESIGN.md).
   const { auth, refetch: refetchAuth } = useSessionAuth(routerClient, sessionId);
@@ -292,7 +311,7 @@ export function ConversationTab({
   // re-open keyed to a real state transition.
   const [streamBroken, setStreamBroken] = useState(false);
   const [streamGeneration, setStreamGeneration] = useState(0);
-  const links = useSessionLinks([sessionId]);
+  const links = useSessionLinks([sessionId], { remote: remoteHost });
   const linkName = useLinkNames(routerClient, sessionId, links);
   // A follower started without a goal waits on its leader's first message.
   const leaderId = leaderLink(links, sessionId)?.granting_session_id;
@@ -464,7 +483,7 @@ export function ConversationTab({
     // between. Those subscriptions are later effects of this same commit;
     // React runs a commit's effects in one go, so they are all registered
     // before even an already-resolved barrier lets these reads start.
-    const ready = eventsReady();
+    const ready = eventsReady(sessionId);
     void ready
       // Unmounted meanwhile: never read, and never settle (no error to show).
       .then(() => (cancelled ? new Promise<never>(() => {}) : routerClient.getSession(sessionId)))
@@ -1100,7 +1119,7 @@ export function ConversationTab({
         setSendError(`Couldn't send your queued message: ${change.error ?? "unknown error"}`);
       }
     });
-    eventsReady()
+    eventsReady(sessionId)
       .then(() => (cancelled ? [] : routerClient.getQueue(sessionId)))
       .then((queued) => {
         if (cancelled || queueHeardRef.current || queued.length === 0) return;
@@ -1570,13 +1589,22 @@ export function ConversationTab({
     if (!turnLive) convDispatch({ type: "turn", turn: { active: true } });
     convDispatch({ type: "sending", on: true });
   };
-  const noteSendError = (msg: string) => {
+  const noteSendError = (msg: string, detail?: { error: unknown; text: string; attachments: number }) => {
+    // The session's host refused this device's grant (a mesh peer's 403):
+    // the message stays in the stream as "Not sent", with Why? and Retry,
+    // not as a toast.
+    const refusal = detail && detail.attachments === 0 ? refusalOf(detail.error, detail.text) : null;
     setWaking(false);
-    setSendError(msg);
-    setSendFailure(msg);
+    if (refusal) {
+      setRefused(refusal);
+    } else {
+      setSendError(msg);
+      setSendFailure(msg);
+    }
     if (optimisticTurn.current) convDispatch({ type: "turn", turn: { active: false } });
     optimisticTurn.current = false;
     convDispatch({ type: "sending", on: false });
+    return refusal !== null;
   };
   const noteQueued = (q: QueuedMessage) => {
     setWaking(false);
@@ -1601,6 +1629,32 @@ export function ConversationTab({
   // Resends the transcript's text verbatim: any attachment paths the Router
   // appended the first time are already in it, so the agent gets the same
   // message, and the identical text is what folds the failed try away.
+  // Retry on a refused message: the same text again; it goes from the
+  // stream once it's taken (or comes back refused, updated).
+  const retryRefused = async (r: RefusedSendState) => {
+    setRetryingRefused(true);
+    setSendError(undefined);
+    noteSendStart();
+    try {
+      const result = await routerClient.sendMessage(sessionId, { text: r.text, mentions: [], queue: true });
+      setRefused(null);
+      if (result.status === "queued") noteQueued(result.queued);
+      else noteSent();
+    } catch (err) {
+      noteSendError(err instanceof Error ? err.message : String(err), { error: err, text: r.text, attachments: 0 });
+    } finally {
+      setRetryingRefused(false);
+    }
+  };
+  const refusedTail = refused && (
+    <RefusedSend
+      refused={refused}
+      host={host?.name ?? "the other device"}
+      device={selfDevice?.name ?? "This device"}
+      retrying={retryingRefused}
+      onRetry={() => void retryRefused(refused)}
+    />
+  );
   const retrySend = async (text: string) => {
     setSendError(undefined);
     noteSendStart();
@@ -1801,7 +1855,7 @@ export function ConversationTab({
                   {conv.rows.length === 0 && worktree.cards.length === 0 && !inChatTurn ? (
                     <>
                       {conv.missing && session && (session.last_turn_at || session.last_usage) ? (
-                        <MissingTranscript missing={conv.missing} provider={session.provider} />
+                        <MissingTranscript missing={conv.missing} provider={session.provider} remote={remoteHost} />
                       ) : (
                         <div className={styles.emptyTranscript}>
                           {leaderId
@@ -1813,6 +1867,7 @@ export function ConversationTab({
                       {livePermissionRequests.map((req) => (
                         <PermissionCard key={req.id} request={req} onResolve={resolvePermission} />
                       ))}
+                      {refusedTail}
                       {heldTail}
                     </>
                   ) : (
@@ -1855,7 +1910,12 @@ export function ConversationTab({
                       }
                       find={find.request}
                       onFindStatus={find.onStatus}
-                      tail={heldTail}
+                      tail={
+                        <>
+                          {refusedTail}
+                          {heldTail}
+                        </>
+                      }
                     />
                   )}
                   {transport.status !== "idle" && (
@@ -2061,7 +2121,9 @@ export function ConversationTab({
                 />
               ) : (
                 <div className={styles.ptyUnavailable}>
-                  Shell requires the Electron shell.
+                  {remoteHost
+                    ? `This session runs on ${host?.name ?? "another device"}; shells only open for sessions on this device.`
+                    : "Shell requires the Electron shell."}
                 </div>
               ))}
           </div>
@@ -2154,7 +2216,7 @@ export function ConversationTab({
  * The empty pane of a session that has had turns but whose agent no longer
  * holds the conversation — most likely its own retention setting deleted it.
  */
-function MissingTranscript({ missing, provider }: { missing: TranscriptMissing; provider?: string }) {
+function MissingTranscript({ missing, provider, remote }: { missing: TranscriptMissing; provider?: string; remote?: boolean }) {
   const label = provider ? providerLabel(provider) : undefined;
   const retention = missing.retention;
   // The settings file isn't there (the agent's defaults apply): like
@@ -2162,7 +2224,7 @@ function MissingTranscript({ missing, provider }: { missing: TranscriptMissing; 
   const [notOnDisk, setNotOnDisk] = useState(false);
   const openSettings = async () => {
     if (!retention) return;
-    if ((await getLinkOpener().openFile(retention.file)) === "missing") setNotOnDisk(true);
+    if ((await getLinkOpener({ remote }).openFile(retention.file)) === "missing") setNotOnDisk(true);
   };
   return (
     <div className={styles.emptyTranscript} data-testid="transcript-missing">
@@ -2176,7 +2238,7 @@ function MissingTranscript({ missing, provider }: { missing: TranscriptMissing; 
           </>
         )}
       </p>
-      {retention && canOpenFiles() && (
+      {retention && canOpenFiles({ remote }) && (
         <Button
           variant="secondary"
           size="sm"

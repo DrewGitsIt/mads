@@ -95,7 +95,7 @@ func newRouterStack(t *testing.T) *routerStack {
 		t.Fatal(err)
 	}
 	h := newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "",
-		identity{root: "/src/checkout"}, localguard.New("router", "17373", nil), nil, auth)
+		identity{root: "/src/checkout"}, localguard.New("router", "17373", nil), nil, auth, nil)
 	return &routerStack{h: h, home: home, auth: auth, data: data, tokens: tokens}
 }
 
@@ -336,7 +336,7 @@ func TestViteDevProxyCoversEveryRouterPrefix(t *testing.T) {
 	for _, m := range regexp.MustCompile(`"([^"]+)"`).FindAllSubmatch(block[1], -1) {
 		listed[string(m[1])] = true
 	}
-	for _, pattern := range routerRoutes(t) {
+	for _, pattern := range append(routerRoutes(t), meshLayerRoutes(t)...) {
 		_, path := fill(pattern, "x")
 		seg := strings.SplitN(strings.TrimPrefix(path, "/"), "/", 2)[0]
 		if seg == "" {
@@ -346,6 +346,35 @@ func TestViteDevProxyCoversEveryRouterPrefix(t *testing.T) {
 			t.Errorf("Router route %q: /%s isn't in ui/vite-router-proxy.ts's ROUTER_API_PREFIXES", pattern, seg)
 		}
 	}
+}
+
+// meshLayerRoutes is the routes the mesh layer (internal/mesh) answers in front
+// of the API: its own mux's patterns, plus /peers, which it claims by
+// prefix (isPeersPath) rather than registering.
+func meshLayerRoutes(t *testing.T) []string {
+	t.Helper()
+	files, err := filepath.Glob("internal/mesh/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(`mux\.Handle(?:Func)?\("([^"]+)"`)
+	out := []string{"GET /peers"}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+			out = append(out, m[1])
+		}
+	}
+	if len(out) < 10 {
+		t.Fatalf("found only %d mesh routes; has their registration moved?", len(out))
+	}
+	return out
 }
 
 // TestWindowWideReadsAreTheUsers: the window-wide GET /permission-requests

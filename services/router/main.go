@@ -26,6 +26,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/devicekey"
 	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/localguard"
 	"github.com/drewkidwell/mads/pkg/preflight"
@@ -45,6 +46,7 @@ import (
 	"github.com/drewkidwell/mads/services/router/internal/attachments"
 	"github.com/drewkidwell/mads/services/router/internal/digestwatch"
 	"github.com/drewkidwell/mads/services/router/internal/job"
+	"github.com/drewkidwell/mads/services/router/internal/mesh"
 	"github.com/drewkidwell/mads/services/router/internal/modelcatalog"
 	"github.com/drewkidwell/mads/services/router/internal/runlogs"
 	"github.com/drewkidwell/mads/services/router/internal/static"
@@ -179,15 +181,20 @@ type frontDoor struct {
 	scoped *localauth.Registry
 }
 
-func (f frontDoor) door(mux *http.ServeMux) *localauth.Door {
+func (f frontDoor) door(classify func(r *http.Request) string) *localauth.Door {
 	if f.tokens == nil {
 		return localauth.Insecure()
 	}
-	return api.NewDoor(mux, f.tokens, f.scoped)
+	return api.NewDoor(classify, f.tokens, f.scoped)
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, attachmentStore *attachments.Store, fastModelFlagBaseURL string, models *modelcatalog.Catalog, routerURL string, ident identity, guard *localguard.Guard, repoState *repostate.Service, auth frontDoor) http.Handler {
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, attachmentStore *attachments.Store, fastModelFlagBaseURL string, models *modelcatalog.Catalog, routerURL string, ident identity, guard *localguard.Guard, repoState *repostate.Service, auth frontDoor, meshMgr *mesh.Manager) http.Handler {
+	var devices http.Handler
+	if meshMgr != nil {
+		devices = meshMgr.Devices()
+	}
 	return guard.Wrap(api.NewHandler(api.Options{
+		Devices:              devices,
 		Data:                 data,
 		Sup:                  sup,
 		Jobs:                 jobs,
@@ -212,7 +219,21 @@ func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runne
 		Home:                 filepath.Dir(runsDir),
 		Tokens:               auth.tokens,
 		Scoped:               auth.scoped,
-	}, auth.door))
+	}, auth.door, meshLayer(meshMgr)))
+}
+
+// meshLayer is mesh routing as a layer inside the front door
+// (docs/MESH-MODE-DESIGN.md D4). The stack, outermost first: localguard
+// (is this a page we trust?), the front door (does it hold the install
+// token?), CORS, mesh, the API. So the UI's requests are authenticated
+// before anything reaches a peer, the door has stripped the token by the
+// time mesh sees them, and /peers can't pass for the exempt static UI.
+// Nil (no mesh) is no layer.
+func meshLayer(m *mesh.Manager) *api.Layer {
+	if m == nil {
+		return nil
+	}
+	return &api.Layer{Wrap: m.Handler, Claims: mesh.Claims}
 }
 
 // activeCheckouts lists the checkouts active sessions work in — every repo
@@ -326,6 +347,7 @@ func main() {
 	// would only leak into the harnesses it spawns (model discovery, jobs).
 	localauth.TakeChildEnv()
 	addr := flag.String("addr", "localhost:17373", "listen address")
+	meshName := flag.String("mesh-name", defaultMeshName(), "how this node labels its own sessions in mesh mode's All devices list")
 	allowedOrigins := flag.String("allowed-origins", "", "comma-separated browser origins, besides the Router's own, allowed to call it — e.g. the Vite dev server: "+strings.Join(localguard.DevServerOrigins, ","))
 	dataURL := flag.String("data-url", "http://localhost:17374", "Data Service base URL")
 	sessionCmd := flag.String("session-cmd", defaultChildCmd("session", "go run ./services/session"), "command to spawn a Session Service child")
@@ -363,6 +385,17 @@ func main() {
 	}
 	data := dataclient.New(*dataURL, "router", dataclient.WithTokenSource(tokens.Token),
 		dataclient.WithUnreachableLog(func(format string, args ...any) { log.Printf("router: "+format, args...) }))
+	// This device's identity (docs/MESH-AUTH-DESIGN.md D1), created on
+	// first start: the key mesh mode presents to every peer it views (TLS
+	// client certificate). A refused key file is logged, not fatal: the
+	// Router serves this device as always, and peers show unreachable.
+	deviceID, err := devicekey.LoadOrCreate(*madsHome)
+	if err != nil {
+		log.Printf("router: device key: %v (mesh peers can't be reached)", err)
+		deviceID = nil
+	} else {
+		log.Printf("router: this device is %s", deviceID.Fingerprint().Short())
+	}
 
 	providers, err := buildProviderRegistry(*madsHome)
 	if err != nil {
@@ -463,7 +496,12 @@ func main() {
 	repoCtx, repoCancel := context.WithCancel(context.Background())
 	defer repoCancel()
 	repoState := repostate.NewService(repoCtx, activeCheckouts(data), onRepoChange(data))
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), attachmentStore, *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist), guard, repoState, auth)}
+	// Mesh mode's viewer side: the devices this node views, their
+	// reachability, and routing to them; also the paired devices' routes
+	// (/devices) and what each paired device lets this node do. Routing
+	// is a pass-through until a device this node views is added.
+	meshMgr := mesh.NewManager(data, mesh.Options{SelfName: *meshName, Identity: deviceID})
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), attachmentStore, *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist), guard, repoState, auth, meshMgr)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -496,6 +534,14 @@ func main() {
 	synthWatcher := synthwatch.NewWatcher(data, jobs, resolveFastModel)
 	go synthWatcher.Run(ctx)
 
+	// Waited for at shutdown: its Run flushes what it holds back (within
+	// meshFlushWait).
+	meshDone := make(chan struct{})
+	go func() {
+		defer close(meshDone)
+		meshMgr.Run(ctx)
+	}()
+
 	// Conversations imported before their subagents were recorded at import
 	// get them now; already-recorded ones are skipped.
 	go api.BackfillImportedDelegates(ctx, data, providers)
@@ -519,8 +565,18 @@ func main() {
 			log.Printf("router: HTTP shutdown: %v", err)
 		}
 		sup.Shutdown(shutdownCtx)
+		// The mesh manager's shutdown flush (what paired devices let this
+		// one do, held back by its write debounce) is bounded at 3 s.
+		select {
+		case <-meshDone:
+		case <-time.After(meshFlushWait):
+			log.Printf("router: mesh shutdown didn't finish within %s", meshFlushWait)
+		}
 	}
 }
+
+// meshFlushWait bounds how long shutdown waits for the mesh manager.
+const meshFlushWait = 4 * time.Second
 
 // sweepLocalState bounds two things under $MADS_HOME that otherwise only
 // grow: pipeline stage output logs (runs/, kept for Config.LogRetentionDays)
@@ -563,4 +619,15 @@ func sweepLocalState(data *dataclient.Client, madsHome string) {
 	for range time.Tick(time.Hour) {
 		sweep()
 	}
+}
+
+// defaultMeshName is this machine's short hostname ("pop-os", not
+// "pop-os.local"), the label mesh mode gives its own sessions.
+func defaultMeshName() string {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return "this device"
+	}
+	h, _, _ = strings.Cut(h, ".")
+	return h
 }

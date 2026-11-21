@@ -122,6 +122,11 @@ export interface Session {
   last_turn_at?: string;
   created_at: string;
   updated_at: string;
+  /**
+   * The device this session lives on — only on GET /sessions?scope=all
+   * (mesh mode, docs/MESH-MODE-DESIGN.md D4). Absent means this device.
+   */
+  host?: SessionHost;
 }
 
 /**
@@ -2274,3 +2279,36 @@ export type TrustChange = {
   restarted: boolean;
   restart_error?: string;
 };
+
+/** Where a session lives in mesh mode (contracts.SessionHost). */
+export interface SessionHost {
+  name: string;
+  self: boolean;
+  peer_id?: string;
+  /** False when the peer couldn't be read just now: its rows are last-known. */
+  reachable: boolean;
+}
+
+/**
+ * A peer's live state as the Router sees it (contracts.PeerReachability).
+ * "unpaired": no device key is pinned for it here, so it is never dialled.
+ */
+export type PeerReachability = "unknown" | "connected" | "unreachable" | "denied" | "version_mismatch" | "unpaired";
+
+/** GET /peers row: a device this node views, plus its live state. */
+export interface PeerStatus {
+  id: string;
+  name: string;
+  dns_name?: string;
+  mesh_url: string;
+  hidden?: boolean;
+  created_at: string;
+  updated_at: string;
+  reachability: PeerReachability;
+  reason?: string;
+  rtt_ms?: number;
+  mads_commit?: string;
+  access?: string[];
+  checked_at?: string;
+}
+

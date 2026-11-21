@@ -60,13 +60,13 @@ export function useHeldUpdates(
   // registered first (same commit), so nothing lands unseen in between.
   useEffect(() => {
     let cancelled = false;
-    void eventsReady().then(() => {
+    void eventsReady(sessionId).then(() => {
       if (!cancelled && (latest.current.waiting > 0 || latest.current.listed)) load();
     });
     return () => {
       cancelled = true;
     };
-  }, [load, waiting, token]);
+  }, [load, waiting, token, sessionId]);
 
   useEffect(
     () =>

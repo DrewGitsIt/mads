@@ -942,7 +942,7 @@ describe("Composer", () => {
     ) as HTMLTextAreaElement;
 
     await waitFor(() =>
-      expect(onSendError).toHaveBeenCalledWith("network down"),
+      expect(onSendError).toHaveBeenCalledWith("network down", expect.objectContaining({ text: expect.any(String) })),
     );
     expect(textarea.value).toBe("fix the deploy script");
   });
@@ -965,7 +965,7 @@ describe("Composer", () => {
     fireEvent.change(textarea, { target: { value: "hello there" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    await waitFor(() => expect(onSendError).toHaveBeenCalledWith("boom"));
+    await waitFor(() => expect(onSendError).toHaveBeenCalledWith("boom", expect.objectContaining({ text: "hello there" })));
     expect(textarea.value).toBe("hello there");
   });
 

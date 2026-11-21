@@ -28,6 +28,43 @@ var ErrNotFound = errors.New("not found")
 // ErrConflict maps 409s — for tasks, that's "live-leased by someone else".
 var ErrConflict = errors.New("conflict")
 
+// ConflictError is a 409 (errors.Is ErrConflict): Code and Msg are the
+// answer's "code" and "error", for a caller to pass on without this
+// client's request line or the Data Service's address.
+type ConflictError struct {
+	Method, Path string
+	Code, Msg    string
+	raw          string
+}
+
+func (e *ConflictError) Error() string {
+	return fmt.Sprintf("%s %s: %v: %s", e.Method, e.Path, ErrConflict, e.raw)
+}
+
+func (e *ConflictError) Unwrap() error { return ErrConflict }
+
+// ForbiddenError is a 403: the Data Service refused the write for who made
+// it (or, for a pairing code, refused the code). Code is the answer's
+// "code", when it has one.
+type ForbiddenError struct {
+	Method, Path string
+	Code, Msg    string
+}
+
+func (e *ForbiddenError) Error() string {
+	return e.Method + " " + e.Path + ": status 403: " + e.Msg
+}
+
+// errorField reads one string field of a JSON error body.
+func errorField(raw []byte, field string) string {
+	var body map[string]any
+	if json.Unmarshal(raw, &body) != nil {
+		return ""
+	}
+	s, _ := body[field].(string)
+	return s
+}
+
 // ErrLeaseLost maps a 409 with code "lease_lost" (Renew): the lease is
 // gone, expired or held under another token, so this client no longer
 // holds the task and must stop writing to it. Errors carrying it also
@@ -154,8 +191,73 @@ func (c *Client) Health(ctx context.Context) error {
 	return c.do(ctx, http.MethodGet, "/health", nil, nil)
 }
 
+type meshRelayKey struct{}
+
+// WithMeshRelay marks ctx as serving a request a mesh peer's Mesh Service
+// relayed (from node, possibly ""). Every write this client makes under it
+// carries contracts.MeshRelayHeader, so the Data Service never treats it as
+// the host user's own (docs/MESH-AUTH-DESIGN.md Q2).
+func WithMeshRelay(ctx context.Context, node string) context.Context {
+	return context.WithValue(ctx, meshRelayKey{}, node)
+}
+
+// MeshRelay reports whether ctx serves a mesh-relayed request, and for
+// which node.
+func MeshRelay(ctx context.Context) (string, bool) {
+	node, ok := ctx.Value(meshRelayKey{}).(string)
+	return node, ok
+}
+
+type meshActorKey struct{}
+
+// WithMeshActor records, on a mesh-relayed ctx (WithMeshRelay), the
+// authenticated device the relaying Mesh Service named as the request's
+// actor (docs/MESH-AUTH-DESIGN.md D8). Every write this client makes under
+// it carries that actor — X-Mads-Actor, and the actor of an appended event
+// — in place of the client's own, so the history shows which device did
+// what. Without the relay mark it has no effect.
+func WithMeshActor(ctx context.Context, actor string) context.Context {
+	return context.WithValue(ctx, meshActorKey{}, actor)
+}
+
+type meshDeviceKey struct{}
+
+// WithMeshDevice records, on a mesh-relayed ctx (WithMeshRelay), the full
+// fingerprint of the device the relaying Mesh Service authenticated
+// (contracts.MeshDeviceHeader). Every write this client makes under it
+// carries that header with the relay mark, so the Data Service can hold
+// the device to what its own grant there allows. Without the relay mark it
+// has no effect.
+func WithMeshDevice(ctx context.Context, fingerprint string) context.Context {
+	return context.WithValue(ctx, meshDeviceKey{}, fingerprint)
+}
+
+// MeshDevice is ctx's relayed device fingerprint, if any.
+func MeshDevice(ctx context.Context) (string, bool) {
+	if _, relayed := MeshRelay(ctx); !relayed {
+		return "", false
+	}
+	fp, ok := ctx.Value(meshDeviceKey{}).(string)
+	return fp, ok && fp != ""
+}
+
+// meshActor is ctx's relayed device actor, if any.
+func meshActor(ctx context.Context) (string, bool) {
+	if _, relayed := MeshRelay(ctx); !relayed {
+		return "", false
+	}
+	a, ok := ctx.Value(meshActorKey{}).(string)
+	return a, ok && a != ""
+}
+
 // do runs one request; out, when non-nil, receives the decoded 2xx body.
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
+	return c.doIf(ctx, method, path, "", in, out)
+}
+
+// doIf is do with an If-Match precondition (ifMatch non-empty): the
+// Data Service answers 409 when the row changed since.
+func (c *Client) doIf(ctx context.Context, method, path, ifMatch string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		raw, err := json.Marshal(in)
@@ -171,10 +273,21 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if c.actor != "" {
+	if a, ok := meshActor(ctx); ok {
+		req.Header.Set("X-Mads-Actor", a)
+	} else if c.actor != "" {
 		req.Header.Set("X-Mads-Actor", c.actor)
 	}
 	c.authorize(req)
+	if ifMatch != "" {
+		req.Header.Set("If-Match", ifMatch)
+	}
+	if node, relayed := MeshRelay(ctx); relayed && method != http.MethodGet && method != http.MethodHead {
+		req.Header[contracts.MeshRelayHeader] = []string{node}
+		if fp, ok := MeshDevice(ctx); ok {
+			req.Header.Set(contracts.MeshDeviceHeader, fp)
+		}
+	}
 	if id := pathTaskID(path); id != "" {
 		if tok := c.leaseToken(id); tok != "" {
 			req.Header.Set(leaseHeader, tok)
@@ -199,6 +312,8 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		return json.Unmarshal(raw, out)
 	case resp.StatusCode == http.StatusNotFound:
 		return fmt.Errorf("%s %s: %w", method, path, ErrNotFound)
+	case resp.StatusCode == http.StatusForbidden:
+		return &ForbiddenError{Method: method, Path: path, Code: errorField(raw, "code"), Msg: firstNonEmpty(errorField(raw, "error"), strings.TrimSpace(string(raw)))}
 	case resp.StatusCode == http.StatusConflict:
 		var body struct {
 			Code string `json:"code"`
@@ -206,7 +321,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		if json.Unmarshal(raw, &body) == nil && body.Code == "lease_lost" {
 			return fmt.Errorf("%s %s: %w (%w)", method, path, ErrLeaseLost, ErrConflict)
 		}
-		return fmt.Errorf("%s %s: %w: %s", method, path, ErrConflict, strings.TrimSpace(string(raw)))
+		return &ConflictError{Method: method, Path: path, Code: body.Code, Msg: errorField(raw, "error"), raw: strings.TrimSpace(string(raw))}
 	case resp.StatusCode == http.StatusUnprocessableEntity:
 		var verr contracts.ValidationError
 		if json.Unmarshal(raw, &verr) == nil && !verr.Empty() {
@@ -896,6 +1011,146 @@ func (c *Client) DeleteWorkspace(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodDelete, "/workspaces/"+url.PathEscape(id), nil, nil)
 }
 
+// --- Mesh peers (docs/MESH-MODE-DESIGN.md D3) ---
+
+// Peers lists the mesh peer list: the devices this node views and the
+// paired-only devices (Viewed false) it doesn't.
+func (c *Client) Peers(ctx context.Context) ([]contracts.Peer, error) {
+	var out []contracts.Peer
+	err := c.do(ctx, http.MethodGet, "/peers", nil, &out)
+	return out, err
+}
+
+// Peer fetches one peer by id or name.
+func (c *Client) Peer(ctx context.Context, idOrName string) (contracts.Peer, error) {
+	var out contracts.Peer
+	err := c.do(ctx, http.MethodGet, "/peers/"+url.PathEscape(idOrName), nil, &out)
+	return out, err
+}
+
+// CreatePeer adds a device to the mesh peer list.
+func (c *Client) CreatePeer(ctx context.Context, p *contracts.Peer) error {
+	return c.do(ctx, http.MethodPost, "/peers", p, p)
+}
+
+// UpdatePeer saves changes to a peer (rename, hide).
+func (c *Client) UpdatePeer(ctx context.Context, p *contracts.Peer) error {
+	return c.do(ctx, http.MethodPut, "/peers/"+url.PathEscape(p.ID), p, p)
+}
+
+// DeletePeer removes a device from the peer list.
+func (c *Client) DeletePeer(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/peers/"+url.PathEscape(id), nil, nil)
+}
+
+// UpdatePeerIfUnchanged is UpdatePeer only if the row is still as read
+// (p.UpdatedAt); otherwise ErrConflict and nothing written. A read, edit,
+// write-back uses it so a change made meanwhile (a pairing, a revoke)
+// isn't overwritten.
+func (c *Client) UpdatePeerIfUnchanged(ctx context.Context, p *contracts.Peer) error {
+	return c.doIf(ctx, http.MethodPut, "/peers/"+url.PathEscape(p.ID), p.UpdatedAt.Format(time.RFC3339Nano), p, p)
+}
+
+// DeletePeerIfUnchanged is DeletePeer only if the row is still as read.
+func (c *Client) DeletePeerIfUnchanged(ctx context.Context, p contracts.Peer) error {
+	return c.doIf(ctx, http.MethodDelete, "/peers/"+url.PathEscape(p.ID), p.UpdatedAt.Format(time.RFC3339Nano), nil, nil)
+}
+
+// --- Pairing by code (docs/MESH-AUTH-DESIGN.md D6) ---
+
+// CreatePairingCode registers a new pairing code by its secret's hash
+// (paircode.Hash); the secret never reaches the Data Service.
+func (c *Client) CreatePairingCode(ctx context.Context, secretHash string) (contracts.PairingCode, error) {
+	var out contracts.PairingCode
+	err := c.do(ctx, http.MethodPost, "/pairing/codes", contracts.PairingCodeCreate{SecretHash: secretHash}, &out)
+	return out, err
+}
+
+// DeletePairingCode retires an unused code.
+func (c *Client) DeletePairingCode(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/pairing/codes/"+url.PathEscape(id), nil, nil)
+}
+
+// RedeemPairingCode consumes a code for the device that presented its
+// secret, opening a request for the host to answer. A bad code is a
+// *ForbiddenError with Code "pairing_refused".
+func (c *Client) RedeemPairingCode(ctx context.Context, in contracts.PairRedeem) (contracts.PairRequest, error) {
+	var out contracts.PairRequest
+	err := c.do(ctx, http.MethodPost, "/pairing/redeem", in, &out)
+	return out, err
+}
+
+// PairRequests lists open and recently answered pairing requests.
+func (c *Client) PairRequests(ctx context.Context) ([]contracts.PairRequest, error) {
+	var out []contracts.PairRequest
+	err := c.do(ctx, http.MethodGet, "/pairing/requests", nil, &out)
+	return out, err
+}
+
+// PairRequest reads one pairing request.
+func (c *Client) PairRequest(ctx context.Context, id string) (contracts.PairRequest, error) {
+	var out contracts.PairRequest
+	err := c.do(ctx, http.MethodGet, "/pairing/requests/"+url.PathEscape(id), nil, &out)
+	return out, err
+}
+
+// ApprovePairRequest pins the requesting device at d.Level.
+func (c *Client) ApprovePairRequest(ctx context.Context, id string, d contracts.PairDecision) (contracts.PairRequest, error) {
+	var out contracts.PairRequest
+	err := c.do(ctx, http.MethodPost, "/pairing/requests/"+url.PathEscape(id)+"/approve", d, &out)
+	return out, err
+}
+
+// DeclinePairRequest declines a pairing request.
+func (c *Client) DeclinePairRequest(ctx context.Context, id string) (contracts.PairRequest, error) {
+	var out contracts.PairRequest
+	err := c.do(ctx, http.MethodPost, "/pairing/requests/"+url.PathEscape(id)+"/decline", struct{}{}, &out)
+	return out, err
+}
+
+// DeviceActivity is the device activity log, newest first: device.*
+// events and events by a device actor. fingerprint "" is every device;
+// before 0 starts at the newest; limit 0 is the service's cap.
+func (c *Client) DeviceActivity(ctx context.Context, fingerprint string, before int64, limit int) ([]contracts.Envelope, error) {
+	q := url.Values{}
+	if fingerprint != "" {
+		q.Set("device", fingerprint)
+	}
+	if before > 0 {
+		q.Set("before", fmt.Sprint(before))
+	}
+	if limit > 0 {
+		q.Set("limit", fmt.Sprint(limit))
+	}
+	var out []contracts.Envelope
+	err := c.do(ctx, http.MethodGet, "/devices/activity?"+q.Encode(), nil, &out)
+	return out, err
+}
+
+// DeviceLastUsed is each device actor's newest event.
+func (c *Client) DeviceLastUsed(ctx context.Context) ([]contracts.DeviceLastUsed, error) {
+	var out []contracts.DeviceLastUsed
+	err := c.do(ctx, http.MethodGet, "/devices/last-used", nil, &out)
+	return out, err
+}
+
+// MeshSettings is this host's mesh settings (GET /devices/settings): the
+// zero value when none were ever set.
+func (c *Client) MeshSettings(ctx context.Context) (contracts.MeshSettings, error) {
+	var out contracts.MeshSettings
+	err := c.do(ctx, http.MethodGet, "/devices/settings", nil, &out)
+	return out, err
+}
+
+// SetMeshSettings records this host's mesh settings (PUT
+// /devices/settings). Only this host's own user may: a relayed write is
+// refused.
+func (c *Client) SetMeshSettings(ctx context.Context, s contracts.MeshSettings) (contracts.MeshSettings, error) {
+	var out contracts.MeshSettings
+	err := c.do(ctx, http.MethodPut, "/devices/settings", s, &out)
+	return out, err
+}
+
 // --- Templates (spec §6) ---
 
 // Template fetches by id or name; used_by is dropped — callers wanting
@@ -1138,7 +1393,9 @@ func (c *Client) RemoveHandRaiser(ctx context.Context, sessionID string) error {
 // Append posts one standalone event (envelope minus seq/timestamp); the
 // client's actor fills the envelope unless the caller set one.
 func (c *Client) Append(ctx context.Context, env *contracts.Envelope) error {
-	if env.Actor == "" {
+	if a, ok := meshActor(ctx); ok {
+		env.Actor = a // a relayed device's action is that device's (D8)
+	} else if env.Actor == "" {
 		env.Actor = c.actor
 	}
 	return c.do(ctx, http.MethodPost, "/events", env, env)
@@ -1196,6 +1453,24 @@ func (c *Client) Stream(ctx context.Context, since int64, sessionID string, type
 		}
 	}()
 	return ch, nil
+}
+
+// LatestSeq is the seq of the newest event matching sessionID and types
+// (0 if none): where a reader that has just loaded current state starts
+// following. It pages through GET /events, which caps each batch, so the
+// answer is the true latest, not the last of the first batch.
+func (c *Client) LatestSeq(ctx context.Context, sessionID string, types []string) (int64, error) {
+	var since int64
+	for {
+		evs, err := c.Events(ctx, since, sessionID, types)
+		if err != nil {
+			return since, err
+		}
+		if len(evs) == 0 {
+			return since, nil
+		}
+		since = evs[len(evs)-1].Seq
+	}
 }
 
 // Events fetches one filtered batch after the cursor (capped server-side;
@@ -1275,4 +1550,13 @@ func (c *Client) MetricsPipelineRuns(ctx context.Context, sessionID string) ([]c
 	var out []contracts.PipelineRun
 	err := c.do(ctx, http.MethodGet, "/metrics/pipelines?"+q.Encode(), nil, &out)
 	return out, err
+}
+
+func firstNonEmpty(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }

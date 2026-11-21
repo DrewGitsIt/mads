@@ -12,6 +12,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/linkwrap"
+	"github.com/drewkidwell/mads/services/router/internal/safeserve"
 )
 
 // get_session_turns reads the subject's transcript, not its
@@ -387,6 +388,7 @@ func (s *server) handleOrchestrateGetTurns(w http.ResponseWriter, r *http.Reques
 		status = http.StatusBadRequest
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	safeserve.Apply(w.Header(), status) // a transcript's text, never a page
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(text))
 }

@@ -11,6 +11,7 @@ import (
 	"net/http"
 
 	"github.com/drewkidwell/mads/services/router/internal/attachments"
+	"github.com/drewkidwell/mads/services/router/internal/safeserve"
 )
 
 // Attachments are files a user pastes, drops or picks into a composer (see
@@ -96,7 +97,10 @@ func (s *server) handleDeleteAttachment(ownerOf attachmentOwnerFunc) http.Handle
 }
 
 // handleGetAttachment serves the original file, for opening a thumbnail
-// full size. inline, so an image or text file shows rather than downloads.
+// full size. inline, so an image or text file shows rather than downloads;
+// anything else (HTML, SVG, ...) downloads. The file's bytes are whoever
+// attached it — a paired device at chat level can — so it must never run
+// as a page on this origin (safeserve).
 func (s *server) handleGetAttachment(ownerOf attachmentOwnerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.attachmentsReady(w) {
@@ -112,7 +116,7 @@ func (s *server) handleGetAttachment(ownerOf attachmentOwnerFunc) http.HandlerFu
 			return
 		}
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": a.Name}))
-		http.ServeFile(w, r, a.Path)
+		http.ServeFile(safeserve.Writer(w), r, a.Path)
 	}
 }
 
@@ -132,7 +136,7 @@ func (s *server) handleGetAttachmentThumbnail(ownerOf attachmentOwnerFunc) http.
 		}
 		// Attachment ids are never reused, so a thumbnail never changes.
 		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
-		http.ServeFile(w, r, p)
+		http.ServeFile(safeserve.Writer(w), r, p)
 	}
 }
 

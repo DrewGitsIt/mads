@@ -71,7 +71,7 @@ export function useLinkCommandState(
       heard = true;
       setPipelineRunning(envelope.type === "pipeline.started");
     });
-    eventsReady()
+    eventsReady(sessionId)
       .then(() => (cancelled ? [] : routerClient.metricsPipelineRuns(sessionId)))
       .then((runs) => {
         if (!cancelled && !heard) setPipelineRunning(runs.some((r) => r.outcome === "running"));

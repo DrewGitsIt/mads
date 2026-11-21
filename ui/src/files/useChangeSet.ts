@@ -82,13 +82,13 @@ export function useChangeSet(routerClient: RouterClient, sessionId: string, vs: 
   // this read start.
   useEffect(() => {
     let cancelled = false;
-    void eventsReady().then(() => {
+    void eventsReady(sessionId).then(() => {
       if (!cancelled) fetchNow();
     });
     return () => {
       cancelled = true;
     };
-  }, [fetchNow]);
+  }, [fetchNow, sessionId]);
 
   // A new session must not show the previous session's files.
   useEffect(() => {

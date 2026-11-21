@@ -33,14 +33,37 @@ export class StagedAttachments {
   private readonly listeners = new Set<() => void>();
   /** Keys removed while their upload was in flight: delete the file when it lands. */
   private readonly abandoned = new Set<string>();
+  /**
+   * Each item's current upload attempt. A retarget starts a new attempt, so a
+   * reply for an older one (an upload to the device we just left) is stale:
+   * its file is deleted where it landed, never adopted.
+   */
+  private readonly attempts = new Map<string, number>();
+  /**
+   * The picked/pasted files themselves, kept only by a list that can change
+   * device before it's sent (the launchpad, mesh mode) so they can be sent
+   * again. A picked or dropped File is a handle to the file on disk; a pasted
+   * image is held in memory until the send, a remove or a clear lets go.
+   */
+  private readonly files = new Map<string, Blob>();
 
   constructor(
     private ownerValue: AttachmentOwner,
-    private readonly client: RouterClient,
+    private client: RouterClient,
+    private readonly retainFiles = false,
   ) {}
 
   get owner(): AttachmentOwner {
     return this.ownerValue;
+  }
+
+  /**
+   * Where a staged file's bytes (or thumbnail) are served: from the Router
+   * this list uploaded it through, which after a retarget may not be the one
+   * the surrounding UI is about to use.
+   */
+  attachmentUrl(attachmentId: string, variant?: "thumbnail"): string {
+    return this.client.attachmentUrl(this.ownerValue, attachmentId, variant);
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -73,24 +96,70 @@ export class StagedAttachments {
       },
     }));
     this.set([...this.items, ...staged.map((s) => s.item)]);
-    const owner = this.ownerValue;
     for (const { file, item } of staged) {
-      this.client.uploadAttachment(owner, file, item.name).then(
-        (attachment) => {
-          if (this.abandoned.delete(item.key)) {
-            void this.client.deleteAttachment(owner, attachment.id).catch(() => {});
-            return;
-          }
-          this.update(item.key, { status: "ready", attachment });
-        },
-        (err: unknown) => {
-          this.abandoned.delete(item.key);
-          this.update(item.key, {
-            status: "failed",
-            error: err instanceof Error ? err.message : String(err),
-          });
-        },
-      );
+      if (this.retainFiles) this.files.set(item.key, file);
+      this.upload(item.key, file, item.name);
+    }
+  }
+
+  private upload(key: string, file: Blob, name: string): void {
+    const attempt = (this.attempts.get(key) ?? 0) + 1;
+    this.attempts.set(key, attempt);
+    const owner = this.ownerValue;
+    const client = this.client;
+    client.uploadAttachment(owner, file, name).then(
+      (attachment) => {
+        if (this.attempts.get(key) !== attempt) {
+          // Retargeted (or removed) while this was in flight.
+          void client.deleteAttachment(owner, attachment.id).catch(() => {});
+          return;
+        }
+        if (this.abandoned.delete(key)) {
+          void client.deleteAttachment(owner, attachment.id).catch(() => {});
+          return;
+        }
+        this.update(key, { status: "ready", attachment });
+      },
+      (err: unknown) => {
+        if (this.attempts.get(key) !== attempt) return;
+        this.abandoned.delete(key);
+        this.update(key, {
+          status: "failed",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      },
+    );
+  }
+
+  /**
+   * Moves a not-yet-sent list to another device's Router (mesh mode: the
+   * launchpad's "on" pill changed). Files already uploaded are deleted
+   * where they are, and every kept file uploads again, under a fresh draft,
+   * through `client`. A no-op for the client it already uses.
+   */
+  retarget(client: RouterClient): void {
+    if (client === this.client) return;
+    const oldClient = this.client;
+    const oldOwner = this.ownerValue;
+    this.client = client;
+    if ("draft" in oldOwner) this.ownerValue = { draft: newDraftId() };
+    for (const item of this.items) {
+      this.attempts.set(item.key, (this.attempts.get(item.key) ?? 0) + 1);
+      if (item.status === "ready" && item.attachment) {
+        void oldClient.deleteAttachment(oldOwner, item.attachment.id).catch(() => {});
+      }
+    }
+    this.abandoned.clear();
+    this.set(
+      this.items.map((i) =>
+        this.files.has(i.key)
+          ? { key: i.key, name: i.name, size: i.size, status: "uploading" as const }
+          : { ...i, status: "failed" as const, attachment: undefined, error: "Attach this file again" },
+      ),
+    );
+    for (const item of this.items) {
+      const file = this.files.get(item.key);
+      if (file) this.upload(item.key, file, item.name);
     }
   }
 
@@ -99,6 +168,7 @@ export class StagedAttachments {
     const item = this.items.find((i) => i.key === key);
     if (!item) return;
     this.set(this.items.filter((i) => i.key !== key));
+    this.files.delete(key);
     if (item.status === "uploading") this.abandoned.add(key);
     else if (item.attachment) {
       void this.client.deleteAttachment(this.ownerValue, item.attachment.id).catch(() => {});
@@ -107,6 +177,7 @@ export class StagedAttachments {
 
   /** After a send: the files now belong to the message, so they stay on disk. */
   clear(): void {
+    this.files.clear();
     this.set(EMPTY);
   }
 
@@ -117,6 +188,8 @@ export class StagedAttachments {
    */
   rehome(owner: AttachmentOwner): void {
     this.ownerValue = owner;
+    // Sent: the session has them now, and its device can't change.
+    this.files.clear();
   }
 
   private update(key: string, patch: Partial<StagedAttachment>): void {
@@ -149,7 +222,7 @@ const LAUNCHPAD = "launchpad";
 export function stagedForLaunchpad(client: RouterClient): StagedAttachments {
   let list = lists.get(LAUNCHPAD);
   if (!list) {
-    list = new StagedAttachments({ draft: newDraftId() }, client);
+    list = new StagedAttachments({ draft: newDraftId() }, client, true);
     lists.set(LAUNCHPAD, list);
   }
   return list;

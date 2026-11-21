@@ -43,13 +43,21 @@ function linksBridge() {
   return typeof window !== "undefined" ? window.mads?.links : undefined;
 }
 
-/** Whether openFile can open anything: only Electron's main can. */
-export function canOpenFiles(): boolean {
-  return !!linksBridge();
+/**
+ * Whether openFile can open anything: only Electron's main can, and only
+ * this machine's files (`remote`: see getLinkOpener).
+ */
+export function canOpenFiles(opts?: { remote?: boolean }): boolean {
+  return !opts?.remote && !!linksBridge();
 }
 
-export function getLinkOpener(): LinkOpener {
-  const bridge = linksBridge();
+/**
+ * `remote`: the links belong to a session on another device (mesh mode).
+ * Its file paths name files over there, which this machine's main can't
+ * open, so only web links open — the same as a plain browser.
+ */
+export function getLinkOpener(opts?: { remote?: boolean }): LinkOpener {
+  const bridge = opts?.remote ? undefined : linksBridge();
   if (!bridge) return browserOpener;
   return {
     open: (href, baseDir) => bridge.open(href, baseDir) as Promise<OpenOutcome>,

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { useMeshLive } from "./router/mesh";
 import { Banner } from "./components/Banner/Banner";
 import { ErrorBoundary } from "./components/ErrorBoundary/ErrorBoundary";
 import { ToastViewport } from "./components/Toast/Toast";
@@ -11,6 +12,7 @@ import { useCommandPaletteData } from "./features/command-palette/state/useComma
 import { RetroSurface } from "./features/retro/RetroSurface";
 import { SessionsSurface } from "./features/sessions/SessionsSurface";
 import { SettingsSurface } from "./features/settings/SettingsSurface";
+import { PairRequestWatcher } from "./features/settings/sections/paired/pairing/PairRequestWatcher";
 import { applyTheme } from "./features/settings/theme/applyTheme";
 import { applyMotion } from "./features/settings/theme/applyMotion";
 import { FirstRunWizard } from "./onboarding/FirstRunWizard";
@@ -114,6 +116,9 @@ export function App() {
   const { sessions, tasks, openTaskCounts } = useCommandPaletteData();
 
   useAttentionBadge(sessions, openTaskCounts);
+  // Mesh mode: the devices this window views, kept live for the rail's
+  // toggle and Settings → Paired devices (docs/MESH-MODE-DESIGN.md D3).
+  useMeshLive();
 
   // Every surface is only as fresh as the window's live-event stream: when it
   // can't connect, the rail, task counts and pipeline state keep showing
@@ -261,6 +266,8 @@ export function App() {
                 );
               })()}
             </ErrorBoundary>
+            {/* A device asking to pair waits on this one's user, whichever surface shows. */}
+            <PairRequestWatcher />
           </ToastViewport>
         </div>
       </div>

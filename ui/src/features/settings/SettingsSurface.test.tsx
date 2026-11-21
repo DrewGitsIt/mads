@@ -4,6 +4,8 @@ import { SettingsSurface } from "./SettingsSurface";
 import { guardLeave } from "../../appNavigation";
 import type { Config } from "../../router/types";
 import { FIELD_SECTION, SECTION_IDS, SECTION_LABELS, SECTION_LEDES, type SectionId } from "./sections";
+import { FakeEventSource } from "../../router/testFakeEventSource";
+import { resetDevicesForTests } from "../../router/devices";
 import {
   fixtureConfig,
   fixturePreflightChecks,
@@ -23,6 +25,8 @@ let server: { config: Config; rejectPut?: { field: string; message: string }[]; 
 
 function stubRouter() {
   server = { config: { ...fixtureConfig }, puts: [] };
+  // Paired devices follows the window's event bus.
+  vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal(
     "fetch",
     vi.fn().mockImplementation((input: URL | string, init?: RequestInit) => {
@@ -50,6 +54,8 @@ function stubRouter() {
       if (url.includes("/providers/behaviors")) return Promise.resolve(jsonResponse(fixtureProviderBehaviors));
       if (url.includes("/providers")) return Promise.resolve(jsonResponse(fixtureProviders));
       if (url.includes("/workspaces")) return Promise.resolve(jsonResponse([]));
+      if (url.includes("/devices/self")) return Promise.resolve(jsonResponse({ name: "pop-os", platform: "linux", hosts_sessions: true }));
+      if (url.includes("/devices")) return Promise.resolve(jsonResponse([]));
       if (url.includes("/version")) return Promise.resolve(jsonResponse(fixtureVersionInfo));
       return Promise.resolve(jsonResponse(server.config));
     }),
@@ -58,6 +64,7 @@ function stubRouter() {
 
 describe("SettingsSurface", () => {
   afterEach(() => {
+    resetDevicesForTests();
     vi.unstubAllGlobals();
     window.location.hash = "";
   });
@@ -90,8 +97,11 @@ describe("SettingsSurface", () => {
       expect(within(section as HTMLElement).getAllByRole("heading", { level: 2 })[0].textContent).toBe(
         SECTION_LABELS[id],
       );
-      if (SECTION_LEDES[id]) expect(section.textContent).toContain(SECTION_LEDES[id]);
+      // Paired devices names this device in its lede ("on this pop-os").
+      if (SECTION_LEDES[id] && id !== "devices") expect(section.textContent).toContain(SECTION_LEDES[id]);
     }
+    await waitFor(() => expect(document.getElementById("devices")!.textContent).toContain("with mads on this pop-os"));
+    expect(within(document.getElementById("devices")!).getByText("Live")).toBeTruthy();
     // Live sections say so beside their lede.
     expect(within(document.getElementById("appearance")!).getByText("Live")).toBeTruthy();
     expect(within(document.getElementById("experimental")!).getByText("Live")).toBeTruthy();

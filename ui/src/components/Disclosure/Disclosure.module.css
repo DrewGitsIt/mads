@@ -1,0 +1,41 @@
+.disclosure > .summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--space-3) var(--space-4);
+  list-style: none;
+  cursor: pointer;
+}
+.disclosure > .summary::-webkit-details-marker {
+  display: none;
+}
+.disclosure > .summary::before {
+  content: "\25B8";
+  width: 10px;
+  color: var(--text3);
+}
+.disclosure[open] > .summary::before {
+  content: "\25BE";
+}
+.summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--r-sm);
+}
+.summaryLabel {
+  flex: 1;
+  font: 500 var(--fs-ui) var(--sans);
+  color: var(--text);
+}
+.inline > .summary {
+  padding: var(--space-1) 0;
+  gap: 6px;
+}
+.inline > .summary .summaryLabel {
+  flex: none;
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--text2);
+}
+.body {
+  padding: 0 0 var(--space-1);
+}

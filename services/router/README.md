@@ -409,6 +409,116 @@ the Router picks up a new build without a restart.
   the CORS policy above is for — and Electron's own dev fallback still points at
   `VITE_DEV_SERVER_URL` when set (`ui/electron/main.ts`).
 
+### Mesh mode (viewer side)
+
+`internal/mesh` wraps the API inside `localguard` and the front door
+([docs/MESH-MODE-DESIGN.md](../../docs/MESH-MODE-DESIGN.md) D3/D4). The stack,
+outermost first, is localguard → front door → CORS → mesh → API (`meshLayer` in
+`main.go`). Every `/peers…` path and every forwarded session path needs the
+install token, because `mesh.Claims` keeps them from being taken for the exempt
+static UI. A session-scoped token is refused. With no peer registered, mesh
+passes everything through. Peers are the Data Service's `/peers` registry;
+only the rows this node views (`contracts.Peer.IsViewed`) are listed, probed
+or routed to. A paired-only device (`mads pair`, docs/MESH-AUTH-DESIGN.md A3)
+isn't one.
+
+**Peer list:**
+- `GET /peers`: every peer plus its live `reachability`, `reason`, `rtt_ms`,
+  `mads_commit` and `access` (`contracts.PeerStatus`).
+- `POST /peers {dns_name | mesh_url, fingerprint?, name?}`: pins the device's
+  key (`fingerprint`, from `mads device` on it) and probes its `/mesh/hello`
+  over that pinned TLS connection first. Answers 422 unless it's
+  `connected`: `peer_unpaired` with no fingerprint (and no paired row of
+  that `name` to take one from), `peer_denied` if the key it proves isn't
+  the pinned one. A new row is stored pinned (`pairing.how` accept) with no
+  grant: viewing a device lets it do nothing here. `mesh_url` is stored as
+  `http://host:port` (the form the Data Service validates) and always
+  dialled with TLS.
+- `PUT /peers/{peer} {name?, hidden?}`, `DELETE /peers/{peer}`. `DELETE` stops
+  viewing the device: a device that is also paired keeps its row and pairing,
+  marked not viewed (`mads pair --revoke` unpairs). Both edit the Data
+  Service's current row with a conditional write (`If-Match`), retried once,
+  never this Router's cached copy. `POST /peers` naming a paired device that
+  isn't viewed gives that row its viewed side, when the device proves the
+  key that row pins in the TLS handshake; otherwise it's refused (another
+  key) or the usual name clash.
+- A request carrying `X-Mads-Mesh-Peer` (relayed by this node's Mesh
+  Service, present even if empty) is answered by this node alone: no
+  `/peers…` (403 `relayed`), no implicit `/sessions/{id}/…` forwarding, no
+  `scope=all` fan-out (the scope is dropped), no `/links` fan-out. So two
+  nodes that view each other never bounce a request, and a device paired
+  here never reaches this node's peers through it. It also marks the
+  request's context (`dataclient.WithMeshRelay`), so every Data Service
+  write made with that context carries the mark and is never granted
+  admin, and carries the device's authenticated `X-Mads-Actor`
+  (`dataclient.WithMeshActor`): the actor of those writes and of the events
+  appended for them. Work detached onto a fresh context doesn't carry
+  either; none of it writes peers.
+- `GET /events` for a relayed request below admin (`X-Mads-Mesh-Level`, set
+  by the Mesh Service) leaves out `peer.*` and `device.*`: the device
+  registry isn't a viewing device's to read.
+- `GET /peers/candidates`: tailnet devices from `tailscale status --json`,
+  already-added ones marked with their live state. Others aren't probed
+  (nothing is dialled before its key is pinned) and read `unpaired`.
+
+**Routing:**
+- Every connection to a peer is mutual TLS 1.3 (`internal/mesh/dial.go`):
+  this Router presents its device key (`$MADS_HOME/device.key`) as its
+  client certificate and accepts the peer only if its key is the row's
+  `fingerprint`. A row without one is never dialled (`unpaired`); there is
+  no plaintext fallback (a plain-HTTP Mesh Service reads `unreachable`).
+  One keep-alive transport per pinned key and address, HTTP/2 when offered,
+  so probes, the index, links and forwarded requests share a connection.
+  It sends only https to that peer's address, and a peer's redirect is
+  never followed.
+- Bytes the Router doesn't control — attachments (a paired chat device can
+  attach), exports, the orchestrate turns text, and every peer answer — go
+  out under `internal/safeserve`: nosniff, CSP `sandbox; default-src 'none'`,
+  and any type but JSON, an event stream, text or a raster image as an
+  `application/octet-stream` attachment, so none can run as a page on this
+  origin.
+- Every peer answer relayed to the UI (forwards, `/peers/{peer}/…`, streams,
+  downloads) is sanitized: a redirect becomes `502 peer_redirect` (never a
+  `Location` for the browser to follow on this origin); only headers that
+  describe the body survive; every answer is `nosniff` and CSP-sandboxed,
+  and any type but JSON, an event stream, text or a raster image is served
+  as an `application/octet-stream` attachment.
+- `/peers/{peer}/<path>` is forwarded to that peer's Mesh Service. Origin,
+  Referer, Cookie, `Sec-Fetch-*`, `Authorization` and `Proxy-Authorization` are
+  stripped. Streams are flushed per write. This machine's install token never
+  goes to a peer. The peer's Mesh Service identifies this node by its device
+  certificate (and, by default, tailnet identity too) and sends its own
+  node's token to its own Router.
+- `/sessions/{id}[/...]` for a session that lives on a peer goes to that
+  peer. The id comes from the session index, refreshed every 15 s, or from
+  asking connected peers on a miss. A session this node's Data Service knows
+  always stays local.
+- `GET /sessions?scope=all` merges this node's list with every non-hidden
+  peer's, adding `host` (`contracts.SessionHost`) to each row. An unreadable
+  peer contributes its last-known rows with `host.reachable: false`.
+- `GET /links?session_ids=` naming peer sessions (indexed on a peer and
+  unknown to the local Data Service: local wins, as for implicit routing;
+  the check is remembered, re-checked in the background after a minute,
+  and dropped when the session is deleted through this Router): the local
+  API answers for every id, each owning peer's part comes from its
+  last-known links, and the union comes back deduped by link id, ordered
+  by creation then id (rows with an unreadable `created_at` last). Links
+  never span hosts. Each request also asks for the peer's ids to be read
+  again: one refresh per peer at a time, later requests joining it or the
+  next one. A request waits up to 3 s for it; a dark peer is never
+  dialled. A peer that answers 404 has linked sessions off: its sessions
+  have no links. Any other failure leaves last-known standing. With no peer ids, or on a request a peer's Mesh
+  Service relayed (`X-Mads-Mesh-Peer`, even empty), the API answers alone.
+
+**Reachability:**
+- Each peer is probed every 5 s.
+- A new state must hold 10 s before it's appended as
+  `peer.reachability_changed`. The first connect, and a first `unpaired`,
+  are logged at once.
+- States: `connected`, `unreachable`, `denied` (it refused this device, or
+  proved a key other than the pinned one), `version_mismatch` (another
+  `mesh_api`), `unpaired` (no key pinned).
+
 ## Critical paths
 
 - **Model-tier mapping is a documented simplification, not real tier selection.**

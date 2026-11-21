@@ -223,6 +223,49 @@ describe("LinkChooserDialog", () => {
       expect(radios[0].checked).toBe(true);
     });
 
+    it("offers only sessions on the device the new session starts on", () => {
+      const peer = { name: "pop-os", self: false, reachable: true };
+      const mixed = [
+        makeSession({ id: "a", name: "investigator" }),
+        makeSession({ id: "r", name: "remote one", host: peer }),
+      ];
+      const onStage = vi.fn();
+      const { unmount } = render(
+        <LinkChooserDialog
+          sessionIds={[]}
+          sessions={mixed}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+          stagedHolder={{ label: "This session (not started yet)", onStage }}
+          // A stale staged pick on another device drops out.
+          initialSubjectIds={["a", "r"]}
+        />,
+      );
+      const remote = screen.getByRole("checkbox", { name: /remote one/ }) as HTMLInputElement;
+      expect(remote.disabled).toBe(true);
+      expect(remote.checked).toBe(false);
+      expect(remote.closest("label")?.textContent).toMatch(/different device/);
+      expect(remote.closest("label")?.getAttribute("title")).toMatch(/^Different device/);
+      expect((screen.getByRole("checkbox", { name: "investigator" }) as HTMLInputElement).disabled).toBe(false);
+      fireEvent.click(screen.getByText("Stage 1 link"));
+      expect(onStage.mock.calls[0][0].map((l: { subject_session_id: string }) => l.subject_session_id)).toEqual(["a"]);
+      unmount();
+
+      // Started on the peer: the other way round.
+      render(
+        <LinkChooserDialog
+          sessionIds={[]}
+          sessions={mixed}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+          host={peer}
+          stagedHolder={{ label: "This session (not started yet)", onStage: vi.fn() }}
+        />,
+      );
+      expect((screen.getByRole("checkbox", { name: /remote one/ }) as HTMLInputElement).disabled).toBe(false);
+      expect((screen.getByRole("checkbox", { name: /investigator/ }) as HTMLInputElement).disabled).toBe(true);
+    });
+
     it("disables the stage button until a subject is checked", () => {
       renderStaged();
       const button = screen.getByText("Stage 0 links").closest("button");

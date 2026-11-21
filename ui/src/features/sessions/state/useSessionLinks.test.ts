@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { LINK_REFETCH_COALESCE_MS, LINK_REFETCH_MAX_WAIT_MS, useSessionLinks } from "./useSessionLinks";
+import { LINK_PEER_POLL_MS, LINK_REFETCH_COALESCE_MS, LINK_REFETCH_MAX_WAIT_MS, useSessionLinks } from "./useSessionLinks";
+import { clearSessionHostsForTests, recordSessionHosts } from "../../../router/sessionHosts";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import { router, RouterHTTPError } from "../../../router/client";
 import { FLAGS } from "../../../featureFlags";
@@ -134,6 +135,95 @@ describe("useSessionLinks", () => {
       await tick(LINK_REFETCH_COALESCE_MS);
 
       expect(fetchedIds()).toEqual(["s1", "s2"]);
+    });
+
+    it("re-reads only the sessions on other devices, every peer poll", async () => {
+      recordSessionHosts([
+        { id: "r1", host: { name: "pop-os", self: false, reachable: true } },
+        { id: "r2", host: { name: "pop-os", self: false, reachable: true } },
+      ]);
+      try {
+        const { result } = await mountSettled(["s1", "r1", "r2"]);
+        // A link made on the peer: its event never reaches this window.
+        serverLinks = [makeLink({ id: "lr", granting_session_id: "r1", subject_session_id: "r2" })];
+        await tick(LINK_PEER_POLL_MS - 1);
+        expect(getLinks).not.toHaveBeenCalled();
+        await tick(1);
+        expect(fetchedIds()).toEqual(["r1", "r2"]);
+        expect(result.current).toEqual(serverLinks);
+
+        // Deleted on the peer: the next poll drops it.
+        serverLinks = [];
+        await tick(LINK_PEER_POLL_MS);
+        expect(result.current).toEqual([]);
+      } finally {
+        clearSessionHostsForTests();
+      }
+    });
+
+    it("pauses the peer poll while the window is hidden, and reads at once when shown", async () => {
+      recordSessionHosts([{ id: "r1", host: { name: "pop-os", self: false, reachable: true } }]);
+      const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      try {
+        await mountSettled(["r1"]);
+        await tick(LINK_PEER_POLL_MS * 3);
+        expect(getLinks).not.toHaveBeenCalled();
+        visibility.mockReturnValue("visible");
+        act(() => {
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+        await tick();
+        expect(fetchedIds()).toEqual(["r1"]);
+      } finally {
+        visibility.mockRestore();
+        clearSessionHostsForTests();
+      }
+    });
+
+    it("keeps polling a session whose host was last listed unreachable", async () => {
+      // That mark goes stale (This device showing stops re-listing peers);
+      // the Router answers a dark host from its cache without dialling it.
+      recordSessionHosts([
+        { id: "r1", host: { name: "pop-os", self: false, reachable: false } },
+        { id: "r2", host: { name: "spark", self: false, reachable: true } },
+      ]);
+      try {
+        await mountSettled(["r1", "r2"]);
+        await tick(LINK_PEER_POLL_MS);
+        expect(fetchedIds()).toEqual(["r1", "r2"]);
+      } finally {
+        clearSessionHostsForTests();
+      }
+    });
+
+    it("polls a remote conversation's session the session list hasn't placed", async () => {
+      // Deep link, or This device showing: sessionHosts knows nothing.
+      const { result } = renderHook(() => useSessionLinks(["r9"], { remote: true }));
+      await tick();
+      getLinks.mockClear();
+      serverLinks = [makeLink({ id: "lr", granting_session_id: "r9", subject_session_id: "r8" })];
+      await tick(LINK_PEER_POLL_MS);
+      expect(fetchedIds()).toEqual(["r9"]);
+      expect(result.current).toEqual(serverLinks);
+    });
+
+    it("shares one peer-poll clock across hooks", async () => {
+      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+      try {
+        renderHook(() => useSessionLinks(["s1"]));
+        renderHook(() => useSessionLinks(["r1"], { remote: true }));
+        renderHook(() => useSessionLinks(["r2"], { remote: true }));
+        await tick();
+        expect(setIntervalSpy.mock.calls.filter(([, ms]) => ms === LINK_PEER_POLL_MS)).toHaveLength(1);
+      } finally {
+        setIntervalSpy.mockRestore();
+      }
+    });
+
+    it("polls nothing when every session is on this device", async () => {
+      await mountSettled(["s1", "s2"]);
+      await tick(LINK_PEER_POLL_MS * 3);
+      expect(getLinks).not.toHaveBeenCalled();
     });
 
     it("accepts a JSON-string payload", async () => {

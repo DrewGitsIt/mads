@@ -4,7 +4,7 @@ GOBIN := $(CURDIR)/bin
 LINT  := $(GOBIN)/golangci-lint
 
 .PHONY: build test lint check tidy ui-deps app e2e-smoke ui-smoke release-gate check-migrations
-.PHONY: services ui mads data router session pipeline
+.PHONY: services ui mads data router session pipeline mesh
 
 build: ui-deps
 	go build ./...
@@ -13,6 +13,7 @@ build: ui-deps
 	go build -o $(GOBIN)/router ./services/router
 	go build -o $(GOBIN)/session ./services/session
 	go build -o $(GOBIN)/pipeline ./services/pipeline
+	go build -o $(GOBIN)/mesh ./services/mesh
 	npm --prefix ui run build
 
 test: ui-deps
@@ -43,7 +44,7 @@ ui-deps:
 # What differs is how each one reaches a running instance.
 
 # Every Go binary, no UI, no npm. The whole set is ~2s warm.
-services: mads data router session pipeline
+services: mads data router session pipeline mesh
 
 mads:
 	go build -o $(GOBIN)/mads ./cmd/mads
@@ -73,6 +74,12 @@ session:
 #   ./bin/router -addr localhost:17373 -session-cmd ./bin/session
 router:
 	go build -o $(GOBIN)/router ./services/router
+
+# A new process, never a restart of anything else: the Mesh Service only
+# forwards to the Router over loopback (docs/MESH-MODE-DESIGN.md). Restart
+# it alone to pick up a rebuild.
+mesh:
+	go build -o $(GOBIN)/mesh ./services/mesh
 
 # Needs a restart, but a survivable one: state lives in ~/.mads/mads.db and
 # the Router's watchers re-subscribe with backoff. In-flight SSE streams break

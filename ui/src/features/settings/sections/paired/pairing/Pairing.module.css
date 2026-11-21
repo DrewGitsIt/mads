@@ -1,0 +1,367 @@
+/* The pairing, introduce and remove dialogs (docs/mockups/paired-devices-v3.html .Pairing_*, .Remove_*). */
+
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.choice {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  gap: var(--space-3);
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg0);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.choice:hover:not(:disabled) {
+  border-color: var(--text3);
+  background: var(--bg2);
+}
+.choice:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.choiceIcon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  background: var(--bg3);
+  color: var(--text2);
+  font: 700 13px var(--mono);
+}
+.choiceTitle {
+  font: 600 var(--fs-ui) var(--sans);
+}
+.choiceHelp {
+  display: block;
+  margin-top: 2px;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+.choiceCaret {
+  transform: rotate(-45deg);
+  color: var(--text3);
+}
+
+.codeString,
+.textarea {
+  font-variant-numeric: slashed-zero;
+  font-feature-settings: "zero" 1;
+}
+.codeString {
+  font: 500 13px/1.6 var(--mono);
+  color: var(--text);
+  word-break: break-all;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg0);
+  user-select: all;
+}
+.codeRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.timer {
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+.help {
+  margin: 0;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.label {
+  font: 500 var(--fs-body) var(--sans);
+  color: var(--text);
+}
+.textarea {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg0);
+  color: var(--text);
+  font: 500 13px/1.5 var(--mono);
+  letter-spacing: 0.03em;
+  word-break: break-all;
+}
+.textarea::placeholder {
+  color: var(--text3);
+}
+.error {
+  margin: 0;
+  color: var(--bad-fg);
+  font-size: var(--fs-sm);
+}
+.preview {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg0);
+}
+.preview b {
+  color: var(--text);
+  font-weight: 600;
+}
+.meta {
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  font-variant-numeric: slashed-zero;
+  font-feature-settings: "zero" 1;
+}
+.ask {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg0);
+}
+.compare {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.raise {
+  display: flex;
+  gap: var(--space-2);
+  color: var(--warn-fg);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.raise::before {
+  content: "!";
+  flex: none;
+  width: 16px;
+  text-align: center;
+  font-weight: 700;
+  color: var(--warn);
+}
+.looking {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+.spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--bg4);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+  flex: none;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.status {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+.doneMark,
+.failMark {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  flex: none;
+}
+.doneMark {
+  background: var(--ok-soft);
+  color: var(--ok-fg);
+}
+.failMark {
+  background: var(--warn-soft);
+  color: var(--warn-fg);
+}
+.grant {
+  margin: 0;
+  font: 400 var(--fs-chat) / 1.45 var(--sans);
+  color: var(--text);
+}
+.grant b {
+  font-weight: 650;
+}
+.showRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.showText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.showLabel {
+  font: 500 var(--fs-body) var(--sans);
+  color: var(--text);
+}
+.showLabel[data-disabled] {
+  color: var(--text3);
+}
+.showStatus {
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.suggest {
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+.suggest b {
+  color: var(--text2);
+  font-weight: 600;
+}
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+.grid2 button[aria-haspopup] {
+  padding: 7px 10px;
+  background: var(--bg0);
+  border-color: var(--line);
+}
+
+/* Remove device */
+.list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg0);
+}
+.item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px var(--space-3);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--line-soft);
+}
+.item:first-child {
+  border-top: 0;
+}
+.itemName {
+  color: var(--text);
+  font-weight: 600;
+}
+.itemName span {
+  color: var(--text3);
+  font-weight: 400;
+}
+.itemHelp {
+  grid-column: 1 / -1;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+.result {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.note {
+  margin: 0;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg0);
+  color: var(--text2);
+  font-size: var(--fs-body);
+  cursor: pointer;
+}
+.check input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+.check b {
+  color: var(--text);
+  font-weight: 600;
+}
+.check .itemHelp {
+  display: block;
+  margin-top: 2px;
+}
+/* Pair, disabled for a moment after the prompt opens: a thin bar fills
+   under it until it's ready. */
+.arming {
+  position: relative;
+  display: inline-flex;
+}
+.arming::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: -5px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  opacity: 0.6;
+  transform-origin: left;
+  animation: arm 1s linear forwards;
+}
+.arming[data-armed]::after {
+  opacity: 0;
+  transition: opacity var(--dur-fast);
+}
+@keyframes arm {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+.suggestLink {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

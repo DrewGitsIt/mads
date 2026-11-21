@@ -136,6 +136,9 @@ type Options struct {
 	Tokens *localauth.Store
 	Scoped *localauth.Registry
 
+	// Devices serves /devices/... (mesh.Manager.Devices); nil answers 503.
+	Devices http.Handler
+
 	// OriginAllowed says which browser pages CORS lets call the Router —
 	// the same list localguard enforces in front of it (main.go). Nil
 	// grants none.
@@ -348,6 +351,33 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("POST /registry/install", s.handleRegistryInstall)
 	mux.HandleFunc("POST /registry/update", s.handleRegistryUpdate)
 	mux.HandleFunc("POST /registry/publish", s.handleRegistryPublish)
+	// Settings → Paired devices (docs/MESH-AUTH-DESIGN.md D5, D6, D8, D9),
+	// served by the mesh layer (opts.Devices). Registered here so the
+	// front door and the mesh route table (authz) classify each one; the
+	// four an admin device may use over the mesh are Admin there, the rest
+	// Deny.
+	devices := opts.Devices
+	if devices == nil {
+		devices = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "mesh_unavailable", "error": "this Router runs without mesh mode"})
+		})
+	}
+	mux.Handle("GET /devices", devices)
+	mux.Handle("GET /devices/self", devices)
+	mux.Handle("PUT /devices/settings", devices)
+	mux.Handle("GET /devices/activity", devices)
+	mux.Handle("POST /devices/pairing-code", devices)
+	mux.Handle("DELETE /devices/pairing-code/{id}", devices)
+	mux.Handle("POST /devices/pair", devices)
+	mux.Handle("GET /devices/pair/{id}", devices)
+	mux.Handle("GET /devices/pair-requests", devices)
+	mux.Handle("POST /devices/pair-requests/{id}/approve", devices)
+	mux.Handle("POST /devices/pair-requests/{id}/decline", devices)
+	mux.Handle("POST /devices/introduce", devices)
+	mux.Handle("POST /devices/{fp}/introduce", devices)
+	mux.Handle("PUT /devices/{fp}/grant", devices)
+	mux.Handle("DELETE /devices/{fp}", devices)
+	mux.Handle("POST /devices/{fp}/remove-everywhere", devices)
 	mux.Handle("/", opts.StaticHandler)
 	return mux
 }

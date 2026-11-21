@@ -52,3 +52,49 @@ describe("useScrollSpy", () => {
     expect(result.current).toBe(SECTION_IDS[SECTION_IDS.length - 1]);
   });
 });
+
+describe("useScrollSpy, layout changes", () => {
+  it("follows sections that move without a scroll (content loading above or in them)", async () => {
+    const observers: (() => void)[] = [];
+    class FakeResizeObserver {
+      constructor(cb: () => void) {
+        observers.push(cb);
+      }
+      observe() {}
+      disconnect() {}
+    }
+    const prev = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver;
+    try {
+      const container = document.createElement("div");
+      stubGeometry(container, 0);
+      Object.defineProperty(container, "scrollTop", { configurable: true, value: 1000 });
+      Object.defineProperty(container, "clientHeight", { configurable: true, value: 1000 });
+      Object.defineProperty(container, "scrollHeight", { configurable: true, value: 10_000 });
+      const tops = new Map<string, number>(SECTION_IDS.map((id, i) => [id, i * 400 - 1000]));
+      const refs = Object.fromEntries(
+        SECTION_IDS.map((id) => {
+          const el = document.createElement("div");
+          Object.defineProperty(el, "getBoundingClientRect", {
+            configurable: true,
+            value: () => ({ top: tops.get(id)!, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON() {} }),
+          });
+          return [id, { current: el }];
+        }),
+      ) as unknown as SectionRefs;
+      const { result } = renderHook(() => useScrollSpy({ current: container }, refs, true));
+      // Reading line at 1000 + 300: the section whose top is 1200 (index 3).
+      expect(result.current).toBe(SECTION_IDS[3]);
+      // Paired devices' content lands: everything from it down moves up
+      // into the reading line, with no scroll event.
+      const devices = SECTION_IDS.indexOf("devices");
+      for (const [i, id] of SECTION_IDS.entries()) if (i > devices) tops.set(id, tops.get(id)! + 600);
+      tops.set("devices", 1250 - 1000);
+      const { act } = await import("@testing-library/react");
+      act(() => observers.forEach((cb) => cb()));
+      expect(result.current).toBe("devices");
+    } finally {
+      globalThis.ResizeObserver = prev;
+    }
+  });
+});

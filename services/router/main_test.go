@@ -40,7 +40,7 @@ func TestHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", nil), nil, frontDoor{}))
+	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", nil), nil, frontDoor{}, nil))
 	defer srv.Close()
 
 	resp, err := srv.Client().Get(srv.URL + "/health")
@@ -74,7 +74,7 @@ func TestGuardRefusesForgedRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", localguard.DevServerOrigins), nil, frontDoor{}))
+	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", localguard.DevServerOrigins), nil, frontDoor{}, nil))
 	defer srv.Close()
 
 	post := func(host string, headers map[string]string) int {
@@ -151,7 +151,7 @@ func TestProvidersEndpointListsGoose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", nil), nil, frontDoor{}))
+	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "", identity{}, localguard.New("router", "", nil), nil, frontDoor{}, nil))
 	defer srv.Close()
 
 	resp, err := srv.Client().Get(srv.URL + "/providers")

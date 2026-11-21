@@ -102,7 +102,12 @@ export interface ComposerProps {
   prefill?: { text: string; nonce: number };
   /** Fires handleSend once on mount when `initialValue` is set — used to auto-send a session's opening goal. */
   autoSendInitial?: boolean;
-  onSendError?: (message: string) => void;
+  /**
+   * A send failed. `detail` carries the error and what was sent; returning
+   * true takes the message over (the conversation shows it, as a host's
+   * refusal does), and the composer clears as if it had gone.
+   */
+  onSendError?: (message: string, detail?: { error: unknown; text: string; attachments: number }) => boolean | void;
   /**
    * Fires synchronously when the auto-send effect runs, before the send
    * resolves — lets the caller stop treating `initialValue` as pending now
@@ -604,8 +609,8 @@ export function Composer({
       if (result.status === "queued") onQueued?.(result.queued);
       else onSent?.(appendAttachments(text, ready), mentions);
     } catch (err) {
-      onSendError?.(err instanceof Error ? err.message : String(err));
-      return;
+      const taken = onSendError?.(err instanceof Error ? err.message : String(err), { error: err, text, attachments: ready.length });
+      if (taken !== true) return;
     }
     setValue("");
     setCursor(0);

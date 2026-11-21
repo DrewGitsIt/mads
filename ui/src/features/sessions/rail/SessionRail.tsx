@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { RailVisibleOrder } from "../state/selectionFollowsList";
 import type { CSSProperties } from "react";
 import { formatShortcut } from "../../../platform/shortcut";
 import { useLiveShells } from "../../../conversation/ShellDock/useLiveShells";
 import { useShellDockState } from "../../../conversation/ShellDock/dockState";
 import type { ShellInfo } from "../../../conversation/TerminalRenderer/ptyBridge";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
+import { DeviceScopeBar } from "./DeviceScopeBar";
 import { HarnessMark } from "./HarnessMark";
 import { LinkConnector } from "./LinkConnector";
+import { linkBlockedTag } from "../links/linkDraft";
 import { StatusMark } from "./StatusMark";
 import { DelegateRows } from "./DelegateRows";
 import {
@@ -73,6 +76,12 @@ export interface SessionRailProps {
   agentStates?: Record<string, SessionAgentState>;
   selectedId?: string;
   onSelect?: (id: string) => void;
+  /**
+   * The cards as drawn, after every filter and search: where "the next card"
+   * is when the open session goes away (SessionsSurface,
+   * selectionFollowsList.ts).
+   */
+  onVisibleOrder?: (order: RailVisibleOrder) => void;
   /*
    * The rail has no sleep or wake control of its own. ✓ (Done) puts a
    * session to sleep, and the workspace kebab keeps "Sleep now" (also the
@@ -221,6 +230,7 @@ export function SessionRail({
   agentStates = {},
   selectedId,
   onSelect,
+  onVisibleOrder,
   onDelete,
   onSetDone,
   doneMotion,
@@ -387,6 +397,14 @@ export function SessionRail({
   const listRows = searching ? visible : active;
   const doneRows = searching ? [] : doneOrder(done, (row) => row.session);
   const shownDone = doneShowAll ? doneRows : doneRows.slice(0, DONE_PREVIEW);
+  const visibleActiveIds = listRows.flatMap((row) => [row.session.id, ...railDescendants(row).map((s) => s.id)]);
+  const visibleDoneIds = doneOpen ? shownDone.flatMap((row) => [row.session.id, ...railDescendants(row).map((s) => s.id)]) : [];
+  const visibleKey = `${visibleActiveIds.join(",")}|${visibleDoneIds.join(",")}`;
+  useEffect(() => {
+    onVisibleOrder?.({ active: visibleActiveIds, done: visibleDoneIds });
+    // visibleKey stands for both lists' contents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleKey, onVisibleOrder]);
 
   // Reordering is a gesture on the whole active list, so it is only offered
   // while the whole list is what's showing: a drop between two of a filter's
@@ -624,6 +642,7 @@ export function SessionRail({
           </button>
         ))}
       </div>
+      <DeviceScopeBar />
       <div className={styles.list} data-rail-list="active">
         {listRows.map((row) =>
           canReorder ? (
@@ -1270,6 +1289,7 @@ function SessionRow({
       title={linkEdit?.blocked ?? (tooltip || undefined)}
       data-rail-card=""
       data-rail-id={session.id}
+      aria-current={selected || undefined}
       data-unseen={unseen ? "" : undefined}
       // Awake or asleep is drawn by the status line (Idle vs Sleeping, see
       // RailStatusKind); the attribute lets the e2e journeys read which one
@@ -1288,6 +1308,7 @@ function SessionRow({
         linkEdit?.linked ? styles.linkPicked : "",
         linkEdit?.blocked ? styles.linkBlocked : "",
         grip?.dragging ? styles.dragging : "",
+        session.host && !session.host.reachable ? styles.hostUnreachable : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -1379,9 +1400,23 @@ function SessionRow({
         <span className={styles.name}>
           <span className={styles.nameText}>{name}</span>
         </span>
-        {linkEdit?.blocked && <span className={styles.linkBlockedTag}>separate worktree</span>}
+        {linkEdit?.blocked && <span className={styles.linkBlockedTag}>{linkBlockedTag(linkEdit.blocked)}</span>}
         {/* The tint is colour alone; this is the same fact for a screen reader. */}
         {unseen && <span className={styles.srOnly}>New session</span>}
+        {/* Mesh mode: where a session from another device lives. */}
+        {session.host && !session.host.self && (
+          <span
+            className={[styles.hostChip, session.host.reachable ? "" : styles.hostStale].filter(Boolean).join(" ")}
+            title={
+              session.host.reachable
+                ? `Runs on ${session.host.name}`
+                : `${session.host.name} isn't answering — this is its last-known state`
+            }
+            data-rail-host={session.host.name}
+          >
+            {session.host.name}
+          </span>
+        )}
         <HarnessMark provider={session.provider} />
         <span className={styles.when} title={stampTitle}>
           {stamp}
@@ -1455,7 +1490,10 @@ function SessionRow({
         role="group"
         aria-label={`${name} actions`}
       >
-        {linkedSessionsEnabled && (
+        {/* No link button on another device's session: link writes stay
+            on their own host (cross-host links are a v1 non-goal, and the
+            host's Mesh Service refuses them). Its links still show. */}
+        {linkedSessionsEnabled && !(session.host && !session.host.self) && (
           <LinkTrigger
             name={name}
             linkCount={linkCount}

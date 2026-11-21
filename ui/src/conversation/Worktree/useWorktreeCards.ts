@@ -65,7 +65,7 @@ export function useWorktreeCards(client: RouterClient, sessionId: string): Workt
     const unsubscribe = subscribeToEvents({ sessionId, types: WORKTREE_CARD_EVENT_TYPES }, (env) =>
       add([env]),
     );
-    void eventsReady()
+    void eventsReady(sessionId)
       .then(() => (cancelled ? [] : getAllEvents(client, { sessionId, types: WORKTREE_CARD_EVENT_TYPES })))
       .then((envs) => {
         if (!cancelled) add(envs);

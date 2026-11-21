@@ -25,30 +25,65 @@ var ScopedRoutes = []string{
 	"POST /links/{id}/orchestrate/message",
 }
 
-// NewDoor is the Router's front door over mux: the install token on every
-// route but ExemptRoutes, a scoped token on ScopedRoutes only. Requests are
-// classified with mux's own pattern lookup, so an API route can never pass
-// for the static UI.
-func NewDoor(mux *http.ServeMux, tokens *localauth.Store, scoped *localauth.Registry) *localauth.Door {
+// NewDoor is the Router's front door: the install token on every route but
+// ExemptRoutes, a scoped token on ScopedRoutes only. classify is Classify:
+// requests are classified with the mux's own pattern lookup, so an API
+// route can never pass for the static UI.
+func NewDoor(classify func(r *http.Request) string, tokens *localauth.Store, scoped *localauth.Registry) *localauth.Door {
 	return localauth.NewDoor(localauth.DoorOptions{
 		Name:         "router",
 		Store:        tokens,
 		Scoped:       scoped,
-		Classify:     func(r *http.Request) string { _, p := mux.Handler(r); return p },
+		Classify:     classify,
 		Exempt:       ExemptRoutes,
 		ScopedRoutes: ScopedRoutes,
 	})
 }
 
+// LayerPattern is what Classify reports for a path a Layer claims that the
+// route table has no route for: not exempt, not scoped, so the door wants
+// the install token.
+const LayerPattern = "layer"
+
+// Layer is a handler between the front door and the route table — mesh
+// routing (docs/MESH-MODE-DESIGN.md D4). It only ever sees requests the
+// door has admitted.
+type Layer struct {
+	Wrap func(next http.Handler) http.Handler
+	// Claims reports the paths Wrap may serve itself. One the route table
+	// would leave to the static UI ("/", exempt) is classified LayerPattern
+	// instead, so the door doesn't let it through untokened.
+	Claims func(r *http.Request) bool
+}
+
+// Classify is the door's classifier: the pattern mux would serve r with,
+// except that a path layer claims is never the static UI.
+func Classify(mux *http.ServeMux, layer *Layer) func(r *http.Request) string {
+	return func(r *http.Request) string {
+		_, p := mux.Handler(r)
+		if layer != nil && layer.Claims != nil && (p == "/" || p == "") && layer.Claims(r) {
+			return LayerPattern
+		}
+		return p
+	}
+}
+
 // NewHandler is New behind door: the Router's production stack, minus
-// localguard (main.go puts that outermost).
-func NewHandler(opts Options, door func(mux *http.ServeMux) *localauth.Door) http.Handler {
+// localguard (main.go puts that outermost). Order, outermost first: door,
+// CORS, layer, route table. layer (may be nil) therefore only sees
+// authenticated requests, and its own answers get the same CORS headers as
+// the API's.
+func NewHandler(opts Options, door func(classify func(r *http.Request) string) *localauth.Door, layer *Layer) http.Handler {
 	allowed := opts.OriginAllowed
 	if allowed == nil {
 		allowed = func(string) bool { return false }
 	}
 	mux := NewMux(opts)
-	return door(mux).Wrap(withCORS(allowed, mux))
+	var inner http.Handler = mux
+	if layer != nil && layer.Wrap != nil {
+		inner = layer.Wrap(mux)
+	}
+	return door(Classify(mux, layer)).Wrap(withCORS(allowed, inner))
 }
 
 // ownSession holds a scoped caller to its own session: the path's {id}

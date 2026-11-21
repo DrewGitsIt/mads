@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/services/router/internal/job"
@@ -116,8 +118,7 @@ func (s *server) sendWaking(w http.ResponseWriter, r *http.Request, id string, b
 		writeWakeError(w, err)
 		return
 	}
-	_, forged := body["attached"]
-	delete(body, "attached")
+	forged := deleteFold(body, "attached")
 	parts := held.Parts(false)
 	if len(parts) > 0 {
 		body["attached"] = mustJSON(parts)
@@ -146,9 +147,32 @@ func (s *server) messageBody(w http.ResponseWriter, r *http.Request) (map[string
 	r.Body = io.NopCloser(bytes.NewReader(raw))
 	var body map[string]json.RawMessage
 	if json.Unmarshal(raw, &body) != nil || body == nil {
+		// The child reads the first JSON value and ignores the rest, so a
+		// body that's an object followed by anything would pass a forged
+		// field it never shows the Router. Not ours to judge otherwise:
+		// the child answers a malformed body.
+		var first map[string]json.RawMessage
+		if json.NewDecoder(bytes.NewReader(raw)).Decode(&first) == nil {
+			writeErrMsg(w, http.StatusBadRequest, "send message: ", errors.New("the body must be one JSON object"))
+			return nil, false
+		}
 		return nil, true
 	}
 	return body, true
+}
+
+// deleteFold removes every key of body that matches key case-insensitively
+// — the way encoding/json, and so the child, matches a field — and reports
+// whether there was one.
+func deleteFold(body map[string]json.RawMessage, key string) bool {
+	found := false
+	for k := range body {
+		if strings.EqualFold(k, key) {
+			delete(body, k)
+			found = true
+		}
+	}
+	return found
 }
 
 // setMessageBody replaces r's body with body, re-encoded.

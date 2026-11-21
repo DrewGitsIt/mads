@@ -36,7 +36,7 @@ func newTestServerWithData(t *testing.T) (*httptest.Server, string) {
 
 func mustAppend(t *testing.T, c *dataclient.Client, sessionID string, typ contracts.EventType) contracts.Envelope {
 	t.Helper()
-	env := contracts.Envelope{Type: typ, SessionID: sessionID, Actor: "test"}
+	env := contracts.Envelope{Type: typ, SessionID: sessionID}
 	if err := c.Append(context.Background(), &env); err != nil {
 		t.Fatalf("append %s: %v", typ, err)
 	}
@@ -55,10 +55,19 @@ type sseFrame struct {
 // cancel func tears down the connection, simulating a UI subscriber drop.
 func openSSE(t *testing.T, ctx context.Context, url string) (<-chan sseFrame, context.CancelFunc) {
 	t.Helper()
+	return openSSEWith(t, ctx, url, nil)
+}
+
+// openSSEWith is openSSE sending header too.
+func openSSEWith(t *testing.T, ctx context.Context, url string, header http.Header) (<-chan sseFrame, context.CancelFunc) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(ctx)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for k, v := range header {
+		req.Header[k] = v
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	resp, err := http.DefaultClient.Do(req)

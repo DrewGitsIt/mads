@@ -1,4 +1,8 @@
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
+import { HostScopeProvider } from "../../../router/hostScope";
+import { clientForHost, recordSessionHosts, setMeshScope } from "../../../router/mesh";
+import { refreshSessions } from "../../../router/sessionsStore";
+import { HostPill } from "../pills/HostPill";
 import { Button } from "../../../components/Button/Button";
 import { ContentColumn } from "../../../components/ContentColumn/ContentColumn";
 import { Popover } from "../../../components/Popover/Popover";
@@ -16,8 +20,11 @@ import type {
   SessionDefaults,
   Workspace,
   WorktreeTenant,
+  SessionHost,
 } from "../../../router/types";
+import { NEW_SESSION_PLACEHOLDER } from "../../../router/types";
 import { LinkChooserDialog } from "../rail/LinkChooserDialog";
+import { deviceOf } from "../links/linkDraft";
 import { useProviderMatrix } from "../../settings/state/useProviderMatrix";
 import { FolderPill, folderName, recentDirs } from "../pills/FolderPill";
 import { AgentPill } from "../pills/AgentPill";
@@ -174,6 +181,13 @@ export function Launchpad({
   // keypress); the state drives the disabled button and "Starting…" label.
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
+  // Mesh mode (docs/MESH-MODE-DESIGN.md D6): the device the session starts
+  // on. Undefined is this device. Not part of the saved draft: a peer that
+  // was there last time may not be now.
+  const [launchHost, setLaunchHost] = useState<SessionHost | undefined>();
+  const remote = Boolean(launchHost);
+  // Defaults, providers and the create itself come from the chosen device.
+  const client = launchHost ? clientForHost(launchHost) : routerClient;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -183,14 +197,17 @@ export function Launchpad({
   // yet — and POST /sessions moves them to it (attachment_draft). Staged
   // outside component state, so they survive navigating away and back.
   const stagedFiles = stagedForLaunchpad(routerClient);
+  // Mesh mode: files go to the device the session will start on, and move
+  // (upload again) if that changes before Start.
+  useEffect(() => stagedFiles.retarget(client), [stagedFiles, client]);
   const attachments = useStagedAttachments(stagedFiles);
   const uploading = attachments.some((a) => a.status === "uploading");
   const { dragging, dropHandlers, onPaste } = useFileDrop((files) => stagedFiles.add(files));
-  const { providers } = useProviderMatrix();
+  const { providers } = useProviderMatrix(client);
 
   useEffect(() => {
     let cancelled = false;
-    routerClient
+    client
       .getSessionDefaults(staged.workspace, staged.dir, staged.provider)
       .then((r) => {
         if (!cancelled) setResolved(r);
@@ -202,7 +219,7 @@ export function Launchpad({
       cancelled = true;
     };
     // savedConfig: saving new defaults changes what an unstaged pill resolves to.
-  }, [routerClient, staged.workspace, staged.dir, staged.provider, savedConfig]);
+  }, [client, staged.workspace, staged.dir, staged.provider, savedConfig]);
 
   useEffect(() => {
     let cancelled = false;
@@ -251,16 +268,32 @@ export function Launchpad({
     submittingRef.current = true;
     setSubmitting(true);
     try {
-      const session = await createSession(
-        buildCreateSessionPayload(trimmed, staged, {
+      // Only links to sessions on this device (links never cross devices,
+      // and a host refuses one that does): a draft staged before the list
+      // placed every session on its device can still carry one elsewhere.
+      const sameDevice = stagedLinks.filter((l) => {
+        const other = l.granting_session_id === NEW_SESSION_PLACEHOLDER ? l.subject_session_id : l.granting_session_id;
+        return deviceOf(sessions.find((s) => s.id === other)) === "";
+      });
+      const payload = buildCreateSessionPayload(trimmed, staged, {
           resolvedAgent: resolved?.agent?.value,
-          links: stagedLinks,
+          links: remote ? [] : sameDevice,
           fullTrustOnly: fullAccessOnly(
             providers.find((p) => p.name === (staged.provider ?? resolved?.provider?.value))?.matrix,
           ),
           attachmentDraft: hasFiles && "draft" in draft ? draft.draft : undefined,
-        }),
-      );
+        });
+      let session: Session;
+      if (launchHost) {
+        // Created on the peer, through this Router's /peers/{peer}/ proxy.
+        // Tag it with its host before anything else reads it, and show All
+        // devices, or the new session would open and then be missing from
+        // the list.
+        session = { ...(await client.createSession(payload)).session, host: launchHost };
+        recordSessionHosts([session]);
+      } else {
+        session = await createSession(payload);
+      }
       // Started: the whole draft goes, so the next new session begins from
       // the defaults again. On failure all of it stays — the server rolled
       // back the whole create, so it's still what the user wants to retry.
@@ -273,6 +306,13 @@ export function Launchpad({
       // The files are the session's now: its composer's opening auto-send
       // carries them, and the launchpad starts a fresh draft.
       if (hasFiles) handLaunchpadToSession(session.id);
+      if (launchHost) {
+        // After the files are handed over: switching the list re-renders this
+        // launchpad, and its chips must already point at the session, not at
+        // the draft the peer just moved into it.
+        setMeshScope("all");
+        refreshSessions();
+      }
       onSessionCreated(session, trimmed);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -286,7 +326,7 @@ export function Launchpad({
   const dirShown = resolved?.dir?.value;
   let dirWarning: string | null = null;
   if (resolved?.dir_status === "missing") {
-    dirWarning = `${dirShown} doesn't exist on this machine — choose another folder to start in.`;
+    dirWarning = `${dirShown} doesn't exist on ${launchHost?.name ?? "this machine"} — choose another folder to start in.`;
   } else if (resolved?.dir_status === "plain") {
     // Commit and Land only reach the repos the agent touches, so say so
     // whatever the isolation (docs/COMMIT-LAND-PUSH-DESIGN.md D9).
@@ -297,12 +337,27 @@ export function Launchpad({
   }
   const dirRepos = resolved?.dir_status === "plain" ? (resolved.dir_repos ?? []) : [];
   const dirOwner = resolved?.dir_status === "git" ? resolved.dir_owner_session : undefined;
+  function changeHost(host: SessionHost | undefined) {
+    if (host?.name === launchHost?.name) return;
+    // Folders, workspaces, agents and models are per device: what was staged
+    // for one means nothing (or something else) on another.
+    setLaunchHost(host);
+    setStaged({});
+    setSelectedWorkspace(undefined);
+    setSelectedAgent(undefined);
+    setStagedLinks([]);
+    setResolved(undefined);
+  }
+
   function pickDir(dir: string) {
     setSelectedWorkspace(undefined);
     setStaged((prev) => ({ ...prev, dir, workspace: undefined }));
   }
   // Never offer to save a folder that isn't there: every later Start would fail.
+  // Not for another device: these are this device's defaults (and its
+  // config isn't reachable over the mesh).
   const canSaveDefaults =
+    !remote &&
     !!savedConfig &&
     resolved?.dir_status !== "missing" &&
     differsFromSaved(staged, selectedWorkspace, savedConfig);
@@ -361,7 +416,7 @@ export function Launchpad({
             items={attachments}
             thumbnailUrl={(a) =>
               a.attachment?.thumbnail
-                ? routerClient.attachmentUrl(stagedFiles.owner, a.attachment.id, "thumbnail")
+                ? stagedFiles.attachmentUrl(a.attachment.id, "thumbnail")
                 : undefined
             }
             onRemove={(key) => stagedFiles.remove(key)}
@@ -418,7 +473,7 @@ export function Launchpad({
                       type="button"
                       role="menuitem"
                       className={styles.menuItem}
-                      disabled={sessions.length === 0}
+                      disabled={sessions.length === 0 || remote}
                       onClick={() => {
                         // Close the menu before opening the dialog — both
                         // listen for document-level Escape; don't stack them.
@@ -427,8 +482,10 @@ export function Launchpad({
                       }}
                     >
                       Link to session(s)…
-                      {sessions.length === 0 && (
-                        <span className={styles.menuHint}>No other sessions to link yet</span>
+                      {remote ? (
+                        <span className={styles.menuHint}>Links stay on one device</span>
+                      ) : (
+                        sessions.length === 0 && <span className={styles.menuHint}>No other sessions to link yet</span>
                       )}
                     </button>
                   </Popover>
@@ -455,13 +512,15 @@ export function Launchpad({
           />
         </div>
 
+        <HostScopeProvider host={launchHost}>
         <div className={styles.pills}>
+          <HostPill value={launchHost} onChange={changeHost} />
           <FolderPill
             dir={staged.dir}
             workspace={staged.workspace}
             resolvedDir={resolved?.dir}
             resolvedWorkspace={resolved?.workspace}
-            recent={recentDirs(sessions)}
+            recent={recentDirs(sessions.filter((s) => hostName(s) === launchHost?.name))}
             onPickDir={pickDir}
             onPickWorkspace={(ws) => {
               setSelectedWorkspace(ws);
@@ -517,6 +576,7 @@ export function Launchpad({
             onRepoPathsChange={(paths) => setStaged((prev) => ({ ...prev, multiRepoPaths: paths }))}
           />
         </div>
+        </HostScopeProvider>
 
         {dirWarning && (
           <p className={styles.dirWarning} role="status">
@@ -564,6 +624,7 @@ export function Launchpad({
         {FLAGS.linkedSessions && linkDialogOpen && (
           <LinkChooserDialog
             sessionIds={[]}
+            host={launchHost}
             sessions={sessions}
             links={links}
             routerClient={router}
@@ -595,4 +656,9 @@ export function Launchpad({
       </ContentColumn>
     </div>
   );
+}
+
+/** The peer a listed session lives on, or undefined for this device. */
+function hostName(s: Session): string | undefined {
+  return s.host && !s.host.self ? s.host.name : undefined;
 }

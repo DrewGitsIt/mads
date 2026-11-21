@@ -405,3 +405,39 @@ describe("SessionDeleteConfirmDialog — an isolated session's work (D7)", () =>
     expect(screen.queryByText(/will be discarded/)).toBeNull();
   });
 });
+
+describe("SessionDeleteConfirmDialog — waits for the opening recount", () => {
+  const isolated = () =>
+    makeSession({ isolation: "worktree", worktree_dir: "/tmp/wt/s1", worktree_branch: "mads/session/s1", worktree_base: "main" } as Partial<Session>);
+
+  it("offers Delete only once the isolated session's work has been recounted", async () => {
+    let answer!: (v: unknown) => void;
+    const client = {
+      getWorktreeStatus: vi.fn(() => new Promise((r) => (answer = r))),
+    } as unknown as FakeRouterClient;
+    render(
+      <SessionDeleteConfirmDialog open session={isolated()} routerClient={client} onConfirm={vi.fn()} onCancel={vi.fn()} />,
+    );
+    const confirm = screen.getByRole("button", { name: /Delete/ }) as HTMLButtonElement;
+    // Deleting now would confirm against stale counts and kill the recount.
+    expect(confirm.disabled).toBe(true);
+    answer({ unlanded_count: 0, uncommitted_count: 1, shared_with: [], pipeline_running: false });
+    await waitFor(() => expect(confirm.disabled).toBe(false));
+  });
+
+  it("offers Delete after a failed recount too", async () => {
+    const client = {
+      getWorktreeStatus: vi.fn(() => Promise.reject(new Error("router request failed: 502"))),
+    } as unknown as FakeRouterClient;
+    render(
+      <SessionDeleteConfirmDialog open session={isolated()} routerClient={client} onConfirm={vi.fn()} onCancel={vi.fn()} />,
+    );
+    const confirm = screen.getByRole("button", { name: /Delete/ }) as HTMLButtonElement;
+    await waitFor(() => expect(confirm.disabled).toBe(false));
+  });
+
+  it("doesn't wait when there's nothing to recount", () => {
+    render(<SessionDeleteConfirmDialog open session={makeSession()} onConfirm={vi.fn()} onCancel={vi.fn()} />);
+    expect((screen.getByRole("button", { name: /Delete/ }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Caret } from "../../../components/Caret/Caret";
 import { Popover } from "../../../components/Popover/Popover";
-import { router } from "../../../router/client";
+import { useHostClient } from "../../../router/hostScope";
 import type { Agent, ResolvedSessionField } from "../../../router/types";
 import { LockedPill, type PillLock } from "./LockedPill";
 import pillStyles from "./pills.module.css";
@@ -22,12 +22,15 @@ export function AgentPill({ value, resolved, onChange, onAuto, locked, modified 
   const [open, setOpen] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
 
+  // Mesh mode: a session started on another device picks from its agents.
+  const client = useHostClient();
+
   useEffect(() => {
-    router
+    client
       .listAgents()
       .then(setAgents)
       .catch(() => setAgents([]));
-  }, []);
+  }, [client]);
 
   // The staged value is the persona id (agt_…); a workspace default may be
   // either an id or a name. Always show the name the menu shows.

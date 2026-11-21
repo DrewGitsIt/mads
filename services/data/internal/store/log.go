@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -188,7 +190,7 @@ func (l *Log) Query(ctx context.Context, f Filter) ([]contracts.Envelope, error)
 		env.SessionID = sessionID.String
 		env.TaskID = taskID.String
 		if payload.Valid {
-			env.Payload = []byte(payload.String)
+			env.Payload = storedPayload(env.Seq, payload.String)
 		}
 		out = append(out, env)
 	}
@@ -231,3 +233,21 @@ func (n *notifier) broadcast() {
 	close(n.ch)
 	n.ch = make(chan struct{})
 }
+
+// storedPayload is an event's stored payload as the JSON it must be. A row
+// whose payload isn't valid JSON (only a damaged database can hold one)
+// would fail encoding every batch and stream that reaches it, every time,
+// so a follower resuming past its cursor never gets further: it is served
+// as {"invalid_payload": "<the raw text>"} instead, and logged once.
+func storedPayload(seq int64, raw string) json.RawMessage {
+	if json.Valid([]byte(raw)) {
+		return json.RawMessage(raw)
+	}
+	if _, seen := invalidPayloadLogged.LoadOrStore(seq, true); !seen {
+		log.Printf("log: event seq %d has a payload that isn't JSON; served as invalid_payload", seq)
+	}
+	out, _ := json.Marshal(map[string]string{"invalid_payload": raw})
+	return out
+}
+
+var invalidPayloadLogged sync.Map

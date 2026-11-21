@@ -26,6 +26,7 @@ import { ProfilesSection } from "./sections/ProfilesSection";
 import { SessionsSection } from "./sections/SessionsSection";
 import { ModelsSection } from "./sections/ModelsSection";
 import { WorkspacesSection } from "./sections/WorkspacesSection";
+import { PairedDevicesLede, PairedDevicesSection } from "./sections/PairedDevicesSection";
 import { PipelinesSection } from "./sections/PipelinesSection";
 import { SynthesisSection } from "./sections/SynthesisSection";
 import { AppearanceSection } from "./sections/AppearanceSection";
@@ -211,6 +212,7 @@ export function SettingsSurface() {
     sessions: <SessionsSection config={config} onNavigate={handleNavigate} resetKey={draftEpoch} />,
     models: <ModelsSection config={config} />,
     workspaces: <WorkspacesSection />,
+    devices: <PairedDevicesSection />,
     pipelines: <PipelinesSection config={config} />,
     synthesis: <SynthesisSection config={config} />,
     appearance: <AppearanceSection config={config} />,
@@ -237,9 +239,13 @@ export function SettingsSurface() {
                     {/* Unsaved edits hold back Switch and the new-profile card; say so in
                         the lede's own line rather than adding one, so the page below
                         doesn't shift as the save bar comes and goes. */}
-                    {id === "profiles" && dirty.length > 0
-                      ? "Save or discard your changes first to switch or create profiles."
-                      : SECTION_LEDES[id]}
+                    {id === "profiles" && dirty.length > 0 ? (
+                      "Save or discard your changes first to switch or create profiles."
+                    ) : id === "devices" ? (
+                      <PairedDevicesLede />
+                    ) : (
+                      SECTION_LEDES[id]
+                    )}
                     {LIVE_SECTIONS.has(id) && <SettingTag tone="info">Live</SettingTag>}
                   </p>
                 )}

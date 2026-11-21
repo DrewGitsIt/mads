@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -29,8 +29,85 @@ async function launch(env: Record<string, string>): Promise<{ app: ElectronAppli
   return { app, win, userData, launchedAt };
 }
 
+/** Every live descendant of pid (Electron's GPU, network and renderer helpers). */
+function descendants(pid: number): number[] {
+  let rows: string;
+  try {
+    rows = execFileSync("ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8" });
+  } catch {
+    return [];
+  }
+  const children = new Map<number, number[]>();
+  for (const line of rows.split("\n")) {
+    const [c, p] = line.trim().split(/\s+/).map(Number);
+    if (!c || !p) continue;
+    children.set(p, [...(children.get(p) ?? []), c]);
+  }
+  const out: number[] = [];
+  const stack = [pid];
+  while (stack.length) {
+    for (const c of children.get(stack.pop()!) ?? []) {
+      out.push(c);
+      stack.push(c);
+    }
+  }
+  return out;
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function kill(pid: number, sig: NodeJS.Signals): void {
+  try {
+    process.kill(pid, sig);
+  } catch {
+    // already gone
+  }
+}
+
+// How long app.close() gets before the process tree is killed. Electron's
+// own shutdown took 1.5-56 s under load, all of it on the test's budget.
+const CLOSE_GRACE_MS = 10_000;
+
+/**
+ * Close the app, bounded: app.close() waits for Electron to exit, which under
+ * load can outlast the test. After CLOSE_GRACE_MS the tree this test launched
+ * (Playwright spawns Electron as its own process-group leader) is SIGKILLed,
+ * and any helper left over even after a clean close is killed too, so none
+ * outlives the test.
+ */
 async function close(l: { app: ElectronApplication; userData: string }): Promise<void> {
-  await l.app.close();
+  const pid = l.app.process().pid;
+  // Collected while main is alive: once it exits its helpers are reparented
+  // and can no longer be found by walking from pid.
+  const tree = pid ? [pid, ...descendants(pid)] : [];
+  let timer: NodeJS.Timeout | undefined;
+  const closed = await Promise.race([
+    l.app.close().then(
+      () => true,
+      () => false,
+    ),
+    new Promise<boolean>((r) => (timer = setTimeout(() => r(false), CLOSE_GRACE_MS))),
+  ]);
+  clearTimeout(timer);
+  if (pid) {
+    const all = [...new Set([...tree, ...descendants(pid)])];
+    if (!closed) {
+      test.info().annotations.push({ type: "electron close", description: `app.close() exceeded ${CLOSE_GRACE_MS} ms; killed the tree` });
+      kill(-pid, "SIGKILL");
+    }
+    for (const p of all) if (alive(p)) kill(p, "SIGKILL");
+    const deadline = Date.now() + 5_000;
+    while (all.some(alive) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    const left = all.filter(alive);
+    expect(left, "Electron processes left after close").toEqual([]);
+  }
   rmSync(l.userData, { recursive: true, force: true });
 }
 
@@ -50,6 +127,9 @@ function sessionList(p: Page) {
   return p.locator('[aria-label="Session list"]').or(p.getByText("No sessions yet"));
 }
 
+const BENCH = process.env.MADS_E2E_BENCH === "1";
+const BENCH_ROUNDS = BENCH ? 300 : 100;
+
 function freePort(): Promise<number> {
   return new Promise((resolve) => {
     const s = createServer();
@@ -60,8 +140,9 @@ function freePort(): Promise<number> {
   });
 }
 
+// Not serial: each test launches (and closes) its own Electron, so they share
+// nothing but the topology, and one slow or failed test must not skip the rest.
 test.describe("Electron injects the bearer below the page", () => {
-  test.describe.configure({ mode: "serial" });
   test.skip(!haveElectron, "no Electron binary or dist-electron build (npm run build; node node_modules/electron/install.js)");
 
   test("the window loads, streams events, and page code can't observe the token", async ({ routerURL }) => {
@@ -149,15 +230,18 @@ test.describe("Electron injects the bearer below the page", () => {
   // through main. Same Router, same endpoint, from the same window: through
   // the hook (the Router's own origin) and not (the localhost spelling of it,
   // outside the filter). GET /health needs no token, so both succeed.
+  // Nothing asserts on these numbers, so by default each round is short
+  // (1,240 sequential fetches overran 90 s under load); MADS_E2E_BENCH=1
+  // runs the full 300-request rounds for real measurements.
   test("measures the webRequest hook's cost per request, and the first output frame", async ({ routerURL }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(BENCH ? 180_000 : 60_000);
     const l = await launch({ VITE_ROUTER_URL: routerURL, MADS_HOME: process.env.MADS_HOME! });
     try {
       const { win } = l;
       await expect(sessionList(win)).toBeVisible({ timeout: 20_000 });
       const other = routerURL.replace("127.0.0.1", "localhost");
       const timing = await win.evaluate(
-        async ({ hooked, unhooked }) => {
+        async ({ hooked, unhooked, rounds }) => {
           const run = async (base: string, n: number) => {
             const t: number[] = [];
             for (let i = 0; i < n; i++) {
@@ -170,13 +254,13 @@ test.describe("Electron injects the bearer below the page", () => {
           };
           await run(hooked, 20);
           await run(unhooked, 20);
-          const a = await run(hooked, 300);
-          const b = await run(unhooked, 300);
-          const c = await run(hooked, 300);
-          const d = await run(unhooked, 300);
+          const a = await run(hooked, rounds);
+          const b = await run(unhooked, rounds);
+          const c = await run(hooked, rounds);
+          const d = await run(unhooked, rounds);
           return { hooked: [a, c], unhooked: [b, d] };
         },
-        { hooked: "", unhooked: other },
+        { hooked: "", unhooked: other, rounds: BENCH_ROUNDS },
       );
       test.info().annotations.push({ type: "per-request (median/p95 ms), hooked", description: JSON.stringify(timing.hooked) });
       test.info().annotations.push({ type: "per-request (median/p95 ms), unhooked", description: JSON.stringify(timing.unhooked) });

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { clearLaunchpadDraft, setLaunchpadDraft } from "./launchpadDraft";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Launchpad, deriveSessionName } from "./Launchpad";
 import { FLAGS } from "../../../featureFlags";
@@ -484,6 +485,7 @@ describe("Launchpad", () => {
     // FLAGS is module-global — reset it or a leak fails unrelated tests.
     afterEach(() => {
       FLAGS.linkedSessions = false;
+      clearLaunchpadDraft();
     });
 
     const pool = [
@@ -581,6 +583,30 @@ describe("Launchpad", () => {
 
       await waitFor(() => expect(createSession).toHaveBeenCalled());
       expect(createSession.mock.calls[0][0].links).toBeUndefined();
+    });
+
+    it("never sends a staged link to a session on another device", async () => {
+      FLAGS.linkedSessions = true;
+      // A draft staged before the list placed "remote one" on its device.
+      setLaunchpadDraft({
+        text: "Coordinate the refactor",
+        staged: {},
+        stagedLinks: [
+          { granting_session_id: "$new", subject_session_id: "s1", preset: "monitor", cadence: "on_signal" },
+          { granting_session_id: "$new", subject_session_id: "r1", preset: "monitor", cadence: "on_signal" },
+        ],
+      });
+      const createSession = vi.fn().mockResolvedValue(makeSession({ id: "s9" }));
+      render(
+        <Launchpad
+          createSession={createSession}
+          onSessionCreated={vi.fn()}
+          sessions={[...pool, makeSession({ id: "r1", name: "remote one", host: { name: "pop-os", self: false, reachable: true } })]}
+        />,
+      );
+      fireEvent.click(screen.getByText("Start & link"));
+      await waitFor(() => expect(createSession).toHaveBeenCalled());
+      expect(createSession.mock.calls[0][0].links.map((l: { subject_session_id: string }) => l.subject_session_id)).toEqual(["s1"]);
     });
 
     it("Enter-to-submit includes the staged links (keyboard path shares submit)", async () => {

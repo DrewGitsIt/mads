@@ -16,7 +16,8 @@ import type { ProxyOptions } from "vite";
 
 /**
  * Every top-level path segment the Router serves an API under
- * (services/router/internal/api/api.go). services/router's front-door test
+ * (services/router/internal/api/api.go, and the mesh layer in
+ * services/router/internal/mesh). services/router's front-door test
  * fails if a new one is missing here.
  */
 export const ROUTER_API_PREFIXES = [
@@ -28,6 +29,7 @@ export const ROUTER_API_PREFIXES = [
   "config",
   "credentials",
   "delegates",
+  "devices",
   "events",
   "fast-model",
   "health",
@@ -36,6 +38,7 @@ export const ROUTER_API_PREFIXES = [
   "link-digests",
   "links",
   "metrics",
+  "peers",
   "permission-requests",
   "pipelines",
   "preflight",

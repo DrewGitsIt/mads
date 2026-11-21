@@ -301,7 +301,8 @@ export interface RouterClient {
   getEvents(filter: { sessionId: string; since?: number; types?: string[] }): Promise<Envelope[]>;
 
   // --- Sessions (session-agnostic) ---
-  listSessions(): Promise<Session[]>;
+  /** `scope: "all"` adds every visible mesh peer's sessions, each tagged with `host`. */
+  listSessions(opts?: { scope?: "all" }): Promise<Session[]>;
   createSession(
     payload: CreateSessionPayload,
   ): Promise<{ session: Session; addr: string; links?: Link[] }>;
@@ -1218,8 +1219,8 @@ export class FetchRouterClient implements RouterClient {
   }
 
   // --- Sessions (session-agnostic) ---
-  async listSessions(): Promise<Session[]> {
-    return routerGet(this.baseUrl, "/sessions");
+  async listSessions(opts?: { scope?: "all" }): Promise<Session[]> {
+    return routerGet(this.baseUrl, "/sessions", opts?.scope ? { scope: opts.scope } : undefined);
   }
 
   async createSession(

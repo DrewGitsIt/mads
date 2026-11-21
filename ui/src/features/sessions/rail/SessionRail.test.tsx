@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DONE_OPEN_KEY, SessionRail, type RailLinkEditor } from "./SessionRail";
+import { DIFFERENT_DEVICE } from "../links/linkDraft";
 import { FLAGS } from "../../../featureFlags";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import { useSessionAgentState } from "../state/useSessionAgentState";
@@ -510,6 +511,30 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     expect(screen.getByRole("button", { name: "Links for payments refactor" })).toBeTruthy();
   });
 
+  // Link writes stay on a session's own host, so another device's session
+  // has no chain button; its links still nest it read-only.
+  it("gives another device's session no link button, but still shows its links", () => {
+    FLAGS.linkedSessions = true;
+    const peer = { name: "pop-os", self: false, reachable: true };
+    render(
+      <SessionRail
+        sessions={[
+          { ...lead, host: peer },
+          { ...a, host: peer },
+          { ...lead, id: "ses_here", name: "local one", host: { name: "mac", self: true, reachable: true } },
+        ]}
+        openTaskCounts={{}}
+        links={[link]}
+        onOpenLinks={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Links for investigator" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Links for payments refactor" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Links for local one" })).toBeTruthy();
+    const subject = screen.getByText("payments refactor").closest('[role="button"]')!;
+    expect(subject.closest('[class*="subjects"]')).toBeTruthy();
+  });
+
   it("keeps a nested row to one control, whatever the orchestrate state", () => {
     FLAGS.linkedSessions = true;
     for (const status of ["pending_restart", "unsupported", "failed", "active"] as const) {
@@ -637,6 +662,16 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
       expect(within(card as HTMLElement).getByText("separate worktree")).toBeTruthy();
       fireEvent.click(card);
       expect(card.className).toMatch(/nope/);
+    });
+
+    it("tags a session on another device as such", () => {
+      FLAGS.linkedSessions = true;
+      const ed = editor({ blockedReason: (id) => (id === "b" ? DIFFERENT_DEVICE : undefined) });
+      render(<SessionRail sessions={[lead, a, b]} openTaskCounts={{}} links={[link]} linkEditor={ed} />);
+      const card = screen.getByText("gateway hardening").closest("[data-rail-card]")!;
+      expect(card.getAttribute("data-link-edit")).toBe("blocked");
+      expect(within(card as HTMLElement).getByText("different device")).toBeTruthy();
+      expect(within(card as HTMLElement).queryByText("separate worktree")).toBeNull();
     });
 
     it("offers no reorder grip while picking", () => {

@@ -39,17 +39,34 @@ export function useOpenDelegateRecords(
     // Subscribed before the read, and the read behind the bus's ready barrier
     // (router/events.ts eventsReady), so nothing falls in the gap; the read
     // lands under anything live.
-    const unsubscribe = subscribeToEvents({ sessionId, types: ["session.delegate_changed"] }, (env) => {
-      const d = env.payload as Delegate | undefined;
-      if (d?.harness_id) put([d], false);
+    const read = () =>
+      routerClient
+        .getSessionDelegates(sessionId)
+        .then((list) => {
+          if (!cancelled) put(list, true);
+        })
+        // Best effort: the rail still has what the fade window kept.
+        .catch(() => undefined);
+    // This hook lives outside the host-keyed workspace (SessionsSurface),
+    // so a host learned after it subscribed doesn't remount it: when its
+    // subscription moves to the host's bus, onReseed reads again behind
+    // that bus's barrier.
+    const unsubscribe = subscribeToEvents(
+      {
+        sessionId,
+        types: ["session.delegate_changed"],
+        onReseed: () => {
+          if (!cancelled) void read();
+        },
+      },
+      (env) => {
+        const d = env.payload as Delegate | undefined;
+        if (d?.harness_id) put([d], false);
+      },
+    );
+    void eventsReady(sessionId).then(() => {
+      if (!cancelled) void read();
     });
-    eventsReady()
-      .then(() => (cancelled ? [] : routerClient.getSessionDelegates(sessionId)))
-      .then((list) => {
-        if (!cancelled) put(list, true);
-      })
-      // Best effort: the rail still has what the fade window kept.
-      .catch(() => undefined);
     return () => {
       cancelled = true;
       unsubscribe();

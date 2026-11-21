@@ -61,7 +61,7 @@ export function useTaskStore(routerClient: RouterClient, sessionId: string): Tas
     // The mount read waits for the bus's ready barrier (router/events.ts
     // eventsReady), subscribed first: the bus never replays, so a read served
     // before it fixes its cursor could miss an event landing in between.
-    void eventsReady().then(() => {
+    void eventsReady(sessionId).then(() => {
       if (!cancelled) fetcher.now();
     });
 

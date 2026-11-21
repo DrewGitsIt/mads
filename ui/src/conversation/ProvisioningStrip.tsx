@@ -77,7 +77,7 @@ export function ProvisioningStrip({ sessionId, routerClient, onDone }: Provision
     // and the stream; steps merge by seq, so one that came both ways counts
     // once and history lands in front of what arrived live.
     let cancelled = false;
-    const ready = eventsReady();
+    const ready = eventsReady(sessionId);
     if (routerClient) {
       void ready
         .then(() => (cancelled ? [] : getAllEvents(routerClient, { sessionId, types: PROVISIONING_TYPES })))
