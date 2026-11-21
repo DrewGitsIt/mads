@@ -2,7 +2,9 @@ import type { Page } from "@playwright/test";
 import { data, liveFixture, router, startStuckFastModel, waitFor } from "./fixtures";
 import { bootRig, type CheckResult, type Plan, type Result } from "./measure";
 import type { Build } from "./stack";
-import type { Manifest } from "./scenarios";
+import type { GitFixture, GitSession, Manifest } from "./scenarios";
+import { appendFileSync } from "node:fs";
+import { fxGit } from "./stack";
 import { resolveCheck } from "./checkNames";
 
 /**
@@ -280,6 +282,286 @@ export const CHECKS: Check[] = [
     },
   },
 ];
+
+// --- Checks f–h: real git (perfseed gitfx).
+
+/**
+ * How long the UI may take to match a fresh server compute after a change
+ * (PERF_CONVERGE_S, default 15). Main's own path: the change's events (or
+ * the repo watcher: 1 s of quiet on the git dir, at most 5 s) → the UI's
+ * 1.5 s refetch debounce → a recompute (the heavy session's changeset is
+ * 4–5 s on main, and one may already be in flight when the change lands).
+ * 15 s = the watcher's worst case + the debounce + two changeset computes;
+ * main measured 3–9 s. A design that pushes fresh values should beat it.
+ */
+const CONVERGE_S = Number(process.env.PERF_CONVERGE_S ?? 15);
+/** g: how soon after a change the "updating" indicator must show. */
+const UPDATING_WITHIN_MS = Number(process.env.PERF_UPDATING_WITHIN_MS ?? 2000);
+const files = (p: Page) => p.locator("#workspace-panel-files");
+
+function gitFixture(manifest: Manifest): GitFixture {
+  if (!manifest.git) throw new Error("the workload has no git fixture (GITFX=1)");
+  return manifest.git;
+}
+
+async function say(rig: Awaited<ReturnType<typeof bootRig>>, id: string, text: string): Promise<void> {
+  await router(rig.stack, "POST", `/sessions/${id}/messages`, { text, queue: true });
+}
+
+async function turnEnds(rig: Awaited<ReturnType<typeof bootRig>>, id: string): Promise<void> {
+  // The turn has started (or is over) and the agent is idle again.
+  await new Promise((r) => setTimeout(r, 300));
+  await waitFor(async () => (await router<{ agent_state?: { state?: string } }>(rig.stack, "GET", `/sessions/${id}`)).agent_state?.state === "idle", 60_000, `${id}'s turn to end`);
+}
+
+/** Opens a session's Changes tab and waits for its change set. */
+async function openChangesOf(page: Page, s: GitSession): Promise<void> {
+  await card(page, s.id).click();
+  await page.getByTitle("Rename session").filter({ hasText: s.name }).waitFor({ state: "visible", timeout: T });
+  await page.getByRole("tab", { name: /Changes/ }).click();
+  await files(page).getByTestId("changes-totals").filter({ hasText: /\d+ files?/ }).first().waitFor({ state: "visible", timeout: T });
+}
+
+/** What the Changes tab says: its file count, the chip's numbers, and (popover open) the Land step's commits. */
+interface GitView {
+  files?: number;
+  uncommitted?: number;
+  toPush?: number;
+  toLand?: number;
+}
+
+async function readView(page: Page): Promise<GitView> {
+  return page.evaluate(() => {
+    const panel = document.querySelector("#workspace-panel-files");
+    const num = (re: RegExp, text: string | null | undefined) => {
+      const m = text ? re.exec(text) : null;
+      return m ? Number(m[1]) : undefined;
+    };
+    const totals = panel?.querySelector('[data-testid="changes-totals"]')?.textContent;
+    const state = panel?.querySelector('[data-testid="changes-work-state"]')?.textContent;
+    const land = document.querySelector('[data-testid="work-step-land"]')?.textContent;
+    return {
+      files: num(/(\d+) files?/, totals),
+      uncommitted: num(/(\d+) uncommitted/, state) ?? (state && /^\s*committed/.test(state) ? 0 : undefined),
+      toPush: num(/(\d+) to push/, state),
+      toLand: num(/(\d+) commits? on /, land) ?? num(/(\d+) commits? to land/, state),
+    };
+  });
+}
+
+/**
+ * Polls the view every 250 ms for CONVERGE_S, then takes a fresh server
+ * compute (after the UI's last read, so the oracle's own side effects — GET
+ * /worktree may write the record's counts — can't help the UI) and compares
+ * the last reading with it. Detail: when the view first matched for good.
+ */
+async function converges(page: Page, since: number, fields: (keyof GitView)[], oracle: () => Promise<GitView>): Promise<string> {
+  const reads: [number, GitView][] = [];
+  const deadline = since + CONVERGE_S * 1000;
+  while (Date.now() < deadline) {
+    reads.push([Date.now(), await readView(page)]);
+    await page.waitForTimeout(250);
+  }
+  reads.push([Date.now(), await readView(page)]);
+  const want = await oracle();
+  const same = (v: GitView) => fields.every((f) => v[f] === want[f]);
+  const last = reads[reads.length - 1][1];
+  if (!same(last)) {
+    const show = (v: GitView) => fields.map((f) => `${f} ${v[f] ?? "–"}`).join(", ");
+    throw new Error(`after ${CONVERGE_S} s the UI shows ${show(last)}; a fresh compute says ${show(want)}`);
+  }
+  let at = reads.length - 1;
+  while (at > 0 && same(reads[at - 1][1])) at--;
+  return `matched ${((reads[at][0] - since) / 1000).toFixed(1)} s after the change (${fields.map((f) => `${f} ${want[f]}`).join(", ")})`;
+}
+
+/** Fresh server computes (side-effect free except GET /worktree's count write-back, read last). */
+async function freshChanges(rig: Awaited<ReturnType<typeof bootRig>>, id: string): Promise<number> {
+  return (await router<{ files: unknown[] }>(rig.stack, "GET", `/sessions/${id}/changeset?vs=start`)).files.length;
+}
+async function freshWorktree(rig: Awaited<ReturnType<typeof bootRig>>, id: string): Promise<{ uncommitted_count: number; unlanded_count: number }> {
+  return router(rig.stack, "GET", `/sessions/${id}/worktree`);
+}
+async function freshAhead(rig: Awaited<ReturnType<typeof bootRig>>, id: string): Promise<number> {
+  const repos = await router<{ primary?: boolean; worktree: { ahead: number } }[]>(rig.stack, "GET", `/sessions/${id}/repos`);
+  return (repos.find((r) => r.primary) ?? repos[0])?.worktree.ahead ?? 0;
+}
+
+const rel = (s: GitSession, p: string) => p.slice(s.folder.length + 1);
+
+/** A commit made outside mads (a terminal) in a fixture checkout. */
+function commitOutside(s: GitSession, paths: string[], msg: string): void {
+  for (const p of paths) appendFileSync(p, `// ${msg}\n`);
+  fxGit(s.folder, ["add", "--", ...paths.map((p) => rel(s, p))]);
+  fxGit(s.folder, ["commit", "-q", "--no-verify", "-m", msg]);
+}
+
+const GIT_CHECKS: Check[] = [
+  {
+    name: "f-git-converge",
+    title: `real git: after an agent turn or a commit, the Changes list, header counts and branch facts match a fresh compute within ${CONVERGE_S} s`,
+    run: async ({ page, rig, manifest }) => {
+      const g = gitFixture(manifest);
+      const A = g.sessions.isolated;
+      const Ty = g.sessions.typical;
+      const fresh = `${A.new_dir}/perf_converge_new.md`;
+      return [
+        await step("isolated heavy: an agent turn writes two files", async () => {
+          await load(page, rig.stack.appURL);
+          await openChangesOf(page, A);
+          await say(rig, A.id, "echo perf converge warm-up");
+          await turnEnds(rig, A.id);
+          await page.waitForTimeout(3000);
+          await say(rig, A.id, `write-file ${rel(A, A.edit_file)} perf converge edit`);
+          await say(rig, A.id, `write-file ${rel(A, fresh)} perf converge new`);
+          await turnEnds(rig, A.id);
+          const since = Date.now();
+          return converges(page, since, ["files", "uncommitted"], async () => ({
+            files: await freshChanges(rig, A.id),
+            uncommitted: (await freshWorktree(rig, A.id)).uncommitted_count,
+          }));
+        }),
+        await step("isolated heavy: a commit outside mads (to land +1)", async () => {
+          await files(page).getByRole("button", { name: "Where this session's work goes" }).click();
+          await page.getByTestId("work-step-land").waitFor({ state: "visible", timeout: T });
+          commitOutside(A, [A.edit_file, fresh], "perf converge: commit outside mads");
+          const since = Date.now();
+          return converges(page, since, ["files", "uncommitted", "toLand"], async () => {
+            const wt = await freshWorktree(rig, A.id);
+            return { files: await freshChanges(rig, A.id), uncommitted: wt.uncommitted_count, toLand: wt.unlanded_count };
+          });
+        }),
+        await step("typical, in place: a commit outside mads (to push +1)", async () => {
+          await page.keyboard.press("Escape");
+          await openChangesOf(page, Ty);
+          await page.waitForTimeout(2000);
+          commitOutside(Ty, [Ty.edit_file], "perf converge: commit in place");
+          const since = Date.now();
+          return converges(page, since, ["files", "uncommitted", "toPush"], async () => ({
+            files: await freshChanges(rig, Ty.id),
+            uncommitted: (await freshWorktree(rig, Ty.id)).uncommitted_count,
+            toPush: await freshAhead(rig, Ty.id),
+          }));
+        }),
+      ];
+    },
+  },
+  {
+    name: "g-git-updating",
+    title: "real git: a visible \"updating\" marker ([data-testid=git-updating]) while a recompute of what the session shows is running",
+    run: async ({ page, rig, manifest }) => {
+      const g = gitFixture(manifest);
+      const A = g.sessions.isolated;
+      const why =
+        "main has no such marker: the Changes tab says \"Updating…\" only until its first answer, and nothing shows a refetch or a recount " +
+        "(the contract design B is to meet; docs/PERF-HARNESS-PLAN.md, check g)";
+      let changedAt = 0;
+      return [
+        await step(
+          `shows within ${UPDATING_WITHIN_MS / 1000} s of a change`,
+          async () => {
+            await load(page, rig.stack.appURL);
+            await openChangesOf(page, A);
+            await say(rig, A.id, "echo perf updating warm-up");
+            await turnEnds(rig, A.id);
+            await page.waitForTimeout(3000);
+            await page.evaluate(() =>
+              (window as unknown as { __perf: { arm(n: string, s: unknown): void } }).__perf.arm("updating", { kind: "exists", sel: '[data-testid="git-updating"]', sync: true }),
+            );
+            changedAt = Date.now();
+            await say(rig, A.id, `write-file ${rel(A, A.edit_file)} perf updating edit`);
+            const deadline = changedAt + UPDATING_WITHIN_MS;
+            for (;;) {
+              const at = await page.evaluate(() => (window as unknown as { __perf: { markers: Record<string, number> } }).__perf.markers.updating);
+              if (at) return `${Math.round(at - changedAt)} ms after the change`;
+              if (Date.now() > deadline) throw new Error(`no [data-testid="git-updating"] within ${UPDATING_WITHIN_MS} ms`);
+              await page.waitForTimeout(25);
+            }
+          },
+          why,
+        ),
+        await step(
+          `clears within ${CONVERGE_S} s, with the values a fresh compute gives`,
+          async () => {
+            await turnEnds(rig, A.id);
+            const seen = await page.evaluate(() => (window as unknown as { __perf: { markers: Record<string, number> } }).__perf.markers.updating);
+            if (!seen) throw new Error("the marker never showed");
+            await page.locator('[data-testid="git-updating"]').waitFor({ state: "hidden", timeout: CONVERGE_S * 1000 });
+            const v = await readView(page);
+            const want = await freshChanges(rig, A.id);
+            if (v.files !== want) throw new Error(`cleared showing ${v.files} files; a fresh compute says ${want}`);
+            return `${v.files} files`;
+          },
+          why,
+        ),
+      ];
+    },
+  },
+  {
+    name: "h-git-dialogs",
+    title: "real git: Commit, Land and Push opened right after a change show what a fresh compute says",
+    run: async ({ page, rig, manifest }) => {
+      const g = gitFixture(manifest);
+      const A = g.sessions.isolated;
+      const L = g.sessions.land;
+      const dialog = () => page.locator('[aria-modal="true"]');
+      const close = async () => {
+        await dialog().getByRole("button", { name: "Cancel" }).click();
+        await dialog().waitFor({ state: "hidden", timeout: T });
+      };
+      return [
+        await step("Commit (isolated heavy, right after a turn writes a file)", async () => {
+          await load(page, rig.stack.appURL);
+          await openChangesOf(page, A);
+          await say(rig, A.id, `write-file ${rel(A, A.new_dir + "/perf_dialog_new.md")} perf dialog new`);
+          await turnEnds(rig, A.id);
+          await files(page).getByTestId("changes-workchip").getByRole("button", { name: "Commit" }).click();
+          const boxes = dialog().getByRole("checkbox", { name: /^Include / });
+          await boxes.first().waitFor({ state: "visible", timeout: T });
+          await page.waitForTimeout(500);
+          const shown = (await boxes.evaluateAll((els) => els.map((e) => e.getAttribute("aria-label")!.slice("Include ".length)))).sort();
+          const plan = await router<{ repos: { files: { path: string }[] }[] }>(rig.stack, "GET", `/sessions/${A.id}/commit-plan`);
+          const want = plan.repos.flatMap((r) => r.files.map((f) => f.path)).sort();
+          await close();
+          if (JSON.stringify(shown) !== JSON.stringify(want)) {
+            const missing = want.filter((p) => !shown.includes(p));
+            const extra = shown.filter((p) => !want.includes(p));
+            throw new Error(`the dialog lists ${shown.length} files, a fresh plan ${want.length} (missing ${missing.slice(0, 3).join(", ")}; extra ${extra.slice(0, 3).join(", ")})`);
+          }
+          if (!shown.some((p) => p.endsWith("perf_dialog_new.md"))) throw new Error("the new file is not in the dialog");
+          return `${shown.length} files`;
+        }),
+        await step("Land (isolated to land, right after a commit outside mads)", async () => {
+          await openChangesOf(page, L);
+          await page.waitForTimeout(1000);
+          commitOutside(L, [L.edit_file], "perf dialog: commit outside mads");
+          // Land from the "where this session's work goes" popover (the chip's own Land is there only in its "to land" state).
+          await files(page).getByRole("button", { name: "Where this session's work goes" }).click();
+          await page.getByTestId("work-step-land").getByRole("button", { name: "Land" }).click();
+          const n = dialog().getByText(/\d+ commits? to squash/);
+          await n.waitFor({ state: "visible", timeout: T });
+          const shown = Number(/(\d+)/.exec(await n.innerText())![1]);
+          const want = (await router<{ to_land: number }>(rig.stack, "GET", `/sessions/${L.id}/land`)).to_land;
+          await close();
+          if (shown !== want) throw new Error(`the dialog shows ${shown} to squash, a fresh preview ${want}`);
+          return `${shown} commits to squash`;
+        }),
+        await step("Push (isolated to land, right after that commit)", async () => {
+          await files(page).getByRole("button", { name: "Where this session's work goes" }).click();
+          await page.getByTestId("work-step-push").getByRole("button").first().click();
+          const n = dialog().getByText(/^\d+ commits?:$/);
+          await n.waitFor({ state: "visible", timeout: T });
+          const shown = Number(/(\d+)/.exec(await n.innerText())![1]);
+          const want = (await router<{ ahead: number }>(rig.stack, "GET", `/sessions/${L.id}/push?target=branch`)).ahead;
+          await close();
+          if (shown !== want) throw new Error(`the dialog shows ${shown} commits, a fresh preview ${want}`);
+          return `${shown} commits`;
+        }),
+      ];
+    },
+  },
+];
+CHECKS.push(...GIT_CHECKS);
 
 export function checkByName(name: string): Check {
   const full = resolveCheck(name);

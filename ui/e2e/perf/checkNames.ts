@@ -2,7 +2,17 @@
  * The correctness checks' names (checks.ts), dependency-free so the report
  * can resolve a short name ("a") to the stored one ("a-permission").
  */
-export const CHECK_NAMES = ["a-permission", "b-queue", "c-retro-progress", "d-pipeline-running", "e-provisioning"] as const;
+export const CHECK_NAMES = [
+  "a-permission",
+  "b-queue",
+  "c-retro-progress",
+  "d-pipeline-running",
+  "e-provisioning",
+  // Real git (perfseed gitfx): git state the UI shows converges and stays fresh.
+  "f-git-converge",
+  "g-git-updating",
+  "h-git-dialogs",
+] as const;
 
 /** Checks that watch UI-only state, not anything the bus carries: reported, excluded from bus comparisons. */
 export const UI_ONLY_CHECKS = new Set<string>(["c-retro-progress"]);
