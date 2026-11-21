@@ -86,6 +86,8 @@ type Manifest struct {
 	Skipped     []string         `json:"skipped_types,omitempty"`
 	Notes       []string         `json:"notes,omitempty"`
 	ElapsedMS   int64            `json:"elapsed_ms"`
+	// Git is the real-git fixture (perfseed gitfx), when the run built one.
+	Git *GitFxManifest `json:"git,omitempty"`
 }
 
 type ManifestRail struct {

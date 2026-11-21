@@ -4,6 +4,7 @@
 //	perfseed calibrate -db <existing.db> -out <profile.json> [-name L]
 //	perfseed scale -in <profile.json> -out <profile.json> -name XL -events 1000000 [-records 1.5]
 //	perfseed append -url <dataURL> -profile <profile.json> -manifest <manifest.json|-> -n 50000 [-concurrency 16]
+//	perfseed gitfx -db <seeded.db> -manifest <manifest.json> -shape <gitfx.json> -src <repo> -root <dir> -guard <tmp>
 //
 // seed writes a fresh database before any Data Service starts, through the
 // store's own write paths (record stores and Log.WithTx / Tx.Append), so
@@ -39,6 +40,8 @@ func main() {
 		err = runRealism(os.Args[2:])
 	case "append":
 		err = runAppend(os.Args[2:])
+	case "gitfx":
+		err = runGitFx(os.Args[2:])
 	default:
 		usage()
 	}
@@ -49,7 +52,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: perfseed seed|calibrate|scale|realism|append [flags]")
+	fmt.Fprintln(os.Stderr, "usage: perfseed seed|calibrate|scale|realism|append|gitfx [flags]")
 	os.Exit(2)
 }
 

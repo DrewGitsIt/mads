@@ -1,0 +1,43 @@
+{
+  "calibration": "2026-11-21, counts only, read-only: live ses_71729a99ce7c00de (repos ~10 s, changeset ~6 s) is current_dir with dir '/', 2103 ledger rows over 908 files in 309 dirs (249 still exist) resolving to 11 checkouts of one repo, 63 uncommitted (2 + 61 in two checkouts), 0 recorded commits. Live heavy sessions record 120-250 commits; median session ledger 13 files. Source main is 23 commits past origin/main; its far branches 96-100. No live session is isolated; 'isolated' and 'land' are the same scale in a session worktree.",
+  "seed": 9,
+  "isolated": {
+    "name": "perf git: isolated heavy",
+    "files": 400, "dirs": 120, "rows": 920,
+    "committed_edits": 250, "commits": 40, "record_commits": true,
+    "uncommitted": 40, "added": 10, "deleted": 5,
+    "untracked_before": 12, "untracked_after": 13
+  },
+  "land": {
+    "name": "perf git: isolated to land",
+    "files": 400, "dirs": 120, "rows": 920,
+    "committed_edits": 250, "commits": 40, "record_commits": true,
+    "uncommitted": 0, "added": 0, "deleted": 0,
+    "untracked_before": 0, "untracked_after": 0
+  },
+  "typical": {
+    "name": "perf git: typical",
+    "files": 13, "dirs": 5, "rows": 30,
+    "committed_edits": 6, "commits": 3, "record_commits": true,
+    "uncommitted": 4, "added": 1, "deleted": 0,
+    "untracked_before": 1, "untracked_after": 0
+  },
+  "multi": {
+    "name": "perf git: multi-repo heavy",
+    "files": 908, "rows": 2103, "gone_dirs": 60,
+    "committed_edits": 380, "commits": 30,
+    "checkouts": [
+      { "dirs": 42, "uncommitted": 2 },
+      { "dirs": 25, "uncommitted": 61 },
+      { "dirs": 39 },
+      { "dirs": 35, "upstream": true },
+      { "dirs": 30 },
+      { "dirs": 27 },
+      { "dirs": 20, "upstream": true },
+      { "dirs": 20 },
+      { "dirs": 5 },
+      { "dirs": 5, "upstream": true },
+      { "dirs": 1 }
+    ]
+  }
+}
