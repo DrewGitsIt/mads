@@ -165,6 +165,14 @@ event after each scenario.
 
 `make ui-perf BASE=<ref> CAND=<ref-or-worktree> PROFILE=L N=5 BROWSER=chromium|electron`
 
+- `SCENARIOS` takes ids (`1,3b`) and aliases (`ui/e2e/perf/scenarioSets.sh`),
+  resolved before anything else decides on them:
+  - empty or `all`: every scenario, 9x included, so `GITFX=auto` builds the
+    real-git fixture (empty under `REALISM=1` means `bus`: the two don't mix);
+  - `bus`: 1–8, 3b, 3t, 7b — the event-bus regression set; no fixture build,
+    the right choice for bus work;
+  - `git`: 9a–9f (delays off by default);
+  - aliases mix with ids (`bus,9a`); `none` runs checks only.
 - Builds each ref's UI and binaries into separate temp dirs.
 - Runs baseline and candidate alternately (ABAB…) on the same seeded
   workload, so machine noise hits both.
@@ -185,7 +193,8 @@ cache with an "updating" marker. The harness measures main, then each.
 
 ### Fixture (`perfseed gitfx`, shape in `ui/e2e/perf/gitfx.shape.json`)
 
-`GITFX=auto` (on for any 9x scenario or check f/g/h) builds it once per run
+`GITFX=auto` (on for any 9x scenario in the resolved list — so also the
+default `all` and `git` — or check f/g/h) builds it once per run
 inside the run's temp tree, `$TMP/gitfx/live`:
 - `origin.git`: `git clone --mirror --no-local $GITFX_SRC` (default
   `~/repo/mads`) — **the only git command that touches the source** — cut

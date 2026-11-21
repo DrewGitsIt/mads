@@ -2,7 +2,7 @@
 # make ui-perf — the perf harness runner (docs/PERF-HARNESS-PLAN.md §6).
 #
 #   make ui-perf BASE=<ref> CAND=<ref|worktree dir> PROFILE=S|M|L|XL N=5 BROWSER=chromium|electron
-#   also: SCENARIOS=1,3b  MODES=on,off (default both)  PERF_DELAYS=<regex>=<ms>,...
+#   also: SCENARIOS=1,3b | bus | git | all (default all, bus in realism; scenarioSets.sh)  MODES=on,off (default both)  PERF_DELAYS=<regex>=<ms>,...
 #         PERF_LONGLIVED_N=50000 PERF_LONGLIVED_RATE=2000 (scenario 8's appended events, events/s)
 #         PERF_HOLD_OUTPUT=0  PERF_PROBE=0 (lite probe everywhere) or PERF_PROBE_CAND=0 (cand only)
 #         CHECKS=a,b,c,d,e|none (default all; none in realism)
@@ -35,9 +35,14 @@ CAND=${CAND:-}
 PROFILE=${PROFILE:-S}
 N=${N:-5}
 BROWSER=${BROWSER:-chromium}
-SCENARIOS=${SCENARIOS:-}
+# Resolved up front (aliases, empty = all) so every decision below, the
+# git fixture's included, sees the scenarios that will actually run.
+# Realism has no git fixture (the two don't mix): its "all" is bus.
+. "$ROOT/ui/e2e/perf/scenarioSets.sh"
+SCENARIOS=$(resolve_scenarios "${SCENARIOS:-$([ -n "${REALISM:-}" ] && echo bus || echo all)}")
 # Real-git scenarios alone: delays off (the mock would add to real git).
-case ",$SCENARIOS," in ,,) DEFAULT_MODES=on,off ;; *) DEFAULT_MODES=off; for s in $(echo "$SCENARIOS" | tr ',' ' '); do case "$s" in 9*) ;; *) DEFAULT_MODES=on,off ;; esac; done ;; esac
+DEFAULT_MODES=off
+for s in $(echo "$SCENARIOS" | tr ',' ' '); do case "$s" in 9*) ;; *) DEFAULT_MODES=on,off ;; esac; done
 MODES=${MODES:-$DEFAULT_MODES}
 PERF_DELAYS=${PERF_DELAYS:-}
 PERF_HOLD_OUTPUT=${PERF_HOLD_OUTPUT:-1}

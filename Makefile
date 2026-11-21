@@ -147,7 +147,7 @@ ui-smoke: ui-deps
 # a temp `git worktree add`), seeds one workload, runs the scenarios ABBA on
 # hermetic stacks behind the delay proxy, and writes perf-results/<stamp>/.
 # Every scenario runs with the proxy's delays on and off (MODES=on,off).
-# Also: SCENARIOS=1,3b  CHECKS=a,b|none  REALISM=1 (a read-only backup of ~/.mads/mads.db)
+# Also: SCENARIOS=1,3b|bus|git|all (default all; bus = 1-8 without the git fixture, git = 9a-9f)  CHECKS=a,b|none  REALISM=1 (a read-only backup of ~/.mads/mads.db)
 #       PERF_DELAYS=<regex>=<ms>,...  PERF_HOLD_OUTPUT=0.
 #       GITFX=auto|1|0 GITFX_SRC=~/repo/mads (real-git fixture for 9x and checks f-h; cloned from, never run in).
 # No ui-deps prerequisite: run.sh installs deps only where they are missing.
