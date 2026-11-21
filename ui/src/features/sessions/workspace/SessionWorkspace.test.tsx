@@ -124,6 +124,48 @@ describe("SessionWorkspace", () => {
     expect(screen.getByRole("tab", { name: "Tasks" }).textContent).toBe("Tasks");
   });
 
+  describe("the run seed (the bus never replays pipeline.started)", () => {
+    const running = {
+      session_id: SESSION_ID,
+      run_seq: 10,
+      run_id: "r1",
+      started_at: "2026-10-19T10:00:00Z",
+      outcome: "running" as const,
+      tasks_done: 0,
+      tasks_blocked: 0,
+      tasks_skipped: 0,
+      cost_usd: 0,
+    };
+
+    it("seeds the run-in-flight flag from metricsPipelineRuns", async () => {
+      const tasks = [task("claimed", { session_id: SESSION_ID, status: "in_progress" })];
+      const pipelineClient = new FakePipelineClient(tasks);
+      const routerClient = new FakeRouterClient(undefined, undefined, undefined, undefined, tasks);
+      const runs = vi.spyOn(routerClient, "metricsPipelineRuns").mockResolvedValue([running]);
+      renderWorkspace({ routerClient, pipelineClient, openTaskBreakdown: { running: 1, ready: 0, blocked: 0 } });
+      const tasksTab = await screen.findByRole("tab", { name: "Tasks" });
+      await waitFor(() => expect(within(tasksTab).queryByTestId("tasks-run-badge")).toBeTruthy());
+      expect(runs).toHaveBeenCalledWith(SESSION_ID);
+    });
+
+    it("lets a run event heard first outrank the seed (live wins)", async () => {
+      const routerClient = new FakeRouterClient();
+      let answer!: (v: (typeof running)[]) => void;
+      vi.spyOn(routerClient, "metricsPipelineRuns").mockReturnValue(new Promise((r) => (answer = r)));
+      renderWorkspace({ routerClient, openTaskBreakdown: { running: 1, ready: 0, blocked: 0 } });
+      const tasksTab = await screen.findByRole("tab", { name: "Tasks" });
+      const source = FakeEventSource.instances.find((s) => s.url.includes("pipeline.started"));
+      act(() => {
+        source?.emit(
+          "pipeline.completed",
+          JSON.stringify({ seq: 50, timestamp: "2026-10-19T10:00:00Z", type: "pipeline.completed", session_id: SESSION_ID, actor: "pipeline" }),
+        );
+      });
+      await act(async () => answer([running]));
+      expect(within(tasksTab).queryByTestId("tasks-run-badge")).toBeNull();
+    });
+  });
+
   it("swaps the Tasks badge for a spinner and the run's own running count while a run is in flight", async () => {
     // Two tasks in progress: one the run claimed, one a person set in
     // progress themselves (the run never touches it). A third is ready.

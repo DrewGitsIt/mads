@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { subscribeToEvents } from "../../router/events";
+import { eventsReady, subscribeToEvents } from "../../router/events";
 import { WORKSPACE_SESSION_EVENT_TYPES } from "../../router/sessionEventTypes";
 import type { Envelope, PipelineRun, Task } from "../../router/types";
 import type { PipelineClient } from "../client/pipelineClient";
@@ -442,6 +442,11 @@ export function useResumingRunFold(
 
       let caughtUpSeq = 0;
       try {
+        // The bus never replays history, so the REST catch-up waits for its
+        // ready barrier (router/events.ts eventsReady): read any earlier and
+        // an event landing before the bus fixes its cursor is in neither.
+        await eventsReady();
+        if (!mounted.current) return;
         const runs = await client!.listRuns(sessionId);
         const target = pickRunRef.current(runs);
         if (target) {

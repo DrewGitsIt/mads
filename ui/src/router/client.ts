@@ -55,6 +55,8 @@ import type {
   Note,
   NoteType,
   PermissionRequest,
+  QueuedMessage,
+  SessionPermissionRequest,
   PipelinePickup,
   PipelineRun,
   PreflightCheck,
@@ -158,6 +160,8 @@ export interface RouterClient {
    * anchor to this URL saves a file.
    */
   exportSessionUrl(sessionId: string, format: "md" | "json"): string;
+  /** The session's queued messages, in delivery order (GET /sessions/{id}/queue); empty when it isn't running. */
+  getQueue(sessionId: string): Promise<QueuedMessage[]>;
   /** Drop one queued message before it's delivered. */
   cancelQueuedMessage(sessionId: string, queuedId: string): Promise<void>;
   interrupt(sessionId: string): Promise<void>;
@@ -194,6 +198,8 @@ export interface RouterClient {
   // getPermissionRequests reconstructs any still-open card on transcript
   // refetch/mount (a resolved one is already known from the live stream).
   getPermissionRequests(sessionId: string): Promise<PermissionRequest[]>;
+  /** Every live session's pending requests in one read (GET /permission-requests), each tagged with its session. */
+  listPermissionRequests(): Promise<SessionPermissionRequest[]>;
   resolvePermissionRequest(
     sessionId: string,
     requestId: string,
@@ -818,6 +824,11 @@ export class FetchRouterClient implements RouterClient {
     return `${this.baseUrl}/sessions/${encodeURIComponent(sessionId)}/export?format=${format}`;
   }
 
+  async getQueue(sessionId: string): Promise<QueuedMessage[]> {
+    const res = await routerGet<{ queued?: QueuedMessage[] | null }>(this.baseUrl, `/sessions/${sessionId}/queue`);
+    return res?.queued ?? [];
+  }
+
   async cancelQueuedMessage(sessionId: string, queuedId: string): Promise<void> {
     const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/queue/${queuedId}`, {
       method: "DELETE",
@@ -883,6 +894,10 @@ export class FetchRouterClient implements RouterClient {
 
   async getPermissionRequests(sessionId: string): Promise<PermissionRequest[]> {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/permission-requests`);
+  }
+
+  async listPermissionRequests(): Promise<SessionPermissionRequest[]> {
+    return routerGet(this.baseUrl, "/permission-requests");
   }
 
   async resolvePermissionRequest(

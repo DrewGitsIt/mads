@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { router } from "../../../router/client";
-import { subscribeToEvents } from "../../../router/events";
+import { eventsReady, subscribeToEvents } from "../../../router/events";
 import { DEFAULT_DELEGATE_FADE_MS } from "../rail/DelegateRows";
 import { isLiveDelegate } from "../../../router/delegateLive";
 import type { SessionAgentState } from "../rail/railGroups";
@@ -29,7 +29,20 @@ const AGENT_STATE_EVENT_TYPES = [
   "session.delegate_changed",
 ];
 
-/** Mutable per-session accumulator. Kept out of state: only its projection renders. */
+/**
+ * Mutable per-session accumulator. Kept out of state: only its projection renders.
+ *
+ * The event bus is live-only (router/events.ts), so this fold hears only what
+ * happens after the window subscribed. What it can't get back after a reload
+ * or in a new window, knowingly: "Done · your turn" (`done`, only ever set by
+ * a live idle transition) and "Crashed" (`crashed`, only by a live
+ * session.crashed) — neither has a REST source, and both are momentary
+ * notices rather than state. And a seeded approval's start (`pending[].at`)
+ * is when the seed arrived, not when the session parked: GET
+ * /permission-requests doesn't say. Everything else is seeded: running
+ * agents from the session records' mirror, delegates from the cold read,
+ * approvals from the approvals seed (both in the hook below).
+ */
 interface Fold {
   crashed: boolean;
   /** Unresolved permission parks, request_id → the tool it named and when it parked. */
@@ -55,6 +68,19 @@ interface Fold {
    */
   heard: Set<string>;
   /**
+   * Permission request ids this connection heard live (requested or
+   * resolved). The approvals seed may answer after a newer event, and must
+   * never re-open a park that event resolved.
+   */
+  heardPermissions: Set<string>;
+  /**
+   * This connection heard the session's parks cleared wholesale (a turn
+   * ending, the process going to sleep or crashing). The approvals seed is
+   * older than that, so it adds nothing to this session; a request parked
+   * after the clear announces itself live.
+   */
+  parksClearedLive: boolean;
+  /**
    * The latest session.agent_state this connection saw. Once set it supersedes
    * the record mirror for good: the stream is newer than any list refetch.
    */
@@ -71,6 +97,8 @@ function emptyFold(): Fold {
     delegates: new Map(),
     recent: new Map(),
     heard: new Set(),
+    heardPermissions: new Set(),
+    parksClearedLive: false,
     done: false,
   };
 }
@@ -96,6 +124,7 @@ function clearStale(fold: Fold): void {
  */
 function clearInFlight(fold: Fold): void {
   fold.pending.clear();
+  fold.parksClearedLive = true;
   fold.delegates.clear();
 }
 
@@ -159,6 +188,7 @@ function apply(fold: Fold, env: Envelope, fadeMs: number): void {
       // that spawned it, and only the server's delegate record says when it
       // ends — retiring it here is what used to read a busy session "Ready".
       fold.pending.clear();
+      fold.parksClearedLive = true;
       fold.done = true;
       return;
     }
@@ -189,6 +219,7 @@ function apply(fold: Fold, env: Envelope, fadeMs: number): void {
     case "session.permission_requested": {
       const p = (env.payload ?? {}) as { request_id?: string; tool?: string };
       clearStale(fold);
+      if (p.request_id) fold.heardPermissions.add(p.request_id);
       fold.pending.set(p.request_id ?? String(env.seq), { tool: p.tool, at: env.timestamp });
       return;
     }
@@ -196,6 +227,7 @@ function apply(fold: Fold, env: Envelope, fadeMs: number): void {
       const p = (env.payload ?? {}) as { request_id?: string };
       // Resolved either way, the turn carries on — the park is over, the work isn't.
       clearStale(fold);
+      if (p.request_id) fold.heardPermissions.add(p.request_id);
       fold.pending.delete(p.request_id ?? String(env.seq));
       return;
     }
@@ -371,9 +403,10 @@ export function useSessionAgentState(
   // session — the live ones, plus the finished ones the fade window still
   // shows. "0 min" asks for what ended after now: nothing finished, but every
   // live one — waiting included, which ?state=running would miss (the store
-  // serves waiting records as live, LiveOrEndedAfter). Declared after the
-  // subscription, so nothing falls in the gap; anything the stream has spoken
-  // about since wins over this older snapshot. A changed window reads again.
+  // serves waiting records as live, LiveOrEndedAfter). Read after the
+  // subscription above and behind the bus's ready barrier (eventsReady), so
+  // nothing falls in the gap; anything the stream has spoken about since wins
+  // over this older snapshot. A changed window reads again.
   useEffect(() => {
     let cancelled = false;
     // A live subagent whose parent ended before the window: the list didn't
@@ -404,13 +437,14 @@ export function useSessionAgentState(
       );
       if (!cancelled && missing.length > 0) publish();
     };
-    const read =
+    const read = () =>
       fadeMs === 0
         ? router.listDelegatesEndedAfter(new Date().toISOString())
         : fadeMs === Infinity
           ? router.listDelegates()
           : router.listDelegatesEndedAfter(new Date(Date.now() - fadeMs).toISOString());
-    read
+    eventsReady()
+      .then(() => (cancelled ? [] : read()))
       .then((list) => {
         if (cancelled) return;
         for (const d of list) {
@@ -440,6 +474,60 @@ export function useSessionAgentState(
       cancelled = true;
     };
   }, [fadeMs, publish]);
+
+  // The approvals seed: the bus never replays session.permission_requested,
+  // so a park from before this window subscribed comes from one window-wide
+  // read (GET /permission-requests), not one per session. Subscribed above,
+  // then behind the ready barrier, then read; a request the stream has
+  // spoken about since, or a session whose parks the stream has since
+  // cleared, wins over this snapshot. The snapshot has no park time, so a
+  // seeded park reads as parked from when the seed arrived.
+  //
+  // Unlike the other seeds this snapshot comes from each live session
+  // child's memory, not the Data Service's log, and the child changes its
+  // memory first and appends the event after (services/session's
+  // RequestPermission / finishPermission). So the snapshot runs AHEAD of the
+  // log, never behind what the log says at the moment it is read:
+  //  - a request parked but not yet appended shows up early; its
+  //    permission_requested follows live and lands as a no-op;
+  //  - a request resolved but not yet appended is already gone; if this
+  //    connection heard it requested, the heard guard keeps it until the
+  //    permission_resolved follows live;
+  //  - an event that reaches the window before the seed's answer does can
+  //    be newer than the snapshot (it was appended after the child was
+  //    read): the heard and cleared guards make it win.
+  // What is still possible: an append that failed (best effort, logged by
+  // the child) leaves the rail and the child disagreeing until the next
+  // event for that request or session; and a child that failed or was too
+  // slow to answer the Router contributes nothing, so its parks appear only
+  // when the next one is requested.
+  useEffect(() => {
+    let cancelled = false;
+    eventsReady()
+      .then(() => (cancelled ? [] : router.listPermissionRequests()))
+      .then((list) => {
+        if (cancelled) return;
+        const now = new Date().toISOString();
+        let changed = false;
+        for (const req of list) {
+          if (req.status !== "pending" || !req.session_id) continue;
+          let fold = folds.current.get(req.session_id);
+          if (!fold) {
+            fold = emptyFold();
+            folds.current.set(req.session_id, fold);
+          }
+          if (fold.parksClearedLive || fold.heardPermissions.has(req.id) || fold.pending.has(req.id)) continue;
+          fold.pending.set(req.id, { tool: req.tool, at: now });
+          changed = true;
+        }
+        if (changed) publish();
+      })
+      // Best effort: live events still bring the next park in.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [publish]);
 
   // Republish when the mirror itself changes — between transitions the stream
   // says nothing, so a refetch is where a cold reader's state arrives. Keyed

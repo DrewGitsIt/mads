@@ -1,10 +1,32 @@
 import { useEffect, useState } from "react";
-import { subscribeToEvents } from "../router/events";
+import { eventsReady, subscribeToEvents } from "../router/events";
+import { getAllEvents } from "../router/eventPages";
 import type { RouterClient } from "../router/client";
 import { StatusMark } from "../features/sessions/rail/StatusMark";
-import type { SessionProvisioningPayload } from "../router/types";
+import type { Envelope, SessionProvisioningPayload } from "../router/types";
 import { reduceSteps, type StepId } from "./provisioningSteps";
 import styles from "./ProvisioningStrip.module.css";
+
+const PROVISIONING_TYPES = ["session.provisioning", "session.activity_changed"];
+
+/** One step as the log recorded it; its seq orders history and live steps together. */
+interface ReceivedStep {
+  seq: number;
+  payload: SessionProvisioningPayload;
+}
+
+function stepOf(env: Envelope): ReceivedStep | undefined {
+  if (env.type !== "session.provisioning") return undefined;
+  const payload = env.payload as SessionProvisioningPayload | undefined;
+  return payload?.step ? { seq: env.seq, payload } : undefined;
+}
+
+/** Merges steps by seq: in log order, each once, whichever way it arrived. */
+function mergeSteps(prev: ReceivedStep[], incoming: ReceivedStep[]): ReceivedStep[] {
+  const seen = new Set(prev.map((r) => r.seq));
+  const fresh = incoming.filter((r) => !seen.has(r.seq));
+  return fresh.length === 0 ? prev : [...prev, ...fresh].sort((a, b) => a.seq - b.seq);
+}
 
 const STEP_LABELS: Record<StepId, string> = {
   worktree: "Setting up worktree",
@@ -20,47 +42,72 @@ const IN_PLACE_LABEL = "Using current directory";
 
 export interface ProvisioningStripProps {
   sessionId: string;
-  /** Read once after subscribing, to catch a start that finished before the strip mounted. */
-  routerClient?: Pick<RouterClient, "getSession">;
+  /**
+   * Read once after subscribing: the session's provisioning history (the
+   * event bus never replays it) and the record, to catch a start that
+   * finished before the strip mounted.
+   */
+  routerClient?: Pick<RouterClient, "getSession" | "getEvents">;
   onDone?: () => void;
 }
 
 /** Ephemeral setup indicator — unmounts once the session goes active, not a persistent status bar. */
 export function ProvisioningStrip({ sessionId, routerClient, onDone }: ProvisioningStripProps) {
-  const [received, setReceived] = useState<SessionProvisioningPayload[]>([]);
+  const [received, setReceived] = useState<ReceivedStep[]>([]);
   const [sessionActive, setSessionActive] = useState(false);
 
   useEffect(() => {
     setReceived([]);
     setSessionActive(false);
-    const unsubscribe = subscribeToEvents(
-      { sessionId, types: ["session.provisioning", "session.activity_changed"] },
-      (envelope) => {
-        if (envelope.type === "session.provisioning") {
-          const payload = envelope.payload as SessionProvisioningPayload | undefined;
-          if (payload?.step) {
-            setReceived((prev) => [...prev, payload]);
-          }
-          // The runner's last step, sent right before the session goes
-          // active. It also counts as done because the window shares one
-          // event stream: an activity_changed delivered to the rail before
-          // this strip subscribed is never delivered again, while the
-          // provisioning history is replayed to the strip on subscribe.
-          if (payload?.step === "provider_ready") setSessionActive(true);
-        } else if (envelope.type === "session.activity_changed") {
-          setSessionActive(true);
-        }
-      },
-    );
-    // A start that finished before the strip subscribed, with no replay to
-    // carry its steps (session.provisioning was already on the stream for an
-    // earlier session): only the record says it is over. Read after
-    // subscribing, so a start finishing in between still arrives live.
+    const unsubscribe = subscribeToEvents({ sessionId, types: PROVISIONING_TYPES }, (envelope) => {
+      if (envelope.type === "session.provisioning") {
+        const step = stepOf(envelope);
+        if (step) setReceived((prev) => mergeSteps(prev, [step]));
+        // The runner's last step, sent right before the session goes
+        // active. It counts as done too: the activity_changed that follows
+        // it may have reached the window before this strip subscribed.
+        if (step?.payload.step === "provider_ready") setSessionActive(true);
+      } else if (envelope.type === "session.activity_changed") {
+        setSessionActive(true);
+      }
+    });
+    // The bus never replays, so what happened before the strip subscribed
+    // comes over REST: subscribed first, both reads behind the bus's ready
+    // barrier (router/events.ts eventsReady), so nothing falls between them
+    // and the stream; steps merge by seq, so one that came both ways counts
+    // once and history lands in front of what arrived live.
     let cancelled = false;
-    routerClient
-      ?.getSession(sessionId)
+    const ready = eventsReady();
+    if (routerClient) {
+      void ready
+        .then(() => (cancelled ? [] : getAllEvents(routerClient, { sessionId, types: PROVISIONING_TYPES })))
+        .then((history) => {
+          if (cancelled) return;
+          const steps = history.map(stepOf).filter((r): r is ReceivedStep => r !== undefined);
+          if (steps.length === 0) return;
+          setReceived((prev) => mergeSteps(prev, steps));
+          // The latest start is over if its last step is provider_ready, or
+          // the session's activity changed after it (an activity change
+          // before it belongs to an earlier life of the session).
+          const last = steps[steps.length - 1];
+          if (
+            last.payload.step === "provider_ready" ||
+            history.some((env) => env.type === "session.activity_changed" && env.seq > last.seq)
+          ) {
+            setSessionActive(true);
+          }
+        })
+        .catch(() => {
+          // Best effort: live steps still arrive.
+        });
+    }
+    // A start that finished before the strip subscribed but that the history
+    // doesn't show finishing (from before these events existed, or past the
+    // read's page cap): only the record says it is over.
+    void ready
+      .then(() => (cancelled ? undefined : routerClient?.getSession(sessionId)))
       .then((session) => {
-        if (!cancelled && session.activity === "active") setSessionActive(true);
+        if (!cancelled && session?.activity === "active") setSessionActive(true);
       })
       .catch(() => {
         // Best effort: the live events still hide the strip.
@@ -78,9 +125,9 @@ export function ProvisioningStrip({ sessionId, routerClient, onDone }: Provision
   if (sessionActive) return null;
 
   // Latest payload per step: a restarted Start reports its steps again.
-  const latest = new Map(received.map((p) => [p.step, p]));
+  const latest = new Map(received.map(({ payload }) => [payload.step, payload]));
   const steps = reduceSteps(
-    received.map((p) => p.step),
+    received.map(({ payload }) => payload.step),
     sessionActive,
   ).filter((step) => !(step.id === "hook" && latest.get("hook")?.skipped));
 

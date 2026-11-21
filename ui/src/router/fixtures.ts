@@ -61,6 +61,8 @@ import type {
   Note,
   NoteType,
   PermissionRequest,
+  QueuedMessage,
+  SessionPermissionRequest,
   PipelinePickup,
   PipelineRun,
   PreflightCheck,
@@ -1236,6 +1238,10 @@ export class FakeRouterClient implements RouterClient {
     return `fixture://${who}/attachments/${attachmentId}${variant ? `/${variant}` : ""}`;
   }
 
+  async getQueue(): Promise<QueuedMessage[]> {
+    return [];
+  }
+
   async cancelQueuedMessage(): Promise<void> {}
 
   async interrupt(): Promise<void> {}
@@ -1348,6 +1354,12 @@ export class FakeRouterClient implements RouterClient {
 
   async getPermissionRequests(sessionId: string): Promise<PermissionRequest[]> {
     return this.permissionRequests.get(sessionId) ?? [];
+  }
+
+  async listPermissionRequests(): Promise<SessionPermissionRequest[]> {
+    return [...this.permissionRequests].flatMap(([session_id, list]) =>
+      list.filter((p) => p.status === "pending").map((p) => ({ ...p, session_id })),
+    );
   }
 
   async resolvePermissionRequest(sessionId: string, requestId: string): Promise<void> {

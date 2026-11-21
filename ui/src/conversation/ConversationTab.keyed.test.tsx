@@ -109,6 +109,46 @@ describe("ConversationTab — keyed conversation", () => {
     expect(screen.getAllByText("and then the docs")).toHaveLength(1);
   });
 
+  describe("the queue seed (the bus never replays queue_changed)", () => {
+    const q = (id: string, text: string) => ({ id, text, queued_at: new Date().toISOString() });
+
+    it("seeds the queue from GET /sessions/{id}/queue when nothing newer has spoken", async () => {
+      const client = new FakeRouterClient();
+      vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
+      const getQueue = vi.spyOn(client, "getQueue").mockResolvedValue([q("q9", "queued before I looked")]);
+      await mount(client);
+      await waitFor(() => expect(screen.getByText("queued before I looked")).toBeTruthy());
+      expect(getQueue).toHaveBeenCalledWith("session-active");
+    });
+
+    it("drops the seed when a live queue_changed spoke first (live wins)", async () => {
+      const client = new FakeRouterClient();
+      vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
+      let answer!: (v: ReturnType<typeof q>[]) => void;
+      vi.spyOn(client, "getQueue").mockReturnValue(new Promise((r) => (answer = r)));
+      await mount(client);
+      controlEnvelope("session.queue_changed", { queued: [q("q2", "the live queue")] });
+      await act(async () => answer([q("q9", "stale snapshot")]));
+      expect(screen.queryByText("stale snapshot")).toBeNull();
+      expect(screen.getByText("the live queue")).toBeTruthy();
+    });
+
+    it("drops the seed when hello brought the queue first — never applied twice", async () => {
+      const client = new FakeRouterClient();
+      vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
+      let answer!: (v: ReturnType<typeof q>[]) => void;
+      vi.spyOn(client, "getQueue").mockReturnValue(new Promise((r) => (answer = r)));
+      const source = await mount(client);
+      act(() => {
+        source.hello({ queued: [q("q1", "from hello")] });
+        source.replayEnd();
+      });
+      await act(async () => answer([q("q1", "from hello"), q("q0", "older snapshot")]));
+      expect(screen.getAllByText("from hello")).toHaveLength(1);
+      expect(screen.queryByText("older snapshot")).toBeNull();
+    });
+  });
+
   it("never duplicates a row: settled, the turn-end page, a reattach, a refocus and an inject all merge by key", async () => {
     const client = new FakeRouterClient();
     const getPage = vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));

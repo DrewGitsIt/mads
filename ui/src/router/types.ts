@@ -894,6 +894,12 @@ export interface PermissionRequest {
   reason?: string;
 }
 
+// One entry of the Router's window-wide GET /permission-requests: a live
+// session child's pending request, tagged with the session it belongs to.
+export interface SessionPermissionRequest extends PermissionRequest {
+  session_id: string;
+}
+
 // mirrors providers/provider/event.go CompactStatus — which phase of a
 // native compaction pass this is. Phase "start" is the ongoing state; "done"
 // carries success/error. Only claude-code's stream-json transport emits this

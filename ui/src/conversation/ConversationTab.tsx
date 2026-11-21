@@ -6,7 +6,7 @@ import { Toast } from "../components/Toast/Toast";
 import type { RouterClient, SessionEventSource } from "../router/client";
 import { CommitRefusedError, TransportSwitchError } from "../router/client";
 import { coalesce, type Coalescer } from "../router/coalesce";
-import { subscribeToEvents } from "../router/events";
+import { eventsReady, subscribeToEvents } from "../router/events";
 import { getAllEvents } from "../router/eventPages";
 import { refreshSessionRepos, useSessionRepos } from "../router/repoStateStore";
 import { contextWindowForModel, countsTokens } from "../router/modelDisplay";
@@ -409,6 +409,11 @@ export function ConversationTab({
   // this pane unmounting; this is only its mirror — hello's snapshot, then
   // kept current by session.queue_changed.
   const queuedMessages = conv.state.queued;
+  // Set once anything newer than the queue seed has spoken for this session:
+  // the keyed stream's hello (which carries the queue), a live
+  // session.queue_changed, or this tab's own queue/cancel. See the queue
+  // effect below.
+  const queueHeardRef = useRef(false);
   // Paced reveal of the turn's text; `final` once the turn is over, so the
   // last word shows whole.
   const reveal = useReveal(conv.rows, wordsPerMinute, !turnLive);
@@ -502,12 +507,21 @@ export function ConversationTab({
         setPermissionRequests(new Map(reqs.map((r) => [r.id, r])));
       })
       .catch(() => {});
+    // The two reads below merge with live bus events (tool_status_changed,
+    // delegate_changed), so they wait for the bus's ready barrier
+    // (router/events.ts eventsReady): the bus never replays, and a read
+    // served before its cursor is fixed could miss an event that lands in
+    // between. Those subscriptions are later effects of this same commit;
+    // React runs a commit's effects in one go, so they are all registered
+    // before even an already-resolved barrier lets these reads start.
+    const ready = eventsReady();
     // History parity (T17): the control-plane event log is the only
     // historical source for task lifecycles, compaction and out-of-band
     // status changes — the provider transcript omits them. Merge live-wins:
     // anything the stream delivered while this fetch was in flight is
     // fresher than the replay.
-    void getAllEvents(routerClient, { sessionId, types: CONVERSATION_EVENT_TYPES })
+    void ready
+      .then(() => (cancelled ? [] : getAllEvents(routerClient, { sessionId, types: CONVERSATION_EVENT_TYPES })))
       .then((envelopes) => {
         if (cancelled) return;
         const h = foldHistoryEvents(envelopes);
@@ -518,8 +532,8 @@ export function ConversationTab({
       .catch(() => {});
     // Live-wins, like the event replay: a delegate_changed that landed while
     // this was in flight is newer than the snapshot.
-    void routerClient
-      .getSessionDelegates(sessionId)
+    void ready
+      .then(() => (cancelled ? [] : routerClient.getSessionDelegates(sessionId)))
       .then((list) => {
         if (cancelled) return;
         setDelegates((live) => new Map([...list.map((d) => [d.harness_id, d] as const), ...live]));
@@ -565,10 +579,10 @@ export function ConversationTab({
     if (turnPhase !== "live") setAgentSince(undefined);
   }, [turnPhase]);
 
-  // Event-driven refetches of the session record are coalesced (the bus
-  // replays its durable log on connect: one GET /sessions/:id per replayed
-  // event before) and single-flight, so an older response is never the last
-  // word. A user action's refetch (after a push) goes through now() —
+  // Event-driven refetches of the session record are coalesced (a
+  // reconnect can bring a burst, everything since the bus's cursor: one
+  // GET /sessions/:id per event before) and single-flight, so an older
+  // response is never the last word. A user action's refetch (after a push) goes through now() —
   // immediate, still in turn with a fetch in flight. The mount read above
   // stays its own fetch: it also seeds usage and agent state.
   const sessionFetch = useRef<Coalescer | null>(null);
@@ -926,6 +940,9 @@ export function ConversationTab({
   // conversation itself tracks turn_end, the rest is this tab's own state.
   statusRef.current = (kind, data) => {
     if (kind === "hello") {
+      // hello carries the queue (the keyed conversation applies it) and is
+      // newer than the REST queue seed: the seed must not overwrite it.
+      if (Array.isArray(data.queued)) queueHeardRef.current = true;
       // A connection that didn't resume starts from its own snapshots (sent
       // only when there is something to say): the last one's processes are
       // gone with it.
@@ -1046,10 +1063,26 @@ export function ConversationTab({
 
   // Queue changes. A queued message going out needs nothing here: it
   // reaches the conversation as a user_message frame, which opens its turn.
+  //
+  // The bus never replays, so a queue that formed before this tab subscribed
+  // is seeded from GET /sessions/{id}/queue: subscribed first, read behind
+  // the ready barrier, and dropped if anything newer has spoken by the time
+  // it answers (queueHeardRef). In chat mode the keyed stream's hello
+  // usually gets there first and the seed is dropped; it matters when
+  // hello hasn't come (terminal mode, a stream that can't connect).
+  //
+  // Like the approvals seed (useSessionAgentState), this snapshot comes from
+  // the session child's memory, which the child changes before it appends
+  // session.queue_changed, so it is never older than the log when read;
+  // each event carries the whole queue, so a later one simply replaces it.
+  // A failed append leaves it stale until the next change.
   useEffect(() => {
-    return subscribeToEvents({ sessionId, types: ["session.queue_changed"] }, (envelope) => {
+    queueHeardRef.current = false;
+    let cancelled = false;
+    const unsubscribe = subscribeToEvents({ sessionId, types: ["session.queue_changed"] }, (envelope) => {
       const change = envelope.payload as Partial<QueueChanged> | undefined;
       if (!change) return;
+      queueHeardRef.current = true;
       convDispatch({ type: "queued", queued: change.queued ?? [] });
       if (change.failed?.attribution) {
         const from = change.failed.attribution.source_name || "mads";
@@ -1058,7 +1091,19 @@ export function ConversationTab({
         setSendError(`Couldn't send your queued message: ${change.error ?? "unknown error"}`);
       }
     });
-  }, [sessionId, convDispatch]);
+    eventsReady()
+      .then(() => (cancelled ? [] : routerClient.getQueue(sessionId)))
+      .then((queued) => {
+        if (cancelled || queueHeardRef.current || queued.length === 0) return;
+        convDispatch({ type: "queued", queued });
+      })
+      // Best effort: the next queue change still arrives live.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [sessionId, convDispatch, routerClient]);
 
   // Queued messages live in the session process, so a session that stops
   // has none, whatever the last event said.
@@ -1068,6 +1113,7 @@ export function ConversationTab({
 
   const handleCancelQueued = useCallback(
     (queuedId: string) => {
+      queueHeardRef.current = true;
       convDispatch({ type: "queued", queued: queuedMessages.filter((m) => m.id !== queuedId) });
       routerClient.cancelQueuedMessage(sessionId, queuedId).catch((err: unknown) => {
         setSendError(err instanceof Error ? err.message : "Couldn't remove the queued message.");
@@ -1528,6 +1574,7 @@ export function ConversationTab({
     optimisticTurn.current = false;
     convDispatch({ type: "sending", on: false }); // it arrives later, as a delivery
     if (!queuedMessages.some((m) => m.id === q.id)) {
+      queueHeardRef.current = true;
       convDispatch({ type: "queued", queued: [...queuedMessages, q] });
     }
   };

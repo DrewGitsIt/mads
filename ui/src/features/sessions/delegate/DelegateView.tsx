@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RouterClient } from "../../../router/client";
-import { subscribeToEvents } from "../../../router/events";
+import { eventsReady, subscribeToEvents } from "../../../router/events";
 import { getAllEvents } from "../../../router/eventPages";
 import type { Delegate, DelegateCapabilities, Envelope, Session, ToolUse } from "../../../router/types";
 import { ContentColumn } from "../../../components/ContentColumn/ContentColumn";
@@ -92,15 +92,17 @@ export function DelegateView({ sessionId, harnessId, parent, routerClient, onBac
     setDelegates(new Map());
     setMissing(false);
     setEnvelopes([]);
-    // Subscribed before the reads, so nothing falls in the gap; the reads
-    // merge under anything live (dedupe by seq; newest record wins).
+    // Subscribed before the reads, and the reads behind the bus's ready
+    // barrier (router/events.ts eventsReady), so nothing falls in the gap;
+    // the reads merge under anything live (dedupe by seq; newest record wins).
     const unsubRecord = subscribeToEvents({ sessionId, types: ["session.delegate_changed"] }, (env) => {
       const d = env.payload as Delegate | undefined;
       if (d?.harness_id) setDelegates((cur) => new Map(cur).set(d.harness_id, d));
     });
     const unsubStream = subscribeToEvents({ sessionId, types: DELEGATE_EVENT_TYPES }, (env) => addEnvelopes([env]));
-    routerClient
-      .getSessionDelegates(sessionId)
+    const ready = eventsReady();
+    ready
+      .then(() => (cancelled ? [] : routerClient.getSessionDelegates(sessionId)))
       .then((list) => {
         if (cancelled) return;
         // Under anything live: the stream is newer than this snapshot.
@@ -114,7 +116,8 @@ export function DelegateView({ sessionId, harnessId, parent, routerClient, onBac
       .catch(() => {
         if (!cancelled) setMissing(true);
       });
-    getAllEvents(routerClient, { sessionId, types: DELEGATE_REPLAY_TYPES })
+    ready
+      .then(() => (cancelled ? [] : getAllEvents(routerClient, { sessionId, types: DELEGATE_REPLAY_TYPES })))
       .then((history) => {
         if (!cancelled) addEnvelopes(history);
       })
@@ -137,7 +140,10 @@ export function DelegateView({ sessionId, harnessId, parent, routerClient, onBac
   useEffect(() => {
     if (!noFile) return;
     let cancelled = false;
-    getAllEvents(routerClient, { sessionId, types: ["session.subagent_event"] })
+    // Behind the ready barrier like the reads above: this merges with the
+    // live session.subagent_event subscription.
+    eventsReady()
+      .then(() => (cancelled ? [] : getAllEvents(routerClient, { sessionId, types: ["session.subagent_event"] })))
       .then((stream) => {
         if (!cancelled) addEnvelopes(stream);
       })

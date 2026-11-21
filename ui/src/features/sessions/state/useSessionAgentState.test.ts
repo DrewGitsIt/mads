@@ -2,8 +2,9 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionAgentState } from "./useSessionAgentState";
 import { router } from "../../../router/client";
+import { resetEventsBusForTests } from "../../../router/events";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
-import type { AgentState, Delegate, DelegateState, Session } from "../../../router/types";
+import type { AgentState, Delegate, DelegateState, Session, SessionPermissionRequest } from "../../../router/types";
 
 let seq = 0;
 
@@ -80,6 +81,7 @@ describe("useSessionAgentState", () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     vi.spyOn(router, "listDelegates").mockResolvedValue([]);
     vi.spyOn(router, "listDelegatesEndedAfter").mockResolvedValue([]);
+    vi.spyOn(router, "listPermissionRequests").mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -169,6 +171,91 @@ describe("useSessionAgentState", () => {
     // the turn's, not the park's.
     await waitFor(() => expect(result.current.s1?.awaitingSince).toBeUndefined());
     expect(result.current.s1?.workingSince).toBe("2026-09-28T09:59:00Z");
+  });
+
+  describe("the approvals seed (the bus never replays parks)", () => {
+    const pending = (id: string, sessionId: string, tool: string): SessionPermissionRequest => ({
+      id,
+      tool,
+      status: "pending",
+      session_id: sessionId,
+    });
+
+    it("seeds open parks from one window-wide read", async () => {
+      vi.mocked(router.listPermissionRequests).mockResolvedValue([pending("r1", "s1", "Bash"), pending("r2", "s2", "Edit")]);
+      const { result } = renderHook(() => useSessionAgentState());
+      await waitFor(() => expect(result.current.s1?.awaitingTool).toBe("Bash"));
+      expect(result.current.s2?.awaitingTool).toBe("Edit");
+      expect(router.listPermissionRequests).toHaveBeenCalledTimes(1);
+    });
+
+    it("never re-opens a park the stream resolved before the seed answered (live wins)", async () => {
+      let answer!: (v: SessionPermissionRequest[]) => void;
+      vi.mocked(router.listPermissionRequests).mockReturnValue(new Promise((r) => (answer = r)));
+      const { result } = renderHook(() => useSessionAgentState());
+      emit("session.permission_resolved", "s1", { request_id: "r1", status: "allowed" });
+      await act(async () => answer([pending("r1", "s1", "Bash")]));
+      expect(result.current.s1?.awaitingSince).toBeUndefined();
+    });
+
+    it("adds nothing to a session whose parks the stream cleared before the seed answered", async () => {
+      let answer!: (v: SessionPermissionRequest[]) => void;
+      vi.mocked(router.listPermissionRequests).mockReturnValue(new Promise((r) => (answer = r)));
+      const { result } = renderHook(() => useSessionAgentState());
+      idle("s1");
+      emit("session.activity_changed", "s2", { activity: "inactive" });
+      await act(async () => answer([pending("r1", "s1", "Bash"), pending("r2", "s2", "Edit"), pending("r3", "s3", "Read")]));
+      expect(result.current.s1?.awaitingSince).toBeUndefined();
+      expect(result.current.s2?.awaitingSince).toBeUndefined();
+      expect(result.current.s3?.awaitingTool).toBe("Read");
+    });
+
+    it("keeps a park the stream raised, whatever the seed says", async () => {
+      let answer!: (v: SessionPermissionRequest[]) => void;
+      vi.mocked(router.listPermissionRequests).mockReturnValue(new Promise((r) => (answer = r)));
+      const { result } = renderHook(() => useSessionAgentState());
+      emit("session.permission_requested", "s1", { request_id: "r2", tool: "Edit" }, "2026-09-28T10:00:00Z");
+      await act(async () => answer([]));
+      expect(result.current.s1?.awaitingTool).toBe("Edit");
+      expect(result.current.s1?.awaitingSince).toBe("2026-09-28T10:00:00Z");
+    });
+
+    // The ready barrier: the seed is read only once the bus knows its cursor,
+    // so an event committed after the snapshot can't fall below the cursor
+    // and be lost, and one heard before the snapshot answers wins over it.
+    it("reads the seed only after the head, and an event between subscribe and snapshot is neither lost nor overridden", async () => {
+      resetEventsBusForTests(); // the production first connect: head unknown
+      let head!: (r: Response) => void;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) =>
+          new URL(url).pathname === "/events/head" ? new Promise<Response>((r) => (head = r)) : Promise.resolve(new Response("[]")),
+        ),
+      );
+      let answer!: (v: SessionPermissionRequest[]) => void;
+      vi.mocked(router.listPermissionRequests).mockReturnValue(new Promise((r) => (answer = r)));
+      vi.mocked(router.listDelegatesEndedAfter).mockClear();
+      const { result } = renderHook(() => useSessionAgentState());
+      await act(async () => {});
+      expect(router.listPermissionRequests).not.toHaveBeenCalled();
+      expect(router.listDelegatesEndedAfter).not.toHaveBeenCalled();
+      expect(FakeEventSource.instances).toHaveLength(0);
+
+      seq = 10;
+      await act(async () => head(new Response('{"seq":10}')));
+      await waitFor(() => expect(router.listPermissionRequests).toHaveBeenCalledTimes(1));
+      expect(router.listDelegatesEndedAfter).toHaveBeenCalledTimes(1);
+      expect(new URL(FakeEventSource.instances[0].url).searchParams.get("since")).toBe("10");
+
+      // Both after the cursor, both before the snapshot answers: r1 resolved
+      // (the snapshot, read earlier, still has it) and r2 newly parked (the
+      // snapshot doesn't have it yet).
+      emit("session.permission_resolved", "s1", { request_id: "r1", status: "allowed" });
+      emit("session.permission_requested", "s1", { request_id: "r2", tool: "Edit" }, "2026-09-28T10:05:00Z");
+      await act(async () => answer([pending("r1", "s1", "Bash")]));
+      expect(result.current.s1?.awaitingTool).toBe("Edit");
+      expect(result.current.s1?.awaitingSince).toBe("2026-09-28T10:05:00Z");
+    });
   });
 
   it("names the oldest park when two are outstanding", async () => {
@@ -291,6 +378,8 @@ describe("useSessionAgentState", () => {
     // "0 min": only live delegates are worth a cold read — what ended after
     // now is nothing, while the store serves every live one, waiting too.
     const { result } = renderHook(() => useSessionAgentState([], undefined, 0));
+    // Read behind the bus's ready barrier: a tick after mount, not during it.
+    await waitFor(() => expect(router.listDelegatesEndedAfter).toHaveBeenCalled());
     expect(router.listDelegates).not.toHaveBeenCalled();
     const cutoff = Date.parse(vi.mocked(router.listDelegatesEndedAfter).mock.calls[0][0]);
     expect(Math.abs(Date.now() - cutoff)).toBeLessThan(5_000);
@@ -538,6 +627,7 @@ describe("useSessionAgentState — the fade window (Settings' 'Fade out subagent
     vi.stubGlobal("EventSource", FakeEventSource);
     vi.spyOn(router, "listDelegates").mockResolvedValue([]);
     vi.spyOn(router, "listDelegatesEndedAfter").mockResolvedValue([]);
+    vi.spyOn(router, "listPermissionRequests").mockResolvedValue([]);
   });
   afterEach(() => {
     vi.unstubAllGlobals();

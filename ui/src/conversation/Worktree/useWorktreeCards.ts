@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RouterClient } from "../../router/client";
-import { subscribeToEvents } from "../../router/events";
+import { eventsReady, subscribeToEvents } from "../../router/events";
 import { WORKTREE_CARD_EVENT_TYPES } from "../../router/sessionEventTypes";
 import { getAllEvents } from "../../router/eventPages";
 import type { CommitResult, Envelope, LandRequest, LandResult, UndoCommitResult } from "../../router/types";
@@ -59,14 +59,18 @@ export function useWorktreeCards(client: RouterClient, sessionId: string): Workt
       // Replay and live overlap at the seam; the fold drops repeated seqs.
       setEnvelopes((cur) => [...cur, ...incoming]);
     };
-    void getAllEvents(client, { sessionId, types: WORKTREE_CARD_EVENT_TYPES })
+    // Subscribed first, then the history read behind the bus's ready barrier
+    // (router/events.ts eventsReady): the bus never replays, so the history
+    // comes only from this read, and nothing may fall between the two.
+    const unsubscribe = subscribeToEvents({ sessionId, types: WORKTREE_CARD_EVENT_TYPES }, (env) =>
+      add([env]),
+    );
+    void eventsReady()
+      .then(() => (cancelled ? [] : getAllEvents(client, { sessionId, types: WORKTREE_CARD_EVENT_TYPES })))
       .then((envs) => {
         if (!cancelled) add(envs);
       })
       .catch(() => {});
-    const unsubscribe = subscribeToEvents({ sessionId, types: WORKTREE_CARD_EVENT_TYPES }, (env) =>
-      add([env]),
-    );
     return () => {
       cancelled = true;
       unsubscribe();

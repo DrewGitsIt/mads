@@ -4,7 +4,7 @@ import { Toast } from "../../../components/Toast/Toast";
 import type { PipelineClient } from "../../../pipeline/client/pipelineClient";
 import type { RouterClient } from "../../../router/client";
 import { coalesce, type Coalescer } from "../../../router/coalesce";
-import { subscribeToEvents } from "../../../router/events";
+import { eventsReady, subscribeToEvents } from "../../../router/events";
 import {
   SESSION_SHELL_REFETCH_EVENT_TYPES,
   WORKSPACE_SESSION_EVENT_TYPES,
@@ -114,9 +114,9 @@ export function SessionWorkspace({
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
   const runTaskCount = useLiveRunTaskCount(sessionId, pipelineClient, running);
 
-  // The open session's record. Event-driven refetches are coalesced (the
-  // bus replays its durable log on connect, so one per event was a storm of
-  // GET /sessions/:id) and single-flight, so an older response can never be
+  // The open session's record. Event-driven refetches are coalesced (a
+  // reconnect can bring a burst, everything since the bus's cursor, and one
+  // per event was a storm of GET /sessions/:id) and single-flight, so an older response can never be
   // the last word. A user action's refetch (after a bounce, a failed rename)
   // goes through now(): immediate, but still in turn with any fetch in flight.
   const sessionFetch = useRef<Coalescer | null>(null);
@@ -143,10 +143,13 @@ export function SessionWorkspace({
     sessionFetch.current = fetcher;
     fetcher.now();
     setRunning(false);
+    // Set once a run event is heard: it outranks the run seed below.
+    let heardRun = false;
     const unsubscribe = subscribeToEvents(
       { sessionId, types: WORKSPACE_SESSION_EVENT_TYPES },
       (envelope) => {
         if ((RUN_EVENT_TYPES as string[]).includes(envelope.type)) {
+          heardRun = true;
           setRunning(envelope.type === "pipeline.started");
         } else if ((SESSION_SHELL_REFETCH_EVENT_TYPES as string[]).includes(envelope.type)) {
           fetcher.request();
@@ -156,6 +159,16 @@ export function SessionWorkspace({
         // shared subscription — this shell has nothing to do with it.
       },
     );
+    // The bus never replays pipeline.started, so a run already going when
+    // this shell mounted comes from the run history: read behind the bus's
+    // ready barrier (router/events.ts eventsReady), and outranked by any run
+    // event heard first.
+    void eventsReady()
+      .then(() => (cancelled ? [] : routerClient.metricsPipelineRuns(sessionId)))
+      .then((runs) => {
+        if (!cancelled && !heardRun) setRunning(runs.some((r) => r.outcome === "running"));
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
       fetcher.cancel();

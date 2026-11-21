@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { RouterClient } from "../../../router/client";
-import { subscribeToEvents } from "../../../router/events";
+import { eventsReady, subscribeToEvents } from "../../../router/events";
 import type { Delegate } from "../../../router/types";
 
 /**
@@ -36,14 +36,15 @@ export function useOpenDelegateRecords(
         for (const d of list) if (!under || !next.has(d.harness_id)) next.set(d.harness_id, d);
         return { key: k, byId: next };
       });
-    // Subscribed before the read, so nothing falls in the gap; the read lands
-    // under anything live.
+    // Subscribed before the read, and the read behind the bus's ready barrier
+    // (router/events.ts eventsReady), so nothing falls in the gap; the read
+    // lands under anything live.
     const unsubscribe = subscribeToEvents({ sessionId, types: ["session.delegate_changed"] }, (env) => {
       const d = env.payload as Delegate | undefined;
       if (d?.harness_id) put([d], false);
     });
-    routerClient
-      .getSessionDelegates(sessionId)
+    eventsReady()
+      .then(() => (cancelled ? [] : routerClient.getSessionDelegates(sessionId)))
       .then((list) => {
         if (!cancelled) put(list, true);
       })

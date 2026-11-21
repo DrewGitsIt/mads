@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { FLAGS, subscribeFlags } from "../../../featureFlags";
 import type { RouterClient } from "../../../router/client";
-import { subscribeToEvents } from "../../../router/events";
+import { eventsReady, subscribeToEvents } from "../../../router/events";
 import type { Link } from "../../../router/types";
 import { RUN_EVENT_TYPES } from "../../../features/sessions/workspace/usePipelineRunning";
 
@@ -65,16 +65,18 @@ export function useLinkCommandState(
     if (!linkedSessions) return;
     let cancelled = false;
     let heard = false;
-    routerClient
-      .metricsPipelineRuns(sessionId)
-      .then((runs) => {
-        if (!cancelled && !heard) setPipelineRunning(runs.some((r) => r.outcome === "running"));
-      })
-      .catch(() => {});
+    // Subscribed first, the run history read behind the bus's ready barrier
+    // (router/events.ts eventsReady); a run event heard first wins.
     const unsubscribe = subscribeToEvents({ sessionId, types: RUN_EVENT_TYPES }, (envelope) => {
       heard = true;
       setPipelineRunning(envelope.type === "pipeline.started");
     });
+    eventsReady()
+      .then(() => (cancelled ? [] : routerClient.metricsPipelineRuns(sessionId)))
+      .then((runs) => {
+        if (!cancelled && !heard) setPipelineRunning(runs.some((r) => r.outcome === "running"));
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
       unsubscribe();
