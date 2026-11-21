@@ -1,7 +1,7 @@
 # Event bus performance: conditions, results, decision
 
-Status: decided 2026-11-21. The production build (branch `event-bus-live`) is
-in review; its own numbers get added under "Production build" when measured.
+Status: decided 2026-11-21. Production build (branch `event-bus-live-fixes`)
+measured and reviewed; numbers under "Production build".
 
 This records every condition measured while fixing the "sessions stop syncing /
 switching floods the network" problem, so the decision can be checked later.
@@ -240,8 +240,61 @@ speedups.
 
 ## Production build
 
-To be filled in from the production build's harness runs against main and R1
-(branch `event-bus-live`).
+Branch `event-bus-live-fixes` @ 2dcb4484 (on `event-bus-live`), measured
+2026-11-21 against main. Design as decided above, plus decisions made during
+review:
+
+- **Services older than the UI** (`/events/head` 404/405): the bus stops for
+  good and a "Restart mads" banner says so. No legacy fallback (Drew: fail
+  loudly; the UI is served live from `ui/dist` and `scripts/app.sh` reuses
+  running services, so this skew is real after an upgrade).
+- **Data Service down:** views keep waiting (order safety), the banner shows
+  after 1 s of failed head reads, job buttons give up after 10 s, and the
+  Router logs Data Service outages (dial errors only, rate-limited, one line
+  on recovery).
+- **Backoff cap 2 s** = 2 × the measured worst realistic restart (~1 s: a full
+  restart right after a rebuild, cold binaries, first head read on a
+  ~300k-event log; warm restarts 50–250 ms).
+- **Removed** as unreachable once `/events/head` is required: the
+  rejected-type probe and the per-link fallback for servers without bulk
+  links.
+- Every mount read in the UI (not only snapshot merges) waits for
+  `eventsReady()`; a table test covers 33 readers.
+
+### Results (L, N=3, Chromium, delays off; main → production)
+
+| # | /events bytes | settled (ms) | main-thread task (ms) |
+|---|---|---|---|
+| 1 cold load | 30.9 MB → 0 | 1921 → 158 | 1555 → 107 |
+| 2 switch | 99.1 MB → 0 | 1963 → 344 | 971 → 138 |
+| 3 delegate, heaviest | 196.6 MB → 0 | 21691 → 218 | 20062 → 126 |
+| 3b no transcript | 196.6 MB → 0 | 14942 → 546 | 13639 → 282 |
+| 3t typical | 196.6 MB → 0 | 2434 → 74 | 1149 → 64 |
+| 4 Retro round trip | 32.1 MB → 0 | 753 → 121 | 408 → 68 |
+| 5 launchpad | 0 → 0 | 93 → 90 | 43 → 39 |
+| 6 pinned streams | 327.8 MB → 0 | 5434 → 817 | 2421 → 387 |
+| 7 drop/resume | 49.5 MB → 0 | 1255 → 645 | 419 → 25 |
+| 7b 20 s offline | 49.5 MB → 0 | recovers 2.3–6.0 s → **0.28–1.40 s** after the network returns | 1147 → 488 |
+| 8 long-lived window | 227.2 MB → 0 | 3465 → 76 | 1748 → 76 |
+
+Realism (copy of the live DB): cold load 2925 → 144 ms, switch 2056 → 276 ms,
+delegate 15622 → 551 ms, pinned streams 6703 → 631 ms, 7b recovery 3.4–9.6 s →
+0.10–1.30 s, 0 B on `/events` throughout. Electron agrees (cold load 2635 →
+106 ms, typical delegate 3782 → 68 ms).
+
+Correctness: check a "after Retro → Sessions" **FIXED**; no REGRESSION in any
+run; check d shows the badge count on both builds; c and e "reload part-way"
+remain known-fail on both (e is a product issue: the strip mounts only after
+provisioning finishes). Live smoke passed every run.
+
+Delays on (git routes mocked slow): settle times equal main's (s2 14779 →
+15085 ms, s6 21543 → 21548 ms) but total queued time is 1.66–2.06× main's and
+6–8 more short requests go out per action (REST seeds, `/permission-requests`,
+mount reads now released together after `ready`). The slow git routes are the
+remaining bottleneck; that is the next piece of work.
+
+Runs: `perf-results/20261121-122846` (off), `-125519` (on), `-130554`
+(Electron), `-131522` (realism).
 
 ## Results directories
 
