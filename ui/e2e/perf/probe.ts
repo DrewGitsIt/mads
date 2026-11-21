@@ -25,6 +25,16 @@ import type { Page } from "@playwright/test";
 export const PROBE_INIT = probeInit(process.env.PERF_PROBE !== "0");
 
 /**
+ * The probe for one build: PERF_PROBE=0 makes every side lite;
+ * PERF_PROBE_CAND=0 only the candidate (BASE=X CAND=X measures the probe's
+ * own overhead, interleaved ABBA like any comparison).
+ */
+export function probeFor(label: string): string {
+  const full = process.env.PERF_PROBE !== "0" && !(label === "cand" && process.env.PERF_PROBE_CAND === "0");
+  return full ? PROBE_INIT : probeInit(false);
+}
+
+/**
  * The probe's source. full=false (PERF_PROBE=0) keeps only the markers —
  * no request wrappers, observers or lag probe — to measure their overhead;
  * settle then skips the page-side inputs it can't have.

@@ -3,7 +3,8 @@
 #
 #   make ui-perf BASE=<ref> CAND=<ref|worktree dir> PROFILE=S|M|L|XL N=5 BROWSER=chromium|electron
 #   also: SCENARIOS=1,3b  MODES=on,off (default both)  PERF_DELAYS=<regex>=<ms>,...
-#         PERF_HOLD_OUTPUT=0  CHECKS=a,b,c,d,e|none (default all; none in realism)
+#         PERF_HOLD_OUTPUT=0  PERF_PROBE=0 (lite probe everywhere) or PERF_PROBE_CAND=0 (cand only)
+#         CHECKS=a,b,c,d,e|none (default all; none in realism)
 #         REALISM=1 — the workload is a read-only backup of ~/.mads/mads.db
 #           (REAL_DB to override), prepared by `perfseed realism` and deleted
 #           with the run's temp dir; nothing real is committed or reported.
@@ -289,7 +290,7 @@ cat >"$RUN_DIR/plan.json" <<EOF
   "holdOutput": $([ "$PERF_HOLD_OUTPUT" = 0 ] && echo false || echo true),
   "checks": $checks_json,
   "realism": $([ -n "$REALISM" ] && echo true || echo false),
-  "meta": {"profile": "$PROFILE", "harness": "$(git -C "$ROOT" rev-parse --short HEAD)", "host": "$(uname -sm)"}
+  "meta": {"profile": "$PROFILE", "harness": "$(git -C "$ROOT" rev-parse --short HEAD)", "host": "$(uname -sm)", "probe": "$([ "${PERF_PROBE:-}" = 0 ] && echo "lite (markers only) on every side" || ([ "${PERF_PROBE_CAND:-}" = 0 ] && echo "full on base, lite (markers only) on cand" || echo full))"}
 }
 EOF
 

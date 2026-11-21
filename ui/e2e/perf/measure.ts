@@ -5,7 +5,7 @@ import { _electron as electron, chromium, type Browser, type BrowserContext, typ
 import { MainThreadMetrics, ProcSampler, SocketSampler, routeOf } from "./collectors";
 import { delayFor, parseDelays } from "./delayRules";
 import { resolveCheck } from "./checkNames";
-import { PROBE_INIT, arm, probeSeries, readProbe, type MarkerSpec, type PageReq } from "./probe";
+import { arm, probeFor, probeSeries, readProbe, type MarkerSpec, type PageReq } from "./probe";
 import type { ProxyRequest, ProxySnapshot } from "./proxyClient";
 import { SCENARIOS, scenarioById, useManifest, type Manifest, type Scenario, type ScenarioCtx } from "./scenarios";
 import { bootPerfStack, childrenOf, logHead, streamTarget, waitDelegatesConcluded, type Build, type PerfStack } from "./stack";
@@ -480,7 +480,7 @@ export async function bootRig(opts: {
       browserPid = electronApp.process().pid!;
       stack.own(browserPid, "electron");
       context = electronApp.context();
-      await context.addInitScript(PROBE_INIT);
+      await context.addInitScript(probeFor(build.label));
       page = await electronApp.firstWindow();
       // Main's ROUTER_BASE is VITE_ROUTER_URL: the window must load from the proxy, never the 17373 default.
       await page.waitForLoadState("domcontentloaded");
@@ -500,7 +500,7 @@ export async function bootRig(opts: {
         extraHTTPHeaders: { Authorization: `Bearer ${stack.token}` },
         viewport: { width: 1440, height: 900 },
       });
-      await context.addInitScript(PROBE_INIT);
+      await context.addInitScript(probeFor(build.label));
       page = await context.newPage();
     }
     for (const c of childrenOf(browserPid)) stack.own(c, "browser-child");
