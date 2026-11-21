@@ -39,6 +39,8 @@ if (!plan) {
   for (const id of plan.scenarios) {
     const scenario = scenarioById(id);
     for (const mode of plan.modes) {
+      // Real git (9x): the delay mock would only add to it; delays off only.
+      if (scenario.git && mode === "on") continue;
       for (let rep = 1; rep <= plan.n; rep++) {
         const order = rep % 2 === 1 ? plan.builds : [...plan.builds].reverse();
         for (const build of order) {

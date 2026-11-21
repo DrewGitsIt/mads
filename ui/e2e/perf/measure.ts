@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { _electron as electron, chromium, type Browser, type BrowserContext, type BrowserServer, type Page } from "@playwright/test";
-import { MainThreadMetrics, ProcSampler, SocketSampler, routeOf } from "./collectors";
+import { GIT_ROUTES, GitPsSampler, MainThreadMetrics, ProcSampler, SocketSampler, gitRoute, gitStats, readGitCalls, routeOf } from "./collectors";
 import { delayFor, parseDelays } from "./delayRules";
 import { resolveCheck } from "./checkNames";
 import { arm, probeFor, probeSeries, readProbe, type MarkerSpec, type PageReq } from "./probe";
@@ -37,6 +37,11 @@ export interface Plan {
    * redacted and no screenshots are kept.
    */
   realism?: boolean;
+  /**
+   * The real-git fixture (perfseed gitfx; scenarios 9x, checks f–h): its
+   * path, restored before every repetition from the pristine copy.
+   */
+  gitFx?: { root: string; pristine: string } | null;
   meta: Record<string, unknown>;
 }
 
@@ -77,6 +82,18 @@ export interface LegResult {
   eventsBytes: number;
   eventsFrames: number;
   eventsConnects: number;
+  /** Git calls the stack made, click → settled (the shim's log). */
+  gitSpawns?: number;
+  gitCpuMs?: number;
+}
+
+/** One git route's latency in the window (ms): server = the proxy's request → response headers; client = the page's fetch → headers. */
+export interface RouteLatency {
+  n: number;
+  serverP50: number;
+  serverMax: number;
+  clientP50: number;
+  clientMax: number;
 }
 
 export interface CheckResult {
@@ -117,6 +134,10 @@ export interface Result {
   browserForeign: string[];
   /** The live-event smoke after the scenario, and any checks run in the same repetition. */
   checks: CheckResult[];
+  /** The git routes' latency in the window. */
+  routes?: Record<string, RouteLatency>;
+  /** Git calls in the window by subcommand (the shim's log). */
+  gitBySub?: Record<string, { n: number; cpuMs: number }>;
   /** Every proxy request in the window: route, start (ms after t0), queued in the browser, duration, status. */
   requests: [string, number, number | null, number | null, number | string | null][];
 }
@@ -427,6 +448,7 @@ export async function bootRig(opts: {
   /** Electron: leave the first window as it loaded, probe or not (the cold-load leg's own reload carries the probe). */
   coldLoad?: boolean;
 }): Promise<Rig> {
+  const gitFx = opts.plan.gitFx ?? undefined;
   const { plan, build, mode, tag, manifest } = opts;
   const drainMs = await waitPortsDrained();
   if (drainMs > 1000) console.log(`${tag}: waited ${Math.round(drainMs / 1000)} s for loopback TIME_WAIT sockets to drain`);
@@ -464,6 +486,7 @@ export async function bootRig(opts: {
       tag,
       fastModelURL: opts.fastModelURL,
       env: opts.env,
+      gitFx,
     });
     if (manifest.parent?.running?.length) await waitDelegatesConcluded(stack, manifest.parent.id);
     if (manifest.typical?.running?.length) await waitDelegatesConcluded(stack, manifest.typical.id);
@@ -539,11 +562,14 @@ export async function bootRig(opts: {
       fallbacks: { n: 0 },
     };
     const st = stack;
+    const views: [number, string][] = [];
     const ctx: ScenarioCtx = {
       page,
       stack,
       manifest,
       browser: plan.browser,
+      views,
+      shown: (id) => views.push([Date.now(), id]),
       quiesce: async () => {
         const r = await waitRule(watch, Date.now(), await logHead(st), PREPARE_CAP_MS);
         if (r.capped) throw new Error(`page never went quiet: ${r.reason}`);
@@ -614,8 +640,11 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
 
     const procs = new ProcSampler(stack.pids, ["router"], (pid) => stack.own(pid, "router-child"));
     const socks = new SocketSampler(stack.proxy.port, rig.browserPid);
+    const gitPs = new GitPsSampler(stack.pids.router);
     await procs.start();
     socks.start();
+    gitPs.start();
+    const legWindows: [number, number][] = [];
     const t0 = Date.now();
     const snap0 = await stack.proxy.snapshot();
     let prevSnap = snap0;
@@ -637,6 +666,7 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       const rule = await waitRule(watch, clickAt, head, SETTLE_CAP_MS);
       if (rule.capped) throw new Error(`settle capped at ${SETTLE_CAP_MS / 1000} s: ${rule.reason}`);
       const settledAt = Math.max(markerAt, rule.at);
+      legWindows.push([clickAt, settledAt]);
       const m1 = await metrics.read();
       const series = await probeSeries(page, clickAt);
       const lag = series.lag.filter((x) => x[0] <= settledAt).map((x) => x[1]);
@@ -677,6 +707,7 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
     const probe = await readProbe(page, t0 - 1);
     const series = await probeSeries(page, t0);
     await socks.stop();
+    await gitPs.stop();
     const proc = await procs.stop();
 
     // The live app must never have been in reach: fail the run loudly.
@@ -723,6 +754,31 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       peak_sockets_lsof: socks.peak,
     };
     result.legs.forEach((l, i) => (result.det[`leg${i + 1}_events_bytes`] = l.eventsBytes));
+
+    // --- Git: the shim's log (every call), ps sampling (concurrency).
+    if (stack.gitLog) {
+      const calls = readGitCalls(stack.gitLog);
+      const all = gitStats(calls, t0, t1, stack.pids.router);
+      result.legs.forEach((l, i) => {
+        const [a, b] = legWindows[i];
+        const g = gitStats(calls, a, b, stack.pids.router);
+        l.gitSpawns = g.spawns;
+        l.gitCpuMs = g.cpuMs;
+      });
+      result.gitBySub = all.bySub;
+      Object.assign(result.timing, {
+        git_spawns: all.spawns,
+        git_router_spawns: all.router,
+        git_cpu_ms: all.cpuMs,
+        git_wall_ms: all.wallMs,
+        git_peak_concurrent_ps: gitPs.peak,
+        git_seen_by_ps: gitPs.seen.size,
+      });
+      result.legs.forEach((l, i) => {
+        result.timing[`leg${i + 1}_git_spawns`] = l.gitSpawns ?? 0;
+        result.timing[`leg${i + 1}_git_cpu_ms`] = l.gitCpuMs ?? 0;
+      });
+    }
     const prep = scenario.prepStats?.();
     if (prep) Object.assign(result.det, prep.det);
 
@@ -753,8 +809,79 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       if (reqStart > 0) addWait(`GET ${routeOf(new URL(name).pathname)}`, start, reqStart);
     }
     for (const [k, xs] of perRoute) result.queuedByRoute[k].p50 = Math.round(pct(xs, 0.5));
+    // --- Git routes: latency at the proxy (server) and in the page (client).
+    const routes: Record<string, { server: number[]; client: number[] }> = {};
+    for (const r of proxyNew) {
+      const g = gitRoute(r.method, r.path);
+      if (!g || r.sse || r.held) continue;
+      (routes[g] ??= { server: [], client: [] }).server.push((r.headers ?? r.end ?? t1) - r.start);
+    }
+    for (const r of probe.reqs) {
+      if (r.start < t0 || r.start > t1 || !r.url.startsWith(stack.appURL)) continue;
+      const g = gitRoute(r.method, new URL(r.url).pathname);
+      if (!g) continue;
+      (routes[g] ??= { server: [], client: [] }).client.push((r.headers ?? r.failed ?? r.closed ?? t1) - r.start);
+    }
+    result.routes = {};
+    for (const g of GIT_ROUTES) {
+      const x = routes[g];
+      if (!x) continue;
+      const lat: RouteLatency = {
+        n: Math.max(x.server.length, x.client.length),
+        serverP50: Math.round(pct(x.server, 0.5)),
+        serverMax: Math.round(Math.max(0, ...x.server)),
+        clientP50: Math.round(pct(x.client, 0.5)),
+        clientMax: Math.round(Math.max(0, ...x.client)),
+      };
+      result.routes[g] = lat;
+      result.timing[`route ${g} n`] = lat.n;
+      result.timing[`route ${g} server p50`] = lat.serverP50;
+      result.timing[`route ${g} server max`] = lat.serverMax;
+      result.timing[`route ${g} client p50`] = lat.clientP50;
+      result.timing[`route ${g} client max`] = lat.clientMax;
+    }
+
+    // --- Abandoned: a request naming session X still in flight when the
+    // view left X (ctx.shown). How many, how long each went on holding its
+    // socket after, and how many the page aborted (the proxy saw the close).
+    const views = ctx.views.filter(([t]) => t >= t0 - 1);
+    const sessOf = (p: string) => /^\/sessions\/([^/]+)\//.exec(p)?.[1];
+    let abandoned = 0;
+    let abandonedGit = 0;
+    let abandonedAborted = 0;
+    let heldTotal = 0;
+    let heldMax = 0;
+    let shownBefore = ctx.views.filter(([t]) => t < t0).at(-1)?.[1];
+    const leaves: [number, string][] = [];
+    for (const [t, id] of views) {
+      if (shownBefore && shownBefore !== id) leaves.push([t, shownBefore]);
+      shownBefore = id;
+    }
+    for (const r of proxyNew.concat(snap1.requests.filter((r) => r.start < t0 && (r.end === undefined || r.end >= t0)))) {
+      if (r.sse || r.held) continue;
+      const sid = sessOf(r.path);
+      if (!sid) continue;
+      const leave = leaves.find(([t, from]) => from === sid && r.start < t && (r.end === undefined || r.end > t));
+      if (!leave) continue;
+      abandoned++;
+      if (gitRoute(r.method, r.path)) abandonedGit++;
+      if (r.aborted) abandonedAborted++;
+      const held = (r.end ?? t1) - leave[0];
+      heldTotal += held;
+      heldMax = Math.max(heldMax, held);
+    }
+    if (leaves.length) {
+      Object.assign(result.timing, {
+        abandoned_requests: abandoned,
+        abandoned_git_requests: abandonedGit,
+        abandoned_aborted: abandonedAborted,
+        abandoned_held_total_ms: Math.round(heldTotal),
+        abandoned_held_max_ms: Math.round(heldMax),
+      });
+    }
     const longs = series.long.filter((x) => x[0] <= t1);
     result.timing = {
+      ...result.timing,
       settled_ms: result.legs.reduce((a, l) => a + l.settledMs, 0),
       marker_ms: result.legs.reduce((a, l) => a + l.markerMs, 0),
       main_task_ms: result.legs.reduce((a, l) => a + l.taskMs, 0),

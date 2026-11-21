@@ -137,6 +137,7 @@ export function probeInit(full: boolean): string {
     text: (s) => [...document.querySelectorAll(s.sel)].some((e) => visible(e) && s.any.some((t) => e.textContent.trim() === t)),
     exists: (s) => (s.n ? [...document.querySelectorAll(s.sel)].filter(visible).length >= s.n : visible(document.querySelector(s.sel))),
     esOpenAfter: (s) => P.reqs.some((r) => r.kind === "es" && r.open >= s.after && new URL(r.url).pathname === "/events"),
+    match: (s) => { const re = new RegExp(s.re); return [...document.querySelectorAll(s.sel)].some((e) => visible(e) && re.test(e.textContent)); },
   };
   // Checked at most once per frame while anything is armed, and a marker
   // is disarmed once it holds.
@@ -185,7 +186,9 @@ export type MarkerSpec =
   | { kind: "text"; sel: string; any: string[] }
   | { kind: "esOpenAfter"; after: number }
   /** n: at least n visible matches. sync: checked on every DOM mutation, not once a frame (a short-lived element). */
-  | { kind: "exists"; sel: string; n?: number; sync?: boolean };
+  | { kind: "exists"; sel: string; n?: number; sync?: boolean }
+  /** A visible match of sel whose text matches the regular expression re. */
+  | { kind: "match"; sel: string; re: string };
 
 export interface PageReq {
   id: number;

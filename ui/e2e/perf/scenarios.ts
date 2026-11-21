@@ -5,6 +5,7 @@ import type { MarkerSpec } from "./probe";
 import type { PerfStack } from "./stack";
 import type { CheckResult } from "./measure";
 import { liveFixture, renameSession, type LiveFixture } from "./fixtures";
+import { arm } from "./probe";
 
 /** What perfseed wrote (services/data/cmd/perfseed Manifest), as far as the scenarios need it. */
 export interface Manifest {
@@ -22,6 +23,33 @@ export interface Manifest {
   total_bytes: number;
   counts: Record<string, number>;
   bytes: Record<string, number>;
+  /** The real-git fixture (perfseed gitfx), when the run built one. */
+  git?: GitFixture;
+}
+
+/** perfseed gitfx's manifest section. */
+export interface GitFixture {
+  root: string;
+  origin: string;
+  sessions: Record<"isolated" | "land" | "multi" | "typical", GitSession>;
+  counts: Record<string, number>;
+}
+
+export interface GitSession {
+  id: string;
+  name: string;
+  kind: "isolated" | "in_place" | "multi_repo";
+  dir: string;
+  folder: string;
+  branch?: string;
+  base?: string;
+  roots: string[];
+  ledger_files: number;
+  ledger_dirs: number;
+  ledger_rows: number;
+  commits_recorded: number;
+  edit_file: string;
+  new_dir: string;
 }
 
 export interface ParentRef {
@@ -41,6 +69,9 @@ export interface ScenarioCtx {
   browser: "chromium" | "electron";
   /** Waits until the page is quiet: no /events bytes, no new or open short requests (delayed ones aside). */
   quiesce(): Promise<void>;
+  /** Which session the view shows, from when (the abandoned-request metric). */
+  views: [number, string][];
+  shown(id: string): void;
 }
 
 /** One click (or navigation) and the data marker that says its view has rendered its data. */
@@ -60,6 +91,8 @@ export interface Leg {
 export interface Scenario {
   id: string;
   title: string;
+  /** Drives the real-git fixture: run with delays off only (git is real; the mock would add to it). */
+  git?: boolean;
   /** Gets the page to the scenario's starting view and lets it settle. Not measured. */
   prepare(ctx: ScenarioCtx): Promise<void>;
   legs: Leg[];
@@ -144,12 +177,16 @@ async function load(ctx: ScenarioCtx): Promise<void> {
 
 async function openSession(ctx: ScenarioCtx, id: string, name = nameOf(id)): Promise<void> {
   await railCard(ctx.page, id).click();
+  ctx.shown(id);
   await header(ctx.page, id, name).waitFor({ state: "visible", timeout: T });
 }
 
 const openLeg = (name: string, id: () => string, quiesceAfter = false): Leg => ({
   name,
-  act: (ctx) => railCard(ctx.page, id()).click(),
+  act: async (ctx) => {
+    await railCard(ctx.page, id()).click();
+    ctx.shown(id());
+  },
   marker: () => ({ kind: "session", name: nameOf(id()) }),
   quiesceAfter,
 });
@@ -294,6 +331,7 @@ export const SCENARIOS: Scenario[] = [
   },
   pinnedScenario(),
   longLivedScenario(),
+  ...gitScenarios(),
   {
     id: "7b-offline",
     title: "Offline for a while, then back (connections refused: backoff, health, probes)",
@@ -494,6 +532,197 @@ function longLivedScenario(): Scenario {
     legs: [{ name: "open delegate", act: (ctx) => row(ctx).click(), marker: () => ({ kind: "delegate" }) }],
     smoke: renameSmoke,
   };
+}
+
+// --- Scenarios 9x: the git routes with real git (perfseed gitfx).
+
+/** The fixture, or the run's error when it wasn't built. */
+// Function declarations: SCENARIOS (above) builds the 9x scenarios at load.
+function gx(): GitFixture {
+  const g = m().git;
+  if (!g) throw new Error("9x: the workload has no such fixture (no git section: run with GITFX=1 or a 9x scenario)");
+  return g;
+}
+function gs(k: keyof GitFixture["sessions"]): () => string {
+  return () => gx().sessions[k].id;
+}
+const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const filesPanel = "#workspace-panel-files";
+/** The Changes tab has its change set: the totals read "N file(s)". */
+const changesLoaded: MarkerSpec = { kind: "match", sel: `${filesPanel} [data-testid="changes-totals"]`, re: "\\d+ files?" };
+/** Something always on screen once a session is open: the leg's marker holds at once (the window is the measure). */
+const sessionHeader = (k: keyof GitFixture["sessions"]): MarkerSpec => ({ kind: "session", name: gx().sessions[k].name });
+
+/** Load, let the page settle, open session k and let every request it started finish. */
+async function gitPrepare(ctx: ScenarioCtx, k: keyof GitFixture["sessions"]): Promise<void> {
+  gx();
+  await load(ctx);
+  await ctx.quiesce();
+  await openSession(ctx, gs(k)());
+  await sessionReady(ctx, gs(k)());
+  await ctx.quiesce();
+}
+
+async function openChanges(ctx: ScenarioCtx): Promise<void> {
+  await ctx.page.getByRole("tab", { name: /Changes/ }).click();
+}
+
+/** Opens the Changes tab's "where this session's work goes" popover and clicks the button in one of its steps. */
+async function workStep(ctx: ScenarioCtx, testId: "work-step-push" | "work-step-land" | "work-step-commit"): Promise<void> {
+  await ctx.page.locator(filesPanel).getByRole("button", { name: "Where this session's work goes" }).click();
+  await ctx.page.getByTestId(testId).getByRole("button").first().click();
+}
+
+/** Posts a message to a session through the Router (wakes its child: the fake provider). */
+async function say(ctx: ScenarioCtx, id: string, text: string): Promise<void> {
+  const res = await fetch(`${ctx.stack.routerURL}/sessions/${id}/messages`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ctx.stack.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ text, queue: true }),
+  });
+  if (!res.ok) throw new Error(`POST /sessions/${id}/messages: ${res.status} ${(await res.text()).slice(0, 200)}`);
+}
+
+async function agentIdle(ctx: ScenarioCtx, id: string, timeoutMs = 60_000): Promise<void> {
+  await until(
+    `${id}'s turn to end`,
+    async () => {
+      const res = await fetch(`${ctx.stack.routerURL}/sessions/${id}`, { headers: { Authorization: `Bearer ${ctx.stack.token}` } });
+      const sess = (await res.json()) as { agent_state?: { state?: string } };
+      return sess.agent_state?.state === "idle";
+    },
+    timeoutMs,
+  );
+}
+
+function gitScenarios(): Scenario[] {
+  const BUSY_S = Number(process.env.PERF_BUSY_S ?? 20);
+  const A = gs("isolated");
+  const B = gs("multi");
+  return [
+    {
+      id: "9a-git-switch",
+      title: "Real git: switch A → B → A between two git-heavy sessions (isolated heavy, multi-repo heavy), quiet between legs",
+      git: true,
+      prepare: (ctx) => gitPrepare(ctx, "isolated"),
+      legs: [openLeg("A→B", B, true), openLeg("B→A", A, true)],
+      smoke: renameSmoke,
+    },
+    {
+      id: "9b-git-rapid-switch",
+      title: "Real git: rapid A → B → A → B, about 1 s apart (requests left behind)",
+      git: true,
+      prepare: (ctx) => gitPrepare(ctx, "isolated"),
+      legs: [
+        {
+          name: "A→B→A→B",
+          act: async (ctx) => {
+            for (const id of [B(), A()]) {
+              await railCard(ctx.page, id).click();
+              ctx.shown(id);
+              await sleepMs(1000);
+            }
+            // The marker is the last one's: re-armed before its click.
+            await arm(ctx.page, "A→B→A→B", { kind: "session", name: nameOf(B()) });
+            await railCard(ctx.page, B()).click();
+            ctx.shown(B());
+          },
+          marker: () => ({ kind: "session", name: nameOf(B()) }),
+        },
+      ],
+      smoke: renameSmoke,
+    },
+    {
+      id: "9c-git-changes-tab",
+      title: "Real git: open the Changes tab of a git-heavy isolated session",
+      git: true,
+      prepare: (ctx) => gitPrepare(ctx, "isolated"),
+      legs: [{ name: "Changes tab", act: openChanges, marker: () => changesLoaded }],
+      smoke: renameSmoke,
+    },
+    {
+      id: "9d-git-focus",
+      title: "Real git: the window regains focus (focus + visibilitychange), twice",
+      git: true,
+      prepare: (ctx) => gitPrepare(ctx, "isolated"),
+      legs: ["focus", "focus again"].map(
+        (name): Leg => ({
+          name,
+          act: (ctx) =>
+            ctx.page.evaluate(() => {
+              window.dispatchEvent(new Event("blur"));
+              document.dispatchEvent(new Event("visibilitychange"));
+              window.dispatchEvent(new Event("focus"));
+            }),
+          marker: () => sessionHeader("isolated"),
+          quiesceAfter: true,
+        }),
+      ),
+      smoke: renameSmoke,
+    },
+    {
+      id: "9e-git-dialogs",
+      title: "Real git: open the Push dialog, then the Land dialog (never confirmed) of a git-heavy isolated session with commits to land",
+      git: true,
+      prepare: async (ctx) => {
+        await gitPrepare(ctx, "land");
+        await openChanges(ctx);
+        await ctx.page.locator(filesPanel).getByTestId("changes-workchip").waitFor({ state: "visible", timeout: T });
+        await ctx.quiesce();
+      },
+      legs: [
+        {
+          name: "Push dialog",
+          act: (ctx) => workStep(ctx, "work-step-push"),
+          // The preview has answered: its commit list's count, or why there's none.
+          marker: () => ({ kind: "match", sel: '[aria-modal="true"]', re: "\\d+ commits?:|[Nn]othing to push|can't|couldn't|Couldn't" }),
+          quiesceAfter: true,
+        },
+        {
+          name: "Land dialog",
+          act: async (ctx) => {
+            const dialog = ctx.page.locator('[aria-modal="true"]');
+            await dialog.getByRole("button", { name: "Cancel" }).click();
+            await dialog.waitFor({ state: "hidden", timeout: T });
+            // The chip's own Land (the session is in its "to land" state).
+            await ctx.page.locator(filesPanel).getByTestId("changes-workchip").getByRole("button", { name: "Land", exact: true }).click();
+          },
+          marker: () => ({ kind: "match", sel: '[aria-modal="true"]', re: "\\d+ commits? to squash|can't|couldn't|Couldn't" }),
+          quiesceAfter: true,
+        },
+      ],
+      smoke: renameSmoke,
+    },
+    {
+      id: "9f-git-busy-turn",
+      title: `Real git: a busy agent (fake provider) writes a file every 2 s for ${BUSY_S} s in a git-heavy isolated session, Changes tab hidden`,
+      git: true,
+      prepare: async (ctx) => {
+        await gitPrepare(ctx, "isolated");
+        // Wake the session's child (the fake provider) before the window.
+        await say(ctx, A(), "echo perf warm-up");
+        await agentIdle(ctx, A());
+        await ctx.quiesce();
+      },
+      legs: [
+        {
+          name: `busy ${BUSY_S} s`,
+          act: async (ctx) => {
+            const s = gx().sessions.isolated;
+            const rel = (p: string) => p.slice(s.folder.length + 1);
+            const end = Date.now() + BUSY_S * 1000;
+            for (let i = 0; Date.now() < end; i++) {
+              const file = i % 2 === 0 ? rel(s.edit_file) : `${rel(s.new_dir) ? rel(s.new_dir) + "/" : ""}perf_busy_${i}.md`;
+              await say(ctx, A(), `write-file ${file} perf busy turn ${i}`);
+              await sleepMs(2000);
+            }
+          },
+          marker: () => sessionHeader("isolated"),
+        },
+      ],
+      smoke: renameSmoke,
+    },
+  ];
 }
 
 function escapeRe(s: string): string {

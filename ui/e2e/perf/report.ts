@@ -63,7 +63,21 @@ const TIMING_LABELS: Record<string, string> = {
   port_drain_wait_ms: "harness wait for TIME_WAIT to drain before boot (ms; not measured time)",
   prep_append_ms: "append phase: posting time (ms; not measured time)",
   prep_catchup_ms: "append phase: last post → page caught up and quiet (ms; not measured time)",
+  git_spawns: "git calls by the stack, whole window (shim log, exact)",
+  git_router_spawns: "…of which the Router's own (the rest: session children)",
+  git_cpu_ms: "git CPU, whole window (ms; the calls' rusage, user + system)",
+  git_wall_ms: "git wall time, summed over calls (ms; overlapping calls add)",
+  git_peak_concurrent_ps: "most git processes running at once (ps every 100 ms, by pid ancestry)",
+  git_seen_by_ps: "git processes ps sampling caught (vs the shim's count: what sampling misses)",
+  abandoned_requests: "abandoned requests: still in flight when the view left their session",
+  abandoned_git_requests: "…of which git routes",
+  abandoned_aborted: "…of which the page aborted",
+  abandoned_held_total_ms: "abandoned: socket time held after leaving, summed (ms)",
+  abandoned_held_max_ms: "abandoned: longest held after leaving (ms)",
 };
+
+/** The git routes' latency rows (measure.ts result.timing "route <r> …"). */
+const GIT_ROUTE_NAMES = ["repos", "changeset", "worktree/refresh", "worktree", "commit-plan", "push", "land"];
 
 const isBytes = (k: string) => k.includes("bytes");
 
@@ -154,6 +168,7 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
   // Every repetition the plan asked for, so missing ones show.
   for (const sid of plan.scenarios) {
     for (const mode of modes) {
+      if (/^9/.test(sid) && mode === "on") continue;
       const rs = results.filter((r) => r.scenario === sid && (r.mode ?? "on") === mode && !r.skipped);
       if (rs.length === 0 && plan.realism) {
         lines.push(`## ${sid} — delays ${mode}`, "", "- not run (realism: no suitable data)", "");
@@ -195,6 +210,13 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
           const sc = timingCell(by(l).map((r) => r.legs[i]?.scriptMs ?? NaN));
           return { text: `${t.text} / ${sc.text}`, value: t.value };
         }));
+        if (ok.some((r) => r.legs[i]?.gitSpawns !== undefined)) {
+          row(`leg “${n}” git calls / git CPU (ms)`, labels.map((l) => {
+            const a = timingCell(by(l).map((r) => r.legs[i]?.gitSpawns ?? NaN));
+            const c = timingCell(by(l).map((r) => r.legs[i]?.gitCpuMs ?? NaN));
+            return { text: `${a.text} / ${c.text}`, value: c.value };
+          }));
+        }
         row(`leg “${n}” CDP lag, worst read (ms; diagnostic)`, labels.map((l) => timingCell(by(l).map((r) => r.legs[i]?.cdpLagMaxMs ?? NaN))));
         row(`leg “${n}” lag p95 / max (ms)`, labels.map((l) => {
           const p = timingCell(by(l).map((r) => r.legs[i]?.lagP95Ms ?? NaN));
@@ -209,6 +231,18 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
       for (const [k, label] of Object.entries(TIMING_LABELS)) {
         if (headline.includes(k) || !ok.some((r) => k in r.timing)) continue;
         row(label, labels.map((l) => timingCell(by(l).map((r) => r.timing[k]))));
+      }
+      // Git routes: per repetition, p50 and max over the window's requests; cells are the median across repetitions.
+      for (const g of GIT_ROUTE_NAMES) {
+        if (!ok.some((r) => `route ${g} n` in r.timing)) continue;
+        const pair = (a: string, b: string) => (l: string) => {
+          const x = timingCell(by(l).map((r) => r.timing[`route ${g} ${a}`] ?? NaN));
+          const y = timingCell(by(l).map((r) => r.timing[`route ${g} ${b}`] ?? NaN));
+          return { text: `${x.text} / ${y.text}`, value: y.value };
+        };
+        row(`**${g}**: requests`, labels.map((l) => timingCell(by(l).map((r) => r.timing[`route ${g} n`] ?? 0))));
+        row(`${g}: server p50 / max (ms)`, labels.map(pair("server p50", "server max")));
+        row(`${g}: client p50 / max (ms; includes queueing)`, labels.map(pair("client p50", "client max")));
       }
       lines.push("");
       for (const l of labels) {
@@ -227,6 +261,13 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
           .slice(0, 5)
           .map(([k, v]) => `${k} ×${v.n} max ${v.max} ms`);
         if (worst.length) lines.push(`- ${l} longest-queued routes (rep ${first.rep}): ${worst.join("; ")}`);
+        if (first.gitBySub && Object.keys(first.gitBySub).length) {
+          const top = Object.entries(first.gitBySub)
+            .sort((a, b) => b[1].cpuMs - a[1].cpuMs)
+            .slice(0, 6)
+            .map(([k, v]) => `${k} ×${v.n} ${v.cpuMs} ms`);
+          lines.push(`- ${l} git by subcommand, by CPU (rep ${first.rep}): ${top.join("; ")}`);
+        }
         const foreign = [...new Set(by(l).flatMap((r) => r.browserForeign ?? []))];
         if (foreign.length) lines.push(`- ${l} ⚠ browser connections other than the proxy: ${foreign.join("; ")}`);
       }
@@ -248,7 +289,10 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
 
 /** Whether every planned repetition exists and succeeded. */
 export function allOk(plan: Plan, results: Result[]): boolean {
-  const want = (plan.scenarios.length * (plan.modes ?? ["on"]).length * plan.n + plan.checks.length) * plan.builds.length;
+  const modes = plan.modes ?? ["on"];
+  // Real-git scenarios (9x) run with delays off only.
+  const runs = plan.scenarios.reduce((n, s) => n + (/^9/.test(s) ? modes.filter((m) => m === "off").length : modes.length), 0);
+  const want = (runs * plan.n + plan.checks.length) * plan.builds.length;
   return results.length === want && results.every((r) => r.ok);
 }
 
