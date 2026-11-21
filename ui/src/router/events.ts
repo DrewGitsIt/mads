@@ -25,7 +25,11 @@ const HEAD_TIMEOUT_MS = 10_000;
 const BACKOFF_BASE_MS = 1000;
 // The reconnect backoff's cap: the one number to change to retune how long a
 // down Router or Data Service can keep a window waiting after it is back.
-const BACKOFF_MAX_MS = 30000;
+// 2 × the measured worst realistic restart (2026-11-21): a full restart right
+// after a rebuild, cold binaries plus the first head read on a ~300k-event log,
+// came back in ~1 s; warm restarts take 50–250 ms. The bus talks to localhost,
+// so a failed attempt is cheap and a short cap costs little while it's down.
+const BACKOFF_MAX_MS = 2000;
 // How long a job action (useRetroGeneration, useAgentGeneration,
 // useRegistryJob) waits for the bus before giving up; see eventsReadyWithin.
 const READY_TIMEOUT_MS = 10_000;
