@@ -18,6 +18,8 @@ const DET_LABELS: Record<string, string> = {
   events_stream_messages_cdp: "/events SSE messages (CDP)",
   events_stream_connects: "/events (re)connects",
   events_from_zero: "…of which with no `since` (replay from 0)",
+  events_declared_start: "…of which declared their start (`: start <seq>`)",
+  es_auto_reconnects: "native EventSource auto-reconnects (page probe)",
   events_batch_requests: "GET /events batch pages",
   events_batch_bytes: "GET /events batch bytes",
   requests_short: "short requests",
