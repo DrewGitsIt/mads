@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderChecks } from "./report";
+import { allOk, renderChecks, renderReport } from "./report";
 import type { Plan, Result } from "./measure";
 
 const plan = {
@@ -44,5 +44,16 @@ describe("renderChecks", () => {
   it("a check that never ran reads as missing, not as passing", () => {
     const md = renderChecks(plan, [result("c-retro-progress", "base", [{ name: "x", ok: true }])]).join("\n");
     expect(md).toContain("missing");
+  });
+});
+
+describe("renderReport (realism)", () => {
+  it("a scenario the real database can't drive reads as not run, and doesn't fail the run", () => {
+    const p = { runDir: "/x/r", builds: [{ label: "base" }], scenarios: ["3t-open-delegate-typical"], modes: ["off"], n: 1, checks: [], meta: {}, realism: true } as unknown as Plan;
+    const rs = [{ scenario: "3t-open-delegate-typical", build: "base", mode: "off", rep: 1, ok: true, skipped: true, legs: [], checks: [] }] as unknown as Result[];
+    const md = renderReport(p, rs);
+    expect(md).toContain("not run (realism: no suitable data)");
+    expect(md).not.toContain("FAILED");
+    expect(allOk(p, rs)).toBe(true);
   });
 });

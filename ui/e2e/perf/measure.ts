@@ -100,6 +100,8 @@ export interface Result {
   browser: string;
   ok: boolean;
   error?: string;
+  /** Realism: the workload lacks what the scenario needs; not run. */
+  skipped?: boolean;
   legs: LegResult[];
   /** Deterministic: same build and workload, same number. */
   det: Record<string, number>;

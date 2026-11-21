@@ -57,6 +57,14 @@ if (!plan) {
               save({ scenario: scenario.id, build: build.label, mode, rep, browser: plan.browser, ok: false, error } as Result);
               throw err;
             }
+            // Realism: a real database may simply lack what a scenario needs
+            // (no delegate without a transcript file, no typical parent). That
+            // is "not run", not a failure.
+            if (plan.realism && !result.ok && /the workload has no such/.test(result.error ?? "")) {
+              save({ ...result, ok: true, skipped: true, legs: [] });
+              test.skip(true, `realism: ${result.error}`);
+              return;
+            }
             save(result);
             const legs = result.legs.map((l) => `${l.name} ${l.settledMs}ms`).join(", ");
             console.log(

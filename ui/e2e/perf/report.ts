@@ -147,7 +147,7 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
   // Every repetition the plan asked for, so missing ones show.
   for (const sid of plan.scenarios) {
     for (const mode of modes) {
-      const rs = results.filter((r) => r.scenario === sid && (r.mode ?? "on") === mode);
+      const rs = results.filter((r) => r.scenario === sid && (r.mode ?? "on") === mode && !r.skipped);
       if (rs.length === 0 && plan.realism) {
         lines.push(`## ${sid} — delays ${mode}`, "", "- not run (realism: no suitable data)", "");
         continue;
