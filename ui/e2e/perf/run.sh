@@ -140,7 +140,11 @@ reap() {
 }
 cleanup() {
 	trap - EXIT INT TERM
-	[ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
+	# Never errexit in here: one failing command (a kill of a watcher that
+	# already exited) used to end the trap before the worktrees and $TMP —
+	# in realism, the real database's copy — were removed.
+	set +e
+	[ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null || true
 	reap
 	for wt in $WORKTREES; do
 		git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true
