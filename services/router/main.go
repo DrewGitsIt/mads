@@ -361,7 +361,8 @@ func main() {
 	if *insecureNoAuth {
 		auth = frontDoor{}
 	}
-	data := dataclient.New(*dataURL, "router", dataclient.WithTokenSource(tokens.Token))
+	data := dataclient.New(*dataURL, "router", dataclient.WithTokenSource(tokens.Token),
+		dataclient.WithUnreachableLog(func(format string, args ...any) { log.Printf("router: "+format, args...) }))
 
 	providers, err := buildProviderRegistry(*madsHome)
 	if err != nil {

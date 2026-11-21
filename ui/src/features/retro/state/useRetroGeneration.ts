@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { router } from "../../../router/client";
-import { eventsReady, subscribeToEvents } from "../../../router/events";
+import { eventsReadyWithin, subscribeToEvents } from "../../../router/events";
 import { RETRO_GENERATION_EVENT_TYPES } from "../events";
 import type { Envelope } from "../../../router/types";
 
@@ -78,7 +78,7 @@ export function useRetroGeneration(): UseRetroGeneration {
         else early.push(envelope);
       });
       try {
-        await eventsReady();
+        await eventsReadyWithin();
         const result = await router.startRetro(sessionIds, userObservations || undefined);
         jobIdRef.current = result.job_id;
         retroIdRef.current = result.retro_id;

@@ -45,6 +45,9 @@ type Client struct {
 	// token is the install token's source (docs/LOCAL-FRONT-DOOR-DESIGN.md
 	// D1/D5), sent as a bearer on every request; nil sends none.
 	token func() string
+	// reach logs the Data Service going unreachable and back
+	// (WithUnreachableLog); nil logs nothing.
+	reach *reachability
 
 	// mu guards held: the leases this client claimed, by task id. The
 	// tokens live only here, in memory: never logged, never in an error.
@@ -178,6 +181,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		}
 	}
 	resp, err := c.http.Do(req)
+	c.reach.observe(ctx, method+" "+stripQuery(path), err)
 	if err != nil {
 		return err
 	}
@@ -392,7 +396,7 @@ func (c *Client) LeasesOfKind(ctx context.Context, kind string) ([]contracts.Lea
 // leases of a kind it doesn't own (LeasesOfKind requires the caller's
 // actor); attribution, not authentication (spec §15).
 func (c *Client) As(actor string) *Client {
-	return &Client{base: c.base, actor: actor, http: c.http, token: c.token, held: map[string]heldLease{}}
+	return &Client{base: c.base, actor: actor, http: c.http, token: c.token, reach: c.reach, held: map[string]heldLease{}}
 }
 
 // ReclaimLease is the proof-or-nothing transition (reap-on-launch): if
@@ -1159,6 +1163,7 @@ func (c *Client) Stream(ctx context.Context, since int64, sessionID string, type
 	req.Header.Set("Accept", "text/event-stream")
 	c.authorize(req)
 	resp, err := (&http.Client{}).Do(req) // no timeout: the stream lives until ctx ends
+	c.reach.observe(ctx, "GET /events (stream)", err)
 	if err != nil {
 		return nil, err
 	}

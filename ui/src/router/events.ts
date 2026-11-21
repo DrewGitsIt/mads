@@ -23,7 +23,12 @@ const MAX_QUEUE = 500;
 // How long a GET /events/head may take before it counts as a failed connect.
 const HEAD_TIMEOUT_MS = 10_000;
 const BACKOFF_BASE_MS = 1000;
+// The reconnect backoff's cap: the one number to change to retune how long a
+// down Router or Data Service can keep a window waiting after it is back.
 const BACKOFF_MAX_MS = 30000;
+// How long a job action (useRetroGeneration, useAgentGeneration,
+// useRegistryJob) waits for the bus before giving up; see eventsReadyWithin.
+const READY_TIMEOUT_MS = 10_000;
 
 // One EventSource per window, shared by every control-plane subscriber —
 // several independent hooks (the rail's task counts, a session workspace's
@@ -98,6 +103,9 @@ let consecutiveFailures = 0;
 // Service predates this UI (it has no head to start a live-only stream
 // from). Nothing connects again until a reload; see enterIncompatible.
 let incompatible = false;
+// The first head read failed and the window is still waiting for its first
+// cursor: logged once on the way in, once on the way out.
+let waitingLogged = false;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let queue: Envelope[] = [];
 let draining = false;
@@ -150,6 +158,22 @@ function markReady(): void {
  */
 export function eventsReady(): Promise<void> {
   return ready;
+}
+
+/** The message a job action shows when the bus isn't ready in time. */
+export const EVENTS_NOT_READY_MESSAGE = "Live updates aren't connected yet. Try again in a moment.";
+
+/**
+ * eventsReady, for an action the user is waiting on (a job's Start button):
+ * rejects with EVENTS_NOT_READY_MESSAGE after `timeoutMs` instead of
+ * leaving the button spinning while the services are down.
+ */
+export function eventsReadyWithin(timeoutMs: number = READY_TIMEOUT_MS): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(EVENTS_NOT_READY_MESSAGE)), timeoutMs);
+  });
+  return Promise.race([ready, timeout]).finally(() => clearTimeout(timer));
 }
 
 function unionTypes(): string[] {
@@ -243,6 +267,10 @@ async function probeRejectedTypes(types: string[]): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /** GET /events/head is missing: the services predate this UI. */
@@ -385,6 +413,10 @@ function openConnection(): void {
       if (cursor === undefined) {
         cursor = head;
         markReady();
+        if (waitingLogged) {
+          waitingLogged = false;
+          console.info("events: reached the event log; live updates connected");
+        }
       } else if (head < cursor) {
         // The log is behind us: it was reset. Nothing past its end exists,
         // so resume from its end rather than wait for it to pass the old one.
@@ -404,7 +436,17 @@ function openConnection(): void {
         return;
       }
       consecutiveFailures++;
-      if (consecutiveFailures >= FAILING_AFTER) setHealth("failing");
+      // Before the first cursor every view is waiting on the barrier, so
+      // say so at once rather than after FAILING_AFTER misses.
+      if (cursor === undefined) {
+        setHealth("failing");
+        if (!waitingLogged) {
+          waitingLogged = true;
+          console.error(`events: can't read the event log's head (${errorText(err)}); retrying — views wait until it answers`);
+        }
+      } else if (consecutiveFailures >= FAILING_AFTER) {
+        setHealth("failing");
+      }
       scheduleReconnect();
     },
   );
@@ -606,6 +648,7 @@ export function resetEventsBusForTests(primeCursor?: number): void {
   recheckHead = false;
   warnedLogReset = false;
   incompatible = false;
+  waitingLogged = false;
   ready = newReady();
   if (primeCursor !== undefined) markReady();
   health = { state: "connecting", ignoredTypes: [] };

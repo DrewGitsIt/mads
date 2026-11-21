@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useRetroGeneration } from "./useRetroGeneration";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
+import { holdEventsHead } from "../../../router/testEventsBarrier";
 
 let nextSeq = 1;
 function envelope(type: string, payload: unknown) {
@@ -17,6 +18,31 @@ describe("useRetroGeneration", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("gives up with an error, never POSTing, when the bus isn't ready within 10 s", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+    holdEventsHead(); // the head never answers: the services are down
+
+    const { result } = renderHook(() => useRetroGeneration());
+    let done = false;
+    act(() => {
+      void result.current.start(["s1"], "").then(() => (done = true));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_000);
+    });
+    expect(done).toBe(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(done).toBe(true);
+    expect(result.current.phase).toBe("failed");
+    expect(result.current.error).toBe("Live updates aren't connected yet. Try again in a moment.");
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/retros"))).toBe(false);
   });
 
   it("walks started -> gathering -> generating -> completed for the matching retro_id", async () => {

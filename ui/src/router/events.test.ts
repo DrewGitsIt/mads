@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  EVENTS_NOT_READY_MESSAGE,
   eventsReady,
+  eventsReadyWithin,
   getBusHealth,
   getEventsCursorForTests,
   resetEventsBusForTests,
@@ -390,15 +392,76 @@ describe("subscribeToEvents", () => {
       expect(FakeEventSource.instances).toHaveLength(0);
     });
 
-    it("counts failed head reads as failed connects for health", async () => {
+    it("reports failing from the first failed head read while nothing is ready yet, and keeps retrying", async () => {
       vi.useFakeTimers();
-      vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 503 })));
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const info = vi.spyOn(console, "info").mockImplementation(() => {});
+      let down = true;
+      let heads = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          heads++;
+          if (down) throw new TypeError("Failed to fetch");
+          return new Response('{"seq":5}', { status: 200 });
+        }),
+      );
+      let readied = false;
+      void eventsReady().then(() => (readied = true));
       subscribe({ types: ["session.created"] }, () => {});
       await vi.advanceTimersByTimeAsync(0);
-      expect(getBusHealth().state).toBe("connecting"); // one miss is ordinary
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(getBusHealth().state).toBe("failing");
+      expect(getBusHealth().state).toBe("failing"); // views are waiting: say so at once
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(heads).toBeGreaterThan(2);
+      expect(readied).toBe(false);
       expect(FakeEventSource.instances).toHaveLength(0);
+      expect(error).toHaveBeenCalledTimes(1); // once on the way in, not per retry
+      expect(info).not.toHaveBeenCalled();
+
+      down = false;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(readied).toBe(true);
+      expect(FakeEventSource.instances).toHaveLength(1);
+      expect(new URL(FakeEventSource.instances[0].url).searchParams.get("since")).toBe("5");
+      expect(info).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the two-miss grace for failed head reads once the cursor is known", async () => {
+      vi.useFakeTimers();
+      let heads = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => (++heads === 1 ? new Response('{"seq":3}', { status: 200 }) : new Response("", { status: 503 }))),
+      );
+      subscribe({ types: ["session.created"] }, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      FakeEventSource.instances[0].simulateError(); // first miss: the drop
+      expect(getBusHealth().state).toBe("connecting");
+      await vi.advanceTimersByTimeAsync(30_000); // the recheck's head read fails: second miss
+      expect(getBusHealth().state).toBe("failing");
+    });
+
+    it("eventsReadyWithin rejects after its timeout while the head can't be read, and resolves once it is", async () => {
+      vi.useFakeTimers();
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "info").mockImplementation(() => {});
+      let down = true;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => (down ? new Response("", { status: 502 }) : new Response('{"seq":1}', { status: 200 }))),
+      );
+      subscribe({ types: ["session.created"] }, () => {});
+      const first = eventsReadyWithin(10_000);
+      const outcome = first.then(
+        () => "ready",
+        (err: Error) => err.message,
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await outcome).toBe(EVENTS_NOT_READY_MESSAGE);
+      down = false;
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(eventsReadyWithin(10)).resolves.toBeUndefined();
     });
 
     it.each([404, 405])("stops for good when the head answers %i — the services predate this UI", async (status) => {
