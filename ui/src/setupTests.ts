@@ -1,4 +1,4 @@
-import { afterEach } from "vitest";
+import { afterEach, beforeEach } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { clearAllStagedAttachments } from "./components/Attachments/stagedAttachments";
 import { clearLaunchpadDraft } from "./features/sessions/launchpad/launchpadDraft";
@@ -39,6 +39,15 @@ for (const name of ["localStorage", "sessionStorage"] as const) {
     });
   }
 }
+
+// The event bus keeps its cursor and readiness for the window's life, and
+// reads the log head before its first connect. Each test gets a fresh bus
+// primed at cursor 0 (ready, so a first subscribe opens at once with no
+// since); router/events.test.ts resets it to undefined to exercise the head
+// read. Imported lazily for the same vi.mock reason as below.
+beforeEach(async () => {
+  (await import("./router/events")).resetEventsBusForTests?.(0);
+});
 
 afterEach(async () => {
   cleanup();

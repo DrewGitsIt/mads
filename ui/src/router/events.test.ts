@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getBusHealth, subscribeToBusHealth, subscribeToEvents } from "./events";
+import {
+  eventsReady,
+  getBusHealth,
+  getEventsCursorForTests,
+  resetEventsBusForTests,
+  subscribeToBusHealth,
+  subscribeToEvents,
+} from "./events";
 import { FakeEventSource } from "./testFakeEventSource";
 import type { Envelope } from "./types";
 
@@ -24,7 +31,7 @@ describe("subscribeToEvents", () => {
   afterEach(() => {
     // A window-singleton bus tears itself down once its last subscriber
     // unsubscribes, so a test that doesn't unsubscribe would otherwise leak
-    // its connection (and lastDeliveredSeq) into the next test.
+    // its connection into the next test (setupTests resets the cursor).
     for (const unsubscribe of unsubscribes.splice(0)) unsubscribe();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -110,7 +117,7 @@ describe("subscribeToEvents", () => {
     expect(second).toHaveBeenCalledWith(expect.objectContaining({ type: "task.created" }));
   });
 
-  it("widens the type filter by closing the current connection and opening a new one, resuming per-type", () => {
+  it("widens by reconnecting from the scalar cursor — the new type gets no history", () => {
     subscribe({ types: ["session.created"] }, () => {});
     const first = FakeEventSource.instances[0];
     first.emit("session.created", JSON.stringify(envelope(5, "session.created")));
@@ -119,38 +126,21 @@ describe("subscribeToEvents", () => {
 
     expect(FakeEventSource.instances).toHaveLength(2);
     expect(first.closed).toBe(true);
-    const second = FakeEventSource.instances[1];
-    const url = new URL(second.url);
+    const url = new URL(FakeEventSource.instances[1].url);
     expect(url.searchParams.get("types")).toBe("session.created,task.created");
-    // The resume cursor is the *minimum* high-water-mark across the unioned
-    // types, not the single scalar "highest seq ever seen": task.created has
-    // no observed history on this connection, so the resume must be absent
-    // (full replay of task.created, deduped against session.created's seq 5)
-    // rather than "5", which would silently skip any earlier task.created
-    // history that was never delivered.
-    expect(url.searchParams.get("since")).toBeNull();
+    expect(url.searchParams.get("since")).toBe("5");
   });
 
-  it("never permanently loses an earlier event of a newly-widened type, even after another type's later event advanced its own cursor", () => {
-    const first = vi.fn();
-    subscribe({ types: ["session.created"] }, first);
-    const firstSource = FakeEventSource.instances[0];
-
-    // session.created advances well past a task.created event this
-    // connection never carried and so never delivered.
-    firstSource.emit("session.created", JSON.stringify(envelope(10, "session.created")));
-
+  it("dedupes on the scalar cursor: anything at or below it is skipped, whatever its type", () => {
     const second = vi.fn();
+    subscribe({ types: ["session.created"] }, () => {});
+    FakeEventSource.instances[0].emit("session.created", JSON.stringify(envelope(10, "session.created")));
     subscribe({ types: ["task.created"] }, second);
-    expect(FakeEventSource.instances).toHaveLength(2);
-    const secondSource = FakeEventSource.instances[1];
-
-    // The earlier, never-delivered task.created event (seq 3, lower than
-    // session.created's seq 10) must still reach the new subscriber — a
-    // scalar cursor keyed off session.created's seq 10 would wrongly treat
-    // it as already-seen and drop it forever.
-    secondSource.emit("task.created", JSON.stringify(envelope(3, "task.created")));
-    expect(second).toHaveBeenCalledWith(expect.objectContaining({ seq: 3, type: "task.created" }));
+    const source = FakeEventSource.instances[1];
+    source.emit("task.created", JSON.stringify(envelope(3, "task.created")));
+    source.emit("task.created", JSON.stringify(envelope(11, "task.created")));
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledWith(expect.objectContaining({ seq: 11 }));
   });
 
   it("delivers every seq exactly once across a dropped connection resumed via cursor", () => {
@@ -285,15 +275,308 @@ describe("subscribeToEvents", () => {
     stop();
   });
 
-  it("resets state on teardown — a fresh subscriber after full unsubscribe gets no since param", () => {
+  it("keeps the cursor across teardown — a Retro→Sessions round trip resumes, never replays", () => {
     const unsubscribe = subscribe({ types: ["session.created"] }, () => {});
-    const source = FakeEventSource.instances[0];
-    source.emit("session.created", JSON.stringify(envelope(9)));
+    FakeEventSource.instances[0].emit("session.created", JSON.stringify(envelope(9)));
     unsubscribe();
-    unsubscribes.pop(); // already unsubscribed above; don't double-unsubscribe in afterEach
+    unsubscribes.pop();
+    expect(FakeEventSource.instances[0].closed).toBe(true);
 
-    subscribe({ types: ["session.created"] }, () => {});
-    const fresh = FakeEventSource.instances[1];
-    expect(new URL(fresh.url).searchParams.get("since")).toBeNull();
+    subscribe({ types: ["session.created", "task.created"] }, () => {});
+    expect(new URL(FakeEventSource.instances[1].url).searchParams.get("since")).toBe("9");
+  });
+
+  describe("first connect (no cursor yet)", () => {
+    function stubHead(seq: number) {
+      const fetchMock = vi.fn(async (url: string) => {
+        if (new URL(url).pathname === "/events/head") return new Response(JSON.stringify({ seq }), { status: 200 });
+        return new Response("[]", { status: 200 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    beforeEach(() => {
+      resetEventsBusForTests(); // undefined cursor: the production first-connect path
+    });
+
+    it("reads the log head and connects from it, never from the beginning", async () => {
+      const fetchMock = stubHead(42);
+      subscribe({ types: ["session.created"] }, () => {});
+      expect(FakeEventSource.instances).toHaveLength(0);
+      await vi.waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+      expect(new URL(FakeEventSource.instances[0].url).searchParams.get("since")).toBe("42");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(getEventsCursorForTests()).toBe(42);
+    });
+
+    it("folds subscribes made while the head is pending into one connection", async () => {
+      stubHead(7);
+      subscribe({ types: ["session.created"] }, () => {});
+      subscribe({ types: ["task.created"] }, () => {});
+      await vi.waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+      const url = new URL(FakeEventSource.instances[0].url);
+      expect(url.searchParams.get("types")).toBe("session.created,task.created");
+      expect(url.searchParams.get("since")).toBe("7");
+    });
+
+    it("resumes a drop from the cursor even when nothing was delivered yet", async () => {
+      stubHead(42);
+      vi.useFakeTimers();
+      subscribe({ types: ["session.created"] }, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      FakeEventSource.instances[0].simulateError();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(FakeEventSource.instances).toHaveLength(2);
+      expect(new URL(FakeEventSource.instances[1].url).searchParams.get("since")).toBe("42");
+    });
+
+    it("never sends since=0 or opens without since across head, widen, drop and teardown", async () => {
+      stubHead(3);
+      vi.useFakeTimers();
+      const un = subscribe({ types: ["session.created"] }, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      FakeEventSource.instances[0].emit("session.created", JSON.stringify(envelope(4)));
+      subscribe({ types: ["task.created"] }, () => {});
+      FakeEventSource.instances.at(-1)!.simulateError();
+      await vi.advanceTimersByTimeAsync(30_000);
+      un();
+      unsubscribes.splice(unsubscribes.indexOf(un), 1);
+      for (const u of unsubscribes.splice(0)) u();
+      subscribe({ types: ["session.created"] }, () => {});
+      for (const es of FakeEventSource.instances) {
+        const since = new URL(es.url).searchParams.get("since");
+        expect(since).not.toBeNull();
+        expect(Number(since)).toBeGreaterThan(0);
+      }
+      expect(FakeEventSource.instances.length).toBeGreaterThanOrEqual(4);
+    });
+
+    it("retries the head after a failed read, with backoff", async () => {
+      vi.useFakeTimers();
+      let calls = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => (++calls === 1 ? new Response("", { status: 502 }) : new Response('{"seq":8}', { status: 200 }))),
+      );
+      subscribe({ types: ["session.created"] }, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(FakeEventSource.instances).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(FakeEventSource.instances).toHaveLength(1);
+      expect(new URL(FakeEventSource.instances[0].url).searchParams.get("since")).toBe("8");
+    });
+
+    it("drops a head that lands after teardown", async () => {
+      stubHead(5);
+      const un = subscribe({ types: ["session.created"] }, () => {});
+      un();
+      unsubscribes.pop();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(FakeEventSource.instances).toHaveLength(0);
+    });
+
+    it("counts failed head reads as failed connects for health", async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 503 })));
+      subscribe({ types: ["session.created"] }, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getBusHealth().state).toBe("connecting"); // one miss is ordinary
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(getBusHealth().state).toBe("failing");
+      expect(FakeEventSource.instances).toHaveLength(0);
+    });
+
+    it("omits since only when the head says the log is empty", async () => {
+      stubHead(0);
+      subscribe({ types: ["session.created"] }, () => {});
+      await vi.waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+      expect(new URL(FakeEventSource.instances[0].url).searchParams.get("since")).toBeNull();
+      expect(getEventsCursorForTests()).toBe(0);
+    });
+
+    it("eventsReady resolves once the head lands, and stays resolved across drop, widen and teardown", async () => {
+      vi.useFakeTimers();
+      let answer!: (r: Response) => void;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) =>
+          new URL(url).pathname === "/events/head"
+            ? new Promise<Response>((r) => (answer = r))
+            : Promise.resolve(new Response("[]", { status: 200 })),
+        ),
+      );
+      let readied = 0;
+      const un = subscribe({ types: ["session.created"] }, () => {});
+      void eventsReady().then(() => readied++);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(readied).toBe(0);
+
+      answer(new Response('{"seq":12}', { status: 200 }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(readied).toBe(1);
+
+      FakeEventSource.instances[0].simulateError();
+      subscribe({ types: ["task.created"] }, () => {});
+      un();
+      unsubscribes.splice(unsubscribes.indexOf(un), 1);
+      for (const u of unsubscribes.splice(0)) u(); // teardown
+      let after = false;
+      void eventsReady().then(() => (after = true));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(after).toBe(true);
+      // And nothing reads the head again: the cursor is known.
+      subscribe({ types: ["session.created"] }, () => {});
+      expect(vi.mocked(fetch).mock.calls.filter(([u]) => new URL(String(u)).pathname === "/events/head")).toHaveLength(1);
+      expect(new URL(FakeEventSource.instances.at(-1)!.url).searchParams.get("since")).toBe("12");
+    });
+  });
+
+  describe("reconnect policy", () => {
+    function setVisibility(state: DocumentVisibilityState) {
+      Object.defineProperty(document, "visibilityState", { value: state, configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      // Every backoff draws its full window, so a pending retry is plainly pending.
+      vi.spyOn(Math, "random").mockReturnValue(0.999);
+      vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
+    });
+
+    afterEach(() => {
+      Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    });
+
+    it("does not let a subscribe jump a pending backoff — it joins the retry", async () => {
+      subscribe({ types: ["session.created"] }, () => {});
+      FakeEventSource.instances[0].emit("session.created", JSON.stringify(envelope(4)));
+      FakeEventSource.instances[0].simulateError();
+      await vi.advanceTimersByTimeAsync(0);
+
+      subscribe({ types: ["task.created"] }, () => {});
+      expect(FakeEventSource.instances).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(FakeEventSource.instances).toHaveLength(2);
+      const url = new URL(FakeEventSource.instances[1].url);
+      expect(url.searchParams.get("types")).toBe("session.created,task.created");
+      expect(url.searchParams.get("since")).toBe("4");
+    });
+
+    it("reconnects at once, from the cursor, on coming back online", async () => {
+      subscribe({ types: ["session.created"] }, () => {});
+      FakeEventSource.instances[0].emit("session.created", JSON.stringify(envelope(6)));
+      // Grow the backoff well past a second.
+      for (let i = 0; i < 4; i++) {
+        FakeEventSource.instances.at(-1)!.simulateError();
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+      FakeEventSource.instances.at(-1)!.simulateError();
+      const before = FakeEventSource.instances.length;
+
+      window.dispatchEvent(new Event("online"));
+      expect(FakeEventSource.instances).toHaveLength(before + 1);
+      expect(new URL(FakeEventSource.instances.at(-1)!.url).searchParams.get("since")).toBe("6");
+
+      // The backoff starts over, and the cancelled retry never fires.
+      FakeEventSource.instances.at(-1)!.simulateError();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(FakeEventSource.instances).toHaveLength(before + 2);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(FakeEventSource.instances).toHaveLength(before + 2);
+    });
+
+    it("reconnects at once when the window comes back to the foreground, not when it goes away", async () => {
+      subscribe({ types: ["session.created"] }, () => {});
+      FakeEventSource.instances[0].simulateError();
+      setVisibility("hidden");
+      expect(FakeEventSource.instances).toHaveLength(1);
+      setVisibility("visible");
+      expect(FakeEventSource.instances).toHaveLength(2);
+    });
+
+    it("leaves a connected bus alone on online/visible", () => {
+      subscribe({ types: ["session.created"] }, () => {});
+      window.dispatchEvent(new Event("online"));
+      setVisibility("visible");
+      expect(FakeEventSource.instances).toHaveLength(1);
+      expect(FakeEventSource.instances[0].closed).toBe(false);
+    });
+
+    it("stops listening at zero subscribers and listens again on the next subscribe", () => {
+      const add = vi.spyOn(window, "addEventListener");
+      const remove = vi.spyOn(window, "removeEventListener");
+      const addDoc = vi.spyOn(document, "addEventListener");
+      const removeDoc = vi.spyOn(document, "removeEventListener");
+      const un1 = subscribe({ types: ["session.created"] }, () => {});
+      const un2 = subscribe({ types: ["task.created"] }, () => {});
+      expect(add.mock.calls.filter(([t]) => t === "online")).toHaveLength(1);
+      expect(addDoc.mock.calls.filter(([t]) => t === "visibilitychange")).toHaveLength(1);
+      un1();
+      expect(remove.mock.calls.filter(([t]) => t === "online")).toHaveLength(0);
+      un2();
+      unsubscribes.splice(0);
+      expect(remove.mock.calls.filter(([t]) => t === "online")).toHaveLength(1);
+      expect(removeDoc.mock.calls.filter(([t]) => t === "visibilitychange")).toHaveLength(1);
+      expect(remove.mock.calls.find(([t]) => t === "online")?.[1]).toBe(add.mock.calls.find(([t]) => t === "online")?.[1]);
+
+      // Nothing subscribed: waking opens nothing.
+      window.dispatchEvent(new Event("online"));
+      expect(FakeEventSource.instances.filter((s) => !s.closed)).toHaveLength(0);
+
+      subscribe({ types: ["session.created"] }, () => {});
+      expect(add.mock.calls.filter(([t]) => t === "online")).toHaveLength(2);
+    });
+
+    it("re-reads the head at once on coming back online after a failed head read", async () => {
+      resetEventsBusForTests();
+      let calls = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => (++calls === 1 ? new Response("", { status: 502 }) : new Response('{"seq":3}', { status: 200 }))),
+      );
+      subscribe({ types: ["session.created"] }, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(FakeEventSource.instances).toHaveLength(0);
+      window.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(FakeEventSource.instances).toHaveLength(1);
+      expect(new URL(FakeEventSource.instances[0].url).searchParams.get("since")).toBe("3");
+    });
+  });
+
+  // React runs the old session's effect cleanup before the new session's
+  // effect: the subscriber union shrinks (no reconnect) and then the same
+  // types come back. That must not count as a widen.
+  it("does not reconnect when a cleanup is followed by re-adding the same types (session switch)", () => {
+    subscribe({ types: ["session.updated"] }, () => {}); // the rail, session-agnostic
+    const unsubOld = subscribe({ sessionId: "s1", types: ["turn.started", "turn.ended"] }, () => {});
+    expect(FakeEventSource.instances).toHaveLength(2); // a genuine widen
+    const source = FakeEventSource.instances[1];
+
+    unsubOld();
+    subscribe({ sessionId: "s2", types: ["turn.started", "turn.ended"] }, () => {});
+
+    expect(FakeEventSource.instances).toHaveLength(2);
+    expect(source.closed).toBe(false);
+  });
+
+  it("still reconnects when a re-add brings a type the open connection doesn't carry", () => {
+    subscribe({ types: ["session.updated"] }, () => {});
+    const unsubOld = subscribe({ sessionId: "s1", types: ["turn.started"] }, () => {});
+    const source = FakeEventSource.instances[1];
+
+    unsubOld();
+    subscribe({ sessionId: "s2", types: ["turn.started", "task.created"] }, () => {});
+
+    expect(source.closed).toBe(true);
+    expect(FakeEventSource.instances).toHaveLength(3);
+    expect(new URL(FakeEventSource.instances[2].url).searchParams.get("types")?.split(",").sort()).toEqual([
+      "session.updated",
+      "task.created",
+      "turn.started",
+    ]);
   });
 });

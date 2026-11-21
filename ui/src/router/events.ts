@@ -12,11 +12,12 @@ interface Subscription {
   onEvent: (envelope: Envelope) => void;
 }
 
-// A full session's event history rarely exceeds a few hundred envelopes —
-// generous margin, not a tuning knob. SSE has no app-level backpressure; if
-// the dispatch queue would ever exceed this, the durable log + cursor is the
-// recovery mechanism, not an in-memory buffer — drop the connection and
-// resume from resumeSince() rather than buffer unboundedly.
+// Generous margin, not a tuning knob: a reconnect after a long gap (a sleep,
+// a Retro round trip) resumes from the cursor and can bring a few hundred
+// envelopes at once. SSE has no app-level backpressure; if the dispatch queue
+// would ever exceed this, the durable log + cursor is the recovery mechanism,
+// not an in-memory buffer — drop the connection and resume from the cursor
+// rather than buffer unboundedly.
 const MAX_QUEUE = 500;
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_MAX_MS = 30000;
@@ -33,17 +34,45 @@ const BACKOFF_MAX_MS = 30000;
 // mounted, so a server-side session filter buys nothing and would force a
 // reconnect on every session switch. Session scoping is a client-side
 // concern instead — see dispatchOne's `sub.sessionId` check.
+//
+// THE CONTRACT: the bus is live-only. It never replays history; a consumer
+// that needs state from before it subscribed reads it over REST, behind the
+// ready barrier (eventsReady, below).
+//
+// - One scalar cursor: the highest seq delivered on this window's bus. Every
+//   connection is opened with since=<cursor>, and anything at or below it is
+//   dropped as already delivered (the log is one seq-ordered stream, resumed
+//   strictly after the cursor).
+// - The first connect reads GET /events/head and starts the cursor there, so
+//   it never starts from the beginning of the log. since is omitted only
+//   when the log was empty (head 0) — which means the same thing.
+// - Widening (a subscriber brings a type the open connection doesn't carry),
+//   a drop, and a queue overflow all reconnect with since=<cursor>. A newly
+//   carried type gets only its events after the cursor — never its history.
+//   (The cursor trails the head while the carried types are quiet, so that
+//   can include the new type's events from the last few moments: older than
+//   the subscribe, but all newer than anything this window was sent.)
+// - At zero subscribers the connection closes but the cursor and readiness
+//   stay, so a surface round trip (Sessions → Retro → Sessions) resumes from
+//   where it left off rather than replaying or skipping.
 let source: EventSource | null = null;
+// The type set `source` was opened with — what the open connection actually
+// carries. A widen is judged against this, not against the current
+// subscribers: React runs an old effect's cleanup before the new effect, so
+// on a session switch the subscriber union briefly shrinks (no reconnect —
+// removing never narrows) and the new session re-adding the same types must
+// not look like a widen.
+let connectedTypes = new Set<string>();
 const subscriptions = new Set<Subscription>();
-// Per type, not one scalar: a single "highest seq ever delivered" cursor
-// conflates "seen for type A" with "seen for type B." If a subscriber
-// widens the union to a type this connection has never carried, and some
-// other already-covered type's traffic had already pushed a scalar cursor
-// past an earlier, never-delivered event of the new type, that event would
-// look already-seen and be skipped forever — the resumed connection's
-// `since` would start past it, and even if the server resent it anyway,
-// the scalar dedupe below would still drop it as "already delivered."
-let lastDeliveredSeqByType = new Map<string, number>();
+// undefined until the first head read lands; module-level, so it outlives
+// teardown at zero subscribers.
+let cursor: number | undefined;
+// Bumped by every connect attempt and teardown, so a head read that lands
+// after either can't open a connection nobody asked for.
+let connectGen = 0;
+// The first connect is waiting on GET /events/head. It reads the subscriber
+// union when the head lands, so subscribes in the meantime fold into it.
+let headPending = false;
 let reconnectAttempt = 0;
 // Types the server refused to filter on — dropped from the connection's
 // union for the rest of this bus's life (see probeRejectedTypes). A refused
@@ -55,6 +84,56 @@ let consecutiveFailures = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let queue: Envelope[] = [];
 let draining = false;
+
+// The ready barrier: resolves once the cursor is known (the first head read
+// landed) and stays resolved for the window's life — reconnects, widens and
+// teardown never un-ready it.
+let resolveReady: (() => void) | undefined;
+let ready = newReady();
+
+function newReady(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    resolveReady = resolve;
+  });
+}
+
+function markReady(): void {
+  resolveReady?.();
+  resolveReady = undefined;
+}
+
+/**
+ * Resolves once the bus knows its cursor (the first GET /events/head
+ * landed); already resolved after that, across reconnects and teardown.
+ *
+ * The bus never replays history, so a consumer that combines a REST snapshot
+ * with live events must order them like this:
+ *
+ *   subscribeToEvents(...)   // 1. register first
+ *   await eventsReady()      // 2. the cursor is fixed
+ *   read the REST snapshot   // 3. served after the cursor was read
+ *   merge                    // 4. live wins, or dedupe by seq
+ *
+ * Every event is then either at or below the cursor — committed before the
+ * head read, so before the snapshot was served, so in it — or after the
+ * cursor, which the connection delivers to the subscriber registered in 1.
+ * Some events are in both (after the cursor and before the snapshot); the
+ * merge in 4 absorbs that overlap. Reading the snapshot before the cursor is
+ * fixed leaves a gap on a window's first connect: an event committed between
+ * the snapshot and the head read is in neither.
+ *
+ * A snapshot that is served from a live session child's memory rather than
+ * the Data Service's log (pending approvals, the message queue) is not
+ * ordered against the log the same way; see useSessionAgentState's
+ * approvals seed for what that leaves.
+ *
+ * It only resolves once something has subscribed (the head is read on the
+ * first connect), and stays pending while the head can't be read — the
+ * consumer's REST read then waits with it, as its live updates do.
+ */
+export function eventsReady(): Promise<void> {
+  return ready;
+}
 
 function unionTypes(): string[] {
   const set = new Set<string>();
@@ -143,6 +222,18 @@ async function probeRejectedTypes(types: string[]): Promise<string[]> {
   }
 }
 
+async function fetchHead(): Promise<number> {
+  const res = await fetch(new URL("/events/head", ROUTER_BASE || window.location.origin).toString(), {
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`GET /events/head: ${res.status}`);
+  const body = (await res.json()) as { seq?: unknown };
+  if (typeof body.seq !== "number" || !Number.isFinite(body.seq) || body.seq < 0) {
+    throw new Error("GET /events/head: no seq");
+  }
+  return body.seq;
+}
+
 function buildUrl(types: string[], since: number): string {
   // ROUTER_BASE is "" for same-origin builds (e.g. served by the Router
   // itself) — the URL constructor requires an absolute base, so fall back
@@ -153,30 +244,15 @@ function buildUrl(types: string[], since: number): string {
   return url.toString();
 }
 
-// The resume point for a (re)connection: the minimum high-water-mark across
-// every currently-subscribed type, defaulting an as-yet-unseen type to 0.
-// Taking the min (not the max, and not the old single scalar) guarantees
-// that widening to a type this connection has never carried resumes from
-// 0 for that type's history — replayed envelopes of already-covered types
-// are simply deduped below, not lost.
-function resumeSince(): number {
-  let since = Infinity;
-  for (const type of unionTypes()) {
-    since = Math.min(since, lastDeliveredSeqByType.get(type) ?? 0);
-  }
-  return Number.isFinite(since) ? since : 0;
-}
-
 function dispatchOne(env: Envelope): void {
   // Belt-and-suspenders: the Go log's Since is documented "strictly greater
   // than" already, so server-side overlap on resume shouldn't happen — but
   // this dedupe is what makes the exactly-once guarantee independent of
-  // that implementation detail. Per-type, for the same reason resumeSince
-  // resumes per-type: a scalar cursor would let one type's traffic mask
-  // another type's still-undelivered history.
-  const lastForType = lastDeliveredSeqByType.get(env.type) ?? 0;
-  if (env.seq <= lastForType) return;
-  lastDeliveredSeqByType.set(env.type, env.seq);
+  // that implementation detail. Scalar, like the cursor: the stream is one
+  // seq-ordered log whatever the types, and a newly carried type is resumed
+  // from the same cursor, so nothing below it is still owed to anyone.
+  if (env.seq <= (cursor ?? 0)) return;
+  cursor = env.seq;
   reconnectAttempt = 0; // live data flowing — connection is healthy
   consecutiveFailures = 0;
   setHealth("live");
@@ -191,7 +267,7 @@ function handleFrame(e: MessageEvent<string>): void {
   queue.push(JSON.parse(e.data) as Envelope);
   if (queue.length > MAX_QUEUE) {
     // Never buffer unboundedly — drop what's queued and resume from the
-    // durable log at our last *dispatched* seq. Nothing already delivered
+    // durable log at the cursor (our last *dispatched* seq). Nothing already delivered
     // is redelivered; nothing still queued is lost, only re-fetched.
     queue = [];
     draining = false;
@@ -232,6 +308,7 @@ function onConnectError(): void {
 function scheduleReconnect(): void {
   source?.close();
   source = null;
+  if (reconnectTimer) clearTimeout(reconnectTimer);
   const delay = Math.random() * Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** reconnectAttempt);
   reconnectAttempt++;
   reconnectTimer = setTimeout(() => {
@@ -242,18 +319,95 @@ function scheduleReconnect(): void {
 
 function openConnection(): void {
   source?.close();
+  source = null;
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = undefined;
+  const gen = ++connectGen;
+  if (cursor !== undefined) {
+    openSource();
+    return;
+  }
+  // First connect on this window: learn where the log ends and start there.
+  // A failed read is a failed connect — same backoff, same health.
+  headPending = true;
+  fetchHead().then(
+    (head) => {
+      if (gen !== connectGen) return;
+      headPending = false;
+      cursor = head;
+      markReady();
+      if (subscriptions.size > 0) openSource();
+    },
+    () => {
+      if (gen !== connectGen) return;
+      headPending = false;
+      consecutiveFailures++;
+      if (consecutiveFailures >= FAILING_AFTER) setHealth("failing");
+      scheduleReconnect();
+    },
+  );
+}
+
+function openSource(): void {
   const types = unionTypes();
-  source = new EventSource(buildUrl(types, resumeSince()));
+  connectedTypes = new Set(types);
+  source = new EventSource(buildUrl(types, cursor ?? 0));
   for (const type of types) source.addEventListener(type, handleFrame as EventListener);
   source.addEventListener("open", () => {
     consecutiveFailures = 0;
     setHealth("live");
   });
-  // A native EventSource auto-reconnects to the exact same URL (same
-  // original `since`, or none), which would silently replay a huge or
-  // unbounded amount of history. Close it ourselves to suppress that and
+  // A native EventSource auto-reconnects to the exact same URL (the same
+  // original `since`), which would redeliver everything since that connect
+  // and ignore the backoff. Close it ourselves to suppress that and
   // reconnect manually with an up-to-date cursor instead.
   source.addEventListener("error", onConnectError);
+}
+
+// Waking up is a reason to stop waiting out the backoff: the network or the
+// machine is back, and a timer that grew to 30 s while it was gone would
+// otherwise keep every live view stale for that long. Only a disconnected
+// bus (between attempts) reconnects; one that is connecting or connected is
+// left alone. Listening only while anything is subscribed.
+function wake(): void {
+  if (subscriptions.size === 0 || source || headPending) return;
+  reconnectAttempt = 0;
+  openConnection();
+}
+
+function onVisibilityChange(): void {
+  if (document.visibilityState === "visible") wake();
+}
+
+let wakeListening = false;
+
+function listenForWake(on: boolean): void {
+  if (on === wakeListening) return;
+  wakeListening = on;
+  if (typeof window !== "undefined") {
+    if (on) window.addEventListener("online", wake);
+    else window.removeEventListener("online", wake);
+  }
+  if (typeof document !== "undefined") {
+    if (on) document.addEventListener("visibilitychange", onVisibilityChange);
+    else document.removeEventListener("visibilitychange", onVisibilityChange);
+  }
+}
+
+function teardown(): void {
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = undefined;
+  reconnectAttempt = 0;
+  source?.close();
+  source = null;
+  connectGen++;
+  headPending = false;
+  connectedTypes = new Set();
+  rejectedTypes = new Set();
+  consecutiveFailures = 0;
+  queue = [];
+  draining = false;
+  listenForWake(false);
 }
 
 /**
@@ -261,46 +415,66 @@ function openConnection(): void {
  * connection shared by every subscriber. Returns an unsubscribe function;
  * the underlying EventSource closes once the last subscriber detaches.
  *
+ * Live-only (see THE CONTRACT above): the subscriber hears what happens from
+ * now on, never history. A consumer that needs earlier state reads it over
+ * REST after `await eventsReady()`.
+ *
  * The server-side `types` filter is the union of every active subscription's
- * types, recomputed on each subscribe/unsubscribe. Widening the union (a new
- * type not already covered) closes the current connection and opens a new
- * one immediately, resuming from `since=resumeSince()` — the minimum
- * per-type high-water-mark across the union — so nothing is lost. Unsubscribing never narrows the filter, to avoid
- * reconnect thrash as components mount/unmount — the connection only tears
- * down fully at zero subscribers.
+ * types. A subscribe that brings a type the open connection doesn't carry
+ * reconnects at once (a deliberate widen: no backoff) from the cursor.
+ * Unsubscribing never narrows the filter, to avoid reconnect thrash as
+ * components mount/unmount — the connection only tears down fully at zero
+ * subscribers. A subscribe never jumps the reconnect backoff: while a
+ * retry is pending it joins that retry (only coming back online or to the
+ * foreground cuts the wait short), and while the first head read is pending
+ * it joins that connect.
  */
 export function subscribeToEvents(
   params: SubscribeParams,
   onEvent: (envelope: Envelope) => void,
 ): () => void {
   const sub: Subscription = { sessionId: params.sessionId, types: params.types, onEvent };
-  const before = unionTypes();
   subscriptions.add(sub);
-  const widened = unionTypes().some((t) => !before.includes(t));
+  listenForWake(true);
 
-  if (!source) {
+  if (source) {
+    if (unionTypes().some((t) => !connectedTypes.has(t))) {
+      reconnectAttempt = 0;
+      openConnection(); // deliberate widen — no backoff, resumes from the cursor
+    }
+  } else if (!headPending && !reconnectTimer) {
     openConnection();
-  } else if (widened) {
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    reconnectTimer = undefined;
-    reconnectAttempt = 0;
-    openConnection(); // deliberate widen — no backoff, resumes from resumeSince()
   }
+  // Otherwise a connect is already on its way (the head read, or a backoff
+  // retry) and reads the union when it opens.
 
   return () => {
-    subscriptions.delete(sub);
+    if (!subscriptions.delete(sub)) return;
     if (subscriptions.size === 0) {
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      reconnectTimer = undefined;
-      reconnectAttempt = 0;
-      source?.close();
-      source = null;
-      lastDeliveredSeqByType = new Map();
-      rejectedTypes = new Set();
-      consecutiveFailures = 0;
+      // The cursor and readiness are deliberately kept: the next subscriber
+      // resumes from here.
+      teardown();
       setHealth("connecting");
-      queue = [];
-      draining = false;
     }
   };
+}
+
+/**
+ * Test hook: forget everything, the cursor and readiness included.
+ * `primeCursor` sets the cursor (and readiness) as if a head read had
+ * returned it, so a first subscribe opens synchronously — since omitted at
+ * 0 — which is what feature tests expect; undefined exercises the head read.
+ */
+export function resetEventsBusForTests(primeCursor?: number): void {
+  teardown();
+  subscriptions.clear();
+  cursor = primeCursor;
+  ready = newReady();
+  if (primeCursor !== undefined) markReady();
+  health = { state: "connecting", ignoredTypes: [] };
+}
+
+/** Test read of the bus cursor. */
+export function getEventsCursorForTests(): number | undefined {
+  return cursor;
 }
