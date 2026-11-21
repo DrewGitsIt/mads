@@ -63,6 +63,18 @@ func (s *server) handleGetEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, events)
 }
 
+// handleEventsHead is GET /events/head: {"seq": <the log's max seq>}, 0 when
+// the log is empty. A client that seeds its state over REST streams with
+// ?since=<head> from then on, so the stream never replays history to it.
+func (s *server) handleEventsHead(w http.ResponseWriter, r *http.Request) {
+	head, err := s.log.Head(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"seq": head})
+}
+
 // streamEvents is the live subscription path (spec §15): replay from the
 // cursor, then push each new commit as it lands. Each SSE message carries
 // the event's seq as its id, so a reconnecting client resumes with

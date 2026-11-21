@@ -239,3 +239,27 @@ func TestStreamEventsReconnectWithCursorNoGaps(t *testing.T) {
 		t.Fatalf("resumed frames must all have seq > %d, got %d and %d", lastSeq, missed[0].seq, missed[1].seq)
 	}
 }
+
+// GET /events/head proxies the Data Service's log head: 0 on an empty log,
+// then the newest event's seq.
+func TestGetEventsHeadProxiesDataService(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	head := func() int64 {
+		t.Helper()
+		resp, err := http.Get(srv.URL + "/events/head")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET /events/head = %d", resp.StatusCode)
+		}
+		return decodeJSON[map[string]int64](t, resp)["seq"]
+	}
+	before := head()
+	c := dataclient.New(base, "test")
+	mustAppend(t, c, "ses_a", contracts.SessionCreated)
+	last := mustAppend(t, c, "ses_b", contracts.SessionUpdated)
+	if got := head(); got != last.Seq || got <= before {
+		t.Fatalf("head = %d, want %d (was %d)", got, last.Seq, before)
+	}
+}

@@ -54,6 +54,7 @@ func NewWithIdentity(db *sql.DB, ident Identity) *http.ServeMux {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /events", s.handlePostEvent)
 	mux.HandleFunc("GET /events", s.handleGetEvents)
+	mux.HandleFunc("GET /events/head", s.handleEventsHead)
 	mux.HandleFunc("POST /tasks", s.handleCreateTask)
 	mux.HandleFunc("POST /tasks/import", s.handleImportTasks)
 	mux.HandleFunc("GET /tasks", s.handleListTasks)

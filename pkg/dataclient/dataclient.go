@@ -1207,6 +1207,15 @@ func (c *Client) Events(ctx context.Context, since int64, sessionID string, type
 	return out, err
 }
 
+// EventsHead is GET /events/head: the log's current max seq (0 when empty).
+func (c *Client) EventsHead(ctx context.Context) (int64, error) {
+	var out struct {
+		Seq int64 `json:"seq"`
+	}
+	err := c.do(ctx, http.MethodGet, "/events/head", nil, &out)
+	return out.Seq, err
+}
+
 // --- Metrics (spec §8) ---
 
 // MetricsCost fetches usage.recorded events sliced by day/model, session, and

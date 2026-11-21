@@ -38,6 +38,19 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, events)
 }
 
+// handleEventsHead proxies the Data Service's GET /events/head: {"seq": N},
+// the log's current max seq. The UI's event bus reads it before its first
+// connect and streams with ?since=N, so the stream carries only what happens
+// from then on (ui/src/router/events.ts).
+func (s *server) handleEventsHead(w http.ResponseWriter, r *http.Request) {
+	head, err := s.data.EventsHead(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"seq": head})
+}
+
 // handleStreamEvents is the UI's single control-plane subscription point
 // (spec §15): each request opens its own upstream dataclient.Stream call
 // scoped to its own filters, so fan-out (independent subscribers) and

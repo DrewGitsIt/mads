@@ -195,6 +195,16 @@ func (l *Log) Query(ctx context.Context, f Filter) ([]contracts.Envelope, error)
 	return out, rows.Err()
 }
 
+// Head is the log's current max seq (0 when empty): the cursor a client
+// that reads state over REST and then streams from now on starts at.
+func (l *Log) Head(ctx context.Context) (int64, error) {
+	var head sql.NullInt64
+	if err := l.db.QueryRowContext(ctx, `SELECT MAX(seq) FROM events`).Scan(&head); err != nil {
+		return 0, fmt.Errorf("log: head: %w", err)
+	}
+	return head.Int64, nil
+}
+
 // Wait returns a channel that closes the next time any events commit. Callers
 // query from their cursor, then Wait, then query again — the notification
 // carries no data, it only wakes.

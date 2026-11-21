@@ -260,3 +260,33 @@ func TestSSEStreamAndCursorResume(t *testing.T) {
 		}
 	}
 }
+
+// GET /events/head is the log's max seq: 0 on an empty log, then the newest
+// event's seq whatever its type or session.
+func TestGetEventsHead(t *testing.T) {
+	srv, _ := newTestServer(t)
+	head := func() int64 {
+		t.Helper()
+		resp, err := srv.Client().Get(srv.URL + "/events/head")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET /events/head = %d", resp.StatusCode)
+		}
+		var out map[string]int64
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out["seq"]
+	}
+	if got := head(); got != 0 {
+		t.Fatalf("empty log head = %d, want 0", got)
+	}
+	postEvent(t, srv, contracts.Envelope{Type: contracts.SessionCreated, Actor: "user", SessionID: "ses_a"})
+	last := postEvent(t, srv, contracts.Envelope{Type: contracts.SessionUpdated, Actor: "user", SessionID: "ses_b"})
+	if got := head(); got != last.Seq {
+		t.Fatalf("head = %d, want %d", got, last.Seq)
+	}
+}

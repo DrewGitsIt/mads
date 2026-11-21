@@ -36,6 +36,7 @@ export const ROUTER_API_PREFIXES = [
   "link-digests",
   "links",
   "metrics",
+  "permission-requests",
   "pipelines",
   "preflight",
   "profiles",

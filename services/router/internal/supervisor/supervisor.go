@@ -516,6 +516,17 @@ func (s *Supervisor) SessionAddr(sessionID string) (string, bool) {
 	return p.Addr, true
 }
 
+// SessionAddrs returns every running session child's address, by session ID.
+func (s *Supervisor) SessionAddrs() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]string, len(s.sessions))
+	for id, p := range s.sessions {
+		out[id] = p.Addr
+	}
+	return out
+}
+
 // ChildInfo describes one live child, for `mads ps` (GET /children).
 type ChildInfo struct {
 	ID        string    `json:"id"`

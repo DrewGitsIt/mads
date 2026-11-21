@@ -38,6 +38,13 @@ var (
 	// not just the session record.
 	modelMu   sync.Mutex
 	lastModel string
+
+	// permModeMu/permMode steer GET /permission-requests for the Router's
+	// window-wide aggregation tests: "" answers two canned pending
+	// requests, "fail" a 500, "garbage" an unreadable body, and "slow"
+	// nothing until the caller gives up.
+	permModeMu sync.Mutex
+	permMode   string
 )
 
 func main() {
@@ -262,6 +269,33 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, `{"present":%t}`, present)
+	})
+	mux.HandleFunc("POST /test/permission-mode", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		permModeMu.Lock()
+		permMode = string(body)
+		permModeMu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /permission-requests", func(w http.ResponseWriter, r *http.Request) {
+		permModeMu.Lock()
+		mode := permMode
+		permModeMu.Unlock()
+		switch mode {
+		case "fail":
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		case "slow":
+			<-r.Context().Done()
+			return
+		case "garbage":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"not":"a list"`)
+			return
+		}
+		// Out of id order, so the Router's own sort is what the test sees.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `[{"id":"req-2","tool":"Edit","status":"pending"},{"id":"req-1","tool":"Bash","status":"pending"}]`)
 	})
 	log.Fatal(http.Serve(ln, mux))
 }
