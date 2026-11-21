@@ -316,6 +316,9 @@ async function turnEnds(rig: Awaited<ReturnType<typeof bootRig>>, id: string): P
 
 /** Opens a session's Changes tab and waits for its change set. */
 async function openChangesOf(page: Page, s: GitSession): Promise<void> {
+  // A Changes tab left full-width covers the sessions sidebar.
+  const half = page.getByRole("button", { name: "Half-width" });
+  if (await half.isVisible().catch(() => false)) await half.click();
   await card(page, s.id).click();
   await page.getByTitle("Rename session").filter({ hasText: s.name }).waitFor({ state: "visible", timeout: T });
   await page.getByRole("tab", { name: /Changes/ }).click();

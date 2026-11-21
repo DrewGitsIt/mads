@@ -117,6 +117,9 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/mads-perf.XXXXXX")
 TMP=$(cd "$TMP" && pwd -P)
 PIDS="$TMP/pids"
 mkdir -p "$PIDS" "$TMP/tmp"
+# Ask Spotlight not to index the run's tree (the git fixture is re-copied
+# every repetition; indexing it loads the machine under the measurement).
+touch "$TMP/.metadata_never_index"
 WORKTREES=""
 STATUS=1
 
