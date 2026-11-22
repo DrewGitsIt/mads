@@ -25,12 +25,20 @@ const (
 // a finished recompute covered, the session's git state generation it
 // finished at (monotonic per session, across Router restarts too: it is
 // clock-based, never below the previous one plus one), and the subset of
-// Parts whose result differs from the one before.
+// Parts whose result differs from the one before. One announcement may
+// cover several parts (every part a batch of recomputes finished).
+//
+// Baseline is set only for a change set against another baseline than
+// session start ("base" or "default"), recomputed on demand: such an
+// announcement covers that baseline's change set alone (Parts is
+// ["changeset"]), and says nothing about session start's. Absent, a
+// "changeset" in Parts is the change set against session start.
 type GitStateUpdatedPayload struct {
 	SessionID  string   `json:"session_id"`
 	Parts      []string `json:"parts"`
 	Generation int64    `json:"generation"`
 	Changed    []string `json:"changed"`
+	Baseline   string   `json:"baseline,omitempty"`
 }
 
 // RepoWorktree is one checkout of a repo and the branch it's on.
