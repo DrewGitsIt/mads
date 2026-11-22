@@ -88,6 +88,10 @@ part "updating" in the window (see below). Counts keep arriving on
   headers `X-Mads-Updating: 1|0` and `X-Mads-Computed-At: <RFC 3339>`. Cold:
   `[]` with `X-Mads-Updating: 1`; the UI treats that as "loading", not
   "no repos" (Push is not offered until a computed answer arrives).
+  Mesh relays both headers for remote sessions (they are on the peer
+  relay's allow-list, `relayedHeaders` in `services/router/internal/mesh`);
+  the UI reads a missing `X-Mads-Updating` as "not updating" and a missing
+  `X-Mads-Computed-At` as unknown.
 - `POST /sessions/{id}/worktree/refresh`: `202 Accepted`, no body (was `204`
   after the recount). The new counts arrive on `session.updated`.
 

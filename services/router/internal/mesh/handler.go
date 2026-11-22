@@ -665,7 +665,8 @@ func (w *peerWriter) Flush() {
 func (w *peerWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // relayedHeaders are the only response headers a peer's answer keeps on its
-// way to this node's UI: what describes the body and its caching. The
+// way to this node's UI: what describes the body, its caching and its
+// freshness. The
 // rest is a peer speaking for this node's origin — cookies (Set-Cookie),
 // navigation (Location, Refresh, Link), CORS, site data, security policy —
 // and none of it is the peer's to set.
@@ -674,6 +675,9 @@ var relayedHeaders = map[string]bool{
 	"Content-Disposition": true, "Content-Range": true, "Accept-Ranges": true,
 	"Cache-Control": true, "Etag": true, "Last-Modified": true, "Expires": true,
 	"Date": true, "Vary": true, "Retry-After": true, "X-Accel-Buffering": true,
+	// GET /sessions/{id}/repos's freshness (docs/GIT-STATE-DESIGN.md): its
+	// body is a bare array, so these say whether it is still computing.
+	"X-Mads-Updating": true, "X-Mads-Computed-At": true,
 }
 
 // sanitizePeerResponse is ModifyResponse for every answer relayed from

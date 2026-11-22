@@ -101,6 +101,34 @@ func TestPeerResponseHeadersAreFiltered(t *testing.T) {
 	}
 }
 
+// A remote session's GET /repos keeps the git state headers that say how
+// current its bare-array body is (docs/GIT-STATE-DESIGN.md); the filter
+// still strips what isn't the peer's to set.
+func TestPeerGitStateHeadersAreRelayed(t *testing.T) {
+	h, p := relayHarness(t)
+	p.setAnswer(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Mads-Updating", "1")
+		w.Header().Set("X-Mads-Computed-At", "2026-11-21T19:00:00Z")
+		w.Header().Set("Set-Cookie", "mads=stolen; Path=/")
+		_, _ = w.Write([]byte(`[]`))
+	})
+	resp, err := noFollow.Get(h.srv.URL + "/sessions/ses_remote/repos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if got := resp.Header.Get("X-Mads-Updating"); got != "1" {
+		t.Errorf("X-Mads-Updating = %q, want 1", got)
+	}
+	if got := resp.Header.Get("X-Mads-Computed-At"); got != "2026-11-21T19:00:00Z" {
+		t.Errorf("X-Mads-Computed-At = %q", got)
+	}
+	if got := resp.Header.Get("Set-Cookie"); got != "" {
+		t.Errorf("Set-Cookie reached the UI: %q", got)
+	}
+}
+
 // A peer's body can't run on this node's origin: an attachment opened in
 // a new tab is the UI's own origin. HTML, SVG, scripts and untyped bodies
 // become downloads; data and images keep their type; all are nosniff and
