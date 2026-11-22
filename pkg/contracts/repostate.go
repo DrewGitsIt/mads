@@ -13,6 +13,26 @@ type RepoChangedPayload struct {
 	GitDir string `json:"git_dir"`
 }
 
+// Git state parts (docs/GIT-STATE-DESIGN.md): what the Router keeps per
+// session and names in GitStateUpdatedPayload.
+const (
+	GitPartRepos     = "repos"
+	GitPartChangeSet = "changeset"
+	GitPartCounts    = "counts"
+)
+
+// GitStateUpdatedPayload is session.git_state_updated's payload: the parts
+// a finished recompute covered, the session's git state generation it
+// finished at (monotonic per session, across Router restarts too: it is
+// clock-based, never below the previous one plus one), and the subset of
+// Parts whose result differs from the one before.
+type GitStateUpdatedPayload struct {
+	SessionID  string   `json:"session_id"`
+	Parts      []string `json:"parts"`
+	Generation int64    `json:"generation"`
+	Changed    []string `json:"changed"`
+}
+
 // RepoWorktree is one checkout of a repo and the branch it's on.
 type RepoWorktree struct {
 	// Path is the top of this checkout; Main marks the repo's main checkout

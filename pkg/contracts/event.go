@@ -589,6 +589,14 @@ const (
 // (GET /repos/state, GET /sessions/{id}/repos) for repos they show.
 const RepoChanged EventType = "repo.changed"
 
+// SessionGitStateUpdated fires when the Router finishes a recompute of a
+// session's git-derived state that a trigger (or a read of a cold or stale
+// part) asked for, whether or not the result changed
+// (docs/GIT-STATE-DESIGN.md). Payload: GitStateUpdatedPayload. Readers
+// refetch the cached GET of the parts in Changed; every part in Parts is no
+// longer "updating" as of Generation.
+const SessionGitStateUpdated EventType = "session.git_state_updated"
+
 var EventTypes = []EventType{
 	SessionCreated, SessionProvisioning, SessionRenamed, SessionActivityChanged, SessionUpdated, SessionDeleted, SessionCrashed,
 	SessionPermissionRequested, SessionPermissionResolved,
@@ -615,7 +623,7 @@ var EventTypes = []EventType{
 	ProfileCreated, ProfileUpdated, ProfileDeleted, ConfigUpdated,
 	AttachmentAdded, AccountAuthChanged,
 	MergeAttempted, MergeConflicted, MergeCompleted, MergeRefused, MergeAutoResolved, LandRetried, LandAutofixed,
-	WorktreeEnsured, RepoChanged,
+	WorktreeEnsured, RepoChanged, SessionGitStateUpdated,
 	UsageRecorded, CapabilityInvoked,
 	StageAttemptRef, StageCapabilitiesMounted,
 	SynthesisProposalCreated, SynthesisProposalApproved, SynthesisProposalDismissed,

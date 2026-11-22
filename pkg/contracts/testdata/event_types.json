@@ -112,6 +112,7 @@
   "land.autofixed",
   "worktree.ensured",
   "repo.changed",
+  "session.git_state_updated",
   "usage.recorded",
   "capability.invoked",
   "stage.attempt_ref",
