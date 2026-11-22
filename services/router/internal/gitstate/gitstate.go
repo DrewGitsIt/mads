@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -36,14 +37,40 @@ const (
 	// DefaultSweepEvery is how often the warm set is checked against the
 	// active sessions and evicted.
 	DefaultSweepEvery = time.Minute
+	// DefaultMaxConcurrent caps the computes running at once, across every
+	// session (the boot warm-up and triggers alike); the rest wait their
+	// turn, still "updating".
+	DefaultMaxConcurrent = 4
+	// DefaultErrorRetryEvery is how often a read may retry a part whose
+	// latest compute failed (a trigger or an explicit refresh always may).
+	DefaultErrorRetryEvery = time.Minute
+	// DefaultOpenMaxAge is how old the kept change set may be before a
+	// window opening the session, or a refresh without a body (open,
+	// focus), recomputes it.
+	DefaultOpenMaxAge = 30 * time.Second
 )
 
-// Repos is the repos part: GET /sessions/{id}/repos's body, and every
+// emitRetries are the waits before each retry of a failed announcement.
+var emitRetries = []time.Duration{250 * time.Millisecond, time.Second}
+
+// Repos is the repos part: GET /sessions/{id}/repos's body, every
 // checkout the session works in (each repo's folder and, for an isolated
-// one, the user's checkout), for the repo watcher.
+// one, the user's checkout), for the repo watcher, and every repo root of
+// the session's set (State leaves out one whose facts can't be read).
 type Repos struct {
 	State     []contracts.SessionRepoState
 	Checkouts []string
+	Roots     []string
+}
+
+// Counts is what a header recount leaves: a fingerprint of the counts (to
+// tell a changed result from an unchanged one) and the roots of the repos
+// it counted something in (the session record's Repos). A root the repos
+// part doesn't hold means the session works in a repo it didn't before:
+// the repos part is recomputed.
+type Counts struct {
+	Print string
+	Roots []string
 }
 
 // Computers are the Router's computes, unchanged from before the cache.
@@ -51,9 +78,9 @@ type Computers struct {
 	Repos     func(ctx context.Context, sessionID string) (Repos, error)
 	ChangeSet func(ctx context.Context, sessionID, vs string) (contracts.ChangeSet, error)
 	// Counts recounts the session's header counts (they land on the session
-	// record, and go out as session.updated) and returns a fingerprint of
-	// them afterwards, to tell a changed result from an unchanged one.
-	Counts func(ctx context.Context, sessionID string) (string, error)
+	// record, and go out as session.updated) and returns what the record
+	// says afterwards.
+	Counts func(ctx context.Context, sessionID string) (Counts, error)
 }
 
 // Events is the Data Service's log, as the service follows it.
@@ -75,8 +102,13 @@ type Options struct {
 	TargetsChanged func()
 
 	Debounce, MaxWait, WarmFor, BaselineTTL, Timeout, SweepEvery time.Duration
+	ErrorRetryEvery, OpenMaxAge                                  time.Duration
+	// MaxConcurrent caps computes running at once. Zero: the default.
+	MaxConcurrent int
 	// Now is the clock (tests). Nil: time.Now.
 	Now func() time.Time
+	// Logf logs (tests). Nil: log.Printf.
+	Logf func(format string, args ...any)
 }
 
 // slot is one cached part: the part, and for a change set its baseline.
@@ -112,8 +144,13 @@ type part struct {
 	// it (a change set against base or main): the next read does.
 	stale bool
 	// owed: a trigger or a waiting read asked for this compute, so its end
-	// is announced.
-	owed bool
+	// is announced; owedTrigger: a trigger (or a refresh) did, not only a
+	// read.
+	owed        bool
+	owedTrigger bool
+	// deferredAt: when an owed end was first held back because the part
+	// was queued again (its queued run announces instead), or zero.
+	deferredAt time.Time
 	// changedAcc carries "the result changed" over a dirty rerun, which is
 	// announced once at its end.
 	changedAcc bool
@@ -135,7 +172,29 @@ type session struct {
 
 	checkouts []string
 	gitDirs   map[string]bool
+
+	// ann collects the parts whose owed ends wait to go out together: one
+	// announcement once no other part of the session is computing (or
+	// MaxWait after the first), not one per part.
+	ann *pendingAnn
+	// emitMu orders the session's appends with their generations.
+	emitMu sync.Mutex
 }
+
+type pendingAnn struct {
+	since   time.Time
+	parts   map[string]bool
+	changed map[string]bool
+}
+
+// ask is why a compute starts: whether its end is announced, and to whom.
+type ask int
+
+const (
+	askWarm    ask = iota // the boot warm-up: announced to nobody
+	askRead               // a read of a cold or stale part waits on it
+	askTrigger            // a trigger or a refresh: the window marked it
+)
 
 // Service is the Router's git state. Safe for concurrent use.
 type Service struct {
@@ -146,11 +205,12 @@ type Service struct {
 	base   context.Context
 	cancel context.CancelFunc
 
-	emitMu sync.Mutex // orders appends with their generations
-	mu     sync.Mutex
-	sess   map[string]*session
-	active map[string]bool
-	wg     sync.WaitGroup
+	sem       chan struct{} // the MaxConcurrent compute slots
+	followLog failLog
+	mu        sync.Mutex
+	sess      map[string]*session
+	active    map[string]bool
+	wg        sync.WaitGroup
 }
 
 // New is a Service with nothing kept. Bind its computers before the first
@@ -174,11 +234,28 @@ func New(opts Options) *Service {
 	if opts.SweepEvery <= 0 {
 		opts.SweepEvery = DefaultSweepEvery
 	}
+	if opts.ErrorRetryEvery <= 0 {
+		opts.ErrorRetryEvery = DefaultErrorRetryEvery
+	}
+	if opts.OpenMaxAge <= 0 {
+		opts.OpenMaxAge = DefaultOpenMaxAge
+	}
+	if opts.MaxConcurrent <= 0 {
+		opts.MaxConcurrent = DefaultMaxConcurrent
+	}
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	if opts.Logf == nil {
+		opts.Logf = log.Printf
+	}
 	base, cancel := context.WithCancel(context.Background())
-	return &Service{opts: opts, base: base, cancel: cancel, sess: map[string]*session{}, active: map[string]bool{}}
+	return &Service{
+		opts: opts, base: base, cancel: cancel,
+		sem:       make(chan struct{}, opts.MaxConcurrent),
+		followLog: failLog{logf: opts.Logf, now: opts.Now},
+		sess:      map[string]*session{}, active: map[string]bool{},
+	}
 }
 
 // Bind sets the computes. Called once, before any read or trigger.
@@ -265,39 +342,91 @@ func (s *Service) revalidateLocked(ss *session, sl slot, p *part) {
 		p.owed = true // someone is waiting on it now
 		return
 	}
-	// A failed compute is tried again on the next read, as a request used
-	// to be: a passing failure mustn't stand until the next trigger.
-	if !p.computed || p.stale || p.err != nil {
-		s.startLocked(ss, sl, true)
+	// A failed compute is tried again on a read, as a request used to be —
+	// a passing failure mustn't stand until the next trigger — but at most
+	// once per ErrorRetryEvery while it keeps failing.
+	if !p.computed || p.stale || p.err != nil && s.opts.Now().Sub(p.at) >= s.opts.ErrorRetryEvery {
+		s.startLocked(ss, sl, askRead)
 	}
 }
 
 // --- triggers ---
 
-// Refresh recomputes the session's counts and repos now (POST
-// /worktree/refresh): answered at once, announced when done.
+// Ask is an explicit refresh of some of a session's parts (POST
+// /sessions/{id}/worktree/refresh with a body): Parts by name, Baseline
+// for the change set (empty: session start), and MaxAge, a kept answer
+// computed within which is left as is (zero: recompute regardless).
+type Ask struct {
+	Parts    []string
+	Baseline string
+	MaxAge   time.Duration
+}
+
+// Refresh is POST /worktree/refresh without a body (a window opening the
+// session, or regaining focus): counts and repos now, and the change set
+// against session start if it is older than OpenMaxAge (outside edits
+// send no event). Answered at once, announced when done.
 func (s *Service) Refresh(sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ss := s.readLocked(sessionID)
-	s.startLocked(ss, slotCounts, true)
-	s.startLocked(ss, slotRepos, true)
+	s.askLocked(ss, slotCounts, 0)
+	s.askLocked(ss, slotRepos, 0)
+	s.askLocked(ss, slotStart, s.opts.OpenMaxAge)
+}
+
+// Revalidate is an explicit refresh of the parts a asks for (a window's
+// first read of a session's change set, with MaxAge; Retry, without).
+// Answered at once, announced when done.
+func (s *Service) Revalidate(sessionID string, a Ask) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ss := s.readLocked(sessionID)
+	for _, name := range a.Parts {
+		sl := slot{part: name}
+		if name == contracts.GitPartChangeSet {
+			sl.vs = a.Baseline
+			if sl.vs == "" {
+				sl.vs = contracts.BaselineSessionStart
+			}
+		}
+		s.askLocked(ss, sl, a.MaxAge)
+	}
+}
+
+// askLocked recomputes sl for an explicit refresh, unless its kept answer
+// is good and younger than maxAge (maxAge > 0).
+func (s *Service) askLocked(ss *session, sl slot, maxAge time.Duration) {
+	p := s.partLocked(ss, sl)
+	p.readAt = s.opts.Now()
+	if maxAge > 0 && p.computed && p.err == nil && !p.stale && s.opts.Now().Sub(p.at) < maxAge {
+		return
+	}
+	if maxAge > 0 && p.running && !p.dirty {
+		// A compute that started moments ago is fresh enough: its end is
+		// announced to whoever asked.
+		p.owed, p.owedTrigger = true, true
+		return
+	}
+	s.startLocked(ss, sl, askTrigger)
 }
 
 // RepoChanged is the repo watcher's settled change of the repo whose
-// shared git dir is gitDir: repos and counts of every kept session using it.
+// shared git dir is gitDir (a commit, branch switch, stash or reset, by
+// anyone): repos, change set and counts of every kept session using it.
 func (s *Service) RepoChanged(gitDir string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, ss := range s.sess {
 		if ss.gitDirs[gitDir] {
-			s.triggerLocked(ss, []string{contracts.GitPartRepos, contracts.GitPartCounts})
+			s.triggerLocked(ss, []string{contracts.GitPartRepos, contracts.GitPartChangeSet, contracts.GitPartCounts})
 		}
 	}
 }
 
 // Trigger is an event saying parts of the session may have moved:
-// debounced, for a session kept warm (kept, or active).
+// debounced, for a session kept warm (kept, or active). One not kept has
+// nothing kept to go stale: its next read is cold and computes.
 func (s *Service) Trigger(sessionID string, parts ...string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -360,16 +489,19 @@ func (s *Service) fire(ss *session, seq int) {
 	ss.pending, ss.firstPending, ss.timer = nil, time.Time{}, nil
 	for sl := range pending {
 		s.partLocked(ss, sl).queued = false
-		s.startLocked(ss, sl, true)
+		s.startLocked(ss, sl, askTrigger)
 	}
 }
 
 // --- recompute ---
 
-func (s *Service) startLocked(ss *session, sl slot, owed bool) {
+func (s *Service) startLocked(ss *session, sl slot, why ask) {
 	p := s.partLocked(ss, sl)
-	if owed {
+	if why != askWarm {
 		p.owed = true
+	}
+	if why == askTrigger {
+		p.owedTrigger = true
 	}
 	if p.running {
 		p.dirty = true
@@ -383,18 +515,19 @@ func (s *Service) startLocked(ss *session, sl slot, owed bool) {
 	go s.run(ss, sl)
 }
 
-func (s *Service) run(ss *session, sl slot) {
-	defer s.wg.Done()
+// compute runs sl's compute in one of the MaxConcurrent slots.
+func (s *Service) compute(ss *session, sl slot) (repos Repos, set contracts.ChangeSet, counts Counts, fp string, err error) {
+	select {
+	case s.sem <- struct{}{}:
+	case <-s.base.Done():
+		return repos, set, counts, "", s.base.Err()
+	}
+	defer func() { <-s.sem }()
 	ctx, cancel := context.WithTimeout(s.base, s.opts.Timeout)
+	defer cancel()
 	s.mu.Lock()
 	comp := s.comp
 	s.mu.Unlock()
-	var (
-		repos Repos
-		set   contracts.ChangeSet
-		fp    string
-		err   error
-	)
 	switch sl.part {
 	case contracts.GitPartRepos:
 		if comp.Repos != nil {
@@ -408,13 +541,19 @@ func (s *Service) run(ss *session, sl slot) {
 		}
 	case contracts.GitPartCounts:
 		if comp.Counts != nil {
-			fp, err = comp.Counts(ctx, ss.id)
+			counts, err = comp.Counts(ctx, ss.id)
+			fp = counts.Print
 		}
 	}
-	cancel()
 	if err != nil {
 		fp = "error: " + err.Error()
 	}
+	return repos, set, counts, fp, err
+}
+
+func (s *Service) run(ss *session, sl slot) {
+	defer s.wg.Done()
+	repos, set, counts, fp, err := s.compute(ss, sl)
 
 	s.mu.Lock()
 	p := ss.parts[sl]
@@ -422,9 +561,10 @@ func (s *Service) run(ss *session, sl slot) {
 		s.mu.Unlock()
 		return
 	}
+	now := s.opts.Now()
 	p.running = false
 	changed := !p.computed || p.fp != fp
-	p.computed, p.at, p.fp, p.stale, p.err = true, s.opts.Now(), fp, false, err
+	p.computed, p.at, p.fp, p.stale, p.err = true, now, fp, false, err
 	if err == nil {
 		p.hasValue = true
 		p.repos, p.set = repos, set
@@ -433,40 +573,130 @@ func (s *Service) run(ss *session, sl slot) {
 	if sl == slotRepos && err == nil {
 		targetsMoved = s.setTargetsLocked(ss, repos)
 	}
+	if sl == slotCounts && err == nil {
+		s.checkRootsLocked(ss, counts.Roots)
+	}
 	p.changedAcc = p.changedAcc || changed
-	var announce *contracts.GitStateUpdatedPayload
-	if p.dirty {
+	done := false // this end goes out
+	switch {
+	case p.dirty:
 		p.dirty = false
 		p.running = true
 		s.wg.Add(1)
 		go s.run(ss, sl) // the one rerun; announced at its end
-	} else if p.owed {
-		announce = &contracts.GitStateUpdatedPayload{SessionID: ss.id, Parts: []string{sl.part}, Changed: []string{}}
-		if p.changedAcc {
-			announce.Changed = []string{sl.part}
-		}
-		p.owed, p.changedAcc = false, false
-	} else {
+	case !p.owed:
 		p.changedAcc = false
+	case !p.owedTrigger && err != nil && !changed:
+		// Only a read asked, and it failed as it did before: the reader
+		// already has that error, and nothing it shows moved.
+		p.owed, p.changedAcc = false, false
+	case p.queued && (p.deferredAt.IsZero() || now.Sub(p.deferredAt) < s.opts.MaxWait):
+		// Queued again: its queued run announces, so the window's mark
+		// can't clear while a recompute is still to come. Not for longer
+		// than MaxWait, so a steady stream still brings the result.
+		if p.deferredAt.IsZero() {
+			p.deferredAt = now
+		}
+	default:
+		done = true
+	}
+	var out []contracts.GitStateUpdatedPayload
+	if done {
+		var ch []string
+		if p.changedAcc {
+			ch = []string{sl.part}
+		}
+		p.owed, p.owedTrigger, p.changedAcc, p.deferredAt = false, false, false, time.Time{}
+		if sl.part == contracts.GitPartChangeSet && sl != slotStart {
+			// Another baseline: its own announcement, saying which.
+			out = append(out, contracts.GitStateUpdatedPayload{SessionID: ss.id, Parts: []string{sl.part}, Baseline: sl.vs, Changed: orEmpty(ch)})
+		} else {
+			if ss.ann == nil {
+				ss.ann = &pendingAnn{since: now, parts: map[string]bool{}, changed: map[string]bool{}}
+			}
+			ss.ann.parts[sl.part] = true
+			for _, c := range ch {
+				ss.ann.changed[c] = true
+			}
+		}
+	}
+	if ss.ann != nil && (!s.keptRunningLocked(ss) || now.Sub(ss.ann.since) >= s.opts.MaxWait) {
+		out = append(out, ss.ann.payload(ss.id))
+		ss.ann = nil
 	}
 	s.mu.Unlock()
 
 	if targetsMoved && s.opts.TargetsChanged != nil {
 		s.opts.TargetsChanged()
 	}
-	if announce != nil {
-		s.emit(ss, *announce)
+	for _, a := range out {
+		s.emit(ss, a)
 	}
 }
 
-// emit appends the announcement with the session's next generation; one at
-// a time, so the log's order is the generations' order.
+// keptRunningLocked: a compute of a part kept warm (repos, the change set
+// against session start, counts) is running for the session.
+func (s *Service) keptRunningLocked(ss *session) bool {
+	for _, sl := range []slot{slotRepos, slotStart, slotCounts} {
+		if p := ss.parts[sl]; p != nil && p.running {
+			return true
+		}
+	}
+	return false
+}
+
+// checkRootsLocked recomputes the repos part when a recount counted in a
+// repo it doesn't hold: the session works in a new repo (the record's
+// Repos, which a live child's turn-end recount may have written first).
+func (s *Service) checkRootsLocked(ss *session, roots []string) {
+	rp := ss.parts[slotRepos]
+	if rp == nil || !rp.hasValue {
+		return // never computed: its first compute reads the new set
+	}
+	held := map[string]bool{}
+	for _, r := range rp.repos.Roots {
+		held[r] = true
+	}
+	for _, r := range roots {
+		if !held[r] {
+			s.startLocked(ss, slotRepos, askTrigger)
+			return
+		}
+	}
+}
+
+func (a *pendingAnn) payload(sessionID string) contracts.GitStateUpdatedPayload {
+	p := contracts.GitStateUpdatedPayload{SessionID: sessionID, Parts: []string{}, Changed: []string{}}
+	for _, name := range allParts {
+		if a.parts[name] {
+			p.Parts = append(p.Parts, name)
+		}
+		if a.changed[name] {
+			p.Changed = append(p.Changed, name)
+		}
+	}
+	return p
+}
+
+var allParts = []string{contracts.GitPartRepos, contracts.GitPartChangeSet, contracts.GitPartCounts}
+
+func orEmpty(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// emit appends the announcement with the session's next generation; one
+// at a time per session, so the log's order is the generations' order. A
+// failed append is tried again; if it still fails, the parts it covered
+// are owed again, so their next compute announces them.
 func (s *Service) emit(ss *session, p contracts.GitStateUpdatedPayload) {
 	if s.opts.Emit == nil {
 		return
 	}
-	s.emitMu.Lock()
-	defer s.emitMu.Unlock()
+	ss.emitMu.Lock()
+	defer ss.emitMu.Unlock()
 	s.mu.Lock()
 	// Clock-based, so a window that saw a previous Router's generations
 	// still sees these as newer.
@@ -474,10 +704,36 @@ func (s *Service) emit(ss *session, p contracts.GitStateUpdatedPayload) {
 	ss.generation = g
 	s.mu.Unlock()
 	p.Generation = g
-	ctx, cancel := context.WithTimeout(s.base, 10*time.Second)
-	defer cancel()
-	if err := s.opts.Emit(ctx, p); err != nil && s.base.Err() == nil {
-		log.Printf("gitstate: announce %s %v: %v", p.SessionID, p.Parts, err)
+	var err error
+	for i := 0; ; i++ {
+		ctx, cancel := context.WithTimeout(s.base, 10*time.Second)
+		err = s.opts.Emit(ctx, p)
+		cancel()
+		if err == nil || s.base.Err() != nil {
+			return
+		}
+		if i == len(emitRetries) || !sleep(s.base, emitRetries[i]) {
+			break
+		}
+	}
+	if s.base.Err() != nil {
+		return
+	}
+	s.opts.Logf("gitstate: announce %s %v: %v (owed to the next compute)", p.SessionID, p.Parts, err)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, name := range p.Parts {
+		sl := slot{part: name}
+		if name == contracts.GitPartChangeSet {
+			sl.vs = p.Baseline
+			if sl.vs == "" {
+				sl.vs = contracts.BaselineSessionStart
+			}
+		}
+		if q := ss.parts[sl]; q != nil {
+			q.owed, q.owedTrigger = true, true
+			q.changedAcc = q.changedAcc || slices.Contains(p.Changed, name)
+		}
 	}
 }
 
@@ -571,7 +827,7 @@ func (s *Service) Sweep(ctx context.Context) {
 			ss := s.newSessionLocked(id)
 			// Warm: computed for whoever opens it, announced to nobody.
 			for _, sl := range []slot{slotRepos, slotStart, slotCounts} {
-				s.startLocked(ss, sl, false)
+				s.startLocked(ss, sl, askWarm)
 			}
 		}
 	}
@@ -648,6 +904,9 @@ func (s *Service) follow(ctx context.Context) {
 		if since < 0 {
 			head, err := s.opts.Events.EventsHead(ctx)
 			if err != nil {
+				if ctx.Err() == nil {
+					s.followLog.failed("read the log head", err)
+				}
 				if !sleep(ctx, backoff) {
 					return
 				}
@@ -658,12 +917,16 @@ func (s *Service) follow(ctx context.Context) {
 		}
 		ch, err := s.opts.Events.Stream(ctx, since, "", TriggerTypes)
 		if err != nil {
+			if ctx.Err() == nil {
+				s.followLog.failed("follow the log", err)
+			}
 			if !sleep(ctx, backoff) {
 				return
 			}
 			backoff = min(backoff*2, 30*time.Second)
 			continue
 		}
+		s.followLog.ok()
 		backoff = 500 * time.Millisecond
 		for env := range ch {
 			if env.Seq > since {
@@ -676,6 +939,44 @@ func (s *Service) follow(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// failLogEvery is how often a still-failing follow gets another log line.
+const failLogEvery = 30 * time.Second
+
+// failLog reports follow's failures the way the Data Service client
+// reports it unreachable: one line on the first failure, at most one per
+// failLogEvery while it keeps failing (with how many it left out), and one
+// when it follows again. Used by follow's goroutine only.
+type failLog struct {
+	logf       func(format string, args ...any)
+	now        func() time.Time
+	down       bool
+	since      time.Time
+	lastLogged time.Time
+	suppressed int
+}
+
+func (f *failLog) failed(what string, err error) {
+	now := f.now()
+	switch {
+	case !f.down:
+		f.down, f.since, f.lastLogged, f.suppressed = true, now, now, 0
+		f.logf("gitstate: %s: %v; triggers wait until it is back", what, err)
+	case now.Sub(f.lastLogged) >= failLogEvery:
+		f.logf("gitstate: %s: still failing after %s (%d more failures): %v", what, now.Sub(f.since).Round(time.Second), f.suppressed, err)
+		f.lastLogged, f.suppressed = now, 0
+	default:
+		f.suppressed++
+	}
+}
+
+func (f *failLog) ok() {
+	if !f.down {
+		return
+	}
+	f.down = false
+	f.logf("gitstate: following the log again after %s", f.now().Sub(f.since).Round(time.Second))
 }
 
 func (s *Service) handle(env contracts.Envelope) {

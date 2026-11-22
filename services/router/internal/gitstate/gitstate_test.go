@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -24,16 +25,25 @@ type fakeComp struct {
 	ctxs     map[string]context.Context
 	started  chan string
 	checkout []string
+	// roots: the repos part's roots; countRoots: what a recount counted in.
+	roots      []string
+	countRoots []string
+	// errs: a part's compute fails with this, while set.
+	errs map[string]error
+	// running and peak: computes in progress now, and the most at once.
+	running, peak int
 }
 
 func newFakeComp() *fakeComp {
-	return &fakeComp{runs: map[string]int{}, hold: map[string]chan struct{}{}, ctxs: map[string]context.Context{}, counts: "1", started: make(chan string, 64)}
+	return &fakeComp{runs: map[string]int{}, hold: map[string]chan struct{}{}, ctxs: map[string]context.Context{}, errs: map[string]error{}, counts: "1", roots: []string{"/r"}, started: make(chan string, 256)}
 }
 
-func (f *fakeComp) begin(ctx context.Context, part string) {
+func (f *fakeComp) begin(ctx context.Context, part string) error {
 	f.mu.Lock()
 	f.runs[part]++
 	f.ctxs[part] = ctx
+	f.running++
+	f.peak = max(f.peak, f.running)
 	h := f.hold[part]
 	f.mu.Unlock()
 	f.started <- part
@@ -43,21 +53,30 @@ func (f *fakeComp) begin(ctx context.Context, part string) {
 		case <-ctx.Done():
 		}
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.running--
+	return f.errs[part]
 }
 
 func (f *fakeComp) computers() Computers {
 	return Computers{
 		Repos: func(ctx context.Context, id string) (Repos, error) {
-			f.begin(ctx, contracts.GitPartRepos)
+			if err := f.begin(ctx, contracts.GitPartRepos); err != nil {
+				return Repos{}, err
+			}
 			f.mu.Lock()
 			defer f.mu.Unlock()
-			return Repos{
-				State:     []contracts.SessionRepoState{{Root: "/r", Worktree: contracts.RepoWorktree{Path: "/r", GitDir: "/r/.git", ComputedAt: time.Now()}}},
-				Checkouts: append([]string(nil), f.checkout...),
-			}, nil
+			r := Repos{Checkouts: append([]string(nil), f.checkout...), Roots: append([]string(nil), f.roots...)}
+			for _, root := range f.roots {
+				r.State = append(r.State, contracts.SessionRepoState{Root: root, Worktree: contracts.RepoWorktree{Path: root, GitDir: root + "/.git", ComputedAt: time.Now()}})
+			}
+			return r, nil
 		},
 		ChangeSet: func(ctx context.Context, id, vs string) (contracts.ChangeSet, error) {
-			f.begin(ctx, contracts.GitPartChangeSet+":"+vs)
+			if err := f.begin(ctx, contracts.GitPartChangeSet+":"+vs); err != nil {
+				return contracts.ChangeSet{}, err
+			}
 			f.mu.Lock()
 			defer f.mu.Unlock()
 			set := contracts.ChangeSet{Baseline: vs, ComputedAt: time.Now()}
@@ -66,11 +85,13 @@ func (f *fakeComp) computers() Computers {
 			}
 			return set, nil
 		},
-		Counts: func(ctx context.Context, id string) (string, error) {
-			f.begin(ctx, contracts.GitPartCounts)
+		Counts: func(ctx context.Context, id string) (Counts, error) {
+			if err := f.begin(ctx, contracts.GitPartCounts); err != nil {
+				return Counts{}, err
+			}
 			f.mu.Lock()
 			defer f.mu.Unlock()
-			return f.counts, nil
+			return Counts{Print: f.counts, Roots: append([]string(nil), f.countRoots...)}, nil
 		},
 	}
 }
@@ -79,6 +100,12 @@ func (f *fakeComp) runsOf(part string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.runs[part]
+}
+
+func (f *fakeComp) set(fn func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn()
 }
 
 func (f *fakeComp) holdPart(part string) chan struct{} {
@@ -92,12 +119,20 @@ func (f *fakeComp) holdPart(part string) chan struct{} {
 type emitted struct {
 	mu  sync.Mutex
 	evs []contracts.GitStateUpdatedPayload
+	// fail: the next this many appends fail; tries counts every attempt.
+	fail  int
+	tries int
 }
 
 func (e *emitted) emit(_ context.Context, p contracts.GitStateUpdatedPayload) error {
 	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.tries++
+	if e.fail > 0 {
+		e.fail--
+		return errors.New("data service down")
+	}
 	e.evs = append(e.evs, p)
-	e.mu.Unlock()
 	return nil
 }
 
@@ -160,11 +195,16 @@ func TestColdReadAnswersAtOnceAndAnnounces(t *testing.T) {
 	if r.Computed || !r.Updating || r.State != nil {
 		t.Fatalf("cold repos = %+v", r)
 	}
-	eventually(t, "both announced", func() bool { return len(em.all()) == 2 })
+	eventually(t, "both announced", func() bool {
+		return len(em.forPart(contracts.GitPartRepos)) == 1 && len(em.forPart(contracts.GitPartChangeSet)) == 1
+	})
 	for _, p := range em.all() {
-		if p.SessionID != "ses_1" || len(p.Parts) != 1 || !slices.Equal(p.Changed, p.Parts) || p.Generation == 0 {
-			t.Errorf("announcement = %+v, want one part, changed (a first answer), with a generation", p)
+		if p.SessionID != "ses_1" || !slices.Equal(p.Changed, p.Parts) || p.Generation == 0 {
+			t.Errorf("announcement = %+v, want its parts changed (a first answer), with a generation", p)
 		}
+	}
+	if got := em.all(); len(got) != 1 {
+		t.Errorf("announcements = %+v, want one covering both (computed together)", got)
 	}
 	a = s.ChangeSet("ses_1", contracts.BaselineSessionStart)
 	if !a.Computed || a.Updating || a.Set.Baseline != contracts.BaselineSessionStart {
@@ -181,7 +221,8 @@ func TestSingleFlightWithOneDirtyRerun(t *testing.T) {
 	s, fc, em := newTestService(t, Options{})
 	release := fc.holdPart(contracts.GitPartCounts)
 	s.Refresh("ses_1")
-	<-fc.started // repos or counts
+	<-fc.started // repos, counts, the change set (cold)
+	<-fc.started
 	<-fc.started
 	for range 3 {
 		s.Refresh("ses_1")
@@ -200,7 +241,7 @@ func TestSingleFlightWithOneDirtyRerun(t *testing.T) {
 		t.Errorf("counts computes = %d, want 2 (one run, one rerun)", n)
 	}
 	got := em.forPart(contracts.GitPartCounts)
-	if len(got) != 1 || !slices.Equal(got[0].Changed, []string{contracts.GitPartCounts}) {
+	if len(got) != 1 || !slices.Contains(got[0].Changed, contracts.GitPartCounts) {
 		t.Errorf("counts announcements = %+v, want one, changed", got)
 	}
 }
@@ -482,4 +523,390 @@ func TestRunFollowsFromTheHead(t *testing.T) {
 			t.Errorf("types %v lack %s", ev.types[0], want)
 		}
 	}
+}
+
+// --- after review ---
+
+// warmStart reads the session's start change set and repos and waits for
+// both computes' announcement, so later tests start from a computed state.
+func warmStart(t *testing.T, s *Service, fc *fakeComp, em *emitted, id string) {
+	t.Helper()
+	s.ChangeSet(id, contracts.BaselineSessionStart)
+	s.Repos(id)
+	eventually(t, "the first computes announced", func() bool {
+		return len(em.forPart(contracts.GitPartChangeSet)) >= 1 && len(em.forPart(contracts.GitPartRepos)) >= 1
+	})
+}
+
+// M1: a repo change (an outside commit, branch switch, stash or reset)
+// recomputes the change set too, and marks the other baselines stale.
+func TestRepoChangedRecomputesTheChangeSet(t *testing.T) {
+	s, fc, em := newTestService(t, Options{})
+	warmStart(t, s, fc, em, "ses_1")
+	s.ChangeSet("ses_1", contracts.BaselineBase)
+	eventually(t, "the base compute", func() bool { return fc.runsOf("changeset:base") == 1 })
+	eventually(t, "the base announcement", func() bool {
+		for _, p := range em.all() {
+			if p.Baseline == contracts.BaselineBase {
+				return true
+			}
+		}
+		return false
+	})
+	n := len(em.all())
+	s.RepoChanged("/r/.git")
+	eventually(t, "the change set recomputed", func() bool { return fc.runsOf("changeset:start") == 2 })
+	eventually(t, "one announcement", func() bool { return len(em.all()) == n+1 })
+	got := em.all()[n]
+	if !slices.Equal(got.Parts, []string{contracts.GitPartRepos, contracts.GitPartChangeSet, contracts.GitPartCounts}) {
+		t.Errorf("announcement parts = %v, want repos, changeset, counts", got.Parts)
+	}
+	if a := s.ChangeSet("ses_1", contracts.BaselineBase); !a.Updating {
+		t.Errorf("base after a repo change = %+v, want stale (recomputing on this read)", a)
+	}
+	eventually(t, "base recomputed on its read", func() bool { return fc.runsOf("changeset:base") == 2 })
+}
+
+// M2a/M2c: a bodiless refresh (open, focus) recomputes the change set only
+// when the kept one is older than OpenMaxAge; an Ask with MaxAge too.
+func TestRefreshRecomputesAStaleChangeSetOnly(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	s, fc, em := newTestService(t, Options{Now: clock})
+	warmStart(t, s, fc, em, "ses_1")
+	s.Refresh("ses_1")
+	eventually(t, "the counts", func() bool { return fc.runsOf(contracts.GitPartCounts) == 1 })
+	time.Sleep(50 * time.Millisecond)
+	if n := fc.runsOf("changeset:start"); n != 1 {
+		t.Errorf("change set computes after a refresh of a fresh one = %d, want 1", n)
+	}
+	s.Revalidate("ses_1", Ask{Parts: []string{contracts.GitPartChangeSet}, MaxAge: 30 * time.Second})
+	time.Sleep(50 * time.Millisecond)
+	if n := fc.runsOf("changeset:start"); n != 1 {
+		t.Errorf("change set computes after an open of a fresh one = %d, want 1", n)
+	}
+	mu.Lock()
+	now = now.Add(31 * time.Second)
+	mu.Unlock()
+	s.Refresh("ses_1")
+	eventually(t, "a focus recomputes an old change set", func() bool { return fc.runsOf("changeset:start") == 2 })
+	mu.Lock()
+	now = now.Add(31 * time.Second)
+	mu.Unlock()
+	s.Revalidate("ses_1", Ask{Parts: []string{contracts.GitPartChangeSet}, MaxAge: 30 * time.Second})
+	eventually(t, "an open recomputes an old change set", func() bool { return fc.runsOf("changeset:start") == 3 })
+}
+
+// M2b: Retry (an Ask without MaxAge) recomputes at once, fresh or not,
+// for the baseline it names, and is announced.
+func TestRevalidateRecomputesAtOnce(t *testing.T) {
+	s, fc, em := newTestService(t, Options{})
+	warmStart(t, s, fc, em, "ses_1")
+	n := len(em.all())
+	fc.set(func() { fc.files = []string{"outside.go"} })
+	s.Revalidate("ses_1", Ask{Parts: []string{contracts.GitPartChangeSet}})
+	eventually(t, "the recompute", func() bool { return fc.runsOf("changeset:start") == 2 })
+	eventually(t, "its announcement", func() bool { return len(em.all()) == n+1 })
+	if got := em.all()[n]; !slices.Equal(got.Changed, []string{contracts.GitPartChangeSet}) || got.Baseline != "" {
+		t.Errorf("announcement = %+v, want changeset changed, no baseline", got)
+	}
+	if a := s.ChangeSet("ses_1", contracts.BaselineSessionStart); len(a.Set.Files) != 1 {
+		t.Errorf("set = %+v, want outside.go", a.Set)
+	}
+	s.Revalidate("ses_1", Ask{Parts: []string{contracts.GitPartChangeSet}, Baseline: contracts.BaselineBase})
+	eventually(t, "the base compute", func() bool { return fc.runsOf("changeset:base") == 1 })
+}
+
+// M3: a recount that counted in a repo the repos part doesn't hold (the
+// child's turn-end recount wrote it to the record first, so the record
+// before and after this recount agree) recomputes repos, announced with
+// the counts in one event; one that counted in held repos doesn't.
+func TestRecountInANewRepoRecomputesRepos(t *testing.T) {
+	s, fc, em := newTestService(t, Options{})
+	warmStart(t, s, fc, em, "ses_1")
+	fc.set(func() { fc.countRoots = []string{"/r"} })
+	s.Trigger("ses_1", contracts.GitPartCounts)
+	eventually(t, "the recount", func() bool { return fc.runsOf(contracts.GitPartCounts) == 1 })
+	time.Sleep(50 * time.Millisecond)
+	if n := fc.runsOf(contracts.GitPartRepos); n != 1 {
+		t.Fatalf("repos computes after a recount in held repos = %d, want 1", n)
+	}
+	n := len(em.all())
+	// The child already recorded /r2 (its turn end ran first); now the
+	// Router's recount sees it, and the repos part doesn't hold it.
+	fc.set(func() { fc.countRoots = []string{"/r", "/r2"}; fc.roots = []string{"/r", "/r2"} })
+	s.Trigger("ses_1", contracts.GitPartCounts)
+	eventually(t, "repos recomputed", func() bool { return fc.runsOf(contracts.GitPartRepos) == 2 })
+	eventually(t, "the announcement", func() bool { return len(em.all()) == n+1 })
+	got := em.all()[n]
+	if !slices.Equal(got.Parts, []string{contracts.GitPartRepos, contracts.GitPartCounts}) || !slices.Contains(got.Changed, contracts.GitPartRepos) {
+		t.Errorf("announcement = %+v, want repos and counts in one, repos changed", got)
+	}
+	if r := s.Repos("ses_1"); len(r.State) != 2 {
+		t.Errorf("repos = %+v, want /r and /r2", r.State)
+	}
+	s.mu.Lock()
+	watched := s.sess["ses_1"].gitDirs["/r2/.git"]
+	s.mu.Unlock()
+	if !watched {
+		t.Error("the new repo's git dir isn't matched for repo changes")
+	}
+}
+
+// M4a: a failed announcement is retried; one that keeps failing leaves
+// its parts owed, so the next compute announces them (changed carried).
+func TestEmitFailureIsRetriedThenOwed(t *testing.T) {
+	s, fc, em := newTestService(t, Options{})
+	em.fail = 1
+	s.ChangeSet("ses_1", contracts.BaselineSessionStart)
+	eventually(t, "the retried announcement", func() bool { return len(em.all()) == 1 })
+	if em.tries != 2 {
+		t.Errorf("tries = %d, want 2 (one failure, one retry)", em.tries)
+	}
+	em.mu.Lock()
+	em.fail = 100
+	em.mu.Unlock()
+	fc.set(func() { fc.files = []string{"x.go"} })
+	s.Trigger("ses_1", contracts.GitPartChangeSet)
+	eventually(t, "every try failed", func() bool { em.mu.Lock(); defer em.mu.Unlock(); return em.tries == 2+1+len(emitRetries) })
+	time.Sleep(20 * time.Millisecond)
+	s.mu.Lock()
+	p := s.sess["ses_1"].parts[slotStart]
+	owed, acc := p.owed, p.changedAcc
+	s.mu.Unlock()
+	if !owed || !acc {
+		t.Fatalf("after a lost announcement: owed %v, changed carried %v; want both", owed, acc)
+	}
+	em.mu.Lock()
+	em.fail = 0
+	em.mu.Unlock()
+	// The next compute of the part — a read-started one included — says so.
+	s.Trigger("ses_1", contracts.GitPartChangeSet)
+	eventually(t, "the owed announcement", func() bool { return len(em.all()) == 2 })
+	if got := em.all()[1]; !slices.Equal(got.Changed, []string{contracts.GitPartChangeSet}) {
+		t.Errorf("announcement = %+v, want the lost change carried", got)
+	}
+}
+
+// M4c: an evicted session keeps nothing to serve: a trigger for it does
+// nothing, and the next read is cold (updating), recomputes and announces.
+func TestEvictedSessionReadsColdAfterATrigger(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	s, fc, em := newTestService(t, Options{Now: clock})
+	warmStart(t, s, fc, em, "ses_1")
+	mu.Lock()
+	now = now.Add(DefaultWarmFor + time.Minute)
+	mu.Unlock()
+	s.Sweep(context.Background())
+	if s.Kept("ses_1") {
+		t.Fatal("not evicted")
+	}
+	n := len(em.all())
+	s.Trigger("ses_1", contracts.GitPartChangeSet)
+	s.RepoChanged("/r/.git")
+	time.Sleep(60 * time.Millisecond)
+	if fc.runsOf("changeset:start") != 1 || len(em.all()) != n {
+		t.Fatal("an evicted session's trigger computed something")
+	}
+	a := s.ChangeSet("ses_1", contracts.BaselineSessionStart)
+	if a.Computed || !a.Updating {
+		t.Errorf("read after eviction = %+v, want cold and updating, never the old set as fresh", a)
+	}
+	eventually(t, "recomputed and announced", func() bool { return fc.runsOf("changeset:start") == 2 && len(em.all()) == n+1 })
+}
+
+// S1: a run that ends while its part is queued again (a trigger in the
+// debounce) isn't announced; the queued run is.
+func TestQueuedPartAnnouncesAtTheQueuedRunsEnd(t *testing.T) {
+	s, fc, em := newTestService(t, Options{Debounce: 150 * time.Millisecond, MaxWait: time.Second})
+	warmStart(t, s, fc, em, "ses_1")
+	n := len(em.all())
+	release := fc.holdPart("changeset:start")
+	s.Revalidate("ses_1", Ask{Parts: []string{contracts.GitPartChangeSet}})
+	eventually(t, "the run", func() bool { return fc.runsOf("changeset:start") == 2 })
+	s.Trigger("ses_1", contracts.GitPartChangeSet) // queued, in the debounce
+	fc.set(func() { fc.hold["changeset:start"] = nil })
+	close(release)
+	time.Sleep(60 * time.Millisecond) // the run ended; the debounce hasn't fired
+	if got := len(em.all()); got != n {
+		t.Fatalf("announced %d while the part is queued, want none yet", got-n)
+	}
+	eventually(t, "the queued run", func() bool { return fc.runsOf("changeset:start") == 3 })
+	eventually(t, "its announcement", func() bool { return len(em.all()) == n+1 })
+	time.Sleep(50 * time.Millisecond)
+	if got := len(em.all()); got != n+1 {
+		t.Errorf("announcements = %d, want one", got-n)
+	}
+}
+
+// S2: under a write storm a session announces once per fire (changeset and
+// counts together), so no more than one per MaxWait, not one per part.
+func TestWriteStormAnnouncesOncePerFire(t *testing.T) {
+	const debounce, maxWait = 20 * time.Millisecond, 100 * time.Millisecond
+	s, fc, em := newTestService(t, Options{Debounce: debounce, MaxWait: maxWait})
+	warmStart(t, s, fc, em, "ses_1")
+	n := len(em.all())
+	start := time.Now()
+	for time.Since(start) < time.Second {
+		s.Trigger("ses_1", contracts.GitPartChangeSet, contracts.GitPartCounts) // a file.changed
+		time.Sleep(5 * time.Millisecond)
+	}
+	elapsed := time.Since(start)
+	time.Sleep(3 * maxWait)
+	got := em.all()[n:]
+	limit := int(elapsed/maxWait) + 2
+	if len(got) > limit || len(got) == 0 {
+		t.Errorf("announcements over %v of writes = %d, want 1..%d", elapsed, len(got), limit)
+	}
+	for _, p := range got {
+		if !slices.Equal(p.Parts, []string{contracts.GitPartChangeSet, contracts.GitPartCounts}) {
+			t.Errorf("announcement parts = %v, want changeset and counts together", p.Parts)
+		}
+	}
+	t.Logf("%d announcements, %d change set computes over %v", len(got), fc.runsOf("changeset:start"), elapsed)
+}
+
+// S3 and the retry of a failed compute: a read-started recompute that
+// fails as before isn't announced; reads retry a failing part at most once
+// per ErrorRetryEvery; a trigger retries regardless, and the recovery is
+// announced as changed.
+func TestFailedComputeRetry(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+	s, fc, em := newTestService(t, Options{Now: clock})
+	fc.set(func() { fc.errs["changeset:start"] = errors.New("git: index locked") })
+	if a := s.ChangeSet("ses_1", contracts.BaselineSessionStart); a.Computed {
+		t.Fatal("first read computed")
+	}
+	eventually(t, "the failure announced (a first answer)", func() bool { return len(em.all()) == 1 })
+	if a := s.ChangeSet("ses_1", contracts.BaselineSessionStart); a.Err == nil || a.Updating {
+		t.Errorf("read after the failure = %+v, want the error, not retried yet", a)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if n := fc.runsOf("changeset:start"); n != 1 {
+		t.Fatalf("computes = %d, want 1 (a read within ErrorRetryEvery doesn't retry)", n)
+	}
+	advance(DefaultErrorRetryEvery)
+	s.ChangeSet("ses_1", contracts.BaselineSessionStart)
+	eventually(t, "the read's retry", func() bool { return fc.runsOf("changeset:start") == 2 })
+	time.Sleep(50 * time.Millisecond)
+	if n := len(em.all()); n != 1 {
+		t.Errorf("announcements = %d, want 1: the read's retry failed the same way", n)
+	}
+	fc.set(func() { delete(fc.errs, "changeset:start") })
+	s.Trigger("ses_1", contracts.GitPartChangeSet)
+	eventually(t, "the trigger's retry announced", func() bool { return len(em.all()) == 2 })
+	if got := em.all()[1]; !slices.Equal(got.Changed, []string{contracts.GitPartChangeSet}) {
+		t.Errorf("recovery announcement = %+v, want changed", got)
+	}
+	if a := s.ChangeSet("ses_1", contracts.BaselineSessionStart); !a.Computed || a.Err != nil {
+		t.Errorf("read after recovery = %+v", a)
+	}
+}
+
+// S4: no more than MaxConcurrent computes at once, the boot warm-up included.
+func TestComputesAreCapped(t *testing.T) {
+	ids := []string{"a", "b", "c", "d", "e"}
+	s, fc, _ := newTestService(t, Options{MaxConcurrent: 2, Active: func(context.Context) ([]string, error) { return ids, nil }})
+	release := fc.holdPart("changeset:start")
+	s.Sweep(context.Background()) // 15 computes
+	time.Sleep(80 * time.Millisecond)
+	fc.mu.Lock()
+	peak := fc.peak
+	fc.mu.Unlock()
+	if peak > 2 {
+		t.Errorf("peak concurrent computes = %d, want ≤ 2", peak)
+	}
+	close(release)
+	fc.set(func() { fc.hold["changeset:start"] = nil })
+	eventually(t, "every warm-up compute", func() bool {
+		return fc.runsOf("changeset:start") == 5 && fc.runsOf(contracts.GitPartRepos) == 5 && fc.runsOf(contracts.GitPartCounts) == 5
+	})
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	if fc.peak > 2 {
+		t.Errorf("peak concurrent computes = %d, want ≤ 2", fc.peak)
+	}
+}
+
+// S7: a change set against another baseline is announced on its own,
+// naming the baseline; it doesn't ride in (or stand for) session start's.
+func TestOtherBaselineAnnouncesItsBaseline(t *testing.T) {
+	s, fc, em := newTestService(t, Options{})
+	warmStart(t, s, fc, em, "ses_1")
+	n := len(em.all())
+	s.ChangeSet("ses_1", contracts.BaselineMain)
+	eventually(t, "main's announcement", func() bool { return len(em.all()) == n+1 })
+	got := em.all()[n]
+	if got.Baseline != contracts.BaselineMain || !slices.Equal(got.Parts, []string{contracts.GitPartChangeSet}) {
+		t.Errorf("announcement = %+v, want baseline main, parts [changeset]", got)
+	}
+	raw, _ := json.Marshal(em.all()[0])
+	if strings.Contains(string(raw), "baseline") {
+		t.Errorf("start's payload %s carries a baseline, want it omitted", raw)
+	}
+}
+
+// fakeHead fails its first headFails reads.
+type flakyEvents struct {
+	fakeEvents
+	headFails int
+}
+
+func (f *flakyEvents) EventsHead(ctx context.Context) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.headFails > 0 {
+		f.headFails--
+		return 0, errors.New("connection refused")
+	}
+	return f.head, nil
+}
+
+type logLines struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *logLines) logf(format string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+func (l *logLines) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.lines...)
+}
+
+// S5 and S8: follow logs a failing head once (not per retry) and its
+// recovery; after a dropped stream it resumes, and the new stream's
+// events trigger.
+func TestFollowLogsFailuresAndResumes(t *testing.T) {
+	ev := &flakyEvents{fakeEvents: fakeEvents{head: 10}, headFails: 2}
+	logs := &logLines{}
+	s, fc, _ := newTestService(t, Options{Events: ev, Logf: logs.logf, Active: func(context.Context) ([]string, error) { return []string{"ses_1"}, nil }})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+	eventually(t, "the first stream", func() bool { ev.mu.Lock(); defer ev.mu.Unlock(); return len(ev.sinces) == 1 })
+	eventually(t, "warm-up", func() bool { return fc.runsOf(contracts.GitPartCounts) == 1 })
+	lines := logs.all()
+	if len(lines) != 2 || !strings.Contains(lines[0], "read the log head") || !strings.Contains(lines[1], "following the log again") {
+		t.Errorf("log = %q, want one failure line and one recovery line", lines)
+	}
+
+	ev.mu.Lock()
+	close(ev.ch)
+	ev.ch = nil
+	ev.mu.Unlock()
+	eventually(t, "the resubscribe", func() bool { ev.mu.Lock(); defer ev.mu.Unlock(); return len(ev.sinces) == 2 })
+	ev.send(t, contracts.Envelope{Seq: 11, Type: contracts.FileChanged, SessionID: "ses_1"})
+	eventually(t, "the resumed stream's trigger", func() bool { return fc.runsOf(contracts.GitPartCounts) == 2 })
 }

@@ -61,6 +61,7 @@ func (s *server) computeSessionRepos(ctx context.Context, sessionID string) (git
 	}
 	out := gitstate.Repos{State: []contracts.SessionRepoState{}}
 	for i, t := range all {
+		out.Roots = append(out.Roots, t.Folder)
 		out.Checkouts = append(out.Checkouts, t.Folder)
 		if t.Isolated() {
 			out.Checkouts = append(out.Checkouts, t.Primary)
@@ -83,29 +84,24 @@ func (s *server) computeSessionRepos(ctx context.Context, sessionID string) (git
 // recountForGitState is the counts part: the header recount, routed as
 // POST /worktree/refresh always was (the child's coalesced recount when
 // one is live, the Router's own otherwise), then the counts it left on
-// the record, as the part's fingerprint.
-//
-// A recount that finds the session working in a repo it didn't before (or
-// no longer) asks for its repos too: file.changed alone recomputes only
-// the change set and counts, and the counts are where a new repo shows
-// first.
-func (s *server) recountForGitState(ctx context.Context, sessionID string) (string, error) {
-	before, beforeErr := s.data.Session(ctx, sessionID)
+// the record, as the part's fingerprint, with the roots of the repos it
+// counted in. The gitstate service compares those roots with the ones its
+// repos part holds (not with the record before this recount: a live
+// child's own turn-end recount usually writes a new repo first), and
+// recomputes repos when the session works in one they lack.
+func (s *server) recountForGitState(ctx context.Context, sessionID string) (gitstate.Counts, error) {
 	if err := s.recount(ctx, sessionID); err != nil {
-		return "", err
+		return gitstate.Counts{}, err
 	}
 	rec, err := s.data.Session(ctx, sessionID)
 	if err != nil {
-		return "", err
-	}
-	if beforeErr == nil && !slices.Equal(repoRoots(before.Repos), repoRoots(rec.Repos)) {
-		s.gitState.Trigger(sessionID, contracts.GitPartRepos)
+		return gitstate.Counts{}, err
 	}
 	b, _ := json.Marshal(struct {
 		U, L, O int
 		R       []contracts.SessionRepo
 	}{rec.UncommittedCount, rec.UnlandedCount, rec.OutsideCount, rec.Repos})
-	return string(b), nil
+	return gitstate.Counts{Print: string(b), Roots: repoRoots(rec.Repos)}, nil
 }
 
 func repoRoots(repos []contracts.SessionRepo) []string {
