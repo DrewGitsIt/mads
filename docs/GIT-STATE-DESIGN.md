@@ -64,13 +64,16 @@ own per-session repo targets, refreshed by the triggers above.
 ## Telling the window
 
 New event `session.git_state_updated`, payload
-`{session_id, parts: ["repos"|"changeset"|"counts"…], generation}`, appended to
-the event log when a recompute **finishes with a changed result** (an unchanged
-result emits nothing). It is small (no data), and at most one per part per
-debounce window, so the log grows by a handful of rows per active turn.
+`{session_id, parts: ["repos"|"changeset"|"counts"…], generation, changed: [...]}`,
+appended to the event log when a **triggered recompute finishes**, whether or
+not its result changed. `parts` lists what was recomputed; `changed` (a subset
+of `parts`) lists what actually differs. It is small (no data), and at most one
+per part per debounce window. (Emitting only on change was rejected in review:
+the window marks parts "updating" when it sees a trigger, so an unchanged
+result must still tell it the recompute is done, or the indicator sticks.)
 
 The UI's shared stores (`repoStateStore`, the Phase A changeset store)
-subscribe to it and refetch the cached `GET` (instant). They no longer refetch
+subscribe to it and refetch the cached `GET` (instant) only for parts in `changed`. They no longer refetch
 on `file.changed`, `commit.*` or `repo.changed` directly; those only mark the
 part "updating" in the window (see below). Counts keep arriving on
 `session.updated` as today.
@@ -98,7 +101,8 @@ git state". Shown for the open session while any part is updating:
   sees a trigger event for the session (`file.changed`, turn end, `commit.*`,
   `merge.completed`, `repo.changed` for its git dir), or after a refresh `POST`;
 - cleared when `session.git_state_updated` arrives with a newer generation for
-  every part that was marked, or a `GET` returns `updating: false` (fallback:
+  every part that was marked (changed or not; counts are cleared only this way,
+  since they have no `GET`), or a `GET` returns `updating: false` (fallback:
   clear after 30 s so it can never stick).
 
 Contract with the perf harness check g: visible within 2 s of a change,
@@ -118,7 +122,8 @@ cherry-picks); the rail's live state for remote sessions (mesh follow-up).
 ## Decisions to review with Drew
 
 1. A new durable event type (`session.git_state_updated`) rather than an
-   ephemeral channel; bounded to changed results, a few rows per turn.
+   ephemeral channel; one per finished triggered recompute (with a `changed`
+   list), capped by the debounce: a handful of rows per active turn.
 2. Warm set = active sessions + read in the last 15 minutes.
 3. Cold reads answer at once with an empty, `updating` state rather than
    waiting for the first compute.
