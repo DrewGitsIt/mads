@@ -1,0 +1,5 @@
+# Dev-only trees stay out of source archives (git archive, GitHub's release
+# tarballs): the perf harness (tools/perf/README.md) and its UI specs.
+# scripts/releasegate/devtools_test.go proves it.
+tools/ export-ignore
+ui/e2e/perf/ export-ignore
