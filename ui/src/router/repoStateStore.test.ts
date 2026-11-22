@@ -73,14 +73,14 @@ describe("repoStateStore (COMMIT-LAND-PUSH D10)", () => {
     await settle();
     // The Router recomputes on repo.changed (docs/GIT-STATE-DESIGN.md): nothing to read yet.
     expect(c.sessionReposCalls).toHaveLength(1);
-    // The change set isn't marked: the Router recomputes it only where its refs moved.
-    expect(getGitUpdating(SID)).toBe("repos counts");
+    // A shown session's change set is recomputed on it too (a stash moves no HEAD).
+    expect(getGitUpdating(SID)).toBe("repos changeset counts");
     act(() => FakeRouterClient.emitGitStateUpdated(SID, ["repos"]));
     await settle(0);
     expect(c.sessionReposCalls).toHaveLength(2);
     expect(result.current.repos?.[0].base_worktree?.ahead).toBe(2);
-    expect(getGitUpdating(SID)).toBe("counts");
-    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["counts"]));
+    expect(getGitUpdating(SID)).toBe("changeset counts");
+    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["changeset", "counts"]));
     expect(getGitUpdating(SID)).toBe("");
   });
 
@@ -89,11 +89,11 @@ describe("repoStateStore (COMMIT-LAND-PUSH D10)", () => {
     renderHook(() => useSessionRepos(c, SID));
     await settle(0);
     act(() => FakeRouterClient.emitRepoChanged(MADS_GIT));
-    expect(getGitUpdating(SID)).toBe("repos counts");
+    expect(getGitUpdating(SID)).toBe("repos changeset counts");
     act(() => FakeRouterClient.emitGitStateUpdated(SID, ["repos"], { changed: [] }));
     await settle();
     expect(c.sessionReposCalls).toHaveLength(1);
-    expect(getGitUpdating(SID)).toBe("counts");
+    expect(getGitUpdating(SID)).toBe("changeset counts");
   });
 
   it("ignores an announcement older than its mark", async () => {
@@ -102,9 +102,13 @@ describe("repoStateStore (COMMIT-LAND-PUSH D10)", () => {
     await settle(0);
     act(() => FakeRouterClient.emitGitStateUpdated(SID, ["counts"], { generation: 5_000_000 }));
     act(() => FakeRouterClient.emitRepoChanged(MADS_GIT));
-    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["repos", "counts"], { generation: 5_000_000, changed: [] }));
-    expect(getGitUpdating(SID)).toBe("repos counts");
-    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["repos", "counts"], { generation: 5_000_001, changed: [] }));
+    act(() =>
+      FakeRouterClient.emitGitStateUpdated(SID, ["repos", "changeset", "counts"], { generation: 5_000_000, changed: [] }),
+    );
+    expect(getGitUpdating(SID)).toBe("repos changeset counts");
+    act(() =>
+      FakeRouterClient.emitGitStateUpdated(SID, ["repos", "changeset", "counts"], { generation: 5_000_001, changed: [] }),
+    );
     expect(getGitUpdating(SID)).toBe("");
   });
 
@@ -194,6 +198,15 @@ describe("repoStateStore (COMMIT-LAND-PUSH D10)", () => {
     expect(c.sessionReposCalls).toHaveLength(1);
   });
 
+  it("marks repo.changed only for a session this window shows", async () => {
+    const c = client();
+    const view = renderHook(() => useSessionRepos(c, SID));
+    await settle(0);
+    view.unmount();
+    act(() => FakeRouterClient.emitRepoChanged(MADS_GIT));
+    expect(getGitUpdating(SID)).toBe("");
+  });
+
   it("matches a second repo by its worktree's git dir", async () => {
     const learn: SessionRepoState = {
       root: "/home/user/repo/learn",
@@ -203,7 +216,7 @@ describe("repoStateStore (COMMIT-LAND-PUSH D10)", () => {
     renderHook(() => useSessionRepos(c, SID));
     await settle(0);
     act(() => FakeRouterClient.emitRepoChanged("/home/user/repo/learn/.git"));
-    expect(getGitUpdating(SID)).toBe("repos counts");
+    expect(getGitUpdating(SID)).toBe("repos changeset counts");
   });
 
   it.each(["commit.created", "commit.undone", "merge.completed"])(

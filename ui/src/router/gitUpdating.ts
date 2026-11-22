@@ -167,10 +167,10 @@ export function triggerParts(env: Envelope): GitStatePart[] {
     case "merge.completed":
       return ALL_PARTS;
     case "repo.changed":
-      // The Router recomputes a change set on it only where its refs moved
-      // (and then announces it as changed): not marked, or a session whose
-      // set didn't move would show updating until the fail-safe.
-      return ["repos", "counts"];
+      // Marked only for sessions this window shows (repoStateStore asks
+      // for its read ones): the Router recomputes a shown session's change
+      // set on it, and announces an unmoved background one's as done.
+      return ALL_PARTS;
     default:
       return [];
   }

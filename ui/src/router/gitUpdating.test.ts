@@ -27,7 +27,7 @@ describe("gitUpdating (docs/GIT-STATE-DESIGN.md, the updating indicator)", () =>
     for (const t of ["commit.created", "commit.undone", "merge.completed"]) {
       expect(triggerParts(env(t))).toEqual(["repos", "changeset", "counts"]);
     }
-    expect(triggerParts(env("repo.changed"))).toEqual(["repos", "counts"]);
+    expect(triggerParts(env("repo.changed"))).toEqual(["repos", "changeset", "counts"]);
     expect(triggerParts(env("session.updated"))).toEqual([]);
   });
 
