@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -473,7 +474,8 @@ func TestWorktreeRoutesDirectLandRefusesLocked(t *testing.T) {
 }
 
 // POST /worktree/refresh recounts the header from git, for work committed
-// outside mads that no turn end counted. 404 for an unknown session.
+// outside mads that no turn end counted: 202 at once, the counts landing
+// after. 404 for an unknown session.
 func TestWorktreeRefreshRecountsHeader(t *testing.T) {
 	srv, data := newWorktreeServer(t)
 	sess, _ := isolatedRecord(t, data, "Committed by hand")
@@ -488,21 +490,17 @@ func TestWorktreeRefreshRecountsHeader(t *testing.T) {
 		return rec.UncommittedCount, rec.UnlandedCount
 	}
 
-	if resp := postJSON(t, url, struct{}{}); resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("refresh: status %d, want 204", resp.StatusCode)
+	if resp := postJSON(t, url, struct{}{}); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("refresh: status %d, want 202", resp.StatusCode)
 	}
-	if u, l := counts(); u != 1 || l != 0 {
-		t.Fatalf("counts = %d/%d, want 1/0", u, l)
-	}
+	waitUntil(t, "counts 1/0", func() bool { u, l := counts(); return u == 1 && l == 0 })
 
 	wtGit(t, sess.WorktreeDir, "add", "feature.txt")
 	wtGit(t, sess.WorktreeDir, "commit", "-q", "-m", "by hand")
-	if resp := postJSON(t, url, struct{}{}); resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("refresh: status %d, want 204", resp.StatusCode)
+	if resp := postJSON(t, url, struct{}{}); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("refresh: status %d, want 202", resp.StatusCode)
 	}
-	if u, l := counts(); u != 0 || l != 1 {
-		t.Errorf("after a commit by hand: counts = %d/%d, want 0/1", u, l)
-	}
+	waitUntil(t, "counts 0/1 after a commit by hand", func() bool { u, l := counts(); return u == 0 && l == 1 })
 
 	if resp := postJSON(t, srv.URL+"/sessions/ses_missing/worktree/refresh", struct{}{}); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("unknown session: status %d, want 404", resp.StatusCode)
@@ -512,7 +510,7 @@ func TestWorktreeRefreshRecountsHeader(t *testing.T) {
 // POST /worktree/refresh with a live child goes to the child's coalesced
 // recount (the one turn ends use) rather than a second one in the Router;
 // a child without the route (started by an older build) falls back to the
-// Router's own recount. 204 either way.
+// Router's own recount. 202 either way.
 func TestWorktreeRefreshRoutesToLiveChild(t *testing.T) {
 	data := dataclient.New(datatest.Start(t), "router")
 	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
@@ -543,10 +541,20 @@ func TestWorktreeRefreshRoutesToLiveChild(t *testing.T) {
 		return decodeJSON[int](t, resp)
 	}
 
-	url := srv.URL + "/sessions/" + id + "/worktree/refresh"
-	if resp := postJSON(t, url, nil); resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("refresh: status %d, want 204", resp.StatusCode)
+	countsDone := func() int {
+		n := 0
+		for _, p := range gitStateEvents(t, data, id) {
+			if slices.Contains(p.Parts, contracts.GitPartCounts) {
+				n++
+			}
+		}
+		return n
 	}
+	url := srv.URL + "/sessions/" + id + "/worktree/refresh"
+	if resp := postJSON(t, url, nil); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("refresh: status %d, want 202", resp.StatusCode)
+	}
+	waitUntil(t, "the recount", func() bool { return countsDone() == 1 })
 	if n := childRefreshes(); n != 1 {
 		t.Fatalf("child recounts = %d, want 1 (routed to the child)", n)
 	}
@@ -556,9 +564,10 @@ func TestWorktreeRefreshRoutesToLiveChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	if resp := postJSON(t, url, nil); resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("refresh with an older child: status %d, want 204 from the Router's own recount", resp.StatusCode)
+	if resp := postJSON(t, url, nil); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("refresh with an older child: status %d, want 202", resp.StatusCode)
 	}
+	waitUntil(t, "the Router's own recount", func() bool { return countsDone() == 2 })
 	if n := childRefreshes(); n != 1 {
 		t.Errorf("child recounts = %d, want still 1", n)
 	}

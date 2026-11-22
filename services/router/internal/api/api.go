@@ -23,6 +23,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/router/internal/attachments"
+	"github.com/drewkidwell/mads/services/router/internal/gitstate"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/modelcatalog"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
@@ -31,6 +32,7 @@ import (
 type server struct {
 	home                 string
 	repoState            *repostate.Service
+	gitState             *gitstate.Service
 	data                 *dataclient.Client
 	sup                  *supervisor.Supervisor
 	jobs                 *job.Runner
@@ -127,6 +129,11 @@ type Options struct {
 	// docs/COMMIT-LAND-PUSH-DESIGN.md D10). Nil computes them on every
 	// request and watches nothing.
 	RepoState *repostate.Service
+	// GitState keeps each session's git-derived state for GET /changeset
+	// and GET /repos (docs/GIT-STATE-DESIGN.md); NewMux binds the Router's
+	// computes to it. Nil: one of its own, following no events (reads,
+	// refreshes and repo changes still recompute), announcing through Data.
+	GitState *gitstate.Service
 	// Home is $MADS_HOME, for mergiraf's state when landing a worktree mads
 	// didn't make. Empty lands without mergiraf there.
 	Home string
@@ -167,7 +174,11 @@ func NewMux(opts Options) *http.ServeMux {
 	if opts.StaticHandler == nil {
 		opts.StaticHandler = http.NotFoundHandler()
 	}
-	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, attachments: opts.Attachments, fastModelFlagBaseURL: opts.FastModelFlagBaseURL, models: opts.Models, routerURL: opts.RouterURL, root: opts.Root, uiDist: opts.UIDist, startedAt: opts.StartedAt, repoState: opts.RepoState, home: opts.Home, tokens: opts.Tokens, scoped: opts.Scoped}
+	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, attachments: opts.Attachments, fastModelFlagBaseURL: opts.FastModelFlagBaseURL, models: opts.Models, routerURL: opts.RouterURL, root: opts.Root, uiDist: opts.UIDist, startedAt: opts.StartedAt, repoState: opts.RepoState, gitState: opts.GitState, home: opts.Home, tokens: opts.Tokens, scoped: opts.Scoped}
+	if s.gitState == nil {
+		s.gitState = gitstate.New(gitstate.Options{Emit: s.emitGitState})
+	}
+	s.gitState.Bind(s.gitStateComputers())
 	if opts.Jobs != nil && opts.Sup != nil {
 		// Job bodies that must reach a dormant session (job.Deps.Waker) wake
 		// it through the same path a composer send uses.

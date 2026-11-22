@@ -171,11 +171,8 @@ func TestReposBackgroundRelistSpawnsNoGitPerDirectory(t *testing.T) {
 	<-relists // the start-up listing
 
 	before := len(spawns())
-	resp, err := http.Get(srv.URL + "/sessions/" + sess.ID + "/repos")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = resp.Body.Close()
+	// The first read is cold: the facts are computed behind it.
+	_ = settledGet(t, srv.URL+"/sessions/"+sess.ID+"/repos").Body.Close()
 	select {
 	case <-relists: // the re-list the first ask kicks
 	case <-time.After(10 * time.Second):

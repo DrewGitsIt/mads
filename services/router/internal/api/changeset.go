@@ -81,8 +81,13 @@ func normalizeBaseline(vs string) (string, bool) {
 }
 
 // handleSessionChangeSet serves GET /sessions/{id}/changeset?vs=: the
-// session's change set against one baseline (pkg/changes). An unavailable
-// baseline is a 400; everything else degrades inside the set (Notes).
+// session's change set against one baseline (pkg/changes), as the
+// gitstate service last computed it, with updating while a recompute is
+// queued or running (docs/GIT-STATE-DESIGN.md). Never waits on git: cold,
+// it is an empty set with computed_at "" and updating true, the compute
+// started behind it and announced as session.git_state_updated. An
+// unavailable baseline is a 400; everything else degrades inside the set
+// (Notes).
 func (s *server) handleSessionChangeSet(w http.ResponseWriter, r *http.Request) {
 	vs, ok := normalizeBaseline(r.URL.Query().Get("vs"))
 	if !ok {
@@ -94,12 +99,20 @@ func (s *server) handleSessionChangeSet(w http.ResponseWriter, r *http.Request) 
 		writeError(w, err)
 		return
 	}
-	set, _, err := s.computeChangeSet(r.Context(), sess, vs)
-	if err != nil {
-		writeChangeSetError(w, err)
+	a := s.gitState.ChangeSet(sess.ID, vs)
+	if a.Err != nil {
+		writeChangeSetError(w, a.Err)
 		return
 	}
-	writeJSON(w, http.StatusOK, set)
+	if !a.Computed {
+		writeJSON(w, http.StatusOK, coldChangeSet(vs))
+		return
+	}
+	writeJSON(w, http.StatusOK, changeSetResponse{
+		ChangeSet:  a.Set,
+		ComputedAt: a.Set.ComputedAt.UTC().Format(time.RFC3339Nano),
+		Updating:   a.Updating,
+	})
 }
 
 func writeChangeSetError(w http.ResponseWriter, err error) {

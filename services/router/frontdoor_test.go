@@ -95,7 +95,7 @@ func newRouterStack(t *testing.T) *routerStack {
 		t.Fatal(err)
 	}
 	h := newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "",
-		identity{root: "/src/checkout"}, localguard.New("router", "17373", nil), nil, auth, nil)
+		identity{root: "/src/checkout"}, localguard.New("router", "17373", nil), nil, nil, auth, nil)
 	return &routerStack{h: h, home: home, auth: auth, data: data, tokens: tokens}
 }
 

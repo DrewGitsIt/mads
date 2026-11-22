@@ -55,6 +55,17 @@ func getChangeSet(t *testing.T, srv, sessionID, vs string) *http.Response {
 	return resp
 }
 
+// settledChangeSet is getChangeSet once the Router has computed it (a
+// cold read answers at once, updating).
+func settledChangeSet(t *testing.T, srv, sessionID, vs string) *http.Response {
+	t.Helper()
+	u := srv + "/sessions/" + sessionID + "/changeset"
+	if vs != "" {
+		u += "?vs=" + url.QueryEscape(vs)
+	}
+	return settledGet(t, u)
+}
+
 func mustWrite(t *testing.T, p, content string) {
 	t.Helper()
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
@@ -74,7 +85,7 @@ func TestSessionChangeSet(t *testing.T) {
 	// an in-place session lists only its own changes.
 	recordChange(t, data, sess.ID, "", filepath.Join(repo, "tmp_try.py"), "added")
 
-	resp := getChangeSet(t, srv.URL, sess.ID, "")
+	resp := settledChangeSet(t, srv.URL, sess.ID, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -95,11 +106,11 @@ func TestSessionChangeSet(t *testing.T) {
 
 	// No worktree base: base is unavailable → 400. Unknown ids → 400.
 	for _, vs := range []string{"base", "bogus"} {
-		if resp := getChangeSet(t, srv.URL, sess.ID, vs); resp.StatusCode != http.StatusBadRequest {
+		if resp := settledChangeSet(t, srv.URL, sess.ID, vs); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("vs=%s status = %d, want 400", vs, resp.StatusCode)
 		}
 	}
-	if resp := getChangeSet(t, srv.URL, "nope", ""); resp.StatusCode != http.StatusNotFound {
+	if resp := settledChangeSet(t, srv.URL, "nope", ""); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("unknown session status = %d, want 404", resp.StatusCode)
 	}
 }
@@ -241,7 +252,7 @@ func TestSessionDeleteScratch(t *testing.T) {
 	}
 
 	// And it's gone from the change set.
-	set := decodeJSON[contracts.ChangeSet](t, getChangeSet(t, srv.URL, sess.ID, ""))
+	set := decodeJSON[contracts.ChangeSet](t, settledChangeSet(t, srv.URL, sess.ID, ""))
 	for _, f := range set.Files {
 		if f.Path == scratch {
 			t.Error("deleted scratch file still in the change set")

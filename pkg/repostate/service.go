@@ -10,12 +10,12 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 )
 
-// Lister names the checkouts active sessions work in: the repos to keep
-// current.
+// Lister names the checkouts sessions work in: the repos to keep current.
+// The Router's is the gitstate service's kept sessions, from memory.
 type Lister func(ctx context.Context) ([]string, error)
 
 // Service is the Router's repo state: a Cache kept current by a Watcher
-// over the repos active sessions work in, and anything recently asked
+// over the repos sessions work in (its Lister), and anything recently asked
 // about. Each settled change clears the repo's entries and is announced
 // once. Safe for concurrent use.
 type Service struct {
@@ -38,8 +38,8 @@ type location struct{ gitDir, ownGitDir string }
 const askedFor = 30 * time.Minute
 
 // NewService starts keeping repo state current until ctx ends: it lists
-// active sessions' checkouts every 30 s (and right away), watches their
-// repos, and calls announce with the shared git dir of each repo that
+// the checkouts to keep current every 30 s (and right away, and on
+// Reconcile), watches their repos, and calls announce with the shared git dir of each repo that
 // changed, after clearing its cache entries.
 func NewService(ctx context.Context, list Lister, announce func(gitDir string)) *Service {
 	return newService(ctx, list, announce, Options{}, 30*time.Second)
@@ -72,6 +72,15 @@ func (s *Service) Branch(ctx context.Context, path, branch string) (contracts.Re
 	return s.cache.GetBranch(ctx, path, branch)
 }
 
+// Reconcile asks for the watched repos to be listed again soon, after the
+// lister's answer moved (a session's repo set changed). Never blocks.
+func (s *Service) Reconcile() {
+	select {
+	case s.kick <- struct{}{}:
+	default:
+	}
+}
+
 func (s *Service) noteAsked(path string) {
 	s.mu.Lock()
 	_, known := s.asked[path]
@@ -100,12 +109,12 @@ func (s *Service) reconcileLoop(ctx context.Context) {
 	}
 }
 
-// reconcile watches exactly the repos of active sessions' checkouts and
+// reconcile watches exactly the repos of the listed checkouts and
 // of checkouts asked about lately.
 func (s *Service) reconcile(ctx context.Context) {
 	paths, err := s.list(ctx)
 	if err != nil && ctx.Err() == nil {
-		log.Printf("repostate: list active sessions' repos: %v", err)
+		log.Printf("repostate: list the checkouts to watch: %v", err)
 	}
 	now := time.Now()
 	s.mu.Lock()

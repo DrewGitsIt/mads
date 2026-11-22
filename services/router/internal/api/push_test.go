@@ -36,9 +36,6 @@ func TestPushRoutes(t *testing.T) {
 	wtGit(t, repo, "commit", "-q", "-m", "Add a")
 	base := srv.URL + "/sessions/" + sess.ID
 
-	if resp := postJSON(t, base+"/worktree/refresh", struct{}{}); resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("refresh: %d", resp.StatusCode)
-	}
 	if ahead := sessionAhead(t, srv.URL, sess.ID); ahead != 1 {
 		t.Errorf("to push = %d, want 1", ahead)
 	}
@@ -95,11 +92,7 @@ func TestPushRoutes(t *testing.T) {
 // repo has to push.
 func sessionAhead(t *testing.T, base, id string) int {
 	t.Helper()
-	resp, err := http.Get(base + "/sessions/" + id + "/repos")
-	if err != nil {
-		t.Fatal(err)
-	}
-	repos := decodeJSON[[]contracts.SessionRepoState](t, resp)
+	repos := freshRepos(t, base, id)
 	if len(repos) != 1 {
 		t.Fatalf("repos = %+v, want one", repos)
 	}
@@ -121,11 +114,7 @@ func TestSessionReposIsolated(t *testing.T) {
 	wtGit(t, repo, "add", "local.txt")
 	wtGit(t, repo, "commit", "-q", "-m", "local")
 
-	resp, err := http.Get(srv.URL + "/sessions/" + sess.ID + "/repos")
-	if err != nil {
-		t.Fatal(err)
-	}
-	repos := decodeJSON[[]contracts.SessionRepoState](t, resp)
+	repos := decodeJSON[[]contracts.SessionRepoState](t, settledGet(t, srv.URL+"/sessions/"+sess.ID+"/repos"))
 	if len(repos) != 1 {
 		t.Fatalf("repos = %+v", repos)
 	}

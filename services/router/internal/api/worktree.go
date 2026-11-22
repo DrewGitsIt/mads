@@ -141,38 +141,42 @@ func (s *server) handleSessionWorktree(w http.ResponseWriter, r *http.Request) {
 	writeRaw(w, http.StatusOK, s.withFolderKeepers(r.Context(), id, raw))
 }
 
-// handleSessionWorktreeRefresh recounts the session's header counts (D4)
-// and publishes them, for a commit or merge made outside mads that no turn
-// end has counted yet. With a live child it asks the child, whose recount
-// is the coalesced one turn ends use: a refresh beside a turn-end recount
-// joins it instead of running a second git status over the same repos.
-// The Router recounts itself when there is no child, or when the child
-// can't (one started before it had the route, or shutting down). No wake
-// lock, like status. Either way: 204, the counts arriving as session.updated.
+// handleSessionWorktreeRefresh asks for the session's header counts (D4)
+// and repo facts to be recomputed, for a commit or merge made outside mads
+// that no turn end has counted yet: 202 at once, the counts arriving as
+// session.updated and the end as session.git_state_updated
+// (docs/GIT-STATE-DESIGN.md). The recount runs in the gitstate service,
+// routed by recount.
 func (s *server) handleSessionWorktreeRefresh(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, err := s.data.Session(r.Context(), id); err != nil {
 		writeError(w, err)
 		return
 	}
+	s.gitState.Refresh(id)
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// recount recounts the session's header counts and publishes them. With a
+// live child it asks the child, whose recount is the coalesced one turn
+// ends use: a recount beside a turn-end recount joins it instead of
+// running a second git status over the same repos. The Router recounts
+// itself when there is no child, or when the child can't (one started
+// before it had the route, or shutting down). No wake lock, like status.
+func (s *server) recount(ctx context.Context, id string) error {
 	if addr, ok := s.sup.SessionAddr(id); ok {
-		status, _, err := callChild(r.Context(), addr, http.MethodPost, "/worktree/refresh", nil)
+		status, _, err := callChild(ctx, addr, http.MethodPost, "/worktree/refresh", nil)
 		if err == nil && status >= 200 && status < 300 {
-			w.WriteHeader(http.StatusNoContent)
-			return
+			return nil
 		}
-		if r.Context().Err() != nil {
-			return // the caller went away; nobody reads the answer
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 		if err != nil || status != http.StatusNotFound && status != http.StatusMethodNotAllowed && status != http.StatusServiceUnavailable {
 			log.Printf("worktree refresh: session %s child: status %d, %v; recounting in the Router", id, status, err)
 		}
 	}
-	if err := s.worktreeOps().Recount(r.Context(), id); err != nil {
-		writeErrMsg(w, http.StatusInternalServerError, "worktree refresh: ", err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	return s.worktreeOps().Recount(ctx, id)
 }
 
 // inPlaceOwnerDetail replaces the not_isolated refusal's "your checkout"

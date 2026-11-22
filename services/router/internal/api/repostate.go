@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/repostate"
@@ -50,36 +51,35 @@ func (s *server) handleRepoState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
-// handleSessionRepos lists every repo of the session's set — the ones with
-// nothing uncommitted too, since they may still have commits to push —
-// with each checkout's branch facts, and for an isolated session the base
-// in the user's checkout, which a push after Land publishes. A repo whose
-// facts can't be read (deleted since) is left out.
+// handleSessionRepos serves GET /sessions/{id}/repos: the session's repos
+// with their branch facts (computeSessionRepos), as the gitstate service
+// last computed them (docs/GIT-STATE-DESIGN.md). The body is the bare
+// array it always was; X-Mads-Updating (1 while a recompute is queued or
+// running) and X-Mads-Computed-At (RFC 3339, absent before a first
+// compute) say how current it is. Cold: [] with X-Mads-Updating: 1, which
+// readers take as "loading", not "no repos".
 func (s *server) handleSessionRepos(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	sess, err := s.data.Session(ctx, r.PathValue("id"))
+	sess, err := s.data.Session(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	primary, all, _, err := s.worktreeOps().Repos(ctx, sess.ID)
-	if err != nil {
-		writeErrMsg(w, http.StatusInternalServerError, "session repos: ", err)
+	a := s.gitState.Repos(sess.ID)
+	if a.Err != nil {
+		writeErrMsg(w, http.StatusInternalServerError, "session repos: ", a.Err)
 		return
 	}
-	out := []contracts.SessionRepoState{}
-	for i, t := range all {
-		wt, err := s.repoWorktree(ctx, t.Folder)
-		if err != nil {
-			continue
-		}
-		rs := contracts.SessionRepoState{Root: t.Folder, Primary: primary != nil && i == 0, Isolated: t.Isolated(), Base: t.Base, Worktree: wt}
-		if t.Isolated() {
-			if base, err := s.repoBranch(ctx, t.Primary, t.Base); err == nil {
-				rs.BaseWorktree = &base
-			}
-		}
-		out = append(out, rs)
+	state := a.State
+	if state == nil {
+		state = []contracts.SessionRepoState{}
 	}
-	writeJSON(w, http.StatusOK, out)
+	if a.Updating || !a.Computed {
+		w.Header().Set("X-Mads-Updating", "1")
+	} else {
+		w.Header().Set("X-Mads-Updating", "0")
+	}
+	if a.Computed {
+		w.Header().Set("X-Mads-Computed-At", a.ComputedAt.UTC().Format(time.RFC3339Nano))
+	}
+	writeJSON(w, http.StatusOK, state)
 }

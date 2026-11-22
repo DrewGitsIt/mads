@@ -32,7 +32,6 @@ import (
 	"github.com/drewkidwell/mads/pkg/preflight"
 	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/repostate"
-	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/codexcli"
@@ -45,6 +44,7 @@ import (
 	"github.com/drewkidwell/mads/services/router/internal/api"
 	"github.com/drewkidwell/mads/services/router/internal/attachments"
 	"github.com/drewkidwell/mads/services/router/internal/digestwatch"
+	"github.com/drewkidwell/mads/services/router/internal/gitstate"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/mesh"
 	"github.com/drewkidwell/mads/services/router/internal/modelcatalog"
@@ -188,7 +188,7 @@ func (f frontDoor) door(classify func(r *http.Request) string) *localauth.Door {
 	return api.NewDoor(classify, f.tokens, f.scoped)
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, attachmentStore *attachments.Store, fastModelFlagBaseURL string, models *modelcatalog.Catalog, routerURL string, ident identity, guard *localguard.Guard, repoState *repostate.Service, auth frontDoor, meshMgr *mesh.Manager) http.Handler {
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, attachmentStore *attachments.Store, fastModelFlagBaseURL string, models *modelcatalog.Catalog, routerURL string, ident identity, guard *localguard.Guard, repoState *repostate.Service, gitState *gitstate.Service, auth frontDoor, meshMgr *mesh.Manager) http.Handler {
 	var devices http.Handler
 	if meshMgr != nil {
 		devices = meshMgr.Devices()
@@ -216,6 +216,7 @@ func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runne
 		StartedAt:            ident.startedAt,
 		OriginAllowed:        guard.OriginAllowed,
 		RepoState:            repoState,
+		GitState:             gitState,
 		Home:                 filepath.Dir(runsDir),
 		Tokens:               auth.tokens,
 		Scoped:               auth.scoped,
@@ -236,75 +237,32 @@ func meshLayer(m *mesh.Manager) *api.Layer {
 	return &api.Layer{Wrap: m.Handler, Claims: mesh.Claims}
 }
 
-// activeCheckouts lists the checkouts active sessions work in — every repo
-// of each one's set, and an isolated session's user checkout too — for
-// repo state to keep current.
-func activeCheckouts(data *dataclient.Client) repostate.Lister {
+// onRepoChange is what a settled change to a repo's branches sets off:
+// recompute the repo facts and header counts of the kept sessions working
+// in that repo (gitstate, docs/GIT-STATE-DESIGN.md) — anyone may have just
+// committed their files or moved their branch — then announce the change.
+// A recount only writes a record, and so only sends session.updated, for
+// a session whose counts actually moved.
+func onRepoChange(data *dataclient.Client, git *gitstate.Service) func(gitDir string) {
+	announce := announceRepoChange(data)
+	return func(gitDir string) {
+		git.RepoChanged(gitDir)
+		announce(gitDir)
+	}
+}
+
+// activeSessionIDs lists the active sessions, for gitstate's warm set.
+func activeSessionIDs(data *dataclient.Client) func(ctx context.Context) ([]string, error) {
 	return func(ctx context.Context) ([]string, error) {
 		sessions, err := data.Sessions(ctx, string(contracts.SessionActive))
 		if err != nil {
 			return nil, err
 		}
-		ops := sessionwt.Ops{Store: data}
-		var paths []string
+		ids := make([]string, 0, len(sessions))
 		for _, sess := range sessions {
-			_, all, _, err := ops.Repos(ctx, sess.ID)
-			if err != nil {
-				continue
-			}
-			for _, t := range all {
-				paths = append(paths, t.Folder)
-				if t.Isolated() {
-					paths = append(paths, t.Primary)
-				}
-			}
+			ids = append(ids, sess.ID)
 		}
-		return paths, nil
-	}
-}
-
-// onRepoChange is what a settled change to a repo's branches sets off:
-// recount the session-owned counts (uncommitted files) of active sessions
-// working in that repo — anyone may have just committed their files — then
-// announce the change. A recount only writes a record, and so only sends
-// session.updated, for a session whose counts actually moved.
-func onRepoChange(data *dataclient.Client) func(gitDir string) {
-	announce := announceRepoChange(data)
-	return func(gitDir string) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		recountSessionsIn(ctx, data, gitDir)
-		announce(gitDir)
-	}
-}
-
-// recountSessionsIn refreshes the header counts of active sessions with a
-// checkout in the repo whose shared git dir is gitDir.
-func recountSessionsIn(ctx context.Context, data *dataclient.Client, gitDir string) {
-	sessions, err := data.Sessions(ctx, string(contracts.SessionActive))
-	if err != nil {
-		log.Printf("router: recount sessions in %s: %v", gitDir, err)
-		return
-	}
-	ops := sessionwt.Ops{Store: data}
-	for _, sess := range sessions {
-		_, all, _, err := ops.Repos(ctx, sess.ID)
-		if err != nil {
-			continue
-		}
-		in := false
-		for _, t := range all {
-			for _, p := range []string{t.Folder, t.Primary} {
-				if g, err := repostate.GitDir(ctx, p); err == nil && g == gitDir {
-					in = true
-				}
-			}
-		}
-		if in {
-			if err := sessionwt.RefreshCounts(ctx, data, sess.ID); err != nil {
-				log.Printf("router: recount %s after a repo change: %v", sess.ID, err)
-			}
-		}
+		return ids, nil
 	}
 }
 
@@ -495,13 +453,28 @@ func main() {
 	// (docs/COMMIT-LAND-PUSH-DESIGN.md D10); stopped at shutdown.
 	repoCtx, repoCancel := context.WithCancel(context.Background())
 	defer repoCancel()
-	repoState := repostate.NewService(repoCtx, activeCheckouts(data), onRepoChange(data))
+	// Each session's git-derived state, recomputed in the background and
+	// served from memory (docs/GIT-STATE-DESIGN.md). Its kept sessions'
+	// checkouts are what repo state watches. Run below, once the API has
+	// bound its computes and orphaned sessions are reconciled.
+	var repoState *repostate.Service
+	gitState := gitstate.New(gitstate.Options{
+		Emit:   api.GitStateEmitter(data),
+		Events: data,
+		Active: activeSessionIDs(data),
+		TargetsChanged: func() {
+			if repoState != nil {
+				repoState.Reconcile()
+			}
+		},
+	})
+	repoState = repostate.NewService(repoCtx, gitState.Checkouts, onRepoChange(data, gitState))
 	// Mesh mode's viewer side: the devices this node views, their
 	// reachability, and routing to them; also the paired devices' routes
 	// (/devices) and what each paired device lets this node do. Routing
 	// is a pass-through until a device this node views is added.
 	meshMgr := mesh.NewManager(data, mesh.Options{SelfName: *meshName, Identity: deviceID})
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), attachmentStore, *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist), guard, repoState, auth, meshMgr)}
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), attachmentStore, *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist), guard, repoState, gitState, auth, meshMgr)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -521,6 +494,10 @@ func main() {
 	// (docs/PIPELINE-LEASES-DESIGN.md B1).
 	sup.ReconcileLostRuns(sweepCtx, supervisor.LostRunOptions{RouterStart: routerStart})
 	sweepCancel()
+
+	// After the orphan sweep, so its boot warm-up sees the sessions that
+	// are really active; follows the log from its head.
+	go gitState.Run(ctx)
 
 	watcher := digestwatch.NewWatcher(data, jobs)
 	go watcher.Run(ctx)
