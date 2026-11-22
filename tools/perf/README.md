@@ -52,7 +52,7 @@ npx --prefix ui tsc -p ui/e2e/perf                      # type-check the specs
 | results | `results/` | output, gitignored (CITED.txt kept) |
 | seeder | [services/data/cmd/perfseed](../../services/data/cmd/perfseed) | Go, `-tags perf`: `seed`, `calibrate`, `realism`, `gitfx`, `append`. Stays there: it imports `services/data/internal/store` |
 | specs | [ui/e2e/perf/](../../ui/e2e/perf) | Playwright/TypeScript: probe, delay proxy, collectors, scenarios, checks, report. Stays there: it needs ui's node_modules and `ui/e2e/lib/topology.ts` |
-| fake provider dialects | [providers/fake](../../providers/fake) | `permission`, `MADS_FAKE_START_DELAY_MS`; overlaid on every build the runner makes |
+| fake provider dialects | [providers/fake/perf.go](../../providers/fake/perf.go) | `permission`, `MADS_FAKE_START_DELAY_MS` (`-tags perf`); overlaid on every build the runner makes |
 | make targets | [Makefile](../../Makefile) | `ui-perf`, `perf-tools-test` |
 
 ## Safety rules
@@ -68,19 +68,41 @@ npx --prefix ui tsc -p ui/e2e/perf                      # type-check the specs
 - `node_modules` is installed (`npm ci`) or copy-on-write cloned, never
   symlinked.
 
-## Guard rails (none of this can ship)
+## Guard rails
 
-1. **Build tag.** Every Go file of perfseed and the git shim (tests too)
-   starts with `//go:build perf`. Plain `go build ./...`, `go test ./...`,
-   `go vet ./...`, golangci-lint, `make build`, the install script and the
-   release gate never compile them; the runner and `make perf-tools-test`
-   pass `-tags perf`.
-2. **Dependency check.** `scripts/release-gate.sh` fails loudly if
-   `go list -deps` of any release program (its `RELEASE_PKGS`, plus
+What is guaranteed:
+- **No release binary or UI bundle contains perf code.** The Go side is
+  behind the `perf` build tag (below); the UI bundle is built from
+  `ui/src`, which imports nothing from `ui/e2e`.
+- **Source archives omit it.** `git archive` (and GitHub's source tarballs)
+  leave out `tools/` and `ui/e2e/perf/`.
+- **A git clone still has it on disk.** `scripts/install.sh` currently
+  installs from a clone, so the source is there, as every test is; it is
+  never compiled into what gets installed.
+
+Not changed here (an open question for Drew): the fake provider itself
+(`providers/fake`, which predates the harness) is linked into the release
+binaries. Only the harness's additions to it are gated.
+
+How:
+1. **Build tag.** Every Go file of perfseed, the git shim (tests too) and
+   `providers/fake/perf.go` / `perf_test.go` (the `permission` dialect,
+   `MADS_FAKE_START_DELAY_MS`) starts with `//go:build perf`; the untagged
+   fake keeps only no-op hooks. Plain `go build/test/vet ./...`,
+   golangci-lint, `make build`, the install script and the release gate
+   never compile them. The runner builds perfseed, the git shim and the
+   services with `-tags perf`; `make perf-tools-test` vets, lints and tests
+   them with the tag. `TestPerfCodeIsTagged` fails on an untagged perf
+   file; `providers/fake`'s `TestNoPerfDialectsUntagged` proves an untagged
+   build has neither addition.
+2. **Dependency and binary checks.** `scripts/release-gate.sh` fails loudly
+   if `go list -deps` of any release program (its `RELEASE_PKGS`, plus
    `services/mesh`) contains a package under `tools/`,
-   `services/data/cmd/perfseed` or `ui/e2e`. The same check runs untagged in
-   every `go test ./...` (`scripts/releasegate/devtools_test.go`), so CI
+   `services/data/cmd/perfseed` or `ui/e2e`, and if a built release binary
+   contains the fake's perf-only strings. The deps check also runs untagged
+   in every `go test ./...` (`scripts/releasegate/devtools_test.go`), so CI
    catches it first.
 3. **Source archives.** `.gitattributes` marks `tools/` and `ui/e2e/perf/`
    `export-ignore`; `TestSourceArchiveOmitsDevTools` proves `git archive`
-   leaves them out.
+   leaves them out. `ui/e2e/playwright.config.ts` ignores `perf/**`, so
+   `make ui-smoke` never collects the harness.
