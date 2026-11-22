@@ -141,19 +141,19 @@ ui-smoke: ui-deps
 	fi
 	npm --prefix ui run test:e2e
 
-# Perf harness (docs/PERF-HARNESS-PLAN.md): local only, never in CI.
+# Perf harness (tools/perf/README.md): local only, never in CI.
 #   make ui-perf BASE=<ref> CAND=<ref|worktree dir> PROFILE=S|M|L|XL N=5 BROWSER=chromium|electron
 # CAND is optional (baseline only). Builds each side into temp dirs (refs via
 # a temp `git worktree add`), seeds one workload, runs the scenarios ABBA on
-# hermetic stacks behind the delay proxy, and writes perf-results/<stamp>/.
+# hermetic stacks behind the delay proxy, and writes tools/perf/results/<stamp>/.
 # Every scenario runs with the proxy's delays on and off (MODES=on,off).
-# Also: SCENARIOS=1,3b|bus|git|all (default all; bus = 1-8 without the git fixture, git = 9a-9f)  CHECKS=a,b|none  REALISM=1 (a read-only backup of ~/.mads/mads.db)
+# Also: SCENARIOS=1,3b|bus|git|all (default all; bus = 1-8 without the git fixture, git = 9a-9h)  CHECKS=a,b|none  REALISM=1 (a read-only backup of ~/.mads/mads.db)
 #       PERF_DELAYS=<regex>=<ms>,...  PERF_HOLD_OUTPUT=0.
-#       GITFX=auto|1|0 GITFX_SRC=~/repo/mads (real-git fixture for 9x and checks f-h; cloned from, never run in).
+#       GITFX=auto|1|0 GITFX_SRC=~/repo/mads (real-git fixture for 9x and checks f-i; cloned from, never run in).
 # No ui-deps prerequisite: run.sh installs deps only where they are missing.
 ui-perf:
 	BASE="$(BASE)" CAND="$(CAND)" PROFILE="$(PROFILE)" N="$(N)" BROWSER="$(BROWSER)" SCENARIOS="$(SCENARIOS)" MODES="$(MODES)" CHECKS="$(CHECKS)" REALISM="$(REALISM)" GITFX="$(GITFX)" GITFX_SRC="$(GITFX_SRC)" \
-		sh ui/e2e/perf/run.sh
+		sh tools/perf/run.sh
 
 # Release gate: cross-platform build matrix + install/update smokes against
 # the native candidate. Kept out of `check`/CI's fast `test` job (multi-

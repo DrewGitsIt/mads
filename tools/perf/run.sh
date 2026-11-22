@@ -1,5 +1,5 @@
 #!/bin/sh
-# make ui-perf — the perf harness runner (docs/PERF-HARNESS-PLAN.md §6).
+# make ui-perf — the perf harness runner (tools/perf/docs/PLAN.md §6; tools/perf/README.md).
 #
 #   make ui-perf BASE=<ref> CAND=<ref|worktree dir> PROFILE=S|M|L|XL N=5 BROWSER=chromium|electron
 #   also: SCENARIOS=1,3b | bus | git | all (default all, bus in realism; scenarioSets.sh)  MODES=on,off (default both)  PERF_DELAYS=<regex>=<ms>,...
@@ -21,7 +21,7 @@
 # build goes to the temp dir). Seeds ONE workload per run with perfseed
 # built from BASE's tree (this tree's perfseed source laid over it with
 # `go build -overlay`, so the schema is BASE's own); every repetition boots
-# on a fresh copy. Writes perf-results/<timestamp>/.
+# on a fresh copy. Writes tools/perf/results/<timestamp>/ (gitignored).
 #
 # Every stack is hermetic (lib/topology.ts rules): temp HOME/MADS_HOME,
 # ephemeral ports, an empty MADS_AGENT_BIN_DIR. Every process a repetition
@@ -29,7 +29,7 @@
 # left there when Playwright exits, however it exits.
 set -eu
 
-ROOT=$(cd "$(dirname "$0")/../../.." && pwd -P)
+ROOT=$(cd "$(dirname "$0")/../.." && pwd -P)
 BASE=${BASE:-main}
 CAND=${CAND:-}
 PROFILE=${PROFILE:-S}
@@ -38,7 +38,7 @@ BROWSER=${BROWSER:-chromium}
 # Resolved up front (aliases, empty = all) so every decision below, the
 # git fixture's included, sees the scenarios that will actually run.
 # Realism has no git fixture (the two don't mix): its "all" is bus.
-. "$ROOT/ui/e2e/perf/scenarioSets.sh"
+. "$ROOT/tools/perf/scenarioSets.sh"
 SCENARIOS=$(resolve_scenarios "${SCENARIOS:-$([ -n "${REALISM:-}" ] && echo bus || echo all)}")
 # Real-git scenarios alone: delays off (the mock would add to real git).
 DEFAULT_MODES=off
@@ -87,7 +87,7 @@ under_forbidden() {
 
 # --- Validate everything before touching anything.
 under_forbidden "$ROOT" && die "refusing to run from $ROOT: it is (or is under) a live checkout ($PERF_FORBIDDEN_DIRS)"
-PROFILE_JSON="$ROOT/ui/e2e/perf/profiles/$PROFILE.json"
+PROFILE_JSON="$ROOT/tools/perf/profiles/$PROFILE.json"
 [ -f "$PROFILE_JSON" ] || die "no profile $PROFILE_JSON"
 case "$BROWSER" in chromium | electron) ;; *) die "BROWSER must be chromium or electron" ;; esac
 case "$N" in '' | *[!0-9]*) die "N must be a number" ;; esac
@@ -117,7 +117,7 @@ CAND_RES=""
 
 # --- From here on, everything made is cleaned up.
 STAMP=$(date +%Y%m%d-%H%M%S)
-RUN_DIR="$ROOT/perf-results/$STAMP"
+RUN_DIR="$ROOT/tools/perf/results/$STAMP"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/mads-perf.XXXXXX")
 TMP=$(cd "$TMP" && pwd -P)
 PIDS="$TMP/pids"
@@ -275,7 +275,7 @@ OVERLAY="$TMP/perfseed-overlay.json"
 	done
 	printf '}}'
 } >"$OVERLAY"
-(cd "$BASE_SRC" && go build -overlay "$OVERLAY" -o "$TMP/perfseed" ./services/data/cmd/perfseed)
+(cd "$BASE_SRC" && go build -tags perf -overlay "$OVERLAY" -o "$TMP/perfseed" ./services/data/cmd/perfseed)
 
 WL="$TMP/workload"
 mkdir -p "$WL"
@@ -306,10 +306,10 @@ else
 		# pristine APFS clone (stack.ts restoreGitFx).
 		echo "ui-perf: building the git fixture from $GITFX_SRC (clone only)" >&2
 		mkdir -p "$TMP/gitfx"
-		"$TMP/perfseed" gitfx -db "$WL/mads.db" -manifest "$WL/manifest.json" -shape "$ROOT/ui/e2e/perf/gitfx.shape.json" \
+		"$TMP/perfseed" gitfx -db "$WL/mads.db" -manifest "$WL/manifest.json" -shape "$ROOT/tools/perf/profiles/gitfx.shape.json" \
 			-src "$GITFX_SRC" -root "$TMP/gitfx/live" -guard "$TMP"
 		cp -cRp "$TMP/gitfx/live" "$TMP/gitfx/pristine"
-		(cd "$ROOT" && go build -o "$TMP/gitshim/git" ./ui/e2e/perf/gitshim)
+		(cd "$ROOT" && go build -tags perf -o "$TMP/gitshim/git" ./tools/perf/gitshim)
 	fi
 	cp "$WL/manifest.json" "$RUN_DIR/manifest.json"
 fi
@@ -348,7 +348,7 @@ set +e
 # the run's temp tree, and non-loopback connections, the whole run long.
 WATCH_STOP="$TMP/watch.stop"
 if [ -n "$REALISM" ]; then
-	sh "$ROOT/ui/e2e/perf/isolationWatch.sh" "$PIDS" "$TMP" "$WATCH_STOP" "$RUN_DIR/isolation.json" &
+	sh "$ROOT/tools/perf/isolationWatch.sh" "$PIDS" "$TMP" "$WATCH_STOP" "$RUN_DIR/isolation.json" &
 	WATCH_PID=$!
 fi
 # GIT_CEILING_DIRECTORIES: no git a stack runs can discover a repo above the run's temp tree.

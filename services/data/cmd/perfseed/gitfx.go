@@ -1,9 +1,9 @@
 package main
 
 // perfseed gitfx: real-git fixtures for the git-route scenarios (9x) and
-// checks f–h (docs/PERF-HARNESS-PLAN.md, "Git routes").
+// checks f–h (tools/perf/docs/PLAN.md, "Git routes").
 //
-//	perfseed gitfx -db <seeded.db> -manifest <manifest.json> -shape <gitfx.json>
+//	perfseed gitfx -db <seeded.db> -manifest <manifest.json> -shape <gitfx.shape.json>
 //	               -src <repo to clone> -root <fixture dir> -guard <run temp dir>
 //
 // It clones -src (a read: `git clone --mirror --no-local`, the only git
@@ -37,7 +37,7 @@ import (
 	"github.com/drewkidwell/mads/services/session/shadow"
 )
 
-// GitFxShape is the fixture's shape (ui/e2e/perf/profiles/gitfx.json),
+// GitFxShape is the fixture's shape (tools/perf/profiles/gitfx.shape.json),
 // calibrated by counts against a live session.
 type GitFxShape struct {
 	Calibration string `json:"calibration"`
@@ -128,7 +128,7 @@ func runGitFx(args []string) error {
 	fs := flag.NewFlagSet("gitfx", flag.ExitOnError)
 	dbPath := fs.String("db", "", "seeded database to add the fixture sessions to")
 	manPath := fs.String("manifest", "", "the seed's manifest (read, then rewritten with the git section)")
-	shapePath := fs.String("shape", "", "fixture shape JSON (profiles/gitfx.json)")
+	shapePath := fs.String("shape", "", "fixture shape JSON (tools/perf/profiles/gitfx.shape.json)")
 	src := fs.String("src", "", "repository to clone (read only)")
 	root := fs.String("root", "", "fixture directory to create (must not exist)")
 	guard := fs.String("guard", "", "the run's temp dir: -root must be inside it")

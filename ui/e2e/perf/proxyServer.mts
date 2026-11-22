@@ -1,4 +1,4 @@
-// The delay proxy (docs/PERF-HARNESS-PLAN.md §2), as its own process: the
+// The delay proxy (tools/perf/docs/PLAN.md §2), as its own process: the
 // Playwright worker only talks to it over IPC, so nothing in the measured
 // path waits on the worker's event loop. Run by Node with type stripping:
 //   node proxyServer.mts   (spawned by proxyClient.ts with an IPC channel)
@@ -133,7 +133,7 @@ const server = createServer((req, res) => {
               prevNL = nl;
               if (isEvents) {
                 if (nl) {
-                  // The harness contract (docs/PERF-HARNESS-PLAN.md): a stream
+                  // The harness contract (tools/perf/docs/PLAN.md): a stream
                   // may declare where the server starts it, ": start <seq>".
                   if (line.startsWith(": start ") && rec.declaredStart === undefined) {
                     const st = Number(line.slice(8));

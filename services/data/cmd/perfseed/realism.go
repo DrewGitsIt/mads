@@ -13,7 +13,7 @@ import (
 	"github.com/drewkidwell/mads/services/data/internal/store"
 )
 
-// Realism mode (docs/PERF-HARNESS-PLAN.md, phase 4): the workload is a COPY
+// Realism mode (tools/perf/docs/PLAN.md, phase 4): the workload is a COPY
 // of a real database, taken by run.sh with `sqlite3 -readonly <live>
 // ".backup <copy>"`. This prepares that copy — and only the copy — so a
 // hermetic stack can boot on it and touch nothing real:

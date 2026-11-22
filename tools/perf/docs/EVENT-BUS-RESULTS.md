@@ -5,7 +5,7 @@ measured and reviewed; numbers under "Production build".
 
 This records every condition measured while fixing the "sessions stop syncing /
 switching floods the network" problem, so the decision can be checked later.
-The harness itself is described in [PERF-HARNESS-PLAN.md](PERF-HARNESS-PLAN.md).
+The harness itself is described in [PLAN.md](PLAN.md).
 
 ## The problem in one paragraph
 
@@ -293,12 +293,12 @@ Delays on (git routes mocked slow): settle times equal main's (s2 14779 →
 mount reads now released together after `ready`). The slow git routes are the
 remaining bottleneck; that is the next piece of work.
 
-Runs: `perf-results/20261121-122846` (off), `-125519` (on), `-130554`
+Runs: `tools/perf/results/20261121-122846` (off), `-125519` (on), `-130554`
 (Electron), `-131522` (realism).
 
 ## Results directories
 
-All under `perf-results/` on the machine that ran them (gitignored):
+All under `tools/perf/results/` on the machine that ran them (gitignored):
 
 | Run | Dir |
 |---|---|

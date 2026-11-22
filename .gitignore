@@ -7,6 +7,10 @@ dist/
 dist-electron/
 coverage.out
 /ui/test-results/
+# perf harness output (tools/perf/README.md); only the list of cited runs is kept
+/tools/perf/results/*
+!/tools/perf/results/CITED.txt
+# the harness's pre-tools/perf output dir
 /perf-results/
 /.mads-app/
 

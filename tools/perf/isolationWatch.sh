@@ -1,5 +1,5 @@
 #!/bin/sh
-# Isolation watch for a realism run (docs/PERF-HARNESS-PLAN.md, phase 4):
+# Isolation watch for a realism run (tools/perf/docs/PLAN.md, phase 4):
 # samples, once a second until <stop-file> exists, every process the run's
 # stacks own (the pid registry and all their descendants) and records:
 #   - any git, claude, codex, hermes, goose or kiro process among them;

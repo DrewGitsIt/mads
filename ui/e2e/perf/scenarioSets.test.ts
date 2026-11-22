@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SCENARIOS, scenarioById } from "./scenarios";
 
-const sets = join(dirname(fileURLToPath(import.meta.url)), "scenarioSets.sh");
+const sets = join(dirname(fileURLToPath(import.meta.url)), "../../../tools/perf/scenarioSets.sh");
 const resolve = (arg: string): string[] =>
   execFileSync("sh", ["-c", `. "$1"; resolve_scenarios "$2"`, "sh", sets, arg], { encoding: "utf8" }).trim().split(",");
 const ids = (xs: string[]) => xs.map((x) => scenarioById(x).id);

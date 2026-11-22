@@ -1,5 +1,5 @@
 // Command gitshim stands in for git on a perf stack's PATH (the harness's
-// git metrics, docs/PERF-HARNESS-PLAN.md): it runs the real git
+// git metrics, tools/perf/docs/PLAN.md): it runs the real git
 // ($PERF_REAL_GIT) with the same arguments, stdio and environment, passes
 // its exit status through, and appends one JSON line per call to
 // $PERF_GIT_LOG: start and end (Unix ms), its parent's pid (the Router or a

@@ -8,7 +8,7 @@ import { fxGit } from "./stack";
 /**
  * Edits made straight in a fixture checkout, as an editor or a terminal
  * would: no agent, so no file.changed and no ledger row. Check i and
- * scenarios 9g/9h (docs/PERF-HARNESS-PLAN.md). Every path is checked to be
+ * scenarios 9g/9h (tools/perf/docs/PLAN.md). Every path is checked to be
  * inside the run's git fixture (its temp tree) before it is touched.
  */
 

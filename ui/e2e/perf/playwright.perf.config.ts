@@ -1,7 +1,7 @@
 import { defineConfig } from "@playwright/test";
 
 /**
- * The perf harness (docs/PERF-HARNESS-PLAN.md): its own config, so `make
+ * The perf harness (tools/perf/docs/PLAN.md): its own config, so `make
  * ui-smoke` never sees it. Run through `make ui-perf`, which builds each ref,
  * seeds the workload and writes the plan this reads (PERF_PLAN). Serial and
  * single-worker: every test boots its own stack, and parallel runs would

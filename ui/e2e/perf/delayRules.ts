@@ -13,7 +13,7 @@ export interface DelayRule {
   methods?: string[];
 }
 
-/** Defaults mimic the live measurements (docs/PERF-HARNESS-PLAN.md §2). */
+/** Defaults mimic the live measurements (tools/perf/docs/PLAN.md §2). */
 export const DEFAULT_DELAY_RULES: DelayRule[] = [
   { pattern: /^\/sessions\/[^/]+\/repos$/, delayMs: 10_000, methods: ["GET"] },
   { pattern: /\/changeset$/, delayMs: 6_000, methods: ["GET"] },

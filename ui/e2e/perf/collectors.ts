@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import type { CDPSession, Page } from "@playwright/test";
 
 /**
- * Collectors for one measured window (docs/PERF-HARNESS-PLAN.md §3). The
+ * Collectors for one measured window (tools/perf/docs/PLAN.md §3). The
  * network ones read the Chrome DevTools Protocol; the process ones sample
  * `ps` and `lsof` for the stack's own pids and the proxy's port only.
  */

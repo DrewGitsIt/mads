@@ -26,7 +26,7 @@ import {
 } from "./outsideEdits";
 
 /**
- * Correctness checks (docs/PERF-HARNESS-PLAN.md §5): a faster design must
+ * Correctness checks (tools/perf/docs/PLAN.md §5): a faster design must
  * not win by dropping state. Each is a user-visible assertion on what the
  * page shows, whatever carries the state there (replay, a REST snapshot,
  * a live stream), and each passes on main. One fresh stack per check per
@@ -475,7 +475,7 @@ const GIT_CHECKS: Check[] = [
       const A = g.sessions.isolated;
       const why =
         "main has no such marker: the Changes tab says \"Updating…\" only until its first answer, and nothing shows a refetch or a recount " +
-        "(the contract design B is to meet; docs/PERF-HARNESS-PLAN.md, check g)";
+        "(the contract design B is to meet; tools/perf/docs/PLAN.md, check g)";
       let changedAt = 0;
       return [
         await step(

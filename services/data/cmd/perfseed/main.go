@@ -1,10 +1,10 @@
-// Command perfseed writes perf-harness workloads (docs/PERF-HARNESS-PLAN.md).
+// Command perfseed writes perf-harness workloads (tools/perf/docs/PLAN.md).
 //
 //	perfseed seed -db <fresh.db> -profile <profile.json> -repo <dir> [-manifest <out.json>]
 //	perfseed calibrate -db <existing.db> -out <profile.json> [-name L]
 //	perfseed scale -in <profile.json> -out <profile.json> -name XL -events 1000000 [-records 1.5]
 //	perfseed append -url <dataURL> -profile <profile.json> -manifest <manifest.json|-> -n 50000 [-concurrency 16]
-//	perfseed gitfx -db <seeded.db> -manifest <manifest.json> -shape <gitfx.json> -src <repo> -root <dir> -guard <tmp>
+//	perfseed gitfx -db <seeded.db> -manifest <manifest.json> -shape <gitfx.shape.json> -src <repo> -root <dir> -guard <tmp>
 //
 // seed writes a fresh database before any Data Service starts, through the
 // store's own write paths (record stores and Log.WithTx / Tx.Append), so

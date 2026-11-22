@@ -165,7 +165,7 @@ event after each scenario.
 
 `make ui-perf BASE=<ref> CAND=<ref-or-worktree> PROFILE=L N=5 BROWSER=chromium|electron`
 
-- `SCENARIOS` takes ids (`1,3b`) and aliases (`ui/e2e/perf/scenarioSets.sh`),
+- `SCENARIOS` takes ids (`1,3b`) and aliases (`tools/perf/scenarioSets.sh`),
   resolved before anything else decides on them:
   - empty or `all`: every scenario, 9x included, so `GITFX=auto` builds the
     real-git fixture (empty under `REALISM=1` means `bus`: the two don't mix);
@@ -176,7 +176,7 @@ event after each scenario.
 - Builds each ref's UI and binaries into separate temp dirs.
 - Runs baseline and candidate alternately (ABAB…) on the same seeded
   workload, so machine noise hits both.
-- Writes `perf-results/<timestamp>/` (gitignored): raw JSON and a markdown
+- Writes `tools/perf/results/<timestamp>/` (gitignored): raw JSON and a markdown
   table per scenario. Deterministic metrics are shown as exact values;
   timings as median and IQR, with the candidate/baseline ratio.
 
@@ -191,7 +191,7 @@ switch/unmount, one shared changeset store, no refresh per focus; (B) the
 Router computes in the background, pushes over the bus, GET answers from
 cache with an "updating" marker. The harness measures main, then each.
 
-### Fixture (`perfseed gitfx`, shape in `ui/e2e/perf/gitfx.shape.json`)
+### Fixture (`perfseed gitfx`, shape in `tools/perf/profiles/gitfx.shape.json`)
 
 `GITFX=auto` (on for any 9x scenario in the resolved list — so also the
 default `all` and `git` — or check f/g/h/i) builds it once per run
@@ -265,7 +265,7 @@ Settled for 9x waits for the git routes too (they are short requests now).
 | Router CPU per leg | `ps` samples at the leg's ends (9h: to the end of its 10 s tail) |
 | per-route latency, p50/max, for repos, changeset, worktree/refresh, worktree, commit-plan, push, land | server: the proxy's arrival → response headers; client: the page probe's fetch → headers (includes queueing) |
 | abandoned requests | a non-stream request naming session X still in flight at the proxy when the view left X (scenarios record each switch, `ctx.shown`): count, git-route count, aborted count, socket time held after leaving (sum, max) |
-| git calls and CPU, whole window and per leg | the **git shim** (`ui/e2e/perf/gitshim`, first on every fixture stack's PATH; `PERF_REAL_GIT` is the real one): one JSON line per call with start/end, parent pid, subcommand, and the call's rusage (user + system). Top subcommands by CPU per build |
+| git calls and CPU, whole window and per leg | the **git shim** (`tools/perf/gitshim`, first on every fixture stack's PATH; `PERF_REAL_GIT` is the real one): one JSON line per call with start/end, parent pid, subcommand, and the call's rusage (user + system). Top subcommands by CPU per build |
 | peak concurrent git processes | `ps` every 100 ms, git processes in the Router's tree by pid ancestry (also reports how many it caught: sampling misses most calls) |
 | all-6-busy, queued, settled, main thread | unchanged |
 
@@ -340,7 +340,7 @@ Settled for 9x waits for the git routes too (they are short requests now).
     `inFixture`: realpath under the fixture root, never under `~/repo`);
     dirty files are listed with `git --no-optional-locks status`.
 
-### Check i, 9g, 9h: origin/main vs b2 (2026-11-22, `perf-results/20261122-002834`)
+### Check i, 9g, 9h: origin/main vs b2 (2026-11-22, `tools/perf/results/20261122-002834`)
 
 `make ui-perf BASE=origin/main CAND=../mads-git-b2 PROFILE=S N=1
 SCENARIOS=9g,9h CHECKS=i`. Check i passes on both builds. Main shows every
@@ -361,7 +361,7 @@ On b2, an idle focus costs about one change-set compute that finds nothing
 new. That is what the probe gate is meant to save: 9h's roots diffed should
 fall to 0, and check i must still pass.
 
-### Validation on main (2026-11-21, `perf-results/20261121-152238`)
+### Validation on main (2026-11-21, `tools/perf/results/20261121-152238`)
 
 `make ui-perf BASE=main PROFILE=S N=3 SCENARIOS=9a,9b,9c,9d,9e,9f
 CHECKS=f,g,h`, Chromium. Medians [min–max] of 3. The machine was loaded

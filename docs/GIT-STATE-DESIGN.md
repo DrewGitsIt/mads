@@ -2,7 +2,7 @@
 
 Status: built, reviewed (4 rounds) and measured; decisions approved by Drew 2026-11-21; merged with Phase A. Written 2026-11-21. Follows Phase A (branch `git-routes-a`:
 request hygiene, aborts, shared changeset store, spawn-free repo roots).
-Measured problem and harness: `docs/PERF-HARNESS-PLAN.md` ("Git routes").
+Measured problem and harness: `tools/perf/docs/PLAN.md` ("Git routes").
 
 ## Goal
 
