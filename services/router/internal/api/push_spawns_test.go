@@ -191,3 +191,67 @@ func TestReposBackgroundRelistSpawnsNoGitPerDirectory(t *testing.T) {
 			len(got), dirs, strings.Join(got, "\n"))
 	}
 }
+
+// Harness 9c (open the Changes tab of a git-heavy isolated session): the
+// change set the session's open asks for (POST /worktree/refresh) was
+// still computing when the tab opened, and most of it was the recorded
+// commits — a rev-parse --verify, a merge-base --is-ancestor and a show
+// --name-only per commit, 3 × 40 runs for the fixture's session. Now the
+// commits are a few runs per repo, however many there are.
+func TestChangeSetOpenGitDoesNotScaleWithCommits(t *testing.T) {
+	const commits = 30
+	srv, data := newWorktreeServer(t)
+	sess, _ := isolatedRecord(t, data, "Committed")
+	ctx := context.Background()
+	for i := range commits {
+		f := filepath.Join(sess.WorktreeDir, fmt.Sprintf("d%02d", i%5), "f.txt")
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte(fmt.Sprintf("%d\n", i)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := data.RecordFileChange(ctx, &contracts.FileChange{SessionID: sess.ID, Path: f, Change: "modified", Origin: contracts.OriginToolUse}); err != nil {
+			t.Fatal(err)
+		}
+		wtGit(t, sess.WorktreeDir, "add", ".")
+		wtGit(t, sess.WorktreeDir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", fmt.Sprintf("work %d", i))
+		hash := wtGit(t, sess.WorktreeDir, "rev-parse", "HEAD")
+		if _, err := data.RecordCommit(ctx, &dataclient.CommitReport{
+			Commit: contracts.Commit{SessionID: sess.ID, Hash: hash, Repo: sess.WorktreeDir, Message: fmt.Sprintf("work %d", i)},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spawns := gitSpawnLog(t)
+	// The session opening: counts, repos and the change set computed behind the 202.
+	if resp := postJSON(t, srv.URL+"/sessions/"+sess.ID+"/worktree/refresh", nil); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("refresh: status %d, want 202", resp.StatusCode)
+	}
+	set := decodeJSON[contracts.ChangeSet](t, settledChangeSet(t, srv.URL, sess.ID, ""))
+	if len(set.Commits) != commits {
+		t.Fatalf("change set lists %d commits, want %d", len(set.Commits), commits)
+	}
+	for _, c := range set.Commits {
+		if len(c.Paths) != 1 {
+			t.Fatalf("commit %s lists %v, want its one file", c.Hash, c.Paths)
+		}
+	}
+	got := spawns()
+	perCommit := 0 // the change set's own (pkg/changes runs git -C <repo>)
+	for _, l := range got {
+		if !strings.HasPrefix(l, "--no-optional-locks -C ") {
+			continue
+		}
+		if strings.Contains(l, " merge-base --is-ancestor ") || strings.Contains(l, " show --no-color --name-only ") || strings.Contains(l, " rev-parse --quiet --verify ") && !strings.Contains(l, "refs/") && !strings.Contains(l, "^^") {
+			perCommit++
+		}
+	}
+	// Before: 126 in all, 3 per commit (rev-parse --verify, merge-base
+	// --is-ancestor, show); now 31–40 (the parts race), one show and one
+	// rev-parse (the first commit, for the start baseline's anchor).
+	if perCommit > 2 || len(got) > 50 {
+		t.Errorf("opening ran %d git commands, %d of them per commit, want no per-commit runs:\n%s", len(got), perCommit, strings.Join(got, "\n"))
+	}
+	t.Logf("git runs opening a session with %d recorded commits: %d", commits, len(got))
+}
