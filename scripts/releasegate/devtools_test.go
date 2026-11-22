@@ -139,3 +139,44 @@ func TestSourceArchiveOmitsDevTools(t *testing.T) {
 		t.Fatal("git archive HEAD listed no files")
 	}
 }
+
+// TestPerfCodeIsTagged: every Go file of the perf tools, and the fake
+// provider's perf-only dialects (providers/fake/perf*.go), is behind
+// //go:build perf, so no untagged build (every release) compiles it.
+func TestPerfCodeIsTagged(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var files []string
+	for _, dir := range []string{"tools", filepath.Join("services", "data", "cmd", "perfseed")} {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(p string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !d.IsDir() && strings.HasSuffix(p, ".go") {
+				files = append(files, p)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	fakePerf, _ := filepath.Glob(filepath.Join(root, "providers", "fake", "perf*.go"))
+	files = append(files, fakePerf...)
+	if len(fakePerf) == 0 {
+		t.Error("no providers/fake/perf*.go: the fake's perf dialects moved; update this test")
+	}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, _, _ := strings.Cut(string(b), "\n")
+		if strings.TrimSpace(first) != "//go:build perf" {
+			rel, _ := filepath.Rel(root, f)
+			t.Errorf("%s: first line %q, want //go:build perf (perf code must never ship)", rel, first)
+		}
+	}
+}

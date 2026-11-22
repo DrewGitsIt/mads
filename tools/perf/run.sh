@@ -207,9 +207,11 @@ build() {
 	echo "$src" >"$TMP/src-$label.path"
 	echo "ui-perf: building $label: $desc" >&2
 	# The hermetic fake provider is harness infrastructure: this tree's
-	# providers/fake is laid over the build (go build -overlay; nothing is
-	# written into it), so every build has the dialects the checks drive
-	# (e.g. "permission"). The product code under test is the build's own.
+	# providers/fake, perf.go included, is laid over the build (go build
+	# -overlay; nothing is written into it) and the services are built with
+	# -tags perf, so every build has the perf-only dialects the checks drive
+	# ("permission", MADS_FAKE_START_DELAY_MS). The product code under test
+	# is the build's own; -tags perf adds nothing else to it.
 	ov="$TMP/fake-overlay-$label.json"
 	{
 		printf '{"Replace":{'
@@ -222,7 +224,7 @@ build() {
 		printf '}}'
 	} >"$ov"
 	for svc in data router session pipeline; do
-		(cd "$src" && go build -overlay "$ov" -o "$out/bin/$svc" "./services/$svc")
+		(cd "$src" && go build -tags perf -overlay "$ov" -o "$out/bin/$svc" "./services/$svc")
 	done
 	if [ ! -d "$src/ui/node_modules" ]; then
 		# Never a symlink (an `npm ci` through one emptied a checkout): a

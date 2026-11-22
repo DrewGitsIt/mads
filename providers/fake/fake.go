@@ -20,9 +20,6 @@
 //	              (default claude-code; see background.go), then its
 //	              closing line; gone removes the file after, killed and
 //	              fail change the closing line, silent writes none
-//	"permission [tool]" → calls tool (default Bash) and parks on the
-//	              session's permission hook (StartOptions.Permissions) until
-//	              it is decided, then ends the turn with "allowed"/"denied"
 //	"crash"     → dies mid-turn (event stream closes with no turn end)
 //	"ratelimit" → the turn fails with a rate-limit error
 //	"fail once <x>" → fails like "ratelimit" the first time it's sent in a
@@ -30,8 +27,8 @@
 //	                  that succeeds
 //	anything    → "ok"
 //
-// MADS_FAKE_START_DELAY_MS in the environment delays every Start by that
-// long (a slow harness start, for watching provisioning).
+// Built with -tags perf (the perf harness only, never a release), perf.go
+// adds a "permission" dialect and MADS_FAKE_START_DELAY_MS.
 //
 // A message MADS wrapped (pkg/linkwrap — a linked session's message, a
 // digest, a notice) is read as its bodies joined, so an injected "echo <x>"
@@ -274,11 +271,7 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 	if opts.Mode != provider.ModeACP && opts.Mode != provider.ModePTY {
 		return nil, fmt.Errorf("mode %q: %w", opts.Mode, provider.ErrUnsupported)
 	}
-	// MADS_FAKE_START_DELAY_MS: a harness that takes its time to start, so a
-	// session's provisioning steps can be watched (and reloaded) mid-way.
-	if ms, err := strconv.Atoi(os.Getenv("MADS_FAKE_START_DELAY_MS")); err == nil && ms > 0 {
-		time.Sleep(time.Duration(ms) * time.Millisecond)
-	}
+	startDelay()
 	f.mu.Lock()
 	f.starts = append(f.starts, opts)
 	ref := opts.Resume
@@ -636,9 +629,18 @@ type turnPlan struct {
 	hold    bool
 	// thinking: the rule's Thinking.
 	thinking string
-	// permission: the "permission" dialect's tool, asked about before it runs.
-	permission string
+	// perf plays the whole turn instead (a perf-tagged dialect, perf.go).
+	perf func(s *fakeSession, prompt string, turn int)
 }
+
+// Hooks for the perf-tagged dialects (perf.go, -tags perf). Untagged
+// builds, releases among them, keep these no-ops.
+var (
+	// startDelay runs at the top of every Start.
+	startDelay = func() {}
+	// perfPlan plans a turn for a perf-only dialect; ok=false for any other prompt.
+	perfPlan = func(prompt string) (turnPlan, bool) { return turnPlan{}, false }
+)
 
 func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) turnPlan {
 	prompt = unwrap(prompt)
@@ -661,6 +663,9 @@ func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) tur
 		}
 		p.blocks, p.hold, p.thinking = r.Blocks, r.HoldUntilToolDone, r.Thinking
 		p.userLag = time.Duration(r.UserLagMs) * time.Millisecond
+		return p
+	}
+	if p, ok := perfPlan(prompt); ok {
 		return p
 	}
 	switch {
@@ -723,12 +728,6 @@ func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) tur
 			blocks: [][]string{{"Looking. "}, {"One file."}},
 			tools:  []ToolStep{{Name: "ls", Result: "a.txt"}},
 		}
-	case prompt == "permission" || strings.HasPrefix(prompt, "permission "):
-		tool := strings.TrimSpace(strings.TrimPrefix(prompt, "permission"))
-		if tool == "" {
-			tool = "Bash"
-		}
-		return turnPlan{permission: tool}
 	case prompt == "background" || strings.HasPrefix(prompt, "background "):
 		return turnPlan{tools: []ToolStep{{Background: backgroundFromPrompt(strings.TrimPrefix(prompt, "background"))}}, chunks: []string{"started it in the background"}}
 	case prompt == "attempt-command":
@@ -871,7 +870,7 @@ type fakeSession struct {
 
 	// settle: the session asked for EventSettle (StartOptions.Keyed).
 	settle bool
-	// asker answers the "permission" dialect's prompt (StartOptions.Permissions).
+	// asker is StartOptions.Permissions (asked by perf.go's "permission" dialect).
 	asker provider.PermissionAsker
 
 	mu        sync.Mutex
@@ -1092,8 +1091,8 @@ func (s *fakeSession) respond(prompt string, plan turnPlan, turn int, user provi
 		s.respondBlocks(prompt, plan, turn)
 		return
 	}
-	if plan.permission != "" {
-		s.respondPermission(prompt, plan, turn)
+	if plan.perf != nil {
+		plan.perf(s, prompt, turn)
 		return
 	}
 	for i, ts := range plan.tools {
@@ -1291,38 +1290,6 @@ func (s *fakeSession) respondBlocks(prompt string, plan turnPlan, turn int) {
 }
 
 // finish records the reply and closes the turn.
-// respondPermission plays the "permission" dialect: a tool call that parks
-// on the session's permission hook, as a harness does when its trust makes
-// it ask, until the user decides (or the turn is interrupted).
-func (s *fakeSession) respondPermission(prompt string, plan turnPlan, turn int) {
-	key := s.itemKey(turn, "tool0")
-	tool := &provider.ToolUse{ID: key, Name: plan.permission, Input: json.RawMessage(`{"command":"echo fake permission"}`)}
-	s.store(provider.Message{Role: "tool", Tool: tool, Key: key})
-	if !s.emit(provider.Event{Kind: provider.EventToolUse, Key: key, Tool: tool}) {
-		return
-	}
-	if s.asker == nil {
-		s.emit(provider.Event{Kind: provider.EventError, Text: "fake: no permission hook to ask"})
-		s.emit(provider.Event{Kind: provider.EventTurnEnd})
-		return
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		select {
-		case <-s.interrupt:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-	d := s.asker(ctx, provider.PermissionAsk{ToolUseID: key, Tool: plan.permission, Input: tool.Input, Reason: "fake: the permission dialect always asks"})
-	reply := "denied"
-	if d.Allow {
-		reply = "allowed"
-	}
-	s.finish(prompt, s.itemKey(turn, "reply"), reply, ctx.Err() != nil)
-}
-
 func (s *fakeSession) finish(prompt, key, reply string, interrupted bool) {
 	s.store(provider.Message{Role: "agent", Text: reply, Key: key})
 	u := usage(prompt, reply)

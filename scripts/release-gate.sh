@@ -57,7 +57,19 @@ build_matrix() {
         fi
     done
 
+    check_no_perf_strings "$native"
     printf '%s\n' "$native"
+}
+
+# The fake provider ships, but its perf-only dialects (providers/fake/perf.go,
+# -tags perf) must not: no release binary may carry their marker strings.
+check_no_perf_strings() {
+    for bin in "$1"/*; do
+        if grep -aqE 'MADS_FAKE_START_DELAY_MS|the permission dialect always asks' "$bin"; then
+            die "FATAL: $bin contains perf-only fake-provider code (built with -tags perf?)"
+        fi
+    done
+    log "no release binary contains perf-only code"
 }
 
 # Dev-only code must never reach a release: no release program's dependency

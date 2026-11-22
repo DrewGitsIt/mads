@@ -155,12 +155,15 @@ ui-perf:
 	BASE="$(BASE)" CAND="$(CAND)" PROFILE="$(PROFILE)" N="$(N)" BROWSER="$(BROWSER)" SCENARIOS="$(SCENARIOS)" MODES="$(MODES)" CHECKS="$(CHECKS)" REALISM="$(REALISM)" GITFX="$(GITFX)" GITFX_SRC="$(GITFX_SRC)" \
 		sh tools/perf/run.sh
 
-# The perf tools' Go code (perfseed, the git shim) is behind the `perf` build
-# tag, so no plain build, test, vet, lint or release ever compiles it. Its
-# own tests and vet run here, with the tag.
+# The perf tools' Go code (perfseed, the git shim, providers/fake/perf.go)
+# is behind the `perf` build tag, so no plain build, test, vet, lint or
+# release ever compiles it. Its own vet, lint and tests run here, with the
+# tag (lint only if bin/golangci-lint exists: `make $(LINT)` installs it).
+PERF_PKGS := ./services/data/cmd/perfseed/... ./tools/perf/... ./providers/fake/...
 perf-tools-test:
-	go vet -tags perf ./services/data/cmd/perfseed/... ./tools/perf/...
-	go test -tags perf -count=1 ./services/data/cmd/perfseed/... ./tools/perf/...
+	go vet -tags perf $(PERF_PKGS)
+	if [ -x "$(LINT)" ]; then $(LINT) run --build-tags perf $(PERF_PKGS); else echo "perf-tools-test: no $(LINT); lint skipped (vet only)"; fi
+	go test -tags perf -count=1 $(PERF_PKGS)
 
 # Release gate: cross-platform build matrix + install/update smokes against
 # the native candidate. Kept out of `check`/CI's fast `test` job (multi-
