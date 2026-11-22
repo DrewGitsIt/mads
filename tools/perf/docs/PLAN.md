@@ -1,99 +1,85 @@
-# Perf harness plan: event bus replay and connection starvation
+# Perf harness: design
 
-Status: draft for review (2026-11-19). Branch `perf-harness` off `main` (fab34ca1).
+Status: in use. Built 2026-11-19..22 to measure the event bus (shipped on
+main 2026-11-21, [EVENT-BUS-RESULTS.md](EVENT-BUS-RESULTS.md)) and then the
+git routes ([docs/GIT-STATE-DESIGN.md](../../../docs/GIT-STATE-DESIGN.md)).
+How to run it and where every piece lives: [../README.md](../README.md).
 
 ## Why
 
-Switching sessions or tabs floods the Router with requests, and small requests
-stall for seconds. DevTools captures from the live app (2026-11-19):
-
-| Action | `/events` stream | Note |
-|---|---|---|
-| Open a delegate | 199 MB over 23.9 s | adds `session.subagent_event` to the window bus |
-| Retro → Sessions | 34 MB after 12.7 s, still streaming | Sessions surface remounts |
-| Session switch | 52 MB | |
-| Session → launchpad | none | control: nothing widens or tears down |
-
-`GET /config` answers in 20 ms against an idle Router. During a switch it took
-818 ms stalled (waiting for one of Chromium's 6 sockets) plus 871 ms waiting on
-a busy server.
-
-Suspected causes, all in `ui/src/router/events.ts` on `main`:
-- `resumeSince()` (:162) is the minimum per-type cursor, and a type never
-  delivered counts as 0. So a fresh window, or a widen to a new type,
-  connects without `since`, and the Data Service replays the log from seq 0
-  for every type in the union.
-- The cursors are dropped when the last subscriber leaves (:292-298), and
-  `App.tsx:227` mounts only the active surface. Leaving the Sessions tab
-  therefore resets them.
-
-These are hypotheses until the harness reproduces them. The harness's job is to
-measure the baseline and the candidate designs the same way, so we pick a
-design on evidence.
+Switching sessions or tabs flooded the Router with requests and small
+requests stalled for seconds (DevTools on the live app, 2026-11-19: opening a
+delegate moved 199 MB over `/events` in 24 s; `GET /config`, 20 ms idle, took
+1.7 s during a switch, most of it waiting for one of Chromium's 6 sockets per
+origin). The harness reproduces that on hermetic stacks so a baseline and a
+candidate design are measured the same way and a design is picked on
+evidence. It reproduced the bus replay first (see EVENT-BUS-RESULTS.md), then
+the slow git routes (below).
 
 ## Scope
 
-In scope: the shared event bus (replay volume, reconnects) and connection
-starvation as it relates to the bus and long-lived streams.
-
-Out of scope for now:
-- why `repos`, `changeset` and `worktree/refresh` are slow — for the bus
-  work we mocked their latency. Since 2026-11-21 the harness also measures
-  them with real git ("Git routes" below).
-- a CI perf gate. Runs are local only (`make ui-perf`).
-- mesh and peer buses. `main` has no peers.
+In scope: the shared event bus (replay volume, reconnects), connection
+starvation, and the git routes (`repos`, `changeset`, `worktree/refresh`, the
+dialogs) with real git. Out of scope: a CI perf gate (runs are local only,
+`make ui-perf`), mesh and peer buses.
 
 ## Safety rules (non-negotiable)
 
-- Every run boots its own stack through `ui/e2e/lib/topology.ts`: temp
-  `MADS_HOME`, ephemeral ports, stub agent binaries (`MADS_AGENT_BIN_DIR`).
-  Never use 17373/17374/17380, the live `~/.mads/local.token`, or `device.key`.
-- Build UIs with `VITE_ROUTER_URL=""`. Never run anything in
-  `~/repo/mads-mesh` or the main checkout.
-- Real data is read only. Calibration reads `~/.mads/mads.db` with
-  `sqlite3 -readonly`. The realism check works on a copy made with
-  `.backup` into the run's temp home, deleted at teardown, and never committed.
-- Every process the harness starts, it stops. No orphans.
+- Every run boots its own stacks through `ui/e2e/lib/topology.ts`: temp
+  `HOME`/`MADS_HOME`, ephemeral ports, an empty `MADS_AGENT_BIN_DIR` (no
+  real provider CLI can start). Never 17373/17374/17380, the live
+  `~/.mads/local.token`, or `device.key`.
+- UIs are built with `VITE_ROUTER_URL=""`; a bundle naming a live port is
+  refused, and a page that reaches one fails the run.
+- The runner refuses to run from, build in or install into the live
+  checkouts (`PERF_FORBIDDEN_DIRS`, default `~/repo/mads:~/repo/mads-mesh`).
+  The git fixture only ever clones FROM `GITFX_SRC`.
+- Real data is read only: calibration and realism open `~/.mads/mads.db`
+  with `sqlite3 -readonly`; realism works on a `.backup` copy in the run's
+  temp dir, deleted at teardown, never committed or named in a report.
+- Every process a repetition starts goes into a pid registry; the runner
+  kills whatever is left when Playwright exits, however it exits.
+- The Go tools (perfseed, the git shim) build only with `-tags perf`, and the
+  release gate fails if a release program links them (README, "Guard rails").
 
 ## Components
 
-### 1. Seeder (`services/data/cmd/perfseed`, Go)
+### 1. Seeder (`services/data/cmd/perfseed`, Go, `-tags perf`)
 
-It writes a workload into a fresh database before the Data Service starts.
-It uses the store's own `Log.WithTx` / `Tx.Append` and record stores, so rows
-and events stay consistent. Batches are written in large transactions, so 1M
-events takes seconds, not hours.
+Writes a workload into a fresh database before the Data Service starts,
+through the store's own `Log.WithTx` / `Tx.Append` and record stores, so rows
+and events stay consistent; large transactions make 1M events take seconds.
+Subcommands: `seed` (a profile), `calibrate` (per-type counts, mean and p95
+payload sizes from the live DB, read-only; no content copied), `realism`
+(prepares a backup copy: schema stepped down to BASE's, paths pointed at a
+scratch dir), `gitfx` (the real-git fixture, below) and `append` (scenario
+8's live events). The runner builds it from BASE's tree with this tree's
+perfseed source laid over it (`go build -overlay`), so the schema is BASE's.
 
-A workload profile is a JSON file:
-- event count per type, payload size distribution per type
-- number of sessions and active sessions, delegates per session, links
-- number of watched repos (for later git work)
-- pending permission requests, queued messages, a provisioning session (the
-  correctness fixtures below)
+A profile (`tools/perf/profiles/*.json`) gives event counts and payload size
+distributions per type, sessions, active sessions, delegates, links, and the
+correctness fixtures (pending permission, queued messages, a provisioning
+session, a live pipeline attempt).
 
 | Profile | Events | Purpose |
 |---|---|---|
 | S | 10k | fast iteration |
 | M | 100k | mid |
-| L | 300k | today: calibrated to the live DB's per-type counts and sizes |
+| L | ~308k | calibrated to the live DB (2026-11-19) |
 | XL | 1M | growth |
 
-Calibration: `perfseed calibrate` reads the live DB read-only, emits per-type
-counts, mean and p95 payload size, and writes the L profile. No payload
-content is copied. Today's shape is 307k events and 260 MB; 125k of them,
-about 37 MB, are in the window's subscribed types excluding subagent events.
+### 2. Delay proxy (`ui/e2e/perf/proxyServer.mts`, its own Node process)
 
-### 2. Delay proxy (`ui/e2e/perf/delayProxy.ts`)
-
-A small Node reverse proxy sits between the browser and the Router.
-- The browser's origin is the proxy, so Chromium's per-origin limit still
-  applies.
-- Path rules add server-side latency after the request is accepted, so the
-  browser socket is really held. Defaults mimic the live measurements:
-  `/sessions/*/repos` 10 s, `/changeset` 6 s, `/worktree/refresh` 16 s.
-- SSE is streamed through unbuffered.
-- No product code changes. Not usable for an HTTP/2 spike; that's out of
-  scope.
+Between the browser and the Router; the page's origin is the proxy, so
+Chromium's per-origin socket limit applies as it does live. Path rules
+(`delayRules.ts`, `PERF_DELAYS=<regex>=<ms>,...`) add latency after the
+request is accepted, so the socket is really held. Defaults mimic the live
+measurements: `/sessions/*/repos` 10 s, `/changeset` 6 s,
+`/worktree/refresh` 16 s. SSE is piped unbuffered (backpressure honoured).
+The open conversation's `/output` stream is held open with heartbeats
+(`PERF_HOLD_OUTPUT=0` turns that off). It logs every request (arrival,
+delay, headers, end, bytes, SSE frames) and a busy-socket timeline, read by
+the worker over IPC so nothing measured waits on the worker.
 
 ### 2b. Harness contract: where a stream starts
 
@@ -117,51 +103,82 @@ the harness waits for frames that never come:
 A stream that still owes frames and moves no byte for 30 s fails the
 repetition with the seq it reached and the one it owes.
 
-### 3. Collectors (Playwright plus the Chrome DevTools Protocol)
+### 3. Collectors
 
-| Metric | Source | Kind |
-|---|---|---|
-| Bytes received on `/events` per scenario | CDP `Network.dataReceived` | deterministic |
-| SSE messages received on `/events` | CDP `Network.eventSourceMessageReceived` | deterministic |
-| Request count by path | CDP `Network.requestWillBeSent` | deterministic |
-| Peak concurrent connections to the origin | CDP `connectionId` of in-flight requests, cross-checked with `lsof` on the test browser's pid and port | deterministic |
-| Stalled/queued time per request (p50/p95/max) | CDP `ResourceTiming` (`sendStart` vs `requestTime`) | timing |
-| Click → settled | a named DOM marker per scenario, plus 500 ms with no new short requests | timing |
-| Main-thread long-task total | `PerformanceObserver("longtask")` via `addInitScript` | timing |
-| Router/Data CPU time and peak RSS | `ps` sampling of the stack's own pids | timing |
+Settle and every timing come from the **page probe** (`probe.ts`, an init
+script: fetch/EventSource wrappers, resource and longtask observers, a 50 ms
+lag probe, DOM markers by MutationObserver, all in page time) and the
+proxy's log, never from CDP network events (they arrive late during a big
+replay). CDP adds main-thread task/script time (`Performance.getMetrics`)
+and SSE message counts; `ps` samples the stack's own pids; `lsof` cross-checks
+sockets; the git shim logs git calls (below).
 
-"Deterministic" means the same build and workload should give the same number
-on every repetition. The runner flags any run where they don't.
+Deterministic metrics (exact; ⚠ in the report when one build's repetitions
+disagree): `/events` bytes and frames (proxy), SSE messages (CDP),
+(re)connects, connects with no `since` (replay from 0), streams that declared
+a start, native EventSource auto-reconnects, `/events` batch pages and bytes,
+short and delayed requests, held `/output` streams, peak busy sockets.
 
-### 4. Scenarios (`ui/e2e/perf/*.perf.ts`)
+Timings (median and IQR, candidate/baseline ratio): click → settled and
+click → marker (all legs and per leg), main-thread task and script time,
+lag max, last `/events` byte, all-6-sockets-busy time, queued time (total,
+p50/p95/max, count over 1 s, max queue depth), cancelled and unanswered
+requests, abandoned requests (below), longtasks, Router/Data/children CPU,
+peak RSS, Data Service connections closed.
 
-1. Cold window load
-2. Switch session A → B (and back)
-3. Open a delegate from its parent
-4. Retro → Sessions round trip
-5. Session → launchpad (control)
-6. Steps 2–4 with long-lived streams pinned: a running background process in
-   the dock and a Tasks tab with a live attempt
-7. Network drop and resume (proxy cuts all connections, as on sleep/wake)
+**Settled** for a leg = its data marker holds (a named DOM predicate per
+scenario), then, from the click on, all three of:
+- no non-delayed short request in flight at the proxy or queued in the
+  browser, and none started for 500 ms;
+- every open `/events` stream has forwarded the newest seq it owes up to the
+  log head read at the click (§2b), or owes none; a stream with bytes but no
+  `id:` lines falls back to 1.5 s of byte idle (counted);
+- the lag probe has had no sample over 100 ms for 500 ms.
+Settled is the instant all three first held (the quiet windows not
+counted). A leg capped at `PERF_SETTLE_CAP_MS` (180 s) fails; a stream
+owing frames with no byte for 30 s fails the repetition.
 
-Each runs N times (default 5) per build and profile.
+### 4. Scenarios (`ui/e2e/perf/scenarios.ts`)
 
-### 5. Correctness checks
+| # | Action |
+|---|---|
+| 1 | cold window load |
+| 2 | switch session A → B → A, quiet between legs |
+| 3 | open a delegate from the heaviest parent (transcript file) |
+| 3b | the same, a delegate with no transcript file (log fallback) |
+| 3t | open a delegate from a typical parent (~1,000 subagent events) |
+| 4 | Retro → Sessions round trip |
+| 5 | session → launchpad (control: nothing should replay) |
+| 6 | with long-lived streams pinned (dock background output + a live pipeline attempt): S's Changes and Conversation tabs, a delegate, S → A → S |
+| 7 | network drop and resume (every socket cut, as on sleep/wake) |
+| 7b | offline for a while (connections refused: backoff, health, probes), then back |
+| 8 | long-lived window: `PERF_LONGLIVED_N` events (default 50k at `PERF_LONGLIVED_RATE`/s) arrive live via `perfseed append`, then open a delegate |
+| 9a–9h | real git, below |
 
-A faster design must not win by dropping state. The 2026-11-19 subscriber
-audit found five things that today arrive only through replay. Each becomes an
-assertion that runs after scenarios 1, 4 and 7:
-- a pending permission request shows "awaiting approval" on the rail after a reload
-- the queued-message list matches the server
-- an in-progress retro shows its progress
-- `SessionWorkspace`'s pipeline `running` flag is right
-- provisioning steps render for a session still provisioning
+Each scenario runs N times (default 5) per build and delay mode, with a
+live-event smoke after it (a session renamed through the Router API shows
+on its rail card within 2 s).
 
-The audit also lists 37 more subscribers judged safe. A cheap smoke for those
-is that the rail, task counts and links update within 2 s of a seeded live
-event after each scenario.
+### 5. Correctness checks (`ui/e2e/perf/checks.ts`)
 
-### 6. Runner and report (`make ui-perf`)
+A faster design must not win by dropping state. Each check is a user-visible
+assertion on what the page shows, whatever carries it there, run on a fresh
+stack per build, delays off; each passes on main unless marked known-fail.
+a–e came from the 2026-11-19 subscriber audit (state that then arrived only
+through replay):
+- **a-permission**: a pending permission request shows "awaiting approval"
+  on the rail after a cold load and after a reload;
+- **b-queue**: the queued-message list matches the server, on open and after
+  a reload;
+- **c-retro-progress**: an in-progress retro shows its progress (UI-only
+  state: reported, excluded from bus comparisons);
+- **d-pipeline-running**: the workspace's pipeline `running` flag and badge
+  count are right, on open and after a reload;
+- **e-provisioning**: provisioning steps render for a session still
+  provisioning (fake provider with `MADS_FAKE_START_DELAY_MS`).
+f–i are the git checks (below). `CHECKS=a,b|none` picks them.
+
+### 6. Runner and report (`make ui-perf`, `tools/perf/run.sh`)
 
 `make ui-perf BASE=<ref> CAND=<ref-or-worktree> PROFILE=L N=5 BROWSER=chromium|electron`
 
@@ -169,16 +186,22 @@ event after each scenario.
   resolved before anything else decides on them:
   - empty or `all`: every scenario, 9x included, so `GITFX=auto` builds the
     real-git fixture (empty under `REALISM=1` means `bus`: the two don't mix);
-  - `bus`: 1–8, 3b, 3t, 7b — the event-bus regression set; no fixture build,
-    the right choice for bus work;
+  - `bus`: 1–8, 3b, 3t, 7b — the event-bus regression set; no fixture build;
   - `git`: 9a–9h (delays off by default);
   - aliases mix with ids (`bus,9a`); `none` runs checks only.
-- Builds each ref's UI and binaries into separate temp dirs.
-- Runs baseline and candidate alternately (ABAB…) on the same seeded
-  workload, so machine noise hits both.
-- Writes `tools/perf/results/<timestamp>/` (gitignored): raw JSON and a markdown
-  table per scenario. Deterministic metrics are shown as exact values;
-  timings as median and IQR, with the candidate/baseline ratio.
+- `MODES=on,off` (default both; 9x only: off), `CHECKS` (default a–e; none
+  in realism), `REALISM=1`, `GITFX`, `PERF_PROBE=0` / `PERF_PROBE_CAND=0`
+  (lite probe: markers only).
+- Builds each side's binaries and UI into separate temp dirs (a ref via a
+  temp detached `git worktree add`, removed after). This tree's
+  `providers/fake` is overlaid on every build (the harness's dialects).
+- Within a scenario and mode the builds alternate **ABBA** (A B, B A, A B,
+  …) on fresh copies of one seeded workload, so drift lands on both alike.
+- Writes `tools/perf/results/<timestamp>/` (gitignored): `plan.json`,
+  `manifest.json`, `raw/`, `results.json`, `report.md`, `stack-logs/`,
+  failure screenshots. Deterministic metrics exact, timings as median and
+  IQR with the candidate/baseline ratio; failed and missing repetitions are
+  listed, never dropped.
 
 ## Git routes with real git (scenarios 9x, checks f–i)
 
@@ -265,7 +288,7 @@ Settled for 9x waits for the git routes too (they are short requests now).
 | Router CPU per leg | `ps` samples at the leg's ends (9h: to the end of its 10 s tail) |
 | per-route latency, p50/max, for repos, changeset, worktree/refresh, worktree, commit-plan, push, land | server: the proxy's arrival → response headers; client: the page probe's fetch → headers (includes queueing) |
 | abandoned requests | a non-stream request naming session X still in flight at the proxy when the view left X (scenarios record each switch, `ctx.shown`): count, git-route count, aborted count, socket time held after leaving (sum, max) |
-| git calls and CPU, whole window and per leg | the **git shim** (`tools/perf/gitshim`, first on every fixture stack's PATH; `PERF_REAL_GIT` is the real one): one JSON line per call with start/end, parent pid, subcommand, and the call's rusage (user + system). Top subcommands by CPU per build |
+| git calls and CPU, whole window and per leg | the **git shim** (`tools/perf/gitshim`, `-tags perf`, first on every fixture stack's PATH; `PERF_REAL_GIT` is the real one): one JSON line per call with start/end, parent pid, subcommand, and the call's rusage (user + system). Top subcommands by CPU per build |
 | peak concurrent git processes | `ps` every 100 ms, git processes in the Router's tree by pid ancestry (also reports how many it caught: sampling misses most calls) |
 | all-6-busy, queued, settled, main thread | unchanged |
 
@@ -400,50 +423,16 @@ in 9a's spread.
   5.1–5.8 s, 3.0–3.3 s after the change); g known-fail as expected; h passes
   (Commit 81 files = fresh plan; Land 41 to squash; Push 182 commits).
 
-## Validation: the harness must reproduce the symptoms first
+## History
 
-On `main` with profile L, before any spike:
-- scenario 3 shows the `/events` replay with roughly 140 MB+ of subagent
-  history (live: 199 MB)
-- scenario 4 shows a full-union replay (live: 34 MB+)
-- scenario 5 shows no replay
-- with the delay proxy on, small requests in scenario 2 stall for seconds
-  while 6 connections are held
-
-The realism check runs scenarios 1–5 against a copy of the live DB. The
-seeded L profile should land within ±20% of its replay bytes.
-
-If the baseline doesn't reproduce these, the harness or the hypothesis is
-wrong. We fix that before testing any design.
-
-## Candidate spikes (after validation)
-
-Each spike is a throwaway branch in its own worktree. Only the winner goes
-through the full flow: builder, reviewer plus tester, architecture review.
-
-| Spike | Idea |
-|---|---|
-| R1 | Live-only bus: start at the log head; one cursor resumes after a drop; history comes from REST snapshots. Needs a "tail" start on the stream and seeds for the five correctness items. |
-| R2 | Keep per-type cursors, but keep them across teardown and start a fresh window at the head |
-| R3 | Bounded replay: no `since` becomes head − K |
-| C1 | Request timeouts/cancellation; close hidden Tasks and background-output streams |
-| C2 | Bus over one WebSocket (separate 255-socket pool) |
-
-The R spikes are measured against baseline first; C1 and C2 are layered on
-the best R. Final numbers for the chosen combination are rerun in Electron.
-
-## Phases
-
-1. Plan review (this doc)
-2. Seeder, calibration and profiles, with Go unit tests
-3. Proxy, collectors, scenarios 1–5, runner, report
-4. Validation against baseline and the live-DB copy; findings to Drew
-5. Scenarios 6–7 and the correctness checks
-6. Spikes R1–R3, compare, decide with Drew; then C1/C2 on the winner
-
-## Open questions
-
-- Settled markers: some scenarios may need a `data-testid` added to the UI.
-  That's a small product diff, listed in the phase 3 review.
-- Electron runs need the built `dist-electron`. Confirm `electron.spec.ts`'s
-  launch path works with the proxy origin as `ROUTER_BASE`.
+- 2026-11-19: plan; seeder, calibration, proxy, collectors, scenarios 1–5.
+- 2026-11-20: three review rounds moved settle into the page probe (CDP
+  arrived late), added scenarios 6–8, 3b/3t/7b, checks a–e and realism; the
+  baseline reproduced the live replay (scenario 3 ~140 MB+ of subagent
+  history at L) before any spike was measured. Spikes R0–R3 compared and R2
+  rebuilt for production (EVENT-BUS-RESULTS.md).
+- 2026-11-21/22: real-git fixture, the git shim, scenarios 9a–9h and checks
+  f–i for the git routes (Phase A and B, docs/GIT-STATE-DESIGN.md and
+  docs/git-routes-overview.html).
+- 2026-11-22: moved to `tools/perf/` as durable dev tooling (was
+  `ui/e2e/perf/` + `docs/`).

@@ -1,11 +1,13 @@
 # Event bus performance: conditions, results, decision
 
-Status: decided 2026-11-21. Production build (branch `event-bus-live-fixes`)
-measured and reviewed; numbers under "Production build".
+Status: completed record. Shipped on main 2026-11-21; final measurements
+below (the production build, branch `event-bus-live-fixes`, under
+"Production build"). Nothing here is open.
 
 This records every condition measured while fixing the "sessions stop syncing /
 switching floods the network" problem, so the decision can be checked later.
-The harness itself is described in [PLAN.md](PLAN.md).
+The harness itself is described in [PLAN.md](PLAN.md); how to run it in
+[../README.md](../README.md).
 
 ## The problem in one paragraph
 
@@ -298,7 +300,9 @@ Runs: `tools/perf/results/20261121-122846` (off), `-125519` (on), `-130554`
 
 ## Results directories
 
-All under `tools/perf/results/` on the machine that ran them (gitignored):
+All under `tools/perf/results/` on the machine that ran them (gitignored;
+made under the old `perf-results/` and copied over; the list of cited runs
+is `tools/perf/results/CITED.txt`):
 
 | Run | Dir |
 |---|---|
