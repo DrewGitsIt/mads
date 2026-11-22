@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { isAbortError, type RouterClient } from "./client";
 import { coalesce, type Coalescer } from "./coalesce";
 import { eventsReady, subscribeToEvents } from "./events";
-import { markFromTrigger, noteGitStateEvent, noteGitStateRead } from "./gitUpdating";
+import { markFromTrigger, noteGitStateEvent, noteGitStateRead, onGitUpdatingFailsafe } from "./gitUpdating";
 import type { Envelope, GitStateUpdatedPayload, RepoChangedPayload, SessionRepoState } from "./types";
 
 export interface SessionReposSnapshot {
@@ -209,7 +209,14 @@ function syncBus(): void {
 function startEntry(e: Entry): void {
   const gen = e.generation;
   e.unsubscribe?.();
-  e.unsubscribe = subscribeToEvents({ sessionId: e.sessionId, types: SESSION_BUS_TYPES }, (env) => onSessionEvent(e, env));
+  const offEvents = subscribeToEvents({ sessionId: e.sessionId, types: SESSION_BUS_TYPES }, (env) => onSessionEvent(e, env));
+  // A lost announcement: the fail-safe re-reads (and a cold or stale part
+  // revalidates on the Router).
+  const offFailsafe = onGitUpdatingFailsafe(e.sessionId, "repos", () => e.coalescer.now());
+  e.unsubscribe = () => {
+    offEvents();
+    offFailsafe();
+  };
   void eventsReady(e.sessionId).then(() => {
     if (gen === e.generation && entries.get(e.sessionId) === e && active(e)) e.coalescer.now();
   });

@@ -7,6 +7,7 @@ import {
   markRefreshed,
   noteGitStateEvent,
   noteGitStateRead,
+  onGitUpdatingFailsafe,
   triggerParts,
   useGitUpdating,
 } from "./gitUpdating";
@@ -26,7 +27,7 @@ describe("gitUpdating (docs/GIT-STATE-DESIGN.md, the updating indicator)", () =>
     for (const t of ["commit.created", "commit.undone", "merge.completed"]) {
       expect(triggerParts(env(t))).toEqual(["repos", "changeset", "counts"]);
     }
-    expect(triggerParts(env("repo.changed"))).toEqual(["repos", "counts"]);
+    expect(triggerParts(env("repo.changed"))).toEqual(["repos", "changeset", "counts"]);
     expect(triggerParts(env("session.updated"))).toEqual([]);
   });
 
@@ -69,5 +70,40 @@ describe("gitUpdating (docs/GIT-STATE-DESIGN.md, the updating indicator)", () =>
     expect(result.current).toBe("repos changeset counts");
     act(() => noteGitStateEvent({ session_id: SID, parts: ["repos", "changeset", "counts"], generation: 99, changed: ["repos"] }));
     expect(result.current).toBe("");
+  });
+
+  it("marks another baseline's change set on its own: its announcement doesn't clear session start's, nor start's it", () => {
+    noteGitStateRead(SID, "changeset", true, true);
+    noteGitStateRead(SID, "changeset", true, true, "base");
+    expect(getGitUpdating(SID)).toBe("changeset");
+    noteGitStateEvent({ session_id: SID, parts: ["changeset"], generation: 10, changed: [], baseline: "base" });
+    expect(getGitUpdating(SID)).toBe("changeset"); // start's mark stands
+    noteGitStateRead(SID, "changeset", true, true, "base");
+    noteGitStateEvent({ session_id: SID, parts: ["changeset"], generation: 11, changed: [] });
+    expect(getGitUpdating(SID)).toBe("changeset"); // base's mark stands
+    noteGitStateEvent({ session_id: SID, parts: ["changeset"], generation: 12, changed: [], baseline: "base" });
+    expect(getGitUpdating(SID)).toBe("");
+  });
+
+  it("re-reads a part when its fail-safe fires, and only that part's readers", () => {
+    noteGitStateRead(SID, "repos", true, false);
+    const repos = vi.fn();
+    const start = vi.fn();
+    const base = vi.fn();
+    const offs = [
+      onGitUpdatingFailsafe(SID, "repos", repos),
+      onGitUpdatingFailsafe(SID, "changeset", start),
+      onGitUpdatingFailsafe(SID, "changeset", base, "base"),
+    ];
+    markFromTrigger(SID, env("file.changed")); // changeset (start) and counts
+    vi.advanceTimersByTime(GIT_UPDATING_FAILSAFE_MS);
+    expect(getGitUpdating(SID)).toBe("");
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(repos).not.toHaveBeenCalled();
+    expect(base).not.toHaveBeenCalled();
+    for (const off of offs) off();
+    markFromTrigger(SID, env("file.changed"));
+    vi.advanceTimersByTime(GIT_UPDATING_FAILSAFE_MS);
+    expect(start).toHaveBeenCalledTimes(1);
   });
 });

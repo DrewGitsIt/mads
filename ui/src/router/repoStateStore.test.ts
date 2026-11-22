@@ -73,13 +73,14 @@ describe("repoStateStore (COMMIT-LAND-PUSH D10)", () => {
     await settle();
     // The Router recomputes on repo.changed (docs/GIT-STATE-DESIGN.md): nothing to read yet.
     expect(c.sessionReposCalls).toHaveLength(1);
-    expect(getGitUpdating(SID)).toBe("repos counts");
+    // repo.changed recomputes the change set too (an outside commit, stash or reset).
+    expect(getGitUpdating(SID)).toBe("repos changeset counts");
     act(() => FakeRouterClient.emitGitStateUpdated(SID, ["repos"]));
     await settle(0);
     expect(c.sessionReposCalls).toHaveLength(2);
     expect(result.current.repos?.[0].base_worktree?.ahead).toBe(2);
-    expect(getGitUpdating(SID)).toBe("counts");
-    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["counts"]));
+    expect(getGitUpdating(SID)).toBe("changeset counts");
+    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["changeset", "counts"]));
     expect(getGitUpdating(SID)).toBe("");
   });
 
@@ -88,11 +89,11 @@ describe("repoStateStore (COMMIT-LAND-PUSH D10)", () => {
     renderHook(() => useSessionRepos(c, SID));
     await settle(0);
     act(() => FakeRouterClient.emitRepoChanged(MADS_GIT));
-    expect(getGitUpdating(SID)).toBe("repos counts");
+    expect(getGitUpdating(SID)).toBe("repos changeset counts");
     act(() => FakeRouterClient.emitGitStateUpdated(SID, ["repos"], { changed: [] }));
     await settle();
     expect(c.sessionReposCalls).toHaveLength(1);
-    expect(getGitUpdating(SID)).toBe("counts");
+    expect(getGitUpdating(SID)).toBe("changeset counts");
   });
 
   it("ignores an announcement older than its mark", async () => {
@@ -101,22 +102,43 @@ describe("repoStateStore (COMMIT-LAND-PUSH D10)", () => {
     await settle(0);
     act(() => FakeRouterClient.emitGitStateUpdated(SID, ["counts"], { generation: 5_000_000 }));
     act(() => FakeRouterClient.emitRepoChanged(MADS_GIT));
-    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["repos", "counts"], { generation: 5_000_000, changed: [] }));
-    expect(getGitUpdating(SID)).toBe("repos counts");
-    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["repos", "counts"], { generation: 5_000_001, changed: [] }));
+    act(() =>
+      FakeRouterClient.emitGitStateUpdated(SID, ["repos", "changeset", "counts"], { generation: 5_000_000, changed: [] }),
+    );
+    expect(getGitUpdating(SID)).toBe("repos changeset counts");
+    act(() =>
+      FakeRouterClient.emitGitStateUpdated(SID, ["repos", "changeset", "counts"], { generation: 5_000_001, changed: [] }),
+    );
     expect(getGitUpdating(SID)).toBe("");
   });
 
-  it("clears a mark that no announcement covers after the fail-safe", async () => {
+  it("clears a mark that no announcement covers after the fail-safe, and re-reads the repos", async () => {
     const c = client();
-    renderHook(() => useSessionRepos(c, SID));
+    const { result } = renderHook(() => useSessionRepos(c, SID));
     await settle(0);
+    expect(c.sessionReposCalls).toHaveLength(1);
+    c.sessionRepos[SID][0].base_worktree!.ahead = 7;
     act(() => FakeRouterClient.emitRepoChanged(MADS_GIT));
     expect(getGitUpdating(SID)).not.toBe("");
     await settle(GIT_UPDATING_FAILSAFE_MS - 100);
     expect(getGitUpdating(SID)).not.toBe("");
+    expect(c.sessionReposCalls).toHaveLength(1);
     await settle(200);
     expect(getGitUpdating(SID)).toBe("");
+    // The announcement was lost: the fail-safe reads what the Router has now.
+    expect(c.sessionReposCalls).toHaveLength(2);
+    expect(result.current.repos?.[0].base_worktree?.ahead).toBe(7);
+  });
+
+  it("marks the repos again when the fail-safe's re-read says the Router is still updating", async () => {
+    const c = client();
+    renderHook(() => useSessionRepos(c, SID));
+    await settle(0);
+    act(() => FakeRouterClient.emitRepoChanged(MADS_GIT));
+    c.sessionReposUpdating.add(SID);
+    await settle(GIT_UPDATING_FAILSAFE_MS + 100);
+    expect(c.sessionReposCalls).toHaveLength(2);
+    expect(getGitUpdating(SID)).toContain("repos");
   });
 
   it("treats a cold answer ([] and X-Mads-Updating: 1) as loading, not as no repos", async () => {
@@ -185,7 +207,7 @@ describe("repoStateStore (COMMIT-LAND-PUSH D10)", () => {
     renderHook(() => useSessionRepos(c, SID));
     await settle(0);
     act(() => FakeRouterClient.emitRepoChanged("/home/user/repo/learn/.git"));
-    expect(getGitUpdating(SID)).toBe("repos counts");
+    expect(getGitUpdating(SID)).toBe("repos changeset counts");
   });
 
   it.each(["commit.created", "commit.undone", "merge.completed"])(

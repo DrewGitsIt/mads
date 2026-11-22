@@ -1,7 +1,7 @@
 import type { RouterClient, SessionEventSource } from "./client";
 import { EVENTS_BATCH_LIMIT } from "./eventPages";
 import { isLiveDelegate } from "./delegateLive";
-import type { RequestOptions, SessionReposAnswer } from "./client";
+import type { GitStateRevalidate, RequestOptions, SessionReposAnswer } from "./client";
 import { abortError, checkLinkSessionIds, CommitRefusedError, MoveRefusedError, RouterValidationError } from "./client";
 import { FakeEventSource } from "./testFakeEventSource";
 import type {
@@ -1916,13 +1916,14 @@ export class FakeRouterClient implements RouterClient {
   static emitGitStateUpdated(
     sessionId: string,
     parts: GitStatePart[],
-    opts: { changed?: GitStatePart[]; generation?: number; seq?: number } = {},
+    opts: { changed?: GitStatePart[]; generation?: number; seq?: number; baseline?: ChangeBaselineId } = {},
   ): void {
     const payload: GitStateUpdatedPayload = {
       session_id: sessionId,
       parts,
       generation: opts.generation ?? ++gitStateGeneration,
       changed: opts.changed ?? parts,
+      ...(opts.baseline ? { baseline: opts.baseline } : {}),
     };
     const data = JSON.stringify({
       seq: opts.seq ?? ++repoChangedSeq,
@@ -1967,6 +1968,12 @@ export class FakeRouterClient implements RouterClient {
     if (this.refreshWorktreeCountsOutcome) {
       return abortable(this.refreshWorktreeCountsOutcome(sessionId), opts.signal);
     }
+    if (opts.signal?.aborted) throw abortError();
+  }
+
+  readonly revalidateGitStateCalls: { sessionId: string; req: GitStateRevalidate }[] = [];
+  async revalidateGitState(sessionId: string, req: GitStateRevalidate, opts: RequestOptions = {}): Promise<void> {
+    this.revalidateGitStateCalls.push({ sessionId, req });
     if (opts.signal?.aborted) throw abortError();
   }
 

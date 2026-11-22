@@ -42,6 +42,7 @@ import type {
   FileChange,
   FileDiff,
   ChangeBaselineId,
+  GitStatePart,
   ChangeSet,
   DeleteScratchResult,
   GenerateAgentBody,
@@ -297,6 +298,13 @@ export interface RouterClient {
   getCommitPlan(sessionId: string, opts?: RequestOptions): Promise<CommitPlan>;
   /** Asks for the header's Commit/Land counts to be recounted: 202 at once (204 from an older Router), the counts arriving on the session record. */
   refreshWorktreeCounts(sessionId: string, opts?: RequestOptions): Promise<void>;
+  /**
+   * Asks the Router to recompute some of the session's git state
+   * (docs/GIT-STATE-DESIGN.md): POST /worktree/refresh with a body naming
+   * the parts. 202 at once; the end comes as session.git_state_updated. An
+   * older Router ignores the body and recounts.
+   */
+  revalidateGitState(sessionId: string, req: GitStateRevalidate, opts?: RequestOptions): Promise<void>;
   /** Throws CommitRefusedError for a structured refusal (invalid_paths, git_failed, …). */
   commitSession(sessionId: string, req: CommitRequest): Promise<CommitResult>;
   /** Resolves for a refusal too (undone: false, with its reason) — only an unexpected failure throws. */
@@ -734,6 +742,15 @@ function toCatalog(res: ModelsResponseWire): ModelCatalog {
     detail: res.detail,
     fetchedAt: res.fetched_at,
   };
+}
+
+/** POST /sessions/{id}/worktree/refresh's body: what to recompute. */
+export interface GitStateRevalidate {
+  parts: GitStatePart[];
+  /** The change set's baseline; absent: session start. */
+  vs?: ChangeBaselineId;
+  /** Leave a kept answer computed within this long as is; absent or 0: recompute. */
+  max_age_ms?: number;
 }
 
 /** What GET /sessions/{id}/repos says, with its freshness headers. */
@@ -1180,6 +1197,17 @@ export class FetchRouterClient implements RouterClient {
       ...(opts.signal ? { signal: opts.signal } : {}),
     });
     // 202: accepted, recounting behind it; 204: an older Router, recounted.
+    if (res.status === 202 || res.status === 204) return;
+    await readJSON<unknown>(res);
+  }
+
+  async revalidateGitState(sessionId: string, req: GitStateRevalidate, opts: RequestOptions = {}): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/worktree/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
     if (res.status === 202 || res.status === 204) return;
     await readJSON<unknown>(res);
   }

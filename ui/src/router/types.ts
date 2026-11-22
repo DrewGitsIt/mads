@@ -1439,7 +1439,6 @@ export interface SessionRepoState {
   base_worktree?: RepoWorktree;
 }
 
-/** repo.changed's payload: a repo's branches moved (a commit, merge, fetch or push, by anyone). Session-less. */
 /** session.git_state_updated's payload (docs/GIT-STATE-DESIGN.md). */
 export type GitStatePart = "repos" | "changeset" | "counts";
 export interface GitStateUpdatedPayload {
@@ -1450,8 +1449,15 @@ export interface GitStateUpdatedPayload {
   generation: number;
   /** The subset of `parts` whose result differs: refetch these. */
   changed: GitStatePart[];
+  /**
+   * Set only for a change set against another baseline than session start
+   * ("base", "main"): the announcement covers that baseline's change set
+   * alone. Absent: "changeset" means session start's.
+   */
+  baseline?: ChangeBaselineId;
 }
 
+/** repo.changed's payload: a repo's branches moved (a commit, merge, fetch or push, by anyone). Session-less. */
 export interface RepoChangedPayload {
   /** The repo's main checkout. */
   repo: string;

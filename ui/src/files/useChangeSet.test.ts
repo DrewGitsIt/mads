@@ -4,9 +4,10 @@ import { abortError } from "../router/client";
 import { FakeRouterClient } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import type { ChangeSet } from "../router/types";
-import { getGitUpdating } from "../router/gitUpdating";
+import { GIT_UPDATING_FAILSAFE_MS, getGitUpdating } from "../router/gitUpdating";
 import {
   CHANGESET_COLD_RETRY_MS,
+  CHANGESET_OPEN_MAX_AGE_MS,
   CHANGESET_REFRESH_DEBOUNCE_MS,
   getChangeSetSnapshot,
   refetchChangeSet,
@@ -261,5 +262,95 @@ describe("useChangeSet's shared store", () => {
     expect(second.result.current.loading).toBe(false);
     expect(second.result.current.error).toBeUndefined();
     expect(second.result.current.changeSet?.files.length).toBe(fresh.files.length);
+  });
+
+  // --- after review (docs/GIT-STATE-DESIGN.md, "Changes after review") ---
+
+  it("asks the Router to revalidate an old set when a window opens it, once per opening", async () => {
+    const c = new FakeRouterClient();
+    const first = renderHook(() => useChangeSet(c, SID));
+    await settle();
+    expect(c.revalidateGitStateCalls).toEqual([
+      { sessionId: SID, req: { parts: ["changeset"], vs: "start", max_age_ms: CHANGESET_OPEN_MAX_AGE_MS } },
+    ]);
+    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["changeset"]));
+    await settle();
+    expect(c.revalidateGitStateCalls).toHaveLength(1);
+    first.unmount();
+    renderHook(() => useChangeSet(c, SID, "base"));
+    await settle();
+    expect(c.revalidateGitStateCalls.at(-1)).toEqual({
+      sessionId: SID,
+      req: { parts: ["changeset"], vs: "base", max_age_ms: CHANGESET_OPEN_MAX_AGE_MS },
+    });
+  });
+
+  it("doesn't ask an older Router (no updating) to revalidate on open", async () => {
+    const c = new FakeRouterClient();
+    const legacy: ChangeSet = await c.getChangeSet(SID);
+    delete legacy.updating;
+    c.changeSetOutcome = async () => structuredClone(legacy);
+    renderHook(() => useChangeSet(c, SID));
+    await settle();
+    expect(c.revalidateGitStateCalls).toHaveLength(0);
+  });
+
+  it("Retry asks the Router to recompute the set (an edit no event reported), then reads it", async () => {
+    const c = new FakeRouterClient();
+    const { result } = renderHook(() => useChangeSet(c, SID, "base"));
+    await settle();
+    const reads = c.changeSetCalls.length;
+    act(() => result.current.refetch());
+    await settle();
+    expect(c.revalidateGitStateCalls.at(-1)).toEqual({ sessionId: SID, req: { parts: ["changeset"], vs: "base" } });
+    expect(c.changeSetCalls.length).toBe(reads + 1);
+  });
+
+  it("re-reads the set when the fail-safe fires (a lost announcement)", async () => {
+    const c = new FakeRouterClient();
+    renderHook(() => useChangeSet(c, SID));
+    await settle();
+    const reads = c.changeSetCalls.length;
+    act(() => emit("file.changed"));
+    expect(getGitUpdating(SID)).toBe("changeset counts");
+    await settle(GIT_UPDATING_FAILSAFE_MS + 10);
+    expect(c.changeSetCalls.length).toBe(reads + 1);
+    expect(getGitUpdating(SID)).toBe("");
+  });
+
+  it("on a repo change of an announcing Router, waits for the announcement instead of reading", async () => {
+    const c = new FakeRouterClient();
+    renderHook(() => useChangeSet(c, SID));
+    await settle();
+    const reads = c.changeSetCalls.length;
+    act(() => FakeRouterClient.emitRepoChanged("/home/user/repo/mads/.git"));
+    await settle(CHANGESET_REFRESH_DEBOUNCE_MS + 50);
+    expect(c.changeSetCalls.length).toBe(reads);
+    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["repos", "changeset", "counts"]));
+    await settle();
+    expect(c.changeSetCalls.length).toBe(reads + 1);
+  });
+
+  it("another baseline re-reads on session start's announcement, refetches on its own, and its own doesn't clear start's mark", async () => {
+    const c = new FakeRouterClient();
+    renderHook(() => [useChangeSet(c, SID), useChangeSet(c, SID, "base")] as const);
+    await settle();
+    const baseReads = () => c.changeSetCalls.filter((x) => x.vs === "base").length;
+    const startReads = () => c.changeSetCalls.filter((x) => (x.vs ?? "start") === "start").length;
+    const [b0, s0] = [baseReads(), startReads()];
+    // Start's recompute after a trigger, unchanged: base (stale on the Router) is read, start isn't.
+    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["changeset"], { changed: [] }));
+    await settle();
+    expect(baseReads()).toBe(b0 + 1);
+    expect(startReads()).toBe(s0);
+    // Base's own, changed: only base refetches; start's mark stands.
+    nextSeq += 1_000_000_000; // after the fixture's announcements, or the bus drops it as seen
+    act(() => emit("file.changed"));
+    expect(getGitUpdating(SID)).toBe("changeset counts");
+    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["changeset"], { baseline: "base", seq: nextSeq++ }));
+    await settle();
+    expect(baseReads()).toBe(b0 + 2);
+    expect(startReads()).toBe(s0);
+    expect(getGitUpdating(SID)).toBe("changeset counts");
   });
 });

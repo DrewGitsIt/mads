@@ -2,7 +2,14 @@ import { useCallback, useRef, useSyncExternalStore } from "react";
 import { isAbortError, type RouterClient } from "../router/client";
 import { coalesce, type Coalescer } from "../router/coalesce";
 import { eventsReady, subscribeToEvents } from "../router/events";
-import { gitStateServed, markFromTrigger, noteGitStateEvent, noteGitStateRead } from "../router/gitUpdating";
+import {
+  gitStateServed,
+  markFromTrigger,
+  markRevalidating,
+  noteGitStateEvent,
+  noteGitStateRead,
+  onGitUpdatingFailsafe,
+} from "../router/gitUpdating";
 import { subscribeRepoChanges } from "../router/repoStateStore";
 import type { AgentState, ChangeBaselineId, ChangeSet, Envelope, GitStateUpdatedPayload } from "../router/types";
 
@@ -53,6 +60,12 @@ export const CHANGESET_REFRESH_MAX_WAIT_MS = 5000;
 export const CHANGESET_COLD_RETRY_MS = 10_000;
 /** Change sets kept for sessions nobody is showing, so switching back paints at once. */
 export const CHANGESET_KEPT_INACTIVE = 16;
+/**
+ * A window opening a session's change set asks the Router to recompute it
+ * when the kept one is older than this: edits made outside the agent send
+ * no event, and the window shows what the Router last computed.
+ */
+export const CHANGESET_OPEN_MAX_AGE_MS = 30_000;
 
 export interface ChangeSetState {
   changeSet: ChangeSet | null;
@@ -88,6 +101,8 @@ interface Entry {
   lastUsed: number;
   /** The re-read after a cold answer, in case its announcement never comes. */
   coldRetry?: ReturnType<typeof setTimeout>;
+  /** The first read since the entry gained a reader hasn't answered yet: it asks for a revalidate if old. */
+  opening: boolean;
 }
 
 // The rail (ContextRail) and the Changes tab both show a session's change
@@ -120,7 +135,17 @@ async function fetchEntry(e: Entry): Promise<void> {
     const cs = await e.client.getChangeSet(e.sessionId, e.vs, { signal: ctl.signal });
     if (gen !== e.generation || entries.get(e.key) !== e) return;
     const served = typeof cs.updating === "boolean";
-    noteGitStateRead(e.sessionId, "changeset", served, cs.updating === true);
+    noteGitStateRead(e.sessionId, "changeset", served, cs.updating === true, e.vs);
+    if (e.opening) {
+      e.opening = false;
+      // Opened: recompute behind what's shown if it is old (the Router
+      // decides, by its own clock). Not while one already runs.
+      if (served && !cs.updating) {
+        e.client
+          .revalidateGitState(e.sessionId, { parts: ["changeset"], vs: e.vs, max_age_ms: CHANGESET_OPEN_MAX_AGE_MS })
+          .catch(() => {});
+      }
+    }
     // Never computed yet (docs/GIT-STATE-DESIGN.md): still loading; the
     // compute's session.git_state_updated brings the set, and one more read
     // a while later makes sure a missed announcement can't leave it loading.
@@ -152,8 +177,17 @@ function onSessionEvent(e: Entry, env: Envelope): void {
   if (env.type === "session.git_state_updated") {
     const p = env.payload as GitStateUpdatedPayload | undefined;
     noteGitStateEvent(p);
-    // Only a changed set is worth a read: the kept one is what's on screen.
-    if (Array.isArray(p?.changed) && p.changed.includes("changeset")) e.coalescer.now();
+    if (!Array.isArray(p?.parts) || !p.parts.includes("changeset")) return;
+    const baseline = p.baseline && p.baseline !== "start" ? p.baseline : "start";
+    if (baseline === e.vs) {
+      // Only a changed set is worth a read: the kept one is what's on screen.
+      if (Array.isArray(p.changed) && p.changed.includes("changeset")) e.coalescer.now();
+    } else if (baseline === "start") {
+      // Session start's recompute followed a trigger, which left the other
+      // baselines stale on the Router: reading one (cached, cheap)
+      // recomputes it behind the answer, and its own announcement follows.
+      e.coalescer.now();
+    }
     return;
   }
   if (env.type === "session.agent_state" && (env.payload as AgentState | undefined)?.state !== "idle") return;
@@ -166,15 +200,21 @@ function start(e: Entry): void {
   const offEvents = subscribeToEvents({ sessionId: e.sessionId, types: CHANGESET_BUS_TYPES }, (env) =>
     onSessionEvent(e, env),
   );
-  // Another session's commit takes files out of "uncommitted" here too
-  // (COMMIT-LAND-PUSH D10): the Router recomputes on it (repoStateStore
-  // marks it); an older one is asked again here.
+  // Another session's commit (or a branch switch, stash or reset) takes
+  // files out of "uncommitted" here too (COMMIT-LAND-PUSH D10): the Router
+  // recomputes the change set on its repo.changed and announces it
+  // (repoStateStore marks it updating), so only an older Router, which
+  // computes per request, is asked again here.
   const offRepos = subscribeRepoChanges(e.client, e.sessionId, () => {
     if (gitStateServed(e.sessionId) !== true) e.coalescer.request();
   });
+  // A lost announcement: the fail-safe re-reads.
+  const offFailsafe = onGitUpdatingFailsafe(e.sessionId, "changeset", () => e.coalescer.now(), e.vs);
+  e.opening = true;
   e.unsubscribe = () => {
     offEvents();
     offRepos();
+    offFailsafe();
   };
   // The read waits for the bus's ready barrier (router/events.ts
   // eventsReady), subscribed first: the bus never replays, so a read served
@@ -222,6 +262,7 @@ function entryFor(client: RouterClient, sessionId: string, vs: ChangeBaselineId)
     }),
     generation: 0,
     lastUsed: ++clock,
+    opening: false,
   };
   if (existing) {
     stop(existing);
@@ -258,10 +299,27 @@ export function getChangeSetSnapshot(client: RouterClient, sessionId: string, vs
   return e && e.client === client ? e.snapshot : UNKNOWN;
 }
 
-/** Fetch now, single-flight with anything in flight: Retry, or after the UI itself changed the set. */
+/**
+ * Retry, or after the UI itself changed the set: against a Router that
+ * keeps git state, ask it to recompute (POST /worktree/refresh naming the
+ * change set: what it kept may predate an edit no event reported), then
+ * read; otherwise just read. Single-flight with anything in flight.
+ */
 export function refetchChangeSet(sessionId: string, vs: ChangeBaselineId): void {
   const e = entries.get(keyOf(sessionId, vs));
-  if (e && active(e)) e.coalescer.now();
+  if (!e || !active(e)) return;
+  if (gitStateServed(sessionId) !== true) {
+    e.coalescer.now();
+    return;
+  }
+  const gen = e.generation;
+  void e.client
+    .revalidateGitState(sessionId, { parts: ["changeset"], vs })
+    .then(() => markRevalidating(sessionId, "changeset", vs))
+    .catch(() => {})
+    .finally(() => {
+      if (gen === e.generation && entries.get(e.key) === e && active(e)) e.coalescer.now();
+    });
 }
 
 export function resetChangeSetStoreForTests(): void {
