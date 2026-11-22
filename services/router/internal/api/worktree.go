@@ -18,13 +18,14 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/providers/fastmodel"
+	"github.com/drewkidwell/mads/services/router/internal/gitstate"
 )
 
 // The session's Commit and Land actions (docs/SESSION-WORKTREES-DESIGN.md
 // D3, D5, D6):
 //
 //	GET  /sessions/{id}/worktree      status: files, counts, Land's blocker
-//	POST /sessions/{id}/worktree/refresh  recount the header's counts
+//	POST /sessions/{id}/worktree/refresh  recompute git state (counts, repos, change set)
 //	POST /sessions/{id}/commit        commit session files
 //	POST /sessions/{id}/commit/undo   take the last Commit back
 //	POST /sessions/{id}/commit/draft  Fast Model commit message
@@ -141,20 +142,73 @@ func (s *server) handleSessionWorktree(w http.ResponseWriter, r *http.Request) {
 	writeRaw(w, http.StatusOK, s.withFolderKeepers(r.Context(), id, raw))
 }
 
-// handleSessionWorktreeRefresh asks for the session's header counts (D4)
-// and repo facts to be recomputed, for a commit or merge made outside mads
-// that no turn end has counted yet: 202 at once, the counts arriving as
-// session.updated and the end as session.git_state_updated
-// (docs/GIT-STATE-DESIGN.md). The recount runs in the gitstate service,
-// routed by recount.
+// handleSessionWorktreeRefresh asks for some of the session's git state
+// to be recomputed (docs/GIT-STATE-DESIGN.md): 202 at once, the end
+// announced as session.git_state_updated (and new counts arriving as
+// session.updated). Without a body — a window opening the session or
+// regaining focus, for a commit, merge or edit made outside mads — it is
+// the header counts (D4) and repo facts, and the change set against
+// session start when the kept one is older than 30 s. With one,
+// refreshRequest says which parts (a window's first read of a change set;
+// its Retry). The recount runs in the gitstate service, routed by recount.
 func (s *server) handleSessionWorktreeRefresh(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+	if err != nil {
+		writeErrMsg(w, http.StatusBadRequest, "worktree refresh: ", err)
+		return
+	}
+	var req refreshRequest
+	if len(bytes.TrimSpace(raw)) > 0 {
+		if err := json.Unmarshal(raw, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+			return
+		}
+	}
+	ask, err := req.ask()
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	if _, err := s.data.Session(r.Context(), id); err != nil {
 		writeError(w, err)
 		return
 	}
-	s.gitState.Refresh(id)
+	if len(ask.Parts) == 0 {
+		s.gitState.Refresh(id)
+	} else {
+		s.gitState.Revalidate(id, ask)
+	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// refreshRequest is POST /worktree/refresh's optional body: the parts to
+// recompute ("repos", "changeset", "counts"), the change set's baseline
+// (vs, as GET /changeset's; empty: session start), and max_age_ms, a kept
+// answer computed within which is left as is (0 or absent: recompute).
+// No parts: the bodiless refresh.
+type refreshRequest struct {
+	Parts    []string `json:"parts"`
+	VS       string   `json:"vs"`
+	MaxAgeMS int64    `json:"max_age_ms"`
+}
+
+func (q refreshRequest) ask() (gitstate.Ask, error) {
+	for _, p := range q.Parts {
+		switch p {
+		case contracts.GitPartRepos, contracts.GitPartChangeSet, contracts.GitPartCounts:
+		default:
+			return gitstate.Ask{}, fmt.Errorf("unknown part %q (want repos, changeset or counts)", p)
+		}
+	}
+	vs, ok := normalizeBaseline(q.VS)
+	if !ok {
+		return gitstate.Ask{}, fmt.Errorf("unknown baseline %q", q.VS)
+	}
+	if q.MaxAgeMS < 0 {
+		return gitstate.Ask{}, errors.New("max_age_ms must not be negative")
+	}
+	return gitstate.Ask{Parts: q.Parts, Baseline: vs, MaxAge: time.Duration(q.MaxAgeMS) * time.Millisecond}, nil
 }
 
 // recount recounts the session's header counts and publishes them. With a

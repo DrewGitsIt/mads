@@ -234,3 +234,46 @@ func TestWorktreeRefreshIsAccepted(t *testing.T) {
 		t.Errorf("uncommitted = %d, want 1", rec.UncommittedCount)
 	}
 }
+
+// POST /worktree/refresh with a body recomputes the parts it names — a
+// Retry's change set, an outside edit with no event behind it — and an
+// unknown part or baseline is a 400.
+func TestWorktreeRefreshBodyNamesParts(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	data := dataclient.New(base, "test")
+	sess, repo := changeSetRepo(t, data, map[string]string{"a.go": "package a\n"})
+	mustWrite(t, filepath.Join(repo, "a.go"), "package a\n\nvar X = 1\n")
+	recordChange(t, data, sess.ID, "", filepath.Join(repo, "a.go"), "modified")
+	first := decodeJSON[contracts.ChangeSet](t, settledGet(t, srv.URL+"/sessions/"+sess.ID+"/changeset"))
+	if len(first.Files) != 1 {
+		t.Fatalf("files = %+v", first.Files)
+	}
+	n := len(gitStateEvents(t, data, sess.ID))
+
+	// Edited outside the agent: no file.changed, so only an ask recomputes.
+	mustWrite(t, filepath.Join(repo, "a.go"), "package a\n\nvar X = 2\n\nvar Y = 3\n")
+	resp := postJSON(t, srv.URL+"/sessions/"+sess.ID+"/worktree/refresh", map[string]any{"parts": []string{"changeset"}})
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("refresh with parts: %d, want 202", resp.StatusCode)
+	}
+	waitUntil(t, "the change set's announcement", func() bool {
+		evs := gitStateEvents(t, data, sess.ID)
+		return len(evs) > n && slices.Equal(evs[len(evs)-1].Changed, []string{contracts.GitPartChangeSet})
+	})
+	again := decodeJSON[contracts.ChangeSet](t, settledGet(t, srv.URL+"/sessions/"+sess.ID+"/changeset"))
+	if len(again.Files) != 1 || again.Files[0].Added == first.Files[0].Added {
+		t.Errorf("after the ask: %+v, want the outside edit counted", again.Files)
+	}
+	if !again.ComputedAt.After(first.ComputedAt) {
+		t.Errorf("computed_at %v not after %v", again.ComputedAt, first.ComputedAt)
+	}
+
+	for _, body := range []map[string]any{{"parts": []string{"nope"}}, {"parts": []string{"changeset"}, "vs": "elsewhere"}, {"parts": []string{"counts"}, "max_age_ms": -1}} {
+		resp := postJSON(t, srv.URL+"/sessions/"+sess.ID+"/worktree/refresh", body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("refresh %v: %d, want 400", body, resp.StatusCode)
+		}
+	}
+}
