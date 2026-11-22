@@ -10,9 +10,9 @@ import (
 // session's parts can't take every slot.
 const MaxPerSession = 2
 
-// DefaultPromoteAfter is how long a background compute waits before it
-// is served like a shown session's, so a steady load of shown sessions
-// can't starve it.
+// DefaultPromoteAfter is how long a background compute waits before the
+// high lane leaves it a slot, so a steady load of shown sessions can't
+// starve it. Shown sessions still go first.
 const DefaultPromoteAfter = 30 * time.Second
 
 // slots hands out the MaxConcurrent compute slots. Two lanes, decided when
@@ -21,9 +21,10 @@ const DefaultPromoteAfter = 30 * time.Second
 // waiting one, and the others (the boot warm-up, a repo change's sweep
 // over sessions nobody shows) never take the last slot, so a shown
 // session's compute never waits behind them, however slow they are. A
-// background compute waiting longer than promoteAfter is served as a
-// shown one. Within a lane, first come first served, skipping a session
-// already at MaxPerSession.
+// background compute waiting longer than promoteAfter goes first in the
+// low lane, and the high lane leaves it a slot (nextLocked). Within a
+// lane, first come first served, skipping a session already at
+// MaxPerSession.
 type slots struct {
 	mu           sync.Mutex
 	max          int
@@ -126,24 +127,49 @@ func (q *slots) grantLocked() {
 	}
 }
 
-// nextLocked takes the first waiter that may run now, and its lane: a
-// shown session's (or a long-waiting one's) first, then the low lane's
-// while it has room.
+// nextLocked takes the waiter that may run now, and its lane. Shown
+// sessions' waiters first, in the high lane; while a background waiter
+// has waited past promoteAfter, the high lane leaves it one slot, so
+// steady shown load can't starve it. Then the low lane, while it has room:
+// long waiters first, then first come first served.
 func (q *slots) nextLocked() (*waiter, bool) {
 	now := q.now()
-	isHigh := func(w *waiter) bool {
-		return now.Sub(w.since) >= q.promoteAfter || q.shown != nil && q.shown(w.session)
-	}
-	for _, high := range []bool{true, false} {
-		if !high && q.low >= q.lowMax() {
-			return nil, false
+	shown := map[*waiter]bool{}
+	aged := false
+	for _, w := range q.waiting {
+		if q.shown != nil && q.shown(w.session) {
+			shown[w] = true
+		} else if now.Sub(w.since) >= q.promoteAfter && q.per[w.session] < MaxPerSession {
+			aged = true
 		}
+	}
+	highCap := q.max
+	if aged {
+		highCap = max(q.max-1, 1)
+	}
+	take := func(i int) *waiter {
+		w := q.waiting[i]
+		q.waiting = append(q.waiting[:i], q.waiting[i+1:]...)
+		return w
+	}
+	if q.running-q.low < highCap {
 		for i, w := range q.waiting {
-			if q.per[w.session] >= MaxPerSession || high && !isHigh(w) {
-				continue
+			if shown[w] && q.per[w.session] < MaxPerSession {
+				return take(i), true
 			}
-			q.waiting = append(q.waiting[:i], q.waiting[i+1:]...)
-			return w, high
+		}
+	}
+	if q.low >= q.lowMax() {
+		return nil, false
+	}
+	for i, w := range q.waiting {
+		if !shown[w] && now.Sub(w.since) >= q.promoteAfter && q.per[w.session] < MaxPerSession {
+			return take(i), false
+		}
+	}
+	for i, w := range q.waiting {
+		if q.per[w.session] < MaxPerSession {
+			return take(i), false
 		}
 	}
 	return nil, false

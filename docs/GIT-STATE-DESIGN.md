@@ -38,9 +38,10 @@ their turn, still `updating`. Two lanes, decided when a slot is granted
 session read in the last 60 s (a window shows it), whatever started them, go
 ahead of every other waiting compute, and the other lane (warm-up, repo-wide
 sweeps over sessions nobody shows) never holds more than 3 slots, so a shown
-session's compute never waits behind a slow repo. A background compute
-waiting more than 30 s is served like a shown one, so steady shown load
-can't starve it. A
+session's compute never waits behind a slow repo. Shown sessions always go
+first; a background compute waiting more than 30 s goes first in the low
+lane, and while one waits the shown lane leaves it a slot, so steady shown
+load can't starve it. A
 part whose compute failed is retried by a read at most once a minute while it
 keeps failing (a trigger or an explicit refresh retries regardless).
 
@@ -69,7 +70,9 @@ watches for, per session:
   with it. Each change set records the refs it was computed against, from the
   repos part: for `start`, each checkout's HEAD and branch (in-place sessions
   share a checkout, so another session's commit there moves theirs) and the
-  repo's `refs/stash` (read from its loose ref file, no git spawned); for
+  repo's `refs/stash` (its loose ref file, plus the size and mtime of its
+  reflog, which a pop or drop of a packed stash still rewrites; no git
+  spawned); for
   `base`, the session's own branch and HEAD and the base branch's head. The repos recompute this queues reads them
   again (repostate's branch facts), and its end recomputes `start` if its
   refs moved, and marks `base` stale if its did (`main`, whose ref repos
@@ -263,3 +266,7 @@ cherry-picks); the rail's live state for remote sessions (mesh follow-up).
   marks the change set again on `repo.changed` for shown sessions; the lane is
   decided at grant time and a read promotes queued computes; background
   computes waiting over 30 s are promoted.
+- Round 4: the stash fingerprint includes the stash reflog's size and mtime
+  (a packed stash's last pop or drop edits only packed-refs); aged background
+  waiters no longer join the shown lane: shown sessions first, the aged one
+  leading the low lane with one slot left to it.

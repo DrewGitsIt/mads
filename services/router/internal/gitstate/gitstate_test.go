@@ -1166,8 +1166,8 @@ func TestReadPromotesQueuedWarmUp(t *testing.T) {
 	fc.set(func() { fc.hold["changeset:start"] = nil })
 }
 
-// A background compute waiting longer than PromoteAfter is served like a
-// shown session's, so steady shown load can't starve it.
+// A background compute waiting longer than PromoteAfter gets a slot even
+// under steady shown load: the high lane leaves it one.
 func TestSlotsPromoteLongWaiters(t *testing.T) {
 	var mu sync.Mutex
 	now := time.Now()
@@ -1187,15 +1187,63 @@ func TestSlotsPromoteLongWaiters(t *testing.T) {
 	}
 	go wait("bg")
 	time.Sleep(20 * time.Millisecond)
-	go wait("C") // shown, arrived after bg
-	time.Sleep(20 * time.Millisecond)
 	mu.Lock()
 	now = now.Add(31 * time.Second)
 	mu.Unlock()
+	go wait("C") // shown, and the shown lane is full (A, B)
+	time.Sleep(20 * time.Millisecond)
 	q.release(a)
 	if first := <-got; first != "bg" {
-		t.Errorf("granted %s first, want bg (waited past PromoteAfter)", first)
+		t.Errorf("granted %s first, want bg (waited past PromoteAfter; the high lane holds B)", first)
 	}
 	<-got
 	q.release(b)
+}
+
+// After a long warm-up whose waiters all aged past PromoteAfter, a session
+// opened now goes before every one of them.
+func TestShownBeatsAgedWarmUp(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	shownX := false
+	shown := func(id string) bool { mu.Lock(); defer mu.Unlock(); return id == "X" && shownX }
+	q := newSlots(4, shown, clock, 30*time.Second)
+	ctx := context.Background()
+	var held []grant
+	for i := range 3 { // the low lane full
+		g, _ := q.acquire(ctx, fmt.Sprintf("busy%d", i))
+		held = append(held, g)
+	}
+	order := make(chan string, 64)
+	for i := range 20 {
+		id := fmt.Sprintf("warm%d", i)
+		go func() {
+			if g, ok := q.acquire(ctx, id); ok {
+				order <- id
+				q.release(g)
+			}
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	now = now.Add(time.Minute) // every warm-up waiter aged
+	shownX = true
+	mu.Unlock()
+	go func() {
+		if g, ok := q.acquire(ctx, "X"); ok {
+			order <- "X"
+			time.Sleep(20 * time.Millisecond)
+			q.release(g)
+		}
+	}()
+	if first := <-order; first != "X" {
+		t.Errorf("granted %s first, want X (shown) before the aged warm-up", first)
+	}
+	for _, g := range held {
+		q.release(g)
+	}
+	for range 20 {
+		<-order
+	}
 }

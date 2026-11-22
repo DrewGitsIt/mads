@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -111,19 +112,25 @@ func (s *server) recountForGitState(ctx context.Context, sessionID string) (gits
 	return gitstate.Counts{Print: string(b), Roots: repoRoots(rec.Repos)}, nil
 }
 
-// stashRef is the repo's refs/stash as its loose ref file says (git
-// stash writes it loose), "" when there is none or it can't be read: a
-// change set's fingerprint, so a stash push or pop, which moves no HEAD,
-// still counts as a move. No git spawned.
+// stashRef fingerprints the repo's stash, for a change set's refs: a
+// stash push, pop or drop moves the working tree (or the stash) without
+// moving HEAD. Its loose ref file (git stash writes it loose), and the
+// size and mtime of its reflog, which every push, pop and drop rewrites —
+// so a stash whose ref was packed (pack-refs, gc) still moves the print
+// when its last entry is popped or dropped, which edits only packed-refs.
+// "" with no stash. No git spawned.
 func stashRef(gitDir string) string {
 	if gitDir == "" {
 		return ""
 	}
-	b, err := os.ReadFile(filepath.Join(gitDir, "refs", "stash"))
-	if err != nil {
-		return ""
+	var out string
+	if b, err := os.ReadFile(filepath.Join(gitDir, "refs", "stash")); err == nil {
+		out = strings.TrimSpace(string(b))
 	}
-	return strings.TrimSpace(string(b))
+	if fi, err := os.Stat(filepath.Join(gitDir, "logs", "refs", "stash")); err == nil {
+		out += fmt.Sprintf("|log:%d:%d", fi.Size(), fi.ModTime().UnixNano())
+	}
+	return out
 }
 
 func repoRoots(repos []contracts.SessionRepo) []string {
