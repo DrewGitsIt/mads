@@ -69,6 +69,9 @@ type Repos struct {
 	State     []contracts.SessionRepoState
 	Checkouts []string
 	Roots     []string
+	// Stash is each repo's refs/stash value by root ("" none): a stash
+	// push or pop moves the working tree without moving HEAD.
+	Stash map[string]string
 }
 
 // Counts is what a header recount leaves: a fingerprint of the counts (to
@@ -109,8 +112,8 @@ type Options struct {
 	// moved (Checkouts has a new answer), so the repo watcher can follow.
 	TargetsChanged func()
 
-	Debounce, MaxWait, WarmFor, BaselineTTL, Timeout, SweepEvery time.Duration
-	ErrorRetryEvery, OpenMaxAge, ShownFor, AskFloor              time.Duration
+	Debounce, MaxWait, WarmFor, BaselineTTL, Timeout, SweepEvery  time.Duration
+	ErrorRetryEvery, OpenMaxAge, ShownFor, AskFloor, PromoteAfter time.Duration
 	// MaxConcurrent caps computes running at once. Zero: the default.
 	MaxConcurrent int
 	// Now is the clock (tests). Nil: time.Now.
@@ -225,7 +228,10 @@ type Service struct {
 	base   context.Context
 	cancel context.CancelFunc
 
-	slots     *slots
+	slots *slots
+	// readAt is each session's lastRead, readable without mu (the slots
+	// ask it when granting).
+	readAt    sync.Map // session id → time.Time
 	followLog failLog
 	mu        sync.Mutex
 	sess      map[string]*session
@@ -266,6 +272,9 @@ func New(opts Options) *Service {
 	if opts.AskFloor <= 0 {
 		opts.AskFloor = DefaultAskFloor
 	}
+	if opts.PromoteAfter <= 0 {
+		opts.PromoteAfter = DefaultPromoteAfter
+	}
 	if opts.MaxConcurrent <= 0 {
 		opts.MaxConcurrent = DefaultMaxConcurrent
 	}
@@ -276,12 +285,13 @@ func New(opts Options) *Service {
 		opts.Logf = log.Printf
 	}
 	base, cancel := context.WithCancel(context.Background())
-	return &Service{
+	s := &Service{
 		opts: opts, base: base, cancel: cancel,
-		slots:     newSlots(opts.MaxConcurrent),
 		followLog: failLog{logf: opts.Logf, now: opts.Now},
 		sess:      map[string]*session{}, active: map[string]bool{},
 	}
+	s.slots = newSlots(opts.MaxConcurrent, s.shown, opts.Now, opts.PromoteAfter)
+	return s
 }
 
 // Bind sets the computes. Called once, before any read or trigger.
@@ -481,10 +491,18 @@ func (s *Service) RepoChanged(gitDir string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, ss := range s.sess {
-		if ss.gitDirs[gitDir] {
-			ss.refsSeq++
-			s.triggerLocked(ss, []string{contracts.GitPartRepos, contracts.GitPartCounts})
+		if !ss.gitDirs[gitDir] {
+			continue
 		}
+		if s.shown(ss.id) {
+			// A window shows it: recompute its change set regardless (a
+			// stash, reset or checkout of files moves it without a ref
+			// the fingerprint knows).
+			s.triggerLocked(ss, []string{contracts.GitPartRepos, contracts.GitPartChangeSet, contracts.GitPartCounts})
+			continue
+		}
+		ss.refsSeq++
+		s.triggerLocked(ss, []string{contracts.GitPartRepos, contracts.GitPartCounts})
 	}
 }
 
@@ -504,12 +522,14 @@ func refsFor(ss *session, vs string) string {
 		b = append(b, r.Root...)
 		switch vs {
 		case contracts.BaselineBase:
-			b = append(b, "|"+r.Base+"|"+r.Worktree.Base+"|"+r.Worktree.Fork...)
+			// The session's own branch too: a commit on it moves the diff
+			// against its base.
+			b = append(b, "|"+r.Worktree.Branch+"|"+r.Worktree.Head+"|"+r.Base+"|"+r.Worktree.Base+"|"+r.Worktree.Fork...)
 			if r.BaseWorktree != nil {
 				b = append(b, "|"+r.BaseWorktree.Head...)
 			}
 		default:
-			b = append(b, "|"+r.Worktree.Branch+"|"+r.Worktree.Head...)
+			b = append(b, "|"+r.Worktree.Branch+"|"+r.Worktree.Head+"|stash:"+rp.repos.Stash[r.Root]...)
 		}
 		b = append(b, '\n')
 	}
@@ -535,6 +555,29 @@ func (s *Service) invalidateByRefsLocked(ss *session) {
 			p.stale = true
 		}
 	}
+}
+
+// noteStartUnmovedLocked: a repo change left the start change set's refs
+// where they were, so it isn't recomputed; its part rides in the batch
+// as done (unchanged), so a window that marked it updating clears.
+func (s *Service) noteStartUnmovedLocked(ss *session, now time.Time) {
+	p := ss.parts[slotStart]
+	if p == nil || !p.computed || p.updating() {
+		return // its own compute announces it
+	}
+	s.annLocked(ss, now).parts[contracts.GitPartChangeSet] = true
+}
+
+// annLocked is the session's waiting batch, started (with its MaxWait
+// timer) if there is none.
+func (s *Service) annLocked(ss *session, now time.Time) *pendingAnn {
+	if ss.ann == nil {
+		a := &pendingAnn{since: now, parts: map[string]bool{}, changed: map[string]bool{}}
+		ss.ann = a
+		// Out by MaxWait even if no other compute ends by then.
+		ss.annTimer = time.AfterFunc(s.opts.MaxWait, func() { s.flushAnn(ss, a) })
+	}
+	return ss.ann
 }
 
 // Trigger is an event saying parts of the session may have moved:
@@ -639,16 +682,14 @@ type computed struct {
 	refsSeq int
 }
 
-// compute runs sl's compute in one of the slots: the high lane for a
-// session shown in a window (read within ShownFor).
+// compute runs sl's compute in one of the slots (the high lane for a
+// session shown in a window, as of when the slot is granted).
 func (s *Service) compute(ss *session, sl slot) computed {
-	s.mu.Lock()
-	high := s.opts.Now().Sub(ss.lastRead) < s.opts.ShownFor
-	s.mu.Unlock()
-	if !s.slots.acquire(s.base, ss.id, high) {
+	g, ok := s.slots.acquire(s.base, ss.id)
+	if !ok {
 		return computed{fp: "", err: s.base.Err()}
 	}
-	defer s.slots.release(ss.id, high)
+	defer s.slots.release(g)
 	ctx, cancel := context.WithTimeout(s.base, s.opts.Timeout)
 	defer cancel()
 	s.mu.Lock()
@@ -728,6 +769,7 @@ func (s *Service) run(ss *session, sl slot) {
 		} else {
 			s.invalidateByRefsLocked(ss)
 		}
+		s.noteStartUnmovedLocked(ss, now)
 	}
 	p.changedAcc = p.changedAcc || changed
 	done := false // this end goes out
@@ -765,15 +807,10 @@ func (s *Service) run(ss *session, sl slot) {
 			// Another baseline: its own announcement, saying which.
 			out = append(out, contracts.GitStateUpdatedPayload{SessionID: ss.id, Parts: []string{sl.part}, Baseline: sl.vs, Changed: orEmpty(ch)})
 		} else {
-			if ss.ann == nil {
-				a := &pendingAnn{since: now, parts: map[string]bool{}, changed: map[string]bool{}}
-				ss.ann = a
-				// Out by MaxWait even if no other compute ends by then.
-				ss.annTimer = time.AfterFunc(s.opts.MaxWait, func() { s.flushAnn(ss, a) })
-			}
-			ss.ann.parts[sl.part] = true
+			a := s.annLocked(ss, now)
+			a.parts[sl.part] = true
 			for _, c := range ch {
-				ss.ann.changed[c] = true
+				a.changed[c] = true
 			}
 		}
 	}
@@ -963,7 +1000,16 @@ func (s *Service) readLocked(sessionID string) *session {
 		ss = s.newSessionLocked(sessionID)
 	}
 	ss.lastRead = s.opts.Now()
+	s.readAt.Store(sessionID, ss.lastRead)
+	// Its computes waiting in the low lane may go now.
+	s.slots.kick()
 	return ss
+}
+
+// shown: the session was read within ShownFor (a window shows it).
+func (s *Service) shown(sessionID string) bool {
+	v, ok := s.readAt.Load(sessionID)
+	return ok && s.opts.Now().Sub(v.(time.Time)) < s.opts.ShownFor
 }
 
 // newSessionLocked keeps a session; lastRead stays zero until a read
@@ -1026,6 +1072,7 @@ func (s *Service) Sweep(ctx context.Context) {
 		}
 		if !s.active[id] && !busy && now.Sub(ss.lastRead) > s.opts.WarmFor {
 			delete(s.sess, id)
+			s.readAt.Delete(id)
 			if len(ss.checkouts) > 0 {
 				moved = true
 			}

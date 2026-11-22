@@ -3,7 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
@@ -71,6 +74,10 @@ func (s *server) computeSessionRepos(ctx context.Context, sessionID string) (git
 			continue
 		}
 		rs := contracts.SessionRepoState{Root: t.Folder, Primary: primary != nil && i == 0, Isolated: t.Isolated(), Base: t.Base, Worktree: wt}
+		if out.Stash == nil {
+			out.Stash = map[string]string{}
+		}
+		out.Stash[t.Folder] = stashRef(wt.GitDir)
 		if t.Isolated() {
 			if base, err := s.repoBranch(ctx, t.Primary, t.Base); err == nil {
 				rs.BaseWorktree = &base
@@ -102,6 +109,21 @@ func (s *server) recountForGitState(ctx context.Context, sessionID string) (gits
 		R       []contracts.SessionRepo
 	}{rec.UncommittedCount, rec.UnlandedCount, rec.OutsideCount, rec.Repos})
 	return gitstate.Counts{Print: string(b), Roots: repoRoots(rec.Repos)}, nil
+}
+
+// stashRef is the repo's refs/stash as its loose ref file says (git
+// stash writes it loose), "" when there is none or it can't be read: a
+// change set's fingerprint, so a stash push or pop, which moves no HEAD,
+// still counts as a move. No git spawned.
+func stashRef(gitDir string) string {
+	if gitDir == "" {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join(gitDir, "refs", "stash"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 func repoRoots(repos []contracts.SessionRepo) []string {

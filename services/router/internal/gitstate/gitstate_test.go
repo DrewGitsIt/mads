@@ -35,15 +35,20 @@ type fakeComp struct {
 	errs map[string]error
 	// running and peak: computes in progress now, and the most at once.
 	running, peak int
+	// order: "session part" per compute start, in order; stash: a
+	// session's refs/stash.
+	order []string
+	stash map[string]string
 }
 
 func newFakeComp() *fakeComp {
-	return &fakeComp{runs: map[string]int{}, hold: map[string]chan struct{}{}, ctxs: map[string]context.Context{}, errs: map[string]error{}, heads: map[string]string{}, baseHeads: map[string]string{}, counts: "1", roots: []string{"/r"}, started: make(chan string, 256)}
+	return &fakeComp{runs: map[string]int{}, hold: map[string]chan struct{}{}, ctxs: map[string]context.Context{}, errs: map[string]error{}, heads: map[string]string{}, stash: map[string]string{}, baseHeads: map[string]string{}, counts: "1", roots: []string{"/r"}, started: make(chan string, 256)}
 }
 
-func (f *fakeComp) begin(ctx context.Context, part string) error {
+func (f *fakeComp) begin(ctx context.Context, id, part string) error {
 	f.mu.Lock()
 	f.runs[part]++
+	f.order = append(f.order, id+" "+part)
 	f.ctxs[part] = ctx
 	f.running++
 	f.peak = max(f.peak, f.running)
@@ -65,12 +70,15 @@ func (f *fakeComp) begin(ctx context.Context, part string) error {
 func (f *fakeComp) computers() Computers {
 	return Computers{
 		Repos: func(ctx context.Context, id string) (Repos, error) {
-			if err := f.begin(ctx, contracts.GitPartRepos); err != nil {
+			if err := f.begin(ctx, id, contracts.GitPartRepos); err != nil {
 				return Repos{}, err
 			}
 			f.mu.Lock()
 			defer f.mu.Unlock()
-			r := Repos{Checkouts: append([]string(nil), f.checkout...), Roots: append([]string(nil), f.roots...)}
+			r := Repos{Checkouts: append([]string(nil), f.checkout...), Roots: append([]string(nil), f.roots...), Stash: map[string]string{}}
+			for _, root := range f.roots {
+				r.Stash[root] = f.stash[id]
+			}
 			for _, root := range f.roots {
 				st := contracts.SessionRepoState{Root: root, Worktree: contracts.RepoWorktree{Path: root, GitDir: root + "/.git", Branch: "main", Head: f.heads[id], ComputedAt: time.Now()}}
 				if bh := f.baseHeads[id]; bh != "" {
@@ -82,7 +90,7 @@ func (f *fakeComp) computers() Computers {
 			return r, nil
 		},
 		ChangeSet: func(ctx context.Context, id, vs string) (contracts.ChangeSet, error) {
-			if err := f.begin(ctx, contracts.GitPartChangeSet+":"+vs); err != nil {
+			if err := f.begin(ctx, id, contracts.GitPartChangeSet+":"+vs); err != nil {
 				return contracts.ChangeSet{}, err
 			}
 			f.mu.Lock()
@@ -94,7 +102,7 @@ func (f *fakeComp) computers() Computers {
 			return set, nil
 		},
 		Counts: func(ctx context.Context, id string) (Counts, error) {
-			if err := f.begin(ctx, contracts.GitPartCounts); err != nil {
+			if err := f.begin(ctx, id, contracts.GitPartCounts); err != nil {
 				return Counts{}, err
 			}
 			f.mu.Lock()
@@ -125,8 +133,9 @@ func (f *fakeComp) holdPart(part string) chan struct{} {
 }
 
 type emitted struct {
-	mu  sync.Mutex
-	evs []contracts.GitStateUpdatedPayload
+	mu    sync.Mutex
+	evs   []contracts.GitStateUpdatedPayload
+	times []time.Time
 	// fail: the next this many appends fail; tries counts every attempt.
 	fail  int
 	tries int
@@ -141,6 +150,7 @@ func (e *emitted) emit(_ context.Context, p contracts.GitStateUpdatedPayload) er
 		return errors.New("data service down")
 	}
 	e.evs = append(e.evs, p)
+	e.times = append(e.times, time.Now())
 	return nil
 }
 
@@ -554,7 +564,7 @@ func warmStart(t *testing.T, s *Service, fc *fakeComp, em *emitted, id string) {
 // session whose checkout HEAD moved recomputes its start change set; a
 // base change set is marked stale only when the base branch moved.
 func TestRepoChangedRecomputesOnlyMovedChangeSets(t *testing.T) {
-	s, fc, em := newTestService(t, Options{})
+	s, fc, em := newTestService(t, Options{ShownFor: 100 * time.Millisecond})
 	ids := []string{"s1", "s2", "s3"}
 	for _, id := range ids {
 		fc.set(func() { fc.heads[id] = "h0"; fc.baseHeads[id] = "b0" })
@@ -568,7 +578,7 @@ func TestRepoChangedRecomputesOnlyMovedChangeSets(t *testing.T) {
 	s.ChangeSet("s2", contracts.BaselineBase)
 	s.ChangeSet("s3", contracts.BaselineBase)
 	eventually(t, "the base computes", func() bool { return fc.runsOf("changeset:base") == 2 })
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond) // nobody shows them now
 	starts := fc.runsOf("changeset:start")
 	// s1 committed (its HEAD moved); s3's base branch moved; s2 nothing.
 	fc.set(func() { fc.heads["s1"] = "h1"; fc.baseHeads["s3"] = "b1" })
@@ -583,11 +593,9 @@ func TestRepoChangedRecomputesOnlyMovedChangeSets(t *testing.T) {
 		t.Errorf("start change set computes = %d, want %d (only s1's HEAD moved)", n, starts+1)
 	}
 	for _, p := range em.all() {
-		if p.SessionID != "s1" && slices.Contains(p.Parts, contracts.GitPartChangeSet) && p.Generation > 0 && fc.runsOf("changeset:start") == starts+1 {
-			// s2/s3 announcements after the change must be repos and counts only.
-			if slices.Equal(p.Parts, []string{contracts.GitPartRepos, contracts.GitPartChangeSet, contracts.GitPartCounts}) {
-				t.Errorf("%s announced a change set it didn't recompute: %+v", p.SessionID, p)
-			}
+		// s2/s3: their change sets ride along as done, never as changed.
+		if p.SessionID != "s1" && slices.Contains(p.Changed, contracts.GitPartChangeSet) && slices.Contains(p.Parts, contracts.GitPartRepos) && len(p.Parts) == 3 {
+			t.Errorf("%s announced its change set changed without a recompute: %+v", p.SessionID, p)
 		}
 	}
 	if a := s.ChangeSet("s2", contracts.BaselineBase); a.Updating {
@@ -899,6 +907,28 @@ func TestWriteStormAnnouncesOncePerFire(t *testing.T) {
 	if both*2 < len(got) {
 		t.Errorf("announcements listing changeset and counts together = %d of %d, want most", both, len(got))
 	}
+	// And the change set is never left unannounced for long: a fire every
+	// MaxWait, its compute, and a deferral of at most MaxWait.
+	em.mu.Lock()
+	var csTimes []time.Time
+	for i, p := range em.evs[n:] {
+		if slices.Contains(p.Parts, contracts.GitPartChangeSet) {
+			csTimes = append(csTimes, em.times[n+i])
+		}
+	}
+	em.mu.Unlock()
+	const computeBound = 100 * time.Millisecond
+	bound := 2*maxWait + debounce + computeBound
+	prev := start
+	for _, at := range csTimes {
+		if at.Sub(prev) > bound {
+			t.Errorf("change set announcements %v apart, want ≤ %v", at.Sub(prev), bound)
+		}
+		prev = at
+	}
+	if start.Add(elapsed).Sub(prev) > bound {
+		t.Errorf("last change set announcement %v before the storm ended, want ≤ %v", start.Add(elapsed).Sub(prev), bound)
+	}
 	t.Logf("%d announcements, %d change set computes over %v", len(got), fc.runsOf("changeset:start"), elapsed)
 }
 
@@ -1042,4 +1072,130 @@ func TestFollowLogsFailuresAndResumes(t *testing.T) {
 	eventually(t, "the resubscribe", func() bool { ev.mu.Lock(); defer ev.mu.Unlock(); return len(ev.sinces) == 2 })
 	ev.send(t, contracts.Envelope{Seq: 11, Type: contracts.FileChanged, SessionID: "ses_1"})
 	eventually(t, "the resumed stream's trigger", func() bool { return fc.runsOf(contracts.GitPartCounts) == 2 })
+}
+
+// --- round 3 ---
+
+// A shown session (read within ShownFor) recomputes its change set on any
+// repo change, even one no fingerprinted ref shows (a stash, say).
+func TestRepoChangedRecomputesAShownSessionsChangeSet(t *testing.T) {
+	s, fc, em := newTestService(t, Options{})
+	warmStart(t, s, fc, em, "ses_1")
+	eventually(t, "both computed", func() bool { return fc.runsOf("changeset:start") == 1 && fc.runsOf(contracts.GitPartRepos) == 1 })
+	time.Sleep(30 * time.Millisecond)
+	s.RepoChanged("/r/.git") // nothing in the fake moved
+	eventually(t, "the shown session's change set", func() bool { return fc.runsOf("changeset:start") == 2 })
+}
+
+// A background session catches a stash through refs/stash in its start
+// fingerprint, HEAD unchanged; and an unmoved one's change set rides in the
+// batch as done, so a window's mark clears.
+func TestBackgroundSessionCatchesAStash(t *testing.T) {
+	s, fc, em := newTestService(t, Options{ShownFor: 50 * time.Millisecond})
+	s.Repos("ses_1")
+	eventually(t, "repos", func() bool { return s.Repos("ses_1").Computed })
+	s.ChangeSet("ses_1", contracts.BaselineSessionStart)
+	eventually(t, "change set", func() bool { return s.ChangeSet("ses_1", contracts.BaselineSessionStart).Computed })
+	time.Sleep(100 * time.Millisecond)
+
+	n := len(em.all())
+	s.RepoChanged("/r/.git") // nothing moved
+	eventually(t, "the repos recompute's announcement", func() bool { return len(em.all()) == n+1 })
+	if got := em.all()[n]; !slices.Contains(got.Parts, contracts.GitPartChangeSet) || slices.Contains(got.Changed, contracts.GitPartChangeSet) {
+		t.Errorf("announcement = %+v, want the change set done, unchanged", got)
+	}
+	if n := fc.runsOf("changeset:start"); n != 1 {
+		t.Fatalf("change set computes = %d, want 1 (nothing moved)", n)
+	}
+	fc.set(func() { fc.stash["ses_1"] = "abc123" })
+	s.RepoChanged("/r/.git")
+	eventually(t, "the stash recompute", func() bool { return fc.runsOf("changeset:start") == 2 })
+}
+
+// A commit on the session's own branch stales its base change set.
+func TestSessionBranchCommitStalesBase(t *testing.T) {
+	s, fc, _ := newTestService(t, Options{ShownFor: 50 * time.Millisecond})
+	fc.set(func() { fc.baseHeads["ses_1"] = "b0"; fc.heads["ses_1"] = "h0" })
+	s.Repos("ses_1")
+	eventually(t, "repos", func() bool { return s.Repos("ses_1").Computed })
+	s.ChangeSet("ses_1", contracts.BaselineBase)
+	eventually(t, "base", func() bool { return s.ChangeSet("ses_1", contracts.BaselineBase).Computed })
+	time.Sleep(100 * time.Millisecond)
+	fc.set(func() { fc.heads["ses_1"] = "h1" })
+	s.RepoChanged("/r/.git")
+	eventually(t, "the repos recompute", func() bool { return fc.runsOf(contracts.GitPartRepos) == 2 })
+	time.Sleep(30 * time.Millisecond)
+	if a := s.ChangeSet("ses_1", contracts.BaselineBase); !a.Updating {
+		t.Errorf("base after a commit on the session branch = %+v, want stale", a)
+	}
+}
+
+// Priority is decided when a slot is granted: a session read while its
+// computes wait behind the warm-up goes next.
+func TestReadPromotesQueuedWarmUp(t *testing.T) {
+	var ids []string
+	for i := range 8 {
+		ids = append(ids, fmt.Sprintf("w%d", i))
+	}
+	s, fc, _ := newTestService(t, Options{MaxConcurrent: 2, Active: func(context.Context) ([]string, error) { return ids, nil }})
+	release := fc.holdPart("changeset:start")
+	s.Sweep(context.Background()) // 24 computes, low lane: one slot
+	eventually(t, "the low lane busy", func() bool { return fc.runsOf("changeset:start") >= 1 })
+	time.Sleep(50 * time.Millisecond)
+	fc.mu.Lock()
+	startedBefore := len(fc.order)
+	fc.mu.Unlock()
+	x := ids[len(ids)-1] // queued last
+	s.Repos(x)           // a window opens it
+	eventually(t, x+"'s compute", func() bool {
+		fc.mu.Lock()
+		defer fc.mu.Unlock()
+		for _, o := range fc.order[startedBefore:] {
+			if strings.HasPrefix(o, x+" ") {
+				return true
+			}
+		}
+		return false
+	})
+	fc.mu.Lock()
+	if first := fc.order[startedBefore]; !strings.HasPrefix(first, x+" ") {
+		t.Errorf("%q started before %s's compute, want %s's first", first, x, x)
+	}
+	fc.mu.Unlock()
+	close(release)
+	fc.set(func() { fc.hold["changeset:start"] = nil })
+}
+
+// A background compute waiting longer than PromoteAfter is served like a
+// shown session's, so steady shown load can't starve it.
+func TestSlotsPromoteLongWaiters(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	shown := func(id string) bool { return id != "bg" }
+	q := newSlots(2, shown, clock, 30*time.Second)
+	ctx := context.Background()
+	a, _ := q.acquire(ctx, "A")
+	b, _ := q.acquire(ctx, "B")
+	got := make(chan string, 2)
+	wait := func(id string) {
+		g, ok := q.acquire(ctx, id)
+		if ok {
+			got <- id
+			q.release(g)
+		}
+	}
+	go wait("bg")
+	time.Sleep(20 * time.Millisecond)
+	go wait("C") // shown, arrived after bg
+	time.Sleep(20 * time.Millisecond)
+	mu.Lock()
+	now = now.Add(31 * time.Second)
+	mu.Unlock()
+	q.release(a)
+	if first := <-got; first != "bg" {
+		t.Errorf("granted %s first, want bg (waited past PromoteAfter)", first)
+	}
+	<-got
+	q.release(b)
 }
