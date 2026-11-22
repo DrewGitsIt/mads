@@ -33,11 +33,14 @@ Recompute runs under the Router's own context with a timeout, never a
 request's, so a window going away can't cancel it (writes are unaffected: all
 git here is read-only). At most 4 computes run at once across all sessions
 (the boot warm-up included), and at most 2 for one session; the rest wait
-their turn, still `updating`. Two lanes: computes for a session read in the
-last 60 s (a window shows it), whatever started them, go ahead of every other
-waiting compute, and the other lane (warm-up, repo-wide sweeps over sessions
-nobody shows) never holds more than 3 slots, so a shown session's compute
-never waits behind a slow repo. A
+their turn, still `updating`. Two lanes, decided when a slot is granted
+(a read of a session promotes its computes already waiting): computes for a
+session read in the last 60 s (a window shows it), whatever started them, go
+ahead of every other waiting compute, and the other lane (warm-up, repo-wide
+sweeps over sessions nobody shows) never holds more than 3 slots, so a shown
+session's compute never waits behind a slow repo. A background compute
+waiting more than 30 s is served like a shown one, so steady shown load
+can't starve it. A
 part whose compute failed is retried by a read at most once a minute while it
 keeps failing (a trigger or an explicit refresh retries regardless).
 
@@ -58,20 +61,24 @@ watches for, per session:
 - `session.agent_state` to idle (turn end): changeset + counts;
 - `commit.created`, `commit.undone`, `merge.completed`: all parts;
 - `repo.changed` (the `repostate` ref watcher, in-process): repos and counts
-  for every kept session using that git dir; its change sets only where their
+  for every kept session using that git dir; the `start` change set of a
+  session read in the last 60 s always (a window shows it: a stash or a reset
+  moves it without moving HEAD); for the others, change sets only where their
   refs moved. All mads worktrees of a repo share one git dir, so one session's
   commit reaches every session in the repo, and most change sets don't move
   with it. Each change set records the refs it was computed against, from the
   repos part: for `start`, each checkout's HEAD and branch (in-place sessions
-  share a checkout, so another session's commit there moves theirs); for
-  `base`, the base branch's head. The repos recompute this queues reads them
+  share a checkout, so another session's commit there moves theirs) and the
+  repo's `refs/stash` (read from its loose ref file, no git spawned); for
+  `base`, the session's own branch and HEAD and the base branch's head. The repos recompute this queues reads them
   again (repostate's branch facts), and its end recomputes `start` if its
   refs moved, and marks `base` stale if its did (`main`, whose ref repos
   doesn't read, is always marked stale; stale costs nothing until read).
-  Unknown refs (a change set computed before its repos) count as moved. A
-  stash or an outside edit that moves no ref shows on the next open, focus,
-  Retry or trigger. The UI marks only repos and counts on `repo.changed`;
-  a recomputed change set comes in the same announcement, as changed;
+  Unknown refs (a change set computed before its repos) count as moved. An
+  unmoved `start` change set rides in the repos announcement as done
+  (unchanged), so a window that marked it clears. An outside edit that moves
+  no ref shows on the next open, focus, Retry or trigger. The UI marks all
+  three parts on `repo.changed`, only for sessions the window shows;
 - `POST /worktree/refresh` (see Response shapes): without a body (a window
   opening the session, or regaining focus, after Phase A's 30 s focus skip),
   counts, and repos and the changeset against `start` when the kept one is
@@ -250,3 +257,9 @@ cherry-picks); the rail's live state for remote sessions (mesh follow-up).
 - Known, harmless: a repo leaving the session's set (no longer counted in)
   stays in the repos part until its next recompute; only new repos are
   looked for.
+- Round 3: `repo.changed` always recomputes a shown session's `start` change
+  set; `refs/stash` joins the `start` fingerprint and the session's own branch
+  and HEAD the `base` one; an unmoved change set is announced as done; the UI
+  marks the change set again on `repo.changed` for shown sessions; the lane is
+  decided at grant time and a read promotes queued computes; background
+  computes waiting over 30 s are promoted.
