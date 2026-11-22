@@ -165,8 +165,12 @@ export function triggerParts(env: Envelope): GitStatePart[] {
     case "commit.created":
     case "commit.undone":
     case "merge.completed":
-    case "repo.changed":
       return ALL_PARTS;
+    case "repo.changed":
+      // The Router recomputes a change set on it only where its refs moved
+      // (and then announces it as changed): not marked, or a session whose
+      // set didn't move would show updating until the fail-safe.
+      return ["repos", "counts"];
     default:
       return [];
   }

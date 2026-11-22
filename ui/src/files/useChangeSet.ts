@@ -177,7 +177,13 @@ function onSessionEvent(e: Entry, env: Envelope): void {
   if (env.type === "session.git_state_updated") {
     const p = env.payload as GitStateUpdatedPayload | undefined;
     noteGitStateEvent(p);
-    if (!Array.isArray(p?.parts) || !p.parts.includes("changeset")) return;
+    if (!Array.isArray(p?.parts)) return;
+    if (!p.parts.includes("changeset")) {
+      // Moved repo facts (a base branch's head, say) may leave another
+      // baseline stale on the Router without a start recompute: re-read.
+      if (e.vs !== "start" && Array.isArray(p.changed) && p.changed.includes("repos")) e.coalescer.now();
+      return;
+    }
     const baseline = p.baseline && p.baseline !== "start" ? p.baseline : "start";
     if (baseline === e.vs) {
       // Only a changed set is worth a read: the kept one is what's on screen.
@@ -313,9 +319,11 @@ export function refetchChangeSet(sessionId: string, vs: ChangeBaselineId): void 
     return;
   }
   const gen = e.generation;
+  // Marked before the ask, so an announcement that beats the POST's answer
+  // still clears it.
+  markRevalidating(sessionId, "changeset", vs);
   void e.client
     .revalidateGitState(sessionId, { parts: ["changeset"], vs })
-    .then(() => markRevalidating(sessionId, "changeset", vs))
     .catch(() => {})
     .finally(() => {
       if (gen === e.generation && entries.get(e.key) === e && active(e)) e.coalescer.now();

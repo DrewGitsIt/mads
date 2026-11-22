@@ -1972,8 +1972,11 @@ export class FakeRouterClient implements RouterClient {
   }
 
   readonly revalidateGitStateCalls: { sessionId: string; req: GitStateRevalidate }[] = [];
+  /** A function lets a test hold back a revalidate's answer (or announce before it). */
+  revalidateGitStateOutcome?: (sessionId: string, req: GitStateRevalidate) => Promise<void>;
   async revalidateGitState(sessionId: string, req: GitStateRevalidate, opts: RequestOptions = {}): Promise<void> {
     this.revalidateGitStateCalls.push({ sessionId, req });
+    if (this.revalidateGitStateOutcome) return abortable(this.revalidateGitStateOutcome(sessionId, req), opts.signal);
     if (opts.signal?.aborted) throw abortError();
   }
 

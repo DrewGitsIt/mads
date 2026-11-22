@@ -353,4 +353,34 @@ describe("useChangeSet's shared store", () => {
     expect(startReads()).toBe(s0);
     expect(getGitUpdating(SID)).toBe("changeset counts");
   });
+
+  it("Retry marks the set updating before it asks, so an announcement beating the ask's answer clears it", async () => {
+    const c = new FakeRouterClient();
+    const { result } = renderHook(() => useChangeSet(c, SID));
+    await settle();
+    let answer!: () => void;
+    c.revalidateGitStateOutcome = () => new Promise<void>((resolve) => (answer = resolve));
+    act(() => result.current.refetch());
+    expect(getGitUpdating(SID)).toBe("changeset");
+    nextSeq += 2_000_000_000;
+    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["changeset"], { changed: [], seq: nextSeq++ }));
+    expect(getGitUpdating(SID)).toBe("");
+    await act(async () => answer());
+    await settle();
+    expect(getGitUpdating(SID)).toBe("");
+  });
+
+  it("another baseline re-reads when an announcement says the repos changed (its base may have moved)", async () => {
+    const c = new FakeRouterClient();
+    renderHook(() => [useChangeSet(c, SID), useChangeSet(c, SID, "base")] as const);
+    await settle();
+    const baseReads = () => c.changeSetCalls.filter((x) => x.vs === "base").length;
+    const startReads = () => c.changeSetCalls.filter((x) => (x.vs ?? "start") === "start").length;
+    const [b0, s0] = [baseReads(), startReads()];
+    nextSeq += 3_000_000_000;
+    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["repos", "counts"], { changed: ["repos"], seq: nextSeq++ }));
+    await settle();
+    expect(baseReads()).toBe(b0 + 1);
+    expect(startReads()).toBe(s0);
+  });
 });
