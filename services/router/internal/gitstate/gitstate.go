@@ -48,6 +48,14 @@ const (
 	// window opening the session, or a refresh without a body (open,
 	// focus), recomputes it.
 	DefaultOpenMaxAge = 30 * time.Second
+	// DefaultShownFor: a session read this lately is shown in a window,
+	// and its computes go ahead of the others (slots).
+	DefaultShownFor = time.Minute
+	// DefaultAskFloor is the least time between two computes of one part
+	// that explicit asks (POST /worktree/refresh, with or without a body)
+	// start, whoever asks: a faster ask waits for the floor, folded into
+	// one compute. Triggers have their own debounce.
+	DefaultAskFloor = 5 * time.Second
 )
 
 // emitRetries are the waits before each retry of a failed announcement.
@@ -102,7 +110,7 @@ type Options struct {
 	TargetsChanged func()
 
 	Debounce, MaxWait, WarmFor, BaselineTTL, Timeout, SweepEvery time.Duration
-	ErrorRetryEvery, OpenMaxAge                                  time.Duration
+	ErrorRetryEvery, OpenMaxAge, ShownFor, AskFloor              time.Duration
 	// MaxConcurrent caps computes running at once. Zero: the default.
 	MaxConcurrent int
 	// Now is the clock (tests). Nil: time.Now.
@@ -155,9 +163,16 @@ type part struct {
 	// announced once at its end.
 	changedAcc bool
 	readAt     time.Time
+	// askedAt: when an explicit ask last started a compute; askTimer the
+	// one waiting for AskFloor after it, if any.
+	askedAt  time.Time
+	askTimer *time.Timer
+	// refs: for a change set, the refs it was computed against (refsFor),
+	// as the repos part knew them then; "" unknown.
+	refs string
 }
 
-func (p *part) updating() bool { return p.running || p.dirty || p.queued }
+func (p *part) updating() bool { return p.running || p.dirty || p.queued || p.askTimer != nil }
 
 type session struct {
 	id         string
@@ -176,9 +191,14 @@ type session struct {
 	// ann collects the parts whose owed ends wait to go out together: one
 	// announcement once no other part of the session is computing (or
 	// MaxWait after the first), not one per part.
-	ann *pendingAnn
+	ann      *pendingAnn
+	annTimer *time.Timer
 	// emitMu orders the session's appends with their generations.
 	emitMu sync.Mutex
+	// refsSeq counts repo changes in the session's repos; refsChecked is
+	// the latest one a repos compute that started after it has checked the
+	// change sets' refs against.
+	refsSeq, refsChecked int
 }
 
 type pendingAnn struct {
@@ -205,7 +225,7 @@ type Service struct {
 	base   context.Context
 	cancel context.CancelFunc
 
-	sem       chan struct{} // the MaxConcurrent compute slots
+	slots     *slots
 	followLog failLog
 	mu        sync.Mutex
 	sess      map[string]*session
@@ -240,6 +260,12 @@ func New(opts Options) *Service {
 	if opts.OpenMaxAge <= 0 {
 		opts.OpenMaxAge = DefaultOpenMaxAge
 	}
+	if opts.ShownFor <= 0 {
+		opts.ShownFor = DefaultShownFor
+	}
+	if opts.AskFloor <= 0 {
+		opts.AskFloor = DefaultAskFloor
+	}
 	if opts.MaxConcurrent <= 0 {
 		opts.MaxConcurrent = DefaultMaxConcurrent
 	}
@@ -252,7 +278,7 @@ func New(opts Options) *Service {
 	base, cancel := context.WithCancel(context.Background())
 	return &Service{
 		opts: opts, base: base, cancel: cancel,
-		sem:       make(chan struct{}, opts.MaxConcurrent),
+		slots:     newSlots(opts.MaxConcurrent),
 		followLog: failLog{logf: opts.Logf, now: opts.Now},
 		sess:      map[string]*session{}, active: map[string]bool{},
 	}
@@ -272,6 +298,14 @@ func (s *Service) Close() {
 	for _, ss := range s.sess {
 		if ss.timer != nil {
 			ss.timer.Stop()
+		}
+		if ss.annTimer != nil {
+			ss.annTimer.Stop()
+		}
+		for _, p := range ss.parts {
+			if p.askTimer != nil {
+				p.askTimer.Stop()
+			}
 		}
 	}
 	s.mu.Unlock()
@@ -363,15 +397,16 @@ type Ask struct {
 }
 
 // Refresh is POST /worktree/refresh without a body (a window opening the
-// session, or regaining focus): counts and repos now, and the change set
-// against session start if it is older than OpenMaxAge (outside edits
-// send no event). Answered at once, announced when done.
+// session, or regaining focus): counts now, and repos and the change set
+// against session start if older than OpenMaxAge (outside edits send no
+// event; repo changes have their own). Answered at once, announced when
+// done.
 func (s *Service) Refresh(sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ss := s.readLocked(sessionID)
 	s.askLocked(ss, slotCounts, 0)
-	s.askLocked(ss, slotRepos, 0)
+	s.askLocked(ss, slotRepos, s.opts.OpenMaxAge)
 	s.askLocked(ss, slotStart, s.opts.OpenMaxAge)
 }
 
@@ -395,11 +430,14 @@ func (s *Service) Revalidate(sessionID string, a Ask) {
 }
 
 // askLocked recomputes sl for an explicit refresh, unless its kept answer
-// is good and younger than maxAge (maxAge > 0).
+// is good and younger than maxAge (maxAge > 0). Never sooner than
+// AskFloor after the last compute an ask started: a faster ask waits for
+// it, and every ask in between is that one compute.
 func (s *Service) askLocked(ss *session, sl slot, maxAge time.Duration) {
 	p := s.partLocked(ss, sl)
-	p.readAt = s.opts.Now()
-	if maxAge > 0 && p.computed && p.err == nil && !p.stale && s.opts.Now().Sub(p.at) < maxAge {
+	now := s.opts.Now()
+	p.readAt = now
+	if maxAge > 0 && p.computed && p.err == nil && !p.stale && now.Sub(p.at) < maxAge {
 		return
 	}
 	if maxAge > 0 && p.running && !p.dirty {
@@ -408,18 +446,93 @@ func (s *Service) askLocked(ss *session, sl slot, maxAge time.Duration) {
 		p.owed, p.owedTrigger = true, true
 		return
 	}
+	if p.askTimer != nil {
+		return // one is waiting for the floor already
+	}
+	if wait := s.opts.AskFloor - now.Sub(p.askedAt); !p.askedAt.IsZero() && wait > 0 {
+		p.owed, p.owedTrigger = true, true
+		var t *time.Timer
+		t = time.AfterFunc(wait, func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if p.askTimer != t || s.base.Err() != nil {
+				return
+			}
+			p.askTimer = nil
+			p.askedAt = s.opts.Now()
+			s.startLocked(ss, sl, askTrigger)
+		})
+		p.askTimer = t
+		return
+	}
+	p.askedAt = now
 	s.startLocked(ss, sl, askTrigger)
 }
 
 // RepoChanged is the repo watcher's settled change of the repo whose
-// shared git dir is gitDir (a commit, branch switch, stash or reset, by
-// anyone): repos, change set and counts of every kept session using it.
+// shared git dir is gitDir (a commit, branch switch, merge or reset, by
+// anyone): repos and counts of every kept session using it, and its
+// change sets only where their refs moved. Every mads worktree of a repo
+// shares its git dir, so one session's commit reaches them all; most
+// change sets don't move with it. The repos compute this queues reads
+// each checkout's HEAD and branch facts, and its end compares them with
+// the refs each change set was computed against (invalidateByRefsLocked).
 func (s *Service) RepoChanged(gitDir string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, ss := range s.sess {
 		if ss.gitDirs[gitDir] {
-			s.triggerLocked(ss, []string{contracts.GitPartRepos, contracts.GitPartChangeSet, contracts.GitPartCounts})
+			ss.refsSeq++
+			s.triggerLocked(ss, []string{contracts.GitPartRepos, contracts.GitPartCounts})
+		}
+	}
+}
+
+// refsFor is what a change set against vs is computed against, as the
+// repos part knows it: each checkout's HEAD and branch for session start
+// (an in-place session's checkout is shared, so another session's commit
+// there moves it), the base branch's head for base. "" when unknown —
+// the repos part has no answer, or main, whose ref it doesn't read —
+// which counts as moved.
+func refsFor(ss *session, vs string) string {
+	rp := ss.parts[slotRepos]
+	if rp == nil || !rp.hasValue || vs == contracts.BaselineMain {
+		return ""
+	}
+	var b []byte
+	for _, r := range rp.repos.State {
+		b = append(b, r.Root...)
+		switch vs {
+		case contracts.BaselineBase:
+			b = append(b, "|"+r.Base+"|"+r.Worktree.Base+"|"+r.Worktree.Fork...)
+			if r.BaseWorktree != nil {
+				b = append(b, "|"+r.BaseWorktree.Head...)
+			}
+		default:
+			b = append(b, "|"+r.Worktree.Branch+"|"+r.Worktree.Head...)
+		}
+		b = append(b, '\n')
+	}
+	return "refs:" + string(b)
+}
+
+// invalidateByRefsLocked, after a repos compute that followed a repo
+// change: the change set against session start is recomputed if the refs
+// it was computed against moved, and the others are marked stale (read
+// recomputes them) if theirs did.
+func (s *Service) invalidateByRefsLocked(ss *session) {
+	for sl, p := range ss.parts {
+		if sl.part != contracts.GitPartChangeSet || !p.computed {
+			continue
+		}
+		now := refsFor(ss, sl.vs)
+		if now != "" && p.refs != "" && now == p.refs {
+			continue
+		}
+		if sl == slotStart {
+			s.startLocked(ss, sl, askTrigger)
+		} else {
+			p.stale = true
 		}
 	}
 }
@@ -515,19 +628,43 @@ func (s *Service) startLocked(ss *session, sl slot, why ask) {
 	go s.run(ss, sl)
 }
 
-// compute runs sl's compute in one of the MaxConcurrent slots.
-func (s *Service) compute(ss *session, sl slot) (repos Repos, set contracts.ChangeSet, counts Counts, fp string, err error) {
-	select {
-	case s.sem <- struct{}{}:
-	case <-s.base.Done():
-		return repos, set, counts, "", s.base.Err()
+// computed is one compute's outcome.
+type computed struct {
+	repos  Repos
+	set    contracts.ChangeSet
+	counts Counts
+	fp     string
+	err    error
+	// refsSeq is the session's refsSeq when the compute started.
+	refsSeq int
+}
+
+// compute runs sl's compute in one of the slots: the high lane for a
+// session shown in a window (read within ShownFor).
+func (s *Service) compute(ss *session, sl slot) computed {
+	s.mu.Lock()
+	high := s.opts.Now().Sub(ss.lastRead) < s.opts.ShownFor
+	s.mu.Unlock()
+	if !s.slots.acquire(s.base, ss.id, high) {
+		return computed{fp: "", err: s.base.Err()}
 	}
-	defer func() { <-s.sem }()
+	defer s.slots.release(ss.id, high)
 	ctx, cancel := context.WithTimeout(s.base, s.opts.Timeout)
 	defer cancel()
 	s.mu.Lock()
 	comp := s.comp
+	c := computed{refsSeq: ss.refsSeq}
+	if p := ss.parts[sl]; p != nil && sl.part == contracts.GitPartChangeSet {
+		p.refs = refsFor(ss, sl.vs)
+	}
 	s.mu.Unlock()
+	var (
+		repos  Repos
+		set    contracts.ChangeSet
+		counts Counts
+		fp     string
+		err    error
+	)
 	switch sl.part {
 	case contracts.GitPartRepos:
 		if comp.Repos != nil {
@@ -548,12 +685,14 @@ func (s *Service) compute(ss *session, sl slot) (repos Repos, set contracts.Chan
 	if err != nil {
 		fp = "error: " + err.Error()
 	}
-	return repos, set, counts, fp, err
+	c.repos, c.set, c.counts, c.fp, c.err = repos, set, counts, fp, err
+	return c
 }
 
 func (s *Service) run(ss *session, sl slot) {
 	defer s.wg.Done()
-	repos, set, counts, fp, err := s.compute(ss, sl)
+	c := s.compute(ss, sl)
+	repos, set, counts, fp, err := c.repos, c.set, c.counts, c.fp, c.err
 
 	s.mu.Lock()
 	p := ss.parts[sl]
@@ -576,6 +715,20 @@ func (s *Service) run(ss *session, sl slot) {
 	if sl == slotCounts && err == nil {
 		s.checkRootsLocked(ss, counts.Roots)
 	}
+	if sl == slotRepos && c.refsSeq > ss.refsChecked {
+		// Started after a repo change: its refs are current (a failed one
+		// says nothing, so every change set counts as moved).
+		ss.refsChecked = c.refsSeq
+		if err != nil {
+			p := ss.parts[slotRepos]
+			hv := p.hasValue
+			p.hasValue = false
+			s.invalidateByRefsLocked(ss)
+			p.hasValue = hv
+		} else {
+			s.invalidateByRefsLocked(ss)
+		}
+	}
 	p.changedAcc = p.changedAcc || changed
 	done := false // this end goes out
 	switch {
@@ -590,8 +743,9 @@ func (s *Service) run(ss *session, sl slot) {
 		// Only a read asked, and it failed as it did before: the reader
 		// already has that error, and nothing it shows moved.
 		p.owed, p.changedAcc = false, false
-	case p.queued && (p.deferredAt.IsZero() || now.Sub(p.deferredAt) < s.opts.MaxWait):
-		// Queued again: its queued run announces, so the window's mark
+	case (p.queued || p.askTimer != nil) && (p.deferredAt.IsZero() || now.Sub(p.deferredAt) < s.opts.MaxWait):
+		// Queued again (in the debounce, or an ask waiting for its
+		// floor): its queued run announces, so the window's mark
 		// can't clear while a recompute is still to come. Not for longer
 		// than MaxWait, so a steady stream still brings the result.
 		if p.deferredAt.IsZero() {
@@ -612,7 +766,10 @@ func (s *Service) run(ss *session, sl slot) {
 			out = append(out, contracts.GitStateUpdatedPayload{SessionID: ss.id, Parts: []string{sl.part}, Baseline: sl.vs, Changed: orEmpty(ch)})
 		} else {
 			if ss.ann == nil {
-				ss.ann = &pendingAnn{since: now, parts: map[string]bool{}, changed: map[string]bool{}}
+				a := &pendingAnn{since: now, parts: map[string]bool{}, changed: map[string]bool{}}
+				ss.ann = a
+				// Out by MaxWait even if no other compute ends by then.
+				ss.annTimer = time.AfterFunc(s.opts.MaxWait, func() { s.flushAnn(ss, a) })
 			}
 			ss.ann.parts[sl.part] = true
 			for _, c := range ch {
@@ -621,8 +778,7 @@ func (s *Service) run(ss *session, sl slot) {
 		}
 	}
 	if ss.ann != nil && (!s.keptRunningLocked(ss) || now.Sub(ss.ann.since) >= s.opts.MaxWait) {
-		out = append(out, ss.ann.payload(ss.id))
-		ss.ann = nil
+		out = append(out, s.takeAnnLocked(ss))
 	}
 	s.mu.Unlock()
 
@@ -632,6 +788,29 @@ func (s *Service) run(ss *session, sl slot) {
 	for _, a := range out {
 		s.emit(ss, a)
 	}
+}
+
+func (s *Service) takeAnnLocked(ss *session) contracts.GitStateUpdatedPayload {
+	a := ss.ann.payload(ss.id)
+	ss.ann = nil
+	if ss.annTimer != nil {
+		ss.annTimer.Stop()
+		ss.annTimer = nil
+	}
+	return a
+}
+
+// flushAnn sends a's parts MaxWait after they were collected, if they are
+// still waiting.
+func (s *Service) flushAnn(ss *session, a *pendingAnn) {
+	s.mu.Lock()
+	if ss.ann != a || s.base.Err() != nil {
+		s.mu.Unlock()
+		return
+	}
+	out := s.takeAnnLocked(ss)
+	s.mu.Unlock()
+	s.emit(ss, out)
 }
 
 // keptRunningLocked: a compute of a part kept warm (repos, the change set
@@ -787,8 +966,10 @@ func (s *Service) readLocked(sessionID string) *session {
 	return ss
 }
 
+// newSessionLocked keeps a session; lastRead stays zero until a read
+// (readLocked): one kept for the warm-up or a trigger isn't shown.
 func (s *Service) newSessionLocked(sessionID string) *session {
-	ss := &session{id: sessionID, lastRead: s.opts.Now(), parts: map[slot]*part{}}
+	ss := &session{id: sessionID, parts: map[slot]*part{}}
 	s.sess[sessionID] = ss
 	return ss
 }

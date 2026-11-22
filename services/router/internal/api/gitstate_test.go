@@ -53,12 +53,13 @@ func settledGet(t *testing.T, url string) *http.Response {
 	}
 }
 
-// freshRepos asks for a recompute (POST /worktree/refresh) and reads the
+// freshRepos asks for a repos recompute (POST /worktree/refresh) and reads the
 // session's repos once one computed after the ask is served.
 func freshRepos(t *testing.T, base, id string) []contracts.SessionRepoState {
 	t.Helper()
 	asked := time.Now().Add(-time.Millisecond)
-	if resp := postJSON(t, base+"/sessions/"+id+"/worktree/refresh", nil); resp.StatusCode != http.StatusAccepted {
+	// Repos by name: a bodiless refresh leaves repos younger than 30 s.
+	if resp := postJSON(t, base+"/sessions/"+id+"/worktree/refresh", map[string]any{"parts": []string{"repos"}}); resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("refresh: status %d, want 202", resp.StatusCode)
 	}
 	deadline := time.Now().Add(30 * time.Second)
