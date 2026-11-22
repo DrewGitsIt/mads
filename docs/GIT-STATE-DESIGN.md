@@ -31,7 +31,10 @@ Each part carries `generation` (monotonic per session), `computed_at`, and
 (session, part); a trigger during a run marks it dirty for exactly one rerun.
 Recompute runs under the Router's own context with a timeout, never a
 request's, so a window going away can't cancel it (writes are unaffected: all
-git here is read-only).
+git here is read-only). At most 4 computes run at once across all sessions
+(the boot warm-up included); the rest wait their turn, still `updating`. A
+part whose compute failed is retried by a read at most once a minute while it
+keeps failing (a trigger or an explicit refresh retries regardless).
 
 **Which sessions are kept warm:** active sessions, plus any session whose state
 was read in the last 15 minutes (a window has it open). Others are dropped from
@@ -49,10 +52,23 @@ watches for, per session:
 - `file.changed`: changeset + counts, debounced 1.5 s, capped at 5 s;
 - `session.agent_state` to idle (turn end): changeset + counts;
 - `commit.created`, `commit.undone`, `merge.completed`: all parts;
-- `repo.changed` (the `repostate` ref watcher, in-process): repos + counts for
-  sessions using that git dir;
-- `POST /worktree/refresh`: counts (and repos), answered at once;
-- a read of a part that is cold or older than its trigger state.
+- `repo.changed` (the `repostate` ref watcher, in-process): repos, changeset
+  and counts for sessions using that git dir (an outside commit, branch
+  switch, stash or reset moves the change set too);
+- `POST /worktree/refresh` (see Response shapes): without a body (a window
+  opening the session, or regaining focus, after Phase A's 30 s focus skip),
+  counts and repos, and the changeset against `start` when the kept one is
+  older than 30 s; with a body, the parts it names. Answered at once;
+- a window opening a session's change set: the change-set store's first read
+  after it gains a reader asks for a revalidate with `max_age_ms: 30000`
+  (outside-the-agent edits send no `file.changed`);
+- Retry in the Changes view: a revalidate of that baseline's change set, no
+  max age;
+- a recount whose counted repos (the session record's `repos` roots) include
+  one the repos part doesn't hold: repos (the session works in a new repo; a
+  live child's own turn-end recount usually wrote it first, so comparing the
+  record before and after the Router's recount would miss it);
+- a read of a part that is cold or stale.
 
 `session.updated` is **not** a trigger: the counts write produces it, and
 listening to it would loop.
@@ -64,18 +80,49 @@ own per-session repo targets, refreshed by the triggers above.
 ## Telling the window
 
 New event `session.git_state_updated`, payload
-`{session_id, parts: ["repos"|"changeset"|"counts"…], generation, changed: [...]}`,
+`{session_id, parts: ["repos"|"changeset"|"counts"…], generation, changed: [...], baseline?}`,
 appended to the event log when a **triggered recompute finishes**, whether or
 not its result changed. `parts` lists what was recomputed; `changed` (a subset
-of `parts`) lists what actually differs. It is small (no data), and at most one
-per part per debounce window. (Emitting only on change was rejected in review:
-the window marks parts "updating" when it sees a trigger, so an unchanged
-result must still tell it the recompute is done, or the indicator sticks.)
+of `parts`) lists what actually differs. It is small (no data). (Emitting only
+on change was rejected in review: the window marks parts "updating" when it
+sees a trigger, so an unchanged result must still tell it the recompute is
+done, or the indicator sticks.)
+
+**One event per batch.** A session's finished parts are collected and
+announced together once none of its kept parts (repos, the `start` change
+set, counts) is still computing, or 5 s (the debounce cap) after the first
+was collected, whichever is first: a `file.changed` burst is one row listing
+`["changeset","counts"]`, not one per part. A part that finishes while it is
+queued again (a trigger in the debounce) is not announced; its queued run is
+(for at most 5 s, so a steady stream still delivers results). A recompute
+that only a read asked for and that failed with the same error as before is
+not announced.
+
+**`baseline`** (optional, added after review): set only for a change set
+against `base` or `main`, which is computed on demand. Such an event covers
+that baseline's change set alone (`parts: ["changeset"]`) and is never
+batched with the others; without `baseline`, `changeset` means the `start`
+change set. Readers that ignore the field treat it as `start` (an extra
+cached read; their mark may clear early).
+
+**Row estimate.** At most one row per session per fire: fires are at least
+1.5 s apart (debounce) after a quiet spell and every 5 s (cap) under a steady
+stream, so a session writing continuously adds ≤ 12 rows a minute, and a turn
+with one burst of writes adds about 2 (the burst, the turn end; often one when
+they fall in the same window), plus one per open, focus or Retry that
+recomputes. Measured with the gitstate storm test (writes every 5 ms for 1 s,
+debounce 20 ms, cap 100 ms): 9–10 rows, i.e. one per cap window, against 20
+with one row per part.
+
+A failed append is retried twice (250 ms, then 1 s); if it still fails, its
+parts are owed again, so their next compute announces them (with "changed"
+carried over).
 
 The UI's shared stores (`repoStateStore`, the Phase A changeset store)
 subscribe to it and refetch the cached `GET` (instant) only for parts in `changed`. They no longer refetch
 on `file.changed`, `commit.*` or `repo.changed` directly; those only mark the
-part "updating" in the window (see below). Counts keep arriving on
+part "updating" in the window (see below). `repo.changed` marks repos,
+changeset and counts, as the Router recomputes all three on it. Counts keep arriving on
 `session.updated` as today.
 
 ## Response shapes (additive or header-only; mesh forwards these to peers)
@@ -93,7 +140,14 @@ part "updating" in the window (see below). Counts keep arriving on
   the UI reads a missing `X-Mads-Updating` as "not updating" and a missing
   `X-Mads-Computed-At` as unknown.
 - `POST /sessions/{id}/worktree/refresh`: `202 Accepted`, no body (was `204`
-  after the recount). The new counts arrive on `session.updated`.
+  after the recount). The new counts arrive on `session.updated`. Optional
+  request body (added after review), `{"parts": ["repos"|"changeset"|"counts"…],
+  "vs": "start"|"base"|"main", "max_age_ms": n}`: recompute the named parts
+  (`vs` picks the change set's baseline, default `start`), leaving any whose
+  kept answer is good and younger than `max_age_ms` (0 or absent: recompute
+  regardless). An unknown part or baseline, or a negative age, is `400`. No
+  body, or no `parts`: the bodiless refresh above. An older Router ignores the
+  body and recounts. GET shapes are unchanged.
 
 ## The "updating" indicator
 
@@ -106,8 +160,18 @@ git state". Shown for the open session while any part is updating:
   `merge.completed`, `repo.changed` for its git dir), or after a refresh `POST`;
 - cleared when `session.git_state_updated` arrives with a newer generation for
   every part that was marked (changed or not; counts are cleared only this way,
-  since they have no `GET`), or a `GET` returns `updating: false` (fallback:
-  clear after 30 s so it can never stick).
+  since they have no `GET`), or a `GET` returns `updating: false`. Fail-safe:
+  30 s after a mark it is cleared **and the part is re-read** (a `GET` of
+  repos, or of each shown change set; cached and cheap, and a cold or stale
+  part revalidates on the Router), so a lost announcement or an evicted
+  session can't leave old data on screen looking fresh; the re-read marks it
+  again if the Router still says updating.
+
+The change set is marked per baseline: an event with `baseline` clears only
+that baseline's mark, never `start`'s. When `start`'s recompute is announced
+(after a trigger, which leaves the other baselines stale on the Router), a
+shown `base`/`main` change set is re-read, which recomputes it behind the
+answer and announces it with its `baseline`.
 
 Contract with the perf harness check g: visible within 2 s of a change,
 cleared within 15 s, with values then matching a fresh compute.
@@ -126,9 +190,32 @@ cherry-picks); the rail's live state for remote sessions (mesh follow-up).
 ## Decisions to review with Drew
 
 1. A new durable event type (`session.git_state_updated`) rather than an
-   ephemeral channel; one per finished triggered recompute (with a `changed`
-   list), capped by the debounce: a handful of rows per active turn.
+   ephemeral channel; one per finished batch of triggered recomputes (with a
+   `changed` list), capped by the debounce: about 2 rows per turn with a
+   burst of writes, ≤ 12 a minute under continuous writes (see "Row
+   estimate").
 2. Warm set = active sessions + read in the last 15 minutes.
 3. Cold reads answer at once with an empty, `updating` state rather than
    waiting for the first compute.
 4. `POST /worktree/refresh` becomes `202` (fire and forget).
+
+## Changes after review
+
+- `repo.changed` also recomputes the change set (and marks the other
+  baselines stale); the UI marks it updating on `repo.changed` and refetches
+  on the announcement.
+- Outside-the-agent edits: a window opening a change set asks for a revalidate
+  if older than 30 s; Retry revalidates regardless; the bodiless refresh (open,
+  focus) recomputes the `start` change set when older than 30 s. Through the
+  new optional body of `POST /worktree/refresh`.
+- New repos are found by comparing the recount's repo roots with the repos
+  part's, not the record before and after the Router's recount.
+- Announcements: retried, then owed; one per batch; not while the part is
+  queued again; not for a read-only retry ending in the same error. Error
+  retries by reads limited to one a minute. Optional `baseline` field.
+- At most 4 computes at once. `follow` logs head and stream failures, one line
+  then at most one per 30 s, and its recovery.
+- UI fail-safe re-reads instead of only clearing the mark.
+- An evicted session keeps nothing: a trigger for it computes nothing, and its
+  next read (the fail-safe's, at the latest) is cold, `updating`, and
+  recomputes.
