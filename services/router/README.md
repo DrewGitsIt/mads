@@ -6,7 +6,9 @@ liveness signal — on child exit it releases leases and emits the failure event
 control-plane event subscriptions to the Data Service, and forwards ephemeral data-plane
 agent-output streams to the UI. It does NOT persist anything and holds no business logic
 about what sessions or pipelines do — all state access goes through `pkg/dataclient`
-against the Data Service; it never calls a sibling service peer-to-peer.
+against the Data Service; it never calls a sibling service peer-to-peer. The one state it
+holds is derived and recomputable: an in-memory cache of each session's git state
+(`internal/gitstate`, see "Git state" below), lost on restart and rebuilt from git.
 
 **Status: W4.1, W4.2, W4.6, W5.3, W5.4, W5.5, and W7.5 complete.** Child process supervision
 (`internal/child`, `internal/supervisor`), the lifecycle HTTP API, and stream fan-out
@@ -114,8 +116,9 @@ pattern lookup.
   (the services, the CLI, children through their token file) carry on; **running
   sessions' orchestrate tools stop until each session restarts** (H6: the scoped tokens
   aren't re-issued), and `mads token rotate` says so. The Router's background watchers
-  (digest, merge, signal, synthesis) resubscribe to the Data Service from their last seq
-  when a rotation ends their stream.
+  (digest, merge, signal, synthesis, gitstate) resubscribe to the Data Service from their last seq
+  when a rotation ends their stream (gitstate places itself at the log head first,
+  never replaying history).
 - **Open streams end with their credential:** every authenticated request is watched;
   a rotation cancels them all at once (only those whose credential it killed), and a
   revoked scoped token ends its streams within a second (`localauth.Door`).
@@ -337,6 +340,51 @@ pattern lookup.
   `pkg/transcriptpage.Respond`, so both paths agree. Cursor rules, the `<key>#<i>`
   sub-keys of a split user row, and the 400/410 errors are `contracts.TranscriptPage`'s
   (and the session service README's `/transcript`).
+
+### Git state (docs/GIT-STATE-DESIGN.md)
+
+The Router keeps each session's git-derived state (the repos' branch facts, the change
+set, the header counts) in `internal/gitstate`, recomputes it in the background when a
+trigger arrives (`file.changed`, turn end, `commit.*`, `merge.completed`, the repo ref
+watcher, a refresh), and announces each finished batch. These reads answer from that
+cache and never run git in the request:
+
+- `GET /sessions/{id}/repos` — still a bare array of the session's repos with branch
+  facts. Headers: `X-Mads-Updating: 1|0` (1 while a recompute is queued or running) and
+  `X-Mads-Computed-At: <RFC 3339>` (absent before a first compute). Cold: `[]` with
+  `X-Mads-Updating: 1`, which readers take as "loading", not "no repos". Mesh relays both
+  headers; a missing `X-Mads-Updating` reads as not updating.
+- `GET /sessions/{id}/changeset?vs=start|base|main` — the change set plus `updating`
+  (and `computed_at`). Cold: `files`, `turns`, `commits` empty, `computed_at` `""`,
+  `updating: true`, the compute started behind it. An unknown or unavailable baseline is
+  400. `base`/`main` are computed on demand and kept 5 min.
+- `POST /sessions/{id}/worktree/refresh` — `202` at once, no body (was `204` after the
+  recount); new counts arrive on `session.updated`. Without a body (or without `parts`):
+  counts, plus repos and the `start` change set when the kept ones are older than 30 s.
+  Optional body `{"parts": ["repos"|"changeset"|"counts"…], "vs": "start"|"base"|"main",
+  "max_age_ms": n}`: recompute the named parts (`vs` picks the change set's baseline,
+  default `start`), leaving any whose kept answer is good and younger than `max_age_ms`
+  (0 or absent: recompute regardless). Invalid JSON, an unknown part or baseline, or a
+  negative age is `400`. Asks recompute a part at most once per 5 s, for every caller.
+
+`session.git_state_updated` (payload `{session_id, parts, generation, changed,
+baseline?}`) is appended when a triggered recompute batch finishes, changed or not:
+`parts` is what was recomputed, `changed` the subset that differs, `generation` monotonic
+per session. `baseline` is set only for a `base`/`main` change set, announced alone;
+absent, `changeset` means `start`. Readers refetch the cached `GET` only for parts in
+`changed`.
+
+**The "updating" indicator** (`data-testid="git-updating"`, label "Updating git state")
+shows for the open session while any part is marked: set by a `GET` saying updating, a
+trigger event for the session, or a refresh `POST`; cleared by a
+`session.git_state_updated` with a newer generation for every marked part, or a `GET`
+saying not updating; after 30 s it clears and re-reads the part.
+
+Stay fresh, computed on demand (user actions and their previews, not served from the
+cache): `GET /sessions/{id}/commit-plan`, the Push and Land previews (`GET .../push`,
+`GET .../land`), Commit, Land and Push themselves, the `GET /sessions/{id}/changes` diff
+(its "is this file changed in the session" gate computes the change set), and `POST
+/sessions/{id}/changeset/delete-scratch`.
 
 Errors: `dataclient.ErrNotFound` → 404, `dataclient.ErrConflict` → 409,
 `*contracts.ValidationError` → 400 (this is a deliberate divergence from the Data

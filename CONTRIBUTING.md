@@ -163,3 +163,6 @@ These come from spec §15 and apply to every change:
 - **New providers pass the conformance suite.** Every adapter declares each
   behavior as native, emulated, or unsupported, and
   `conformance.Run` holds it to that claim in both directions.
+- **A git-derived GET that a view reads on open or on events answers from the
+  Router's gitstate cache and never runs git in the request;** on-demand git is for
+  user actions and their previews.

@@ -442,7 +442,8 @@ lands.
 - Its file links open only as web links (`getLinkOpener({ remote })`).
 
 **Mesh Service.** `POST /sessions/{id}/worktree/refresh` moved to `view`:
-it's a recount of cached state, and the conversation view sends it on open.
+it answers `202` at once (an optional body names the parts to recompute), the
+counts arrive on `session.updated`, and the conversation view sends it on open.
 
 **Verified.**
 - vitest: 360 files, 3,891 tests.
