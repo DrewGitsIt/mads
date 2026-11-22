@@ -1,6 +1,6 @@
 # Git state served from the Router (Phase B)
 
-Status: design for build, 2026-11-21. Follows Phase A (branch `git-routes-a`:
+Status: built, reviewed (4 rounds) and measured; decisions approved by Drew 2026-11-21; merged with Phase A. Written 2026-11-21. Follows Phase A (branch `git-routes-a`:
 request hygiene, aborts, shared changeset store, spawn-free repo roots).
 Measured problem and harness: `docs/PERF-HARNESS-PLAN.md` ("Git routes").
 
@@ -218,7 +218,7 @@ Commit plan (`GET /commit-plan`), Push preview (`GET /push`), Land preview
 Cheaper git itself (Phase C: untracked cache, fewer diffs, bounded
 cherry-picks); the rail's live state for remote sessions (mesh follow-up).
 
-## Decisions to review with Drew
+## Decisions (approved by Drew, 2026-11-21)
 
 1. A new durable event type (`session.git_state_updated`) rather than an
    ephemeral channel; one per finished batch of triggered recomputes (with a
@@ -270,3 +270,39 @@ cherry-picks); the rail's live state for remote sessions (mesh follow-up).
   (a packed stash's last pop or drop edits only packed-refs); aged background
   waiters no longer join the shown lane: shown sessions first, the aged one
   leading the low lane with one slot left to it.
+- Commit lookup batched (2026-11-22): `changes.Build`'s commit list ran three
+  git calls per recorded commit (`rev-parse --verify`, `merge-base
+  --is-ancestor`, `show --name-only`). `pkg/changes/commits.go` now does it in
+  4–8 calls per repo (`cat-file --batch-check`, chunked `merge-base --octopus
+  --all` plus a capped `rev-list`, one multi-commit `show`), falling back to the
+  per-commit path on any error. Equivalence-tested against the old path. This
+  was the ~1 s on opening the Changes tab after a session switch (the tab waited
+  for the background build's announcement): 938 → 74 ms.
+
+## Considered and rejected: a probe gate on open/focus (2026-11-22)
+
+A cheap fingerprint (`git status` per repo plus `lstat` of the listed and
+ledger paths) in front of the open/focus revalidate, rebuilding only when it
+changed. Measured (branch `git-routes-b-probe`, not merged): an idle focus went
+from 142 to 8 git calls and ~2.0 s to 0.14 s git CPU, with every outside edit
+still caught. Rejected: focus already feels instant (the rebuild runs in the
+background), Router CPU over whole scenarios rose 14–18% for unexplained
+reasons, and it added a fingerprint layer to keep correct. The Changes-tab cost
+it was hoped to fix was the commit lookup above.
+
+## Results (perf harness, real-git clones)
+
+| | main | Phase A | A + B |
+|---|---|---|---|
+| Session switch, settled | 19.9 s | 9.1 s | 0.13 s |
+| Rapid switching, settled | 19.9 s | 6.4 s | 2.1 s |
+| Rapid switching, all 6 sockets busy | 10.0 s | 0.16 s | 0.05 s |
+| Opening the Changes tab | 2.7 s | 0.08 s | 0.07 s |
+| Outside edit then focus, settled | (reopen needed) | 12.3 s (reopen) | 0.41 s |
+| /repos, /changeset, refresh (server) | 3–11 s | 0.02–5 s | 2–3 ms |
+
+main and A→B figures come from separate paired runs (main vs B, A vs B);
+details and run directories in `git-routes-overview.html` and the perf
+harness's results. Correctness checks f (converges), g (updating mark),
+h (dialogs act on fresh state) and i (outside edits) pass on A + B.
+

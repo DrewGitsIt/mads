@@ -60,7 +60,7 @@
 <div class="viz-root">
 
 <h1>Git routes: from socket starvation to cached git state</h1>
-<p class="sub">Phase A <code>git-routes-a</code> and Phase B <code>git-routes-b-fixes</code> · measured 2026-11-21 with the local perf harness on real-git clones shaped like the live heavy session (908 files in 309 directories, 11 checkouts of one repo) · harness: <code>docs/PERF-HARNESS-PLAN.md</code> (“Git routes”) · design: <code>docs/GIT-STATE-DESIGN.md</code></p>
+<p class="sub">Phase A and Phase B, merged together · measured 2026-11-21/22 with the local perf harness on real-git clones shaped like the live heavy session (908 files in 309 directories, 11 checkouts of one repo) · harness: <code>docs/PERF-HARNESS-PLAN.md</code> (“Git routes”) · design: <code>docs/GIT-STATE-DESIGN.md</code></p>
 
 <div class="card">
   <h3>The work in brief</h3>
@@ -70,10 +70,10 @@
 </div>
 
 <div class="tiles">
-  <div class="card tile"><div class="l">Session switch, settled</div><div class="v">0.18 s</div><div class="d">main 19.9 s · A 8.2 s</div></div>
+  <div class="card tile"><div class="l">Session switch, settled</div><div class="v">0.13 s</div><div class="d">main 19.9 s · A 9.1 s</div></div>
   <div class="card tile"><div class="l">Rapid switching, all 6 sockets busy</div><div class="v">0.05 s</div><div class="d">main 10.0 s · 5 abandoned requests held 33 s</div></div>
   <div class="card tile"><div class="l">/repos · /changeset · refresh (server)</div><div class="v">2–3 ms</div><div class="d">main 3–11 s</div></div>
-  <div class="card tile"><div class="l">Git calls per session switch</div><div class="v">262</div><div class="d">main 1,899 · A 513</div></div>
+  <div class="card tile"><div class="l">Git calls per session switch</div><div class="v">250</div><div class="d">main 1,899 · A 513</div></div>
 </div>
 
 <h2>How a session switch works: main vs A vs B</h2>
@@ -97,6 +97,7 @@
     <div class="step key">triggers (file changed, turn end, commit, ref moved) → background recompute, single-flight, the shown session first</div><div class="arrow">↓</div>
     <div class="step key"><code>GET</code> answers from memory: <b>2–3 ms</b>; cold → an empty “updating” state</div><div class="arrow">↓</div>
     <div class="step key"><code>session.git_state_updated</code> → the window refetches only what changed; the “updating” mark clears</div><div class="arrow">↓</div>
+    <div class="step key">commit lookups batched: 4–8 git calls per repo instead of 3 per commit</div><div class="arrow">↓</div>
     <div class="step">actions (Commit, Land, Push, previews) still compute fresh</div>
   </div></div>
 </div>
@@ -113,27 +114,29 @@
 <div class="card"><svg id="git" role="img" aria-label="Git calls per scenario for main, A and B"></svg>
   <details><summary>Table</summary><table id="git-t"></table></details></div>
 
-<h2>Trade-offs B makes (for review)</h2>
+<h2>What changed after review, and what B still costs</h2>
 <div class="card">
   <ul>
-    <li><span class="warn">Opening the Changes tab: A 0.06 s → B 0.97 s</span> (main 2.7 s). A shows its shared copy and asks nothing. B shows its cached copy immediately, then revalidates it if it is older than 30 s, so edits made outside the agent appear. “Settled” waits for that recompute.</li>
-    <li><span class="warn">Window focus: A instant → B 0.28 s, about 70 git calls per focus</span> (main 4.3 s, 389 calls). B revalidates the changeset on focus as well, for the same reason. A skipped focus refreshes within 30 s.</li>
-    <li><span class="warn">Background cost:</span> cold load +60 ms and drop/resume +200 ms in the event-bus scenarios, and Router CPU 1.3–1.5× in some, from warming active sessions. A busy agent turn does about as much git as A (~1,300 calls); B’s gain there is no queueing and no busy sockets, not less git.</li>
-    <li>Durable events: about 1–3 <code>session.git_state_updated</code> rows per scenario, at most ~12 a minute under continuous writes.</li>
+    <li><b>Opening the Changes tab is back to A’s speed</b> (0.07 s). Its earlier ~1 s was the background change-set build’s commit lookup (3 git calls per recorded commit), now batched.</li>
+    <li><b>Outside edits show on focus</b> in about 2 s (0.41 s settled in this scenario). On main and A they appear only when the session is reopened.</li>
+    <li><b>Focus</b> settles instantly. When the cached change set is older than 30 s, focus starts a background rebuild (about 50 git calls on an idle focus) so outside edits are caught. A cheaper probe gate was measured and rejected: it saved CPU you don’t notice and added complexity.</li>
+    <li><b>Background cost:</b> the Router warms active sessions, so its CPU runs higher in some scenarios, and Push/Land may be slightly slower under load (344→419 ms, within noise).</li>
+    <li><b>Durable events:</b> about 1–3 <code>session.git_state_updated</code> rows per action, at most ~12 a minute under continuous writes.</li>
   </ul>
-  <p class="note">Correctness: checks f (converges to a fresh compute), g (the “updating” mark appears and clears) and h (Commit, Land and Push dialogs act on fresh state) pass on B. Event-bus regression is clean; <code>make ui-smoke</code> 104/104.</p>
+  <p class="note">Correctness: checks f (converges to a fresh compute), g (the “updating” mark appears and clears), h (Commit, Land, Push dialogs act on fresh state) and i (outside edits, including re-edits of already-modified files) pass. Event-bus regression is clean; <code>make ui-smoke</code> 104/104. main figures come from a separate paired run (main vs B), A and A+B figures from the same paired run.</p>
 </div>
 
 <div class="tip" id="tip"></div>
 <script>
 const SC = [
-  // label, settled main, A, B ; git main, A, B
-  ['Switch session A→B→A',         19886, 8221, 240,  1899, 513, 262],
-  ['Rapid switching (1 s apart)',  19891, 6764, 2159, 2318, 479, 279],
-  ['Open the Changes tab',          2683,   62,  967,  284,   0,  66],
-  ['Window focus ×2',               4324,    3,  281,  414,   0,  74],
-  ['Open Push, then Land',          7320,  749,  742,  521,  37,  37],
-  ['Busy agent turn (20 s)',       32361, 21442, 18659, 3793, 1334, 1321],
+  // label, settled main, A, B ; git main, A, B   (main: run 20261121-211851; A and B: run 20261122-121521)
+  ['Switch session A→B→A',         19886, 9134,  127,  1899, 513, 250],
+  ['Rapid switching (1 s apart)',  19891, 6404, 2148,  2318, 432, 218],
+  ['Open the Changes tab',          2683,   75,   74,   284,   0,   0],
+  ['Window focus ×2',               4324,    3,    3,   414,   0,   0],
+  ['Open Push, then Land',          7320,  889, 1012,   521,  37,  37],  // A and B: N=5 rerun 20261122-130403
+  ['Busy agent turn (20 s)',       32361, 21942, 19886, 3793, 1062, 370],
+  ['Outside edit, then focus',     14700, 12297,  409,   828, 159,  26],
 ];
 const SERIES = [
   { key: 'main', name: 'main',               color: '--s-main', shape: 'circle' },
