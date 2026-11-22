@@ -82,9 +82,13 @@ export interface LegResult {
   eventsBytes: number;
   eventsFrames: number;
   eventsConnects: number;
-  /** Git calls the stack made, click → settled (the shim's log). */
+  /** Git calls the stack made, click → settled, or to the leg's gitTailMs if later (the shim's log). */
   gitSpawns?: number;
   gitCpuMs?: number;
+  /** …of which change-set roots diffed (a change-set compute's `add -A` into a temp shadow index, one per root). */
+  gitChangesetRoots?: number;
+  /** Router CPU over the same span (ps samples at its ends, ms). */
+  routerCpuMs?: number;
 }
 
 /** One git route's latency in the window (ms): server = the proxy's request → response headers; client = the page's fetch → headers. */
@@ -651,6 +655,9 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
     let cdpLagAll = 0;
 
     for (const leg of scenario.legs) {
+      // Inside the window, outside the leg's span (a wait past a skip window).
+      if (leg.before) await leg.before(ctx);
+      const cpu0 = await procs.mark("router");
       const head = await logHead(stack);
       const m0 = await metrics.read();
       watch.cdpLag.max = 0;
@@ -666,14 +673,21 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       const rule = await waitRule(watch, clickAt, head, SETTLE_CAP_MS);
       if (rule.capped) throw new Error(`settle capped at ${SETTLE_CAP_MS / 1000} s: ${rule.reason}`);
       const settledAt = Math.max(markerAt, rule.at);
-      legWindows.push([clickAt, settledAt]);
       const m1 = await metrics.read();
       const series = await probeSeries(page, clickAt);
       const lag = series.lag.filter((x) => x[0] <= settledAt).map((x) => x[1]);
       const domNodes = await page.evaluate(() => document.getElementsByTagName("*").length).catch(() => 0);
       const legLag = watch.cdpLag.max;
       cdpLagAll = Math.max(cdpLagAll, legLag);
+      let cpu1 = leg.gitTailMs ? 0 : await procs.mark("router");
       if (leg.quiesceAfter) await ctx.quiesce();
+      // Work the click started in the background (a 202 and a recompute behind it) counts to the leg.
+      const spanEnd = Math.max(settledAt, clickAt + (leg.gitTailMs ?? 0));
+      if (leg.gitTailMs) {
+        if (Date.now() < spanEnd) await sleep(spanEnd - Date.now());
+        cpu1 = await procs.mark("router");
+      }
+      legWindows.push([clickAt, spanEnd]);
       const snap = await stack.proxy.snapshot();
       const ev = eventsBetween(prevSnap, snap);
       prevSnap = snap;
@@ -693,6 +707,7 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
         eventsBytes: ev.bytes,
         eventsFrames: ev.frames,
         eventsConnects: ev.connects,
+        routerCpuMs: cpu1 - cpu0,
       });
       if (process.env.PERF_DEBUG && !plan.realism) {
         const dir = path.join(plan.runDir, "debug");
@@ -764,6 +779,7 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
         const g = gitStats(calls, a, b, stack.pids.router);
         l.gitSpawns = g.spawns;
         l.gitCpuMs = g.cpuMs;
+        l.gitChangesetRoots = g.changesetRoots;
       });
       result.gitBySub = all.bySub;
       Object.assign(result.timing, {
@@ -771,12 +787,14 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
         git_router_spawns: all.router,
         git_cpu_ms: all.cpuMs,
         git_wall_ms: all.wallMs,
+        git_changeset_roots: all.changesetRoots,
         git_peak_concurrent_ps: gitPs.peak,
         git_seen_by_ps: gitPs.seen.size,
       });
       result.legs.forEach((l, i) => {
         result.timing[`leg${i + 1}_git_spawns`] = l.gitSpawns ?? 0;
         result.timing[`leg${i + 1}_git_cpu_ms`] = l.gitCpuMs ?? 0;
+        result.timing[`leg${i + 1}_git_changeset_roots`] = l.gitChangesetRoots ?? 0;
       });
     }
     const prep = scenario.prepStats?.();
@@ -912,7 +930,10 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       data_conns_closed: timeWait(Number(new URL(stack.dataURL).port)).to,
       port_drain_wait_ms: rig.drainMs,
     };
-    result.legs.forEach((l, i) => (result.timing[`leg${i + 1}_settled_ms`] = l.settledMs));
+    result.legs.forEach((l, i) => {
+      result.timing[`leg${i + 1}_settled_ms`] = l.settledMs;
+      result.timing[`leg${i + 1}_router_cpu_ms`] = l.routerCpuMs ?? 0;
+    });
     if (prep) Object.assign(result.timing, prep.timing);
     result.socketOwners = [...socks.owners];
     result.requests = shortsProxy.map((r) => [

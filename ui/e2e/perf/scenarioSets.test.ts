@@ -17,9 +17,9 @@ describe("resolve_scenarios", () => {
     expect(ids(resolve("all")).sort()).toEqual(every);
     expect(resolve("").some(isGit)).toBe(true);
   });
-  it("bus is every non-git scenario; git is 9a-9f", () => {
+  it("bus is every non-git scenario; git is 9a-9h", () => {
     expect(ids(resolve("bus")).sort()).toEqual(SCENARIOS.map((s) => s.id).filter((id) => !isGit(id)).sort());
-    expect(resolve("git")).toEqual(["9a", "9b", "9c", "9d", "9e", "9f"]);
+    expect(resolve("git")).toEqual(["9a", "9b", "9c", "9d", "9e", "9f", "9g", "9h"]);
   });
   it("passes ids and none through and mixes with aliases", () => {
     expect(resolve("1,3b")).toEqual(["1", "3b"]);

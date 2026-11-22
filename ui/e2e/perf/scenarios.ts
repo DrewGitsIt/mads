@@ -6,6 +6,7 @@ import type { PerfStack } from "./stack";
 import type { CheckResult } from "./measure";
 import { liveFixture, renameSession, type LiveFixture } from "./fixtures";
 import { arm } from "./probe";
+import { FOCUS_SKIP_MS, OUTSIDE_S, addUntracked, focusWindow, readTotals } from "./outsideEdits";
 
 /** What perfseed wrote (services/data/cmd/perfseed Manifest), as far as the scenarios need it. */
 export interface Manifest {
@@ -86,6 +87,10 @@ export interface Leg {
   navigates?: boolean;
   /** How long the marker may take (default PERF_MARKER_CAP_MS, 30 s). */
   markerCapMs?: number;
+  /** Runs before the click: inside the window, outside the leg's span (a wait past a skip window). */
+  before?(ctx: ScenarioCtx): Promise<void>;
+  /** The leg's git calls and Router CPU count for at least this long from the click, past settled (work a 202 left running). */
+  gitTailMs?: number;
 }
 
 export interface Scenario {
@@ -547,6 +552,9 @@ function gs(k: keyof GitFixture["sessions"]): () => string {
   return () => gx().sessions[k].id;
 }
 const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** 9g: the file count before its edit, and whether the focus alone showed it (1) or a reopen was needed (0). */
+let outsideFilesBefore = 0;
+let outsideShownOnFocus = 0;
 const filesPanel = "#workspace-panel-files";
 /** The Changes tab has its change set: the totals read "N file(s)". */
 const changesLoaded: MarkerSpec = { kind: "match", sel: `${filesPanel} [data-testid="changes-totals"]`, re: "\\d+ files?" };
@@ -565,6 +573,19 @@ async function gitPrepare(ctx: ScenarioCtx, k: keyof GitFixture["sessions"]): Pr
 
 async function openChanges(ctx: ScenarioCtx): Promise<void> {
   await ctx.page.getByRole("tab", { name: /Changes/ }).click();
+}
+
+/**
+ * Opens the Changes tab and waits for its totals, at half width: a
+ * full-width tab covers the sessions rail and the session's header (the
+ * markers and the reopen need both).
+ */
+async function openChangesHalf(ctx: ScenarioCtx): Promise<void> {
+  await openChanges(ctx);
+  await until("the Changes tab's totals", async () => (await readTotals(ctx.page)).files !== undefined);
+  const half = ctx.page.getByRole("button", { name: "Half-width" });
+  if (await half.isVisible().catch(() => false)) await half.click();
+  await header(ctx.page, gs("isolated")()).waitFor({ state: "visible", timeout: T });
 }
 
 /** Opens the Changes tab's "where this session's work goes" popover and clicks the button in one of its steps. */
@@ -656,6 +677,71 @@ function gitScenarios(): Scenario[] {
             }),
           marker: () => sessionHeader("isolated"),
           quiesceAfter: true,
+        }),
+      ),
+      smoke: renameSmoke,
+    },
+    {
+      id: "9g-git-outside-edit",
+      title: `Real git: an edit outside mads (a new untracked file) in a git-heavy isolated session, then focus (past the 30 s skip), Changes tab showing; reopen if the focus didn't show it in ${OUTSIDE_S} s`,
+      git: true,
+      prepare: async (ctx) => {
+        outsideShownOnFocus = 0;
+        await gitPrepare(ctx, "isolated");
+        await openChangesHalf(ctx);
+        await ctx.quiesce();
+        outsideFilesBefore = (await readTotals(ctx.page)).files!;
+        await sleepMs(FOCUS_SKIP_MS);
+      },
+      legs: [
+        {
+          name: "edit + focus",
+          act: async (ctx) => {
+            const g = gx();
+            addUntracked(g, g.sessions.isolated, `perf_outside_9g_${Date.now()}.md`);
+            await focusWindow(ctx.page);
+            const deadline = Date.now() + OUTSIDE_S * 1000;
+            while (Date.now() < deadline) {
+              if ((await readTotals(ctx.page)).files === outsideFilesBefore + 1) {
+                outsideShownOnFocus = 1;
+                return;
+              }
+              await sleepMs(100);
+            }
+            // Main and A don't recompute a change set on focus: the user reopens the session.
+            await openSession(ctx, gs("typical")());
+            await openSession(ctx, A());
+            await openChanges(ctx);
+          },
+          marker: () => ({ kind: "match", sel: `${filesPanel} [data-testid="changes-totals"]`, re: `^\\s*${outsideFilesBefore + 1} files?` }),
+          markerCapMs: (OUTSIDE_S * 2 + 30) * 1000,
+          quiesceAfter: true,
+        },
+      ],
+      prepStats: () => ({ det: { outside_shown_on_focus: outsideShownOnFocus }, timing: {} }),
+      smoke: renameSmoke,
+    },
+    {
+      id: "9h-git-idle-focus",
+      title: `Real git: the window regains focus with nothing changed, twice, each past the 30 s skip; git calls and Router CPU counted for ${OUTSIDE_S} s from each focus`,
+      git: true,
+      prepare: async (ctx) => {
+        await gitPrepare(ctx, "isolated");
+        await openChangesHalf(ctx);
+        await ctx.quiesce();
+        await sleepMs(FOCUS_SKIP_MS);
+      },
+      legs: ["idle focus", "idle focus again"].map(
+        (name, i): Leg => ({
+          name,
+          // The first leg's wait is prepare's; the second's is here (in the window, outside the leg).
+          // A full skip after the last leg's tail: B's recompute ends a second or so after the focus.
+          before: i === 0 ? undefined : async () => void (await sleepMs(FOCUS_SKIP_MS)),
+          act: (ctx) => focusWindow(ctx.page),
+          // Holds at once (the Changes tab is showing): the span is the measure.
+          marker: () => changesLoaded,
+          quiesceAfter: true,
+          gitTailMs: OUTSIDE_S * 1000,
         }),
       ),
       smoke: renameSmoke,

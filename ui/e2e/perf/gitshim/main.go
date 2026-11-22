@@ -4,7 +4,9 @@
 // its exit status through, and appends one JSON line per call to
 // $PERF_GIT_LOG: start and end (Unix ms), its parent's pid (the Router or a
 // session child), the git subcommand, and the call's CPU time (the child's
-// rusage, user + system, µs). Most of the routes' git calls finish in a few
+// rusage, user + system, µs), and idx when GIT_INDEX_FILE is set (a
+// change-set compute's `add -A` into a temp copy of the shadow index,
+// pkg/changes/gitops.go: one per diffed root). Most of the routes' git calls finish in a few
 // milliseconds, which `ps` sampling misses; this sees every one.
 //
 // SIGINT/SIGTERM are forwarded to git. A SIGKILL of the shim (an
@@ -31,6 +33,7 @@ type call struct {
 	Sub   string `json:"sub"`
 	CPUus int64  `json:"cpu_us"`
 	Exit  int    `json:"exit"`
+	Idx   bool   `json:"idx,omitempty"`
 }
 
 // subcommand is the first argument that isn't a global option (-C <dir>,
@@ -77,7 +80,7 @@ func main() {
 	} else if err != nil {
 		exit = 127
 	}
-	c := call{T0: t0.UnixMilli(), T1: time.Now().UnixMilli(), PPID: os.Getppid(), Sub: subcommand(os.Args[1:]), Exit: exit}
+	c := call{T0: t0.UnixMilli(), T1: time.Now().UnixMilli(), PPID: os.Getppid(), Sub: subcommand(os.Args[1:]), Exit: exit, Idx: os.Getenv("GIT_INDEX_FILE") != ""}
 	if ru, ok := cmd.ProcessState.SysUsage().(*syscall.Rusage); ok {
 		c.CPUus = ru.Utime.Sec*1e6 + int64(ru.Utime.Usec) + ru.Stime.Sec*1e6 + int64(ru.Stime.Usec)
 	}

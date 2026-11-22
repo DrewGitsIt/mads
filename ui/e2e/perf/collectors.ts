@@ -124,6 +124,14 @@ export class ProcSampler {
     this.timer = setInterval(() => void this.sample(), intervalMs);
   }
 
+  /** A fresh sample now: a process group's CPU since start (ms), for per-leg deltas. */
+  async mark(name: string): Promise<number> {
+    while (this.busy) await new Promise((r) => setTimeout(r, 20));
+    await this.sample();
+    const pid = this.pids[name];
+    return pid === undefined ? 0 : Math.round(((this.last.get(pid) ?? 0) - (this.first.get(pid) ?? 0)) * 1000);
+  }
+
   async stop(): Promise<Record<string, ProcStats>> {
     if (this.timer) clearInterval(this.timer);
     while (this.busy) await new Promise((r) => setTimeout(r, 20));
@@ -221,6 +229,8 @@ export interface GitCall {
   sub: string;
   cpu_us: number;
   exit: number;
+  /** GIT_INDEX_FILE was set (shim): with sub "add", one change-set root diffed (pkg/changes/gitops.go). */
+  idx?: boolean;
 }
 
 export function readGitCalls(file: string | undefined): GitCall[] {
@@ -250,18 +260,21 @@ export interface GitStats {
   wallMs: number;
   /** Calls whose parent is the Router itself (the rest: session children, pipelines). */
   router: number;
+  /** Change-set roots diffed: `add -A` into a temp shadow index, one per root per change-set compute. */
+  changesetRoots: number;
   bySub: Record<string, { n: number; cpuMs: number }>;
 }
 
 /** The git calls that started in [from, to] (Unix ms). */
 export function gitStats(calls: GitCall[], from: number, to: number, routerPid: number): GitStats {
-  const s: GitStats = { spawns: 0, cpuMs: 0, wallMs: 0, router: 0, bySub: {} };
+  const s: GitStats = { spawns: 0, cpuMs: 0, wallMs: 0, router: 0, changesetRoots: 0, bySub: {} };
   for (const c of calls) {
     if (c.t0 < from || c.t0 > to) continue;
     s.spawns++;
     s.cpuMs += c.cpu_us / 1000;
     s.wallMs += c.t1 - c.t0;
     if (c.ppid === routerPid) s.router++;
+    if (c.idx && c.sub === "add") s.changesetRoots++;
     const b = (s.bySub[c.sub || "?"] ??= { n: 0, cpuMs: 0 });
     b.n++;
     b.cpuMs += c.cpu_us / 1000;

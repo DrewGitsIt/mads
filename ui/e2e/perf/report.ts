@@ -67,6 +67,7 @@ const TIMING_LABELS: Record<string, string> = {
   git_router_spawns: "…of which the Router's own (the rest: session children)",
   git_cpu_ms: "git CPU, whole window (ms; the calls' rusage, user + system)",
   git_wall_ms: "git wall time, summed over calls (ms; overlapping calls add)",
+  git_changeset_roots: "change-set roots diffed, whole window (shim: `add -A` into a temp shadow index; one per root per change-set compute)",
   git_peak_concurrent_ps: "most git processes running at once (ps every 100 ms, by pid ancestry)",
   git_seen_by_ps: "git processes ps sampling caught (vs the shim's count: what sampling misses)",
   abandoned_requests: "abandoned requests: still in flight when the view left their session",
@@ -216,7 +217,9 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
             const c = timingCell(by(l).map((r) => r.legs[i]?.gitCpuMs ?? NaN));
             return { text: `${a.text} / ${c.text}`, value: c.value };
           }));
+          row(`leg “${n}” change-set roots diffed (shim)`, labels.map((l) => timingCell(by(l).map((r) => r.legs[i]?.gitChangesetRoots ?? NaN))));
         }
+        row(`leg “${n}” Router CPU (ms; ps)`, labels.map((l) => timingCell(by(l).map((r) => r.legs[i]?.routerCpuMs ?? NaN))));
         row(`leg “${n}” CDP lag, worst read (ms; diagnostic)`, labels.map((l) => timingCell(by(l).map((r) => r.legs[i]?.cdpLagMaxMs ?? NaN))));
         row(`leg “${n}” lag p95 / max (ms)`, labels.map((l) => {
           const p = timingCell(by(l).map((r) => r.legs[i]?.lagP95Ms ?? NaN));

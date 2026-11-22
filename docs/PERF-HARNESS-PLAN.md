@@ -171,7 +171,7 @@ event after each scenario.
     real-git fixture (empty under `REALISM=1` means `bus`: the two don't mix);
   - `bus`: 1–8, 3b, 3t, 7b — the event-bus regression set; no fixture build,
     the right choice for bus work;
-  - `git`: 9a–9f (delays off by default);
+  - `git`: 9a–9h (delays off by default);
   - aliases mix with ids (`bus,9a`); `none` runs checks only.
 - Builds each ref's UI and binaries into separate temp dirs.
 - Runs baseline and candidate alternately (ABAB…) on the same seeded
@@ -180,7 +180,7 @@ event after each scenario.
   table per scenario. Deterministic metrics are shown as exact values;
   timings as median and IQR, with the candidate/baseline ratio.
 
-## Git routes with real git (scenarios 9x, checks f–h)
+## Git routes with real git (scenarios 9x, checks f–i)
 
 Added 2026-11-21, after the bus fix showed the git routes are the remaining
 socket bottleneck. Opening or switching a session fires `GET
@@ -194,7 +194,7 @@ cache with an "updating" marker. The harness measures main, then each.
 ### Fixture (`perfseed gitfx`, shape in `ui/e2e/perf/gitfx.shape.json`)
 
 `GITFX=auto` (on for any 9x scenario in the resolved list — so also the
-default `all` and `git` — or check f/g/h) builds it once per run
+default `all` and `git` — or check f/g/h/i) builds it once per run
 inside the run's temp tree, `$TMP/gitfx/live`:
 - `origin.git`: `git clone --mirror --no-local $GITFX_SRC` (default
   `~/repo/mads`) — **the only git command that touches the source** — cut
@@ -252,6 +252,8 @@ measured window.
 | 9d | window focus on A (blur, visibilitychange, focus), twice |
 | 9e | `land` session: open the Push dialog, then the Land dialog; never confirmed |
 | 9f | A's child (fake provider) writes a file every 2 s for 20 s (`PERF_BUSY_S`), Conversation tab showing |
+| 9g | outside edit then focus: A's Changes tab open, 31 s idle (past the focus skip), a new untracked file written straight into A's worktree (no agent, no `file.changed`), then focus; marker = the totals show one more file. If the focus hasn't shown it within 10 s, the leg reopens A (→ typical → A) as a user would — main and A recompute a change set only on open; `outside_shown_on_focus` says which |
+| 9h | idle focus: A's Changes tab open, nothing changed, focus twice, each 31 s after the last (past the skip); each leg's git calls, change-set roots diffed and Router CPU count for 10 s from the focus (`gitTailMs`: B's refresh is a 202 with the work behind it). Where a probe gate should save work |
 
 Settled for 9x waits for the git routes too (they are short requests now).
 
@@ -259,6 +261,8 @@ Settled for 9x waits for the git routes too (they are short requests now).
 
 | Metric | Source |
 |---|---|
+| change-set roots diffed (whole window, per leg) | the shim marks a call made with `GIT_INDEX_FILE` set (`idx`); `add -A` into a temp shadow index is one root of one change-set compute (`pkg/changes/gitops.go`), so 0 = no change-set recompute |
+| Router CPU per leg | `ps` samples at the leg's ends (9h: to the end of its 10 s tail) |
 | per-route latency, p50/max, for repos, changeset, worktree/refresh, worktree, commit-plan, push, land | server: the proxy's arrival → response headers; client: the page probe's fetch → headers (includes queueing) |
 | abandoned requests | a non-stream request naming session X still in flight at the proxy when the view left X (scenarios record each switch, `ctx.shown`): count, git-route count, aborted count, socket time held after leaving (sum, max) |
 | git calls and CPU, whole window and per leg | the **git shim** (`ui/e2e/perf/gitshim`, first on every fixture stack's PATH; `PERF_REAL_GIT` is the real one): one JSON line per call with start/end, parent pid, subcommand, and the call's rusage (user + system). Top subcommands by CPU per build |
@@ -292,6 +296,70 @@ Settled for 9x waits for the git routes too (they are short requests now).
   dialog's "N commits to squash" a fresh `GET /land`; the Push dialog's
   "N commits:" a fresh `GET /push`. A cached design must not show stale
   counts here.
+
+- **i-git-outside-edits** (must pass on main, A and B; guards the planned
+  focus/open "probe gate" that skips a change-set recompute when a cheap
+  fingerprint says nothing changed). Edits made straight in `isolated`'s
+  worktree (no agent: no `file.changed`, no ledger row) must show in the
+  Changes tab within **N = 10 s** (`PERF_OUTSIDE_S`) of a focus, or else of
+  a reopen (→ typical → A, timed from the click back on A), with totals (files, +added, −deleted) equal to a
+  fresh compute. Steps: a new untracked file; a re-edit of an
+  already-dirty tracked file (content and size change); a **same-size**
+  re-edit of another (one letter of its first line bumped: new content and
+  mtime, same size); a deleted tracked file (one the change set doesn't
+  list yet). The re-edits are the probe's
+  blind spot: `git status` output doesn't move when an already-dirty file
+  changes again, so a status hash alone would skip them (a correct probe
+  adds the size and mtime of the dirty paths; the same-size step catches
+  one that keys on size). A last step, not an assertion, records whether a
+  focus with nothing changed recomputed the change set (change-set roots
+  diffed, git calls and CPU in the 10 s after it, from the shim log).
+  - Focus skip: the UI skips a focus within 30 s of its last recount
+    (Phase A), and B's bodiless refresh and first change-set read recompute
+    only a change set older than 30 s, so each step waits until **31 s**
+    (`PERF_FOCUS_SKIP_MS`) after anything last refreshed A (the UI's
+    focus/reopen, or the oracle), then edits, then focuses; the reopen is the
+    fallback, not a substitute. Main and A recompute a change set only on
+    open (main's focus recounts the header counts only; `repo.changed`
+    ignores the index), so there the steps pass on the reopen; B passes on
+    the focus. Each step's detail says which.
+  - Oracle: main and A compute on every `GET /changeset`; B answers from its
+    cache (the answer carries `updating`), so there the oracle forces a
+    recompute (`POST /worktree/refresh {parts:["changeset"], max_age_ms:0}`)
+    and waits for an answer computed after the ask. Taken after the UI's
+    last read. It must also differ from the previous step's (a gated or
+    stale oracle would otherwise agree with a stale UI); the harness's own
+    prediction of the totals (+1 file / +3 lines, +2, +1 −1, +1 file −L) is
+    only for stopping the poll early.
+  - N = 10 s: B's path is a 202, the heavy session's change set recomputed
+    (~1 s on b2), the batch announced, a cached GET; main's is the reopen's
+    GET computing it (3.6–6.7 s measured under load) behind the mount's
+    events barrier. No repo-watcher term (f's 15 s has one): the trigger is
+    explicit.
+  - Edits only touch paths inside the run's git fixture (`outsideEdits.ts`
+    `inFixture`: realpath under the fixture root, never under `~/repo`);
+    dirty files are listed with `git --no-optional-locks status`.
+
+### Check i, 9g, 9h: origin/main vs b2 (2026-11-22, `perf-results/20261122-002834`)
+
+`make ui-perf BASE=origin/main CAND=../mads-git-b2 PROFILE=S N=1
+SCENARIOS=9g,9h CHECKS=i`. Check i passes on both builds. Main shows every
+edit only on the reopen (4.6–4.7 s after the click back on A; the focus showed
+nothing in 10 s). b2 shows each one on the focus (2.0 s). The idle focus
+records no change-set recompute on main (129 git calls, 1.0 s git CPU in
+10 s, the header recount) and a recompute on b2 (1 root diffed, 142 calls,
+1.3 s).
+
+| | main | b2 |
+|---|---|---|
+| 9g settled (edit + focus; main: + reopen) | 14.7 s | 1.9 s |
+| 9g git calls / git CPU / roots diffed / Router CPU | 828 / 8.6 s / 3 / 0.97 s | 142 / 1.3 s / 1 / 0.19 s |
+| 9h settled per focus | 1.6 s | 4 ms (202) |
+| 9h per focus: git calls / git CPU / roots diffed / Router CPU | 129 / 1.0–1.1 s / 0 / 90–100 ms | 142 / 1.3–1.4 s / 1 / 180–190 ms |
+
+On b2, an idle focus costs about one change-set compute that finds nothing
+new. That is what the probe gate is meant to save: 9h's roots diffed should
+fall to 0, and check i must still pass.
 
 ### Validation on main (2026-11-21, `perf-results/20261121-152238`)
 

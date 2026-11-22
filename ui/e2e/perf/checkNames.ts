@@ -12,6 +12,7 @@ export const CHECK_NAMES = [
   "f-git-converge",
   "g-git-updating",
   "h-git-dialogs",
+  "i-git-outside-edits",
 ] as const;
 
 /** Checks that watch UI-only state, not anything the bus carries: reported, excluded from bus comparisons. */

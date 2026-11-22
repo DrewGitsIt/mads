@@ -6,6 +6,24 @@ import type { GitFixture, GitSession, Manifest } from "./scenarios";
 import { appendFileSync } from "node:fs";
 import { fxGit } from "./stack";
 import { resolveCheck } from "./checkNames";
+import { gitStats, readGitCalls } from "./collectors";
+import {
+  FOCUS_SKIP_MS,
+  OUTSIDE_S,
+  addUntracked,
+  deleteTracked,
+  dirtyTracked,
+  unlistedTracked,
+  focusWindow,
+  plus,
+  readTotals,
+  reEdit,
+  sameSizeEdit,
+  sameTotals,
+  showTotals,
+  type OutsideEdit,
+  type Totals,
+} from "./outsideEdits";
 
 /**
  * Correctness checks (docs/PERF-HARNESS-PLAN.md §5): a faster design must
@@ -559,6 +577,119 @@ const GIT_CHECKS: Check[] = [
           await close();
           if (shown !== want) throw new Error(`the dialog shows ${shown} commits, a fresh preview ${want}`);
           return `${shown} commits`;
+        }),
+      ];
+    },
+  },
+  {
+    name: "i-git-outside-edits",
+    title: `real git: edits made outside mads (no file.changed) show in the Changes tab within ${OUTSIDE_S} s of a focus or a reopen, matching a fresh compute`,
+    run: async ({ page, rig, manifest }) => {
+      const g = gitFixture(manifest);
+      const A = g.sessions.isolated;
+      const Ty = g.sessions.typical;
+      const dirty = dirtyTracked(g, A);
+      if (dirty.length < 2) throw new Error(`isolated heavy has ${dirty.length} dirty tracked text files; the check needs 2`);
+      // When anything last refreshed A's git state (the UI's open/focus, or the oracle's forced compute).
+      let touched = 0;
+      let prev: Totals = {};
+      const waitSkip = async () => {
+        const left = touched + FOCUS_SKIP_MS - Date.now();
+        if (left > 0) await page.waitForTimeout(left);
+      };
+      /** Polls the Changes tab until it shows want, for OUTSIDE_S; the time it did, or undefined. */
+      const shows = async (want: Totals, since: number): Promise<number | undefined> => {
+        const deadline = since + OUTSIDE_S * 1000;
+        for (;;) {
+          if (sameTotals(await readTotals(page), want)) return Date.now() - since;
+          if (Date.now() > deadline) return undefined;
+          await page.waitForTimeout(250);
+        }
+      };
+      /** Away to typical and back to A; the time it clicked back on A. */
+      const reopen = async (): Promise<number> => {
+        await openChangesOf(page, Ty);
+        const at = Date.now();
+        await openChangesOf(page, A);
+        return at;
+      };
+      // Paths in A's change set at the last fresh compute (to pick a tracked file it doesn't list).
+      let listed = new Set<string>();
+      /**
+       * A fresh compute of A's change set against session start, taken after
+       * the UI's last read. Main and A compute on every GET. B answers GET
+       * from its cache (it carries `updating`): there the oracle forces a
+       * recompute (max_age_ms 0) and waits for one computed after the ask.
+       */
+      const fresh = async (): Promise<Totals> => {
+        type CS = { files: { path: string }[]; totals: { added: number; deleted: number }; computed_at?: string; updating?: boolean };
+        const get = () => router<CS>(rig.stack, "GET", `/sessions/${A.id}/changeset?vs=start`);
+        let cs = await get();
+        if ("updating" in cs) {
+          const ask = Date.now();
+          await router(rig.stack, "POST", `/sessions/${A.id}/worktree/refresh`, { parts: ["changeset"], vs: "start", max_age_ms: 0 });
+          const at = (s?: string) => (s ? Date.parse(s.replace(/(\.\d{3})\d+/, "$1")) : 0);
+          await waitFor(async () => {
+            cs = await get();
+            return !cs.updating && at(cs.computed_at) >= ask;
+          }, 60_000, "a forced recompute of the change set (the oracle)");
+        }
+        touched = Date.now();
+        listed = new Set(cs.files.map((f) => f.path));
+        return { files: cs.files.length, added: cs.totals.added, deleted: cs.totals.deleted };
+      };
+      /** One outside edit: wait out the skip, edit, focus; reopen if the focus didn't show it. */
+      const outside = async (edit: () => OutsideEdit): Promise<string> => {
+        await waitSkip();
+        const e = edit();
+        const predicted = plus(prev, e.delta);
+        const focusAt = Date.now();
+        await focusWindow(page);
+        const onFocus = await shows(predicted, focusAt);
+        let how: string;
+        if (onFocus !== undefined) how = `on focus, ${(onFocus / 1000).toFixed(1)} s`;
+        else {
+          const reopenAt = await reopen();
+          const onReopen = await shows(predicted, reopenAt);
+          how = onReopen !== undefined ? `on reopen, ${(onReopen / 1000).toFixed(1)} s (focus: not within ${OUTSIDE_S} s)` : "";
+        }
+        const last = await readTotals(page);
+        const want = await fresh();
+        const before = prev;
+        prev = want;
+        if (sameTotals(want, before)) throw new Error(`a fresh compute didn't see the ${e.what} either (${showTotals(want)}): the oracle is stale`);
+        if (!sameTotals(last, want)) {
+          throw new Error(`neither a focus nor a reopen showed the ${e.what} within ${OUTSIDE_S} s: the UI shows ${showTotals(last)}, a fresh compute ${showTotals(want)}`);
+        }
+        const note = sameTotals(want, predicted) ? "" : ` (predicted ${showTotals(predicted)})`;
+        return `${how || "matched at the end"}; ${showTotals(want)}${note}`;
+      };
+      return [
+        await step("setup: A's Changes tab matches a fresh compute", async () => {
+          await load(page, rig.stack.appURL);
+          await openChangesOf(page, A);
+          await page.waitForTimeout(2000);
+          const ui = await readTotals(page);
+          prev = await fresh();
+          if (!sameTotals(ui, prev)) throw new Error(`the UI shows ${showTotals(ui)}, a fresh compute ${showTotals(prev)}`);
+          return showTotals(prev);
+        }),
+        await step("new untracked file", () => outside(() => addUntracked(g, A, "perf_outside_new.md"))),
+        await step("re-edit of an already-dirty file (content and size change)", () => outside(() => reEdit(g, dirty[0]))),
+        await step("same-size re-edit of an already-dirty file (content and mtime change)", () => outside(() => sameSizeEdit(g, dirty[1]))),
+        await step("delete a tracked file", () => outside(() => deleteTracked(g, unlistedTracked(g, A, listed)))),
+        await step("(record) a focus with nothing changed: did it recompute the change set?", async () => {
+          await waitSkip();
+          const at = Date.now();
+          await focusWindow(page);
+          await page.waitForTimeout(OUTSIDE_S * 1000);
+          const ui = await readTotals(page);
+          if (!rig.stack.gitLog) return "no git log (shim off)";
+          const s = gitStats(readGitCalls(rig.stack.gitLog), at, at + OUTSIDE_S * 1000, rig.stack.pids.router);
+          return (
+            `${s.changesetRoots > 0 ? `recomputed (${s.changesetRoots} roots diffed)` : "no change-set recompute"}; ` +
+            `${s.spawns} git calls, ${s.cpuMs} ms git CPU in ${OUTSIDE_S} s; UI ${sameTotals(ui, prev) ? "unchanged" : `moved to ${showTotals(ui)}`}`
+          );
         }),
       ];
     },

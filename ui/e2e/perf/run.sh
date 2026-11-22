@@ -9,7 +9,7 @@
 #         GITFX=auto|1|0 — the real-git fixture (perfseed gitfx: local clones of
 #           GITFX_SRC, default ~/repo/mads, which is only ever cloned FROM, never
 #           run in) and the git shim on every stack's PATH. auto: on when a
-#           scenario is 9x or a check is f, g or h. 9x run with delays off only.
+#           scenario is 9x or a check is f, g, h or i. 9x run with delays off only.
 #         REALISM=1 — the workload is a read-only backup of ~/.mads/mads.db
 #           (REAL_DB to override), prepared by `perfseed realism` and deleted
 #           with the run's temp dir; nothing real is committed or reported.
@@ -54,7 +54,7 @@ GITFX_SRC=${GITFX_SRC:-$HOME/repo/mads}
 if [ "$GITFX" = auto ]; then
 	GITFX=0
 	for s in $(echo "$SCENARIOS" | tr ',' ' '); do case "$s" in 9*) GITFX=1 ;; esac; done
-	for c in $(echo "$CHECKS" | tr ',' ' '); do case "$c" in f | f-* | g | g-* | h | h-*) GITFX=1 ;; esac; done
+	for c in $(echo "$CHECKS" | tr ',' ' '); do case "$c" in f | f-* | g | g-* | h | h-* | i | i-*) GITFX=1 ;; esac; done
 fi
 # Checkouts the harness must never run from, build in or install into (the
 # live app runs from them): the dirs themselves and anything under them.
