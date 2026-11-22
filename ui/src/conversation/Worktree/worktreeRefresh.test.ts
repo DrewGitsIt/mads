@@ -1,6 +1,7 @@
 import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeRouterClient } from "../../router/fixtures";
+import { getGitUpdating, noteGitStateRead } from "../../router/gitUpdating";
 import {
   WORKTREE_REFRESH_FOCUS_SKIP_MS,
   heldWorktreeRefreshesForTests,
@@ -20,6 +21,17 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe("worktreeRefresh", () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it("marks the counts and repos updating once the Router accepts (202), when it serves git state", async () => {
+    const c = new FakeRouterClient();
+    const pending = holdRefreshes(c);
+    noteGitStateRead(SID, "repos", true, false);
+    const { settled } = requestWorktreeRefresh(c, SID, "open");
+    expect(getGitUpdating(SID)).toBe("");
+    pending[0]();
+    await settled;
+    expect(getGitUpdating(SID)).toBe("repos counts");
+  });
 
   it("is single-flight across remounts: a remount joins the recount already out", async () => {
     const c = new FakeRouterClient();

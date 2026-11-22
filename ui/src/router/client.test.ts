@@ -281,6 +281,44 @@ describe("FetchRouterClient", () => {
     );
   });
 
+  it("refreshWorktreeCounts resolves on 202 (the Router recounts behind it)", async () => {
+    mockFetchOnce(undefined, true, 202);
+    const client = new FetchRouterClient("http://router.local");
+    await expect(client.refreshWorktreeCounts("s1")).resolves.toBeUndefined();
+  });
+
+  it("getSessionReposState reads X-Mads-Updating and X-Mads-Computed-At", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("[]", {
+        status: 200,
+        headers: { "Content-Type": "application/json", "X-Mads-Updating": "1" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new FetchRouterClient("http://router.local");
+    expect(await client.getSessionReposState("s1")).toEqual({ repos: [], updating: true, computedAt: undefined, gitState: true });
+    fetchMock.mockResolvedValue(
+      new Response("[]", { status: 200, headers: { "X-Mads-Updating": "0", "X-Mads-Computed-At": "2026-11-21T19:00:00Z" } }),
+    );
+    expect(await client.getSessionReposState("s1")).toEqual({
+      repos: [],
+      updating: false,
+      computedAt: "2026-11-21T19:00:00Z",
+      gitState: true,
+    });
+  });
+
+  it("getSessionReposState takes missing headers (an older peer) as not updating, computed-at unknown", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
+    const client = new FetchRouterClient("http://router.local");
+    expect(await client.getSessionReposState("s1")).toEqual({ repos: [], updating: false, computedAt: undefined, gitState: false });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("[]", { status: 200, headers: { "X-Mads-Updating": "0", "X-Mads-Computed-At": "soon" } })),
+    );
+    expect((await client.getSessionReposState("s1")).computedAt).toBeUndefined();
+  });
+
   it("commitSession POSTs paths and message to /sessions/:id/commit", async () => {
     const fetchMock = mockFetchOnce({ hash: "abc", message: "m", undoable: true, paths: [] });
     const client = new FetchRouterClient("http://router.local");

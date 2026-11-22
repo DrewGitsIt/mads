@@ -70,4 +70,6 @@ afterEach(async () => {
   (await import("./files/useChangeSet")).resetChangeSetStoreForTests?.();
   // And the per-session worktree recounts (in flight, and when each last finished).
   (await import("./conversation/Worktree/worktreeRefresh")).resetWorktreeRefreshForTests?.();
+  // And which git state parts each session has "updating" (docs/GIT-STATE-DESIGN.md).
+  (await import("./router/gitUpdating")).resetGitUpdatingForTests?.();
 });

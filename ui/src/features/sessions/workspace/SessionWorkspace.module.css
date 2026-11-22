@@ -141,6 +141,15 @@
   }
 }
 
+/* The git state "updating" mark, tucked into the Changes tab's right
+   padding (the last tab), in the quiet text color. */
+.gitUpdating {
+  display: inline-flex;
+  align-items: center;
+  margin-left: calc(-1 * var(--space-3) - 8px);
+  color: var(--text2);
+}
+
 .spacer {
   flex: 1;
 }

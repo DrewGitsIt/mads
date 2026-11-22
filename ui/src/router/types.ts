@@ -1440,6 +1440,18 @@ export interface SessionRepoState {
 }
 
 /** repo.changed's payload: a repo's branches moved (a commit, merge, fetch or push, by anyone). Session-less. */
+/** session.git_state_updated's payload (docs/GIT-STATE-DESIGN.md). */
+export type GitStatePart = "repos" | "changeset" | "counts";
+export interface GitStateUpdatedPayload {
+  session_id: string;
+  /** What the finished recompute covered: none of these is "updating" any more as of `generation`. */
+  parts: GitStatePart[];
+  /** Monotonic per session (clock-based, so it survives a Router restart). */
+  generation: number;
+  /** The subset of `parts` whose result differs: refetch these. */
+  changed: GitStatePart[];
+}
+
 export interface RepoChangedPayload {
   /** The repo's main checkout. */
   repo: string;
@@ -1824,7 +1836,13 @@ export interface ChangeSet {
   commits: ChangeCommit[];
   totals: { files: number; added: number; deleted: number };
   notes?: string[];
+  /** "" before the Router's first compute (docs/GIT-STATE-DESIGN.md). */
   computed_at: string;
+  /**
+   * A recompute is queued or running; the set may be the previous one.
+   * Absent from a Router that computes per request (an older mesh peer).
+   */
+  updating?: boolean;
 }
 
 export interface DeleteScratchResult {

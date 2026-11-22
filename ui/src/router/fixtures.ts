@@ -1,10 +1,12 @@
 import type { RouterClient, SessionEventSource } from "./client";
 import { EVENTS_BATCH_LIMIT } from "./eventPages";
 import { isLiveDelegate } from "./delegateLive";
-import type { RequestOptions } from "./client";
+import type { RequestOptions, SessionReposAnswer } from "./client";
 import { abortError, checkLinkSessionIds, CommitRefusedError, MoveRefusedError, RouterValidationError } from "./client";
 import { FakeEventSource } from "./testFakeEventSource";
 import type {
+  GitStatePart,
+  GitStateUpdatedPayload,
   Attachment,
   HeldUpdate,
   HeldUpdates,
@@ -979,6 +981,8 @@ export const fixturePushPreview: PushPreview = {
 
 // emitRepoChanged's seqs: above any a test seeds, and rising (the bus drops a repeated seq).
 let repoChangedSeq = 1_000_000_000;
+// emitGitStateUpdated's generations: rising, as the Router's are.
+let gitStateGeneration = 1_000;
 
 /** The isolated session's Land confirmation: three commits onto main, its own base. */
 export const fixtureLandPreview: LandPreview = {
@@ -1682,8 +1686,14 @@ export class FakeRouterClient implements RouterClient {
     this.changeSetSignals.push(opts.signal);
     if (this.changeSetOutcome) return abortable(this.changeSetOutcome(sessionId, vs), opts.signal);
     const cs = this.changeSets.get(sessionId);
+    // As the Router serves it (docs/GIT-STATE-DESIGN.md): with updating,
+    // false unless the fixture says otherwise.
     return abortable(
-      Promise.resolve(cs ? { ...structuredClone(cs), baseline: vs ?? cs.baseline } : emptyChangeSet(vs)),
+      Promise.resolve(
+        cs
+          ? { updating: false, ...structuredClone(cs), baseline: vs ?? cs.baseline }
+          : { ...emptyChangeSet(vs), updating: false },
+      ),
       opts.signal,
     );
   }
@@ -1859,6 +1869,18 @@ export class FakeRouterClient implements RouterClient {
     return session ? fixtureReposFor(session) : [];
   }
 
+  /** Sessions whose GET /repos says X-Mads-Updating: 1. */
+  readonly sessionReposUpdating = new Set<string>();
+  /** Sessions whose GET /repos omits the git state headers (an older Router). */
+  readonly sessionReposLegacy = new Set<string>();
+
+  async getSessionReposState(sessionId: string, opts: RequestOptions = {}): Promise<SessionReposAnswer> {
+    // Through getSessionRepos, so a test's spy on it sees every read.
+    const repos = await this.getSessionRepos(sessionId, opts);
+    if (this.sessionReposLegacy.has(sessionId)) return { repos, updating: false, gitState: false };
+    return { repos, updating: this.sessionReposUpdating.has(sessionId), computedAt: new Date().toISOString(), gitState: true };
+  }
+
   async getRepoState(path: string): Promise<RepoWorktree> {
     for (const set of Object.values(this.sessionRepos)) {
       for (const r of set) {
@@ -1883,6 +1905,35 @@ export class FakeRouterClient implements RouterClient {
     });
     for (const source of FakeEventSource.instances) {
       if (!source.closed && source.url.includes("repo.changed")) source.emit("repo.changed", data);
+    }
+  }
+
+  /**
+   * The Router's session.git_state_updated (docs/GIT-STATE-DESIGN.md) to
+   * every open stream subscribed to it: a recompute of `parts` finished,
+   * `changed` (default: all of them) differing from before.
+   */
+  static emitGitStateUpdated(
+    sessionId: string,
+    parts: GitStatePart[],
+    opts: { changed?: GitStatePart[]; generation?: number; seq?: number } = {},
+  ): void {
+    const payload: GitStateUpdatedPayload = {
+      session_id: sessionId,
+      parts,
+      generation: opts.generation ?? ++gitStateGeneration,
+      changed: opts.changed ?? parts,
+    };
+    const data = JSON.stringify({
+      seq: opts.seq ?? ++repoChangedSeq,
+      type: "session.git_state_updated",
+      actor: "router",
+      session_id: sessionId,
+      timestamp: new Date().toISOString(),
+      payload,
+    });
+    for (const source of FakeEventSource.instances) {
+      if (!source.closed && source.url.includes("session.git_state_updated")) source.emit("session.git_state_updated", data);
     }
   }
 

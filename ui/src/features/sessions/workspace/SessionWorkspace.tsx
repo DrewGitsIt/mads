@@ -27,6 +27,7 @@ import { useLiveShells } from "../../../conversation/ShellDock/useLiveShells";
 import { requestShellToggle } from "../../../conversation/shellToggleSignal";
 import { requestStreamReattach } from "../../../conversation/streamReattachSignal";
 import type { ChangesFocus } from "../../../files/changesModel";
+import { GitUpdatingIndicator } from "./GitUpdatingIndicator";
 import { toWorkspaceTabId, WORKSPACE_TABS, type WorkspaceTabId } from "./tabRegistry";
 import { RUN_EVENT_TYPES } from "./usePipelineRunning";
 import { useLiveRunTaskCount } from "./useLiveRunTaskCount";
@@ -392,6 +393,8 @@ export function SessionWorkspace({
             </button>
           ))}
         </nav>
+        {/* Right after the last tab, Changes: in view whichever tab is open. */}
+        <GitUpdatingIndicator routerClient={routerClient} sessionId={sessionId} />
         <span className={styles.spacer} />
 
         <div className={styles.kebabWrap}>

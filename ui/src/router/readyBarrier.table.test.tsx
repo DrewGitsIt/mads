@@ -33,6 +33,7 @@ import { useTemplates } from "../library/templates/useTemplates";
 import { useWorkspaces } from "../library/workspaces/useWorkspaces";
 import { useLiveActivity } from "../dashboard/state/useLiveActivity";
 import { useChangeSet } from "../files/useChangeSet";
+import { GitUpdatingIndicator } from "../features/sessions/workspace/GitUpdatingIndicator";
 import { UsageCard } from "../conversation/Composer/commands/UsageCard";
 import { useCommitSettings } from "../conversation/Worktree/useCommitSettings";
 import { useWorktreeCards } from "../conversation/Worktree/useWorktreeCards";
@@ -99,6 +100,7 @@ const rows: [name: string, mount: (c: Clients) => void, allowedEarly?: string[]]
   ["useWorkspaces", () => void renderHook(() => useWorkspaces())],
   ["useLiveActivity", (c) => void renderHook(() => useLiveActivity(c.metrics))],
   ["useChangeSet", (c) => void renderHook(() => useChangeSet(c.router, SID))],
+  ["GitUpdatingIndicator", (c) => void render(<GitUpdatingIndicator routerClient={c.router} sessionId={SID} />)],
   ["UsageCard", (c) => void render(<UsageCard routerClient={c.router} sessionId={SID} fallbackWindow={200_000} />)],
   ["useCommitSettings", (c) => void renderHook(() => useCommitSettings(c.router))],
   ["useWorktreeCards", (c) => void renderHook(() => useWorktreeCards(c.router, SID))],

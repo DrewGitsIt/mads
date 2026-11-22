@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { RouterClient } from "../../router/client";
+import { markRefreshed } from "../../router/gitUpdating";
 
 /**
  * A focus within this long of a finished recount for the same session is
@@ -42,8 +43,9 @@ function entryFor(client: RouterClient, sessionId: string): Entry {
 }
 
 /**
- * Asks the Router to recount the session's Commit/Land counts (they arrive
- * as session.updated), joining one already in flight. A "focus" ask is
+ * Asks the Router to recount the session's Commit/Land counts (it answers
+ * 202 at once; they arrive as session.updated), joining one already in
+ * flight. A "focus" ask is
  * skipped when one finished within WORKTREE_REFRESH_FOCUS_SKIP_MS. Returns
  * a release: when every asker has released, a recount still running is
  * aborted (the view went away; the next open recounts again), and
@@ -65,6 +67,9 @@ export function requestWorktreeRefresh(
       holders: 0,
       settled: client
         .refreshWorktreeCounts(sessionId, { signal: ctl.signal })
+        // Accepted (202): the Router recounts behind it, and says when
+        // (session.git_state_updated) — until then the counts are "updating".
+        .then(() => markRefreshed(sessionId))
         // Best-effort, an abort included: the next turn end recounts anyway.
         .catch(() => {})
         .finally(() => {

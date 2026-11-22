@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { isAbortError, type RouterClient } from "./client";
 import { coalesce, type Coalescer } from "./coalesce";
 import { eventsReady, subscribeToEvents } from "./events";
-import type { Envelope, RepoChangedPayload, SessionRepoState } from "./types";
+import { markFromTrigger, noteGitStateEvent, noteGitStateRead } from "./gitUpdating";
+import type { Envelope, GitStateUpdatedPayload, RepoChangedPayload, SessionRepoState } from "./types";
 
 export interface SessionReposSnapshot {
   /** Null until the first fetch succeeds: unknown, never "no repos". */
@@ -18,9 +19,17 @@ export const REPO_STATE_FETCH_TIMEOUT_MS = 15_000;
  * A session's own events after which its repo set or branches may have
  * moved: a record update (a repo joined its set), its Commit, an Undo, a
  * Land. Its repos' repo.changed usually follows too, but a second later.
+ * The Router recomputes on these (docs/GIT-STATE-DESIGN.md), so they only
+ * mark the repos "updating" (router/gitUpdating) and the read waits for
+ * session.git_state_updated naming repos changed; against a Router that
+ * computes per request (an older mesh peer) they refetch, as before.
  */
 export const REPO_STATE_SESSION_EVENT_TYPES = ["session.updated", "commit.created", "commit.undone", "merge.completed"];
-const BUS_TYPES = ["repo.changed", ...REPO_STATE_SESSION_EVENT_TYPES];
+const SESSION_BUS_TYPES = ["session.git_state_updated", ...REPO_STATE_SESSION_EVENT_TYPES];
+/** repo.changed has no session: one subscription on this device's bus matches it to sessions by git dir. */
+const BUS_TYPES = ["repo.changed"];
+/** After a cold answer (never computed), read again this long after, announced or not. */
+export const REPO_STATE_COLD_RETRY_MS = 10_000;
 
 const RETRY_FLOOR_MS = 500;
 const RETRY_BASE_MS = 2_000;
@@ -44,6 +53,9 @@ interface Entry {
   /** Aborts the fetch in flight: when the last reader leaves, or its timeout fires before a retry. */
   inFlight?: AbortController;
   lastJson: string;
+  /** The session's own subscription (its bus: a remote session's host), while read. */
+  unsubscribe?: () => void;
+  coldRetry?: ReturnType<typeof setTimeout>;
 }
 
 // Branch facts several sessions share (docs/COMMIT-LAND-PUSH-DESIGN.md D10),
@@ -51,8 +63,10 @@ interface Entry {
 // them (dock, path, Changes chip, push dialog). Like sessionsStore: events
 // only ask a session's coalescer, which runs at most one fetch at a time,
 // and a snapshot outlives its last reader so a remount shows it at once and
-// revalidates behind it. One bus subscription for every session: repo.changed
-// has no session, so each is matched to sessions by their repos' git dirs.
+// revalidates behind it. Each read session has its own subscription
+// (session.git_state_updated and its own triggers, on its host's bus); one
+// more for every session takes repo.changed, which has no session, matched
+// to sessions by their repos' git dirs.
 const entries = new Map<string, Entry>();
 let unsubscribeBus: (() => void) | null = null;
 
@@ -94,10 +108,8 @@ async function fetchEntry(e: Entry): Promise<void> {
   const ctl = new AbortController();
   e.inFlight = ctl;
   try {
-    const answer: unknown = await withTimeout(
-      (signal) => e.client.getSessionRepos(e.sessionId, { signal }),
-      ctl,
-    );
+    const state = await withTimeout((signal) => e.client.getSessionReposState(e.sessionId, { signal }), ctl);
+    const answer: unknown = state?.repos;
     // Only well-formed entries: a Router without this route, or a stand-in
     // answering every URL alike, mustn't take down a reader.
     const repos = Array.isArray(answer)
@@ -105,6 +117,22 @@ async function fetchEntry(e: Entry): Promise<void> {
       : [];
     if (gen !== e.generation || entries.get(e.sessionId) !== e) return;
     e.retryAttempt = 0;
+    const served = state?.gitState === true;
+    noteGitStateRead(e.sessionId, "repos", served, served && state.updating);
+    // Never computed yet: [] with X-Mads-Updating: 1 is "loading", not "no
+    // repos" (Push isn't offered until a computed answer). The compute's
+    // session.git_state_updated brings them; one more read a while later
+    // makes sure a missed announcement can't leave them unknown.
+    if (served && state.updating && !state.computedAt && repos.length === 0) {
+      if (e.snapshot.error !== null) setSnapshot(e, { ...e.snapshot, error: null });
+      if (!e.coldRetry) {
+        e.coldRetry = setTimeout(() => {
+          e.coldRetry = undefined;
+          if (gen === e.generation && active(e)) e.coalescer.now();
+        }, REPO_STATE_COLD_RETRY_MS);
+      }
+      return;
+    }
     const json = JSON.stringify(repos);
     if (json === e.lastJson && e.snapshot.repos !== null && e.snapshot.error === null) return;
     const same = json === e.lastJson && e.snapshot.repos !== null;
@@ -138,18 +166,27 @@ function inRepos(repos: SessionRepoState[] | null, gitDir: string): boolean {
 }
 
 function onBusEvent(env: Envelope): void {
-  if (env.type === "repo.changed") {
-    const gitDir = (env.payload as RepoChangedPayload | undefined)?.git_dir;
-    if (!gitDir) return;
-    for (const e of entries.values()) {
-      if (!active(e) || !inRepos(e.snapshot.repos, gitDir)) continue;
-      e.coalescer.request();
-      for (const listener of e.changeListeners) listener();
-    }
+  if (env.type !== "repo.changed") return;
+  const gitDir = (env.payload as RepoChangedPayload | undefined)?.git_dir;
+  if (!gitDir) return;
+  for (const e of entries.values()) {
+    if (!active(e) || !inRepos(e.snapshot.repos, gitDir)) continue;
+    if (!markFromTrigger(e.sessionId, env)) e.coalescer.request();
+    for (const listener of e.changeListeners) listener();
+  }
+}
+
+function onSessionEvent(e: Entry, env: Envelope): void {
+  if (!active(e)) return;
+  if (env.type === "session.git_state_updated") {
+    const p = env.payload as GitStateUpdatedPayload | undefined;
+    noteGitStateEvent(p);
+    if (Array.isArray(p?.changed) && p.changed.includes("repos")) e.coalescer.now();
     return;
   }
-  const e = env.session_id ? entries.get(env.session_id) : undefined;
-  if (e && active(e)) e.coalescer.request();
+  // session.updated marks nothing (it isn't a trigger: the Router's own
+  // counts write sends it); an older Router is asked again on it.
+  if (!markFromTrigger(e.sessionId, env)) e.coalescer.request();
 }
 
 function syncBus(): void {
@@ -162,14 +199,18 @@ function syncBus(): void {
 }
 
 /**
- * The entry's load, once the bus is ready (router/events.ts eventsReady):
- * the bus never replays, so a read served before it fixes its cursor could
- * miss a repo.changed landing in between. Dropped if the entry stopped (or
- * was replaced) meanwhile.
+ * The entry's session subscription, then its load once the session's bus
+ * is ready (router/events.ts eventsReady): the bus never replays, so a read
+ * served before it fixes its cursor could miss a session.git_state_updated
+ * landing in between. The session's own bus: a remote session's events
+ * come from its host. Dropped if the entry stopped (or was replaced)
+ * meanwhile.
  */
-function loadWhenReady(e: Entry): void {
+function startEntry(e: Entry): void {
   const gen = e.generation;
-  void eventsReady().then(() => {
+  e.unsubscribe?.();
+  e.unsubscribe = subscribeToEvents({ sessionId: e.sessionId, types: SESSION_BUS_TYPES }, (env) => onSessionEvent(e, env));
+  void eventsReady(e.sessionId).then(() => {
     if (gen === e.generation && entries.get(e.sessionId) === e && active(e)) e.coalescer.now();
   });
 }
@@ -178,6 +219,10 @@ function stopEntry(e: Entry): void {
   e.generation++;
   e.coalescer.cancel();
   clearRetry(e);
+  e.unsubscribe?.();
+  e.unsubscribe = undefined;
+  if (e.coldRetry) clearTimeout(e.coldRetry);
+  e.coldRetry = undefined;
   // Nobody reads it now: let the Router stop its git work.
   e.inFlight?.abort();
   e.inFlight = undefined;
@@ -207,7 +252,7 @@ function entryFor(client: RouterClient, sessionId: string): Entry {
     for (const listener of e.listeners) listener();
   }
   entries.set(sessionId, e);
-  if (existing && active(e)) loadWhenReady(e);
+  if (existing && active(e)) startEntry(e);
   return e;
 }
 
@@ -218,7 +263,7 @@ function attach(e: Entry, set: Set<() => void>, listener: () => void): () => voi
     // First reader: load, or revalidate the snapshot kept from before —
     // subscribed first, the read behind the bus's ready barrier.
     syncBus();
-    loadWhenReady(e);
+    startEntry(e);
   }
   return () => {
     if (!set.delete(listener)) return;
@@ -254,8 +299,10 @@ export function refreshSessionRepos(sessionId: string): void {
 
 /**
  * The session's repos with their branch facts (COMMIT-LAND-PUSH D10), loaded
- * on first use and kept current by repo.changed. `repos` is null until the
- * first answer: callers treat what they'd read from it as unknown.
+ * on first use and kept current by session.git_state_updated (the Router
+ * recomputes them on repo.changed and the session's commits,
+ * docs/GIT-STATE-DESIGN.md). `repos` is null until the first computed
+ * answer: callers treat what they'd read from it as unknown.
  */
 export function useSessionRepos(client: RouterClient, sessionId: string): SessionReposSnapshot {
   const subscribe = useCallback(

@@ -2,8 +2,9 @@ import { useCallback, useRef, useSyncExternalStore } from "react";
 import { isAbortError, type RouterClient } from "../router/client";
 import { coalesce, type Coalescer } from "../router/coalesce";
 import { eventsReady, subscribeToEvents } from "../router/events";
+import { gitStateServed, markFromTrigger, noteGitStateEvent, noteGitStateRead } from "../router/gitUpdating";
 import { subscribeRepoChanges } from "../router/repoStateStore";
-import type { AgentState, ChangeBaselineId, ChangeSet, Envelope } from "../router/types";
+import type { AgentState, ChangeBaselineId, ChangeSet, Envelope, GitStateUpdatedPayload } from "../router/types";
 
 /**
  * Fills the slices Go may send as null (a nil slice marshals to null) so
@@ -26,8 +27,12 @@ export function normalizeChangeSet(raw: ChangeSet): ChangeSet {
 }
 
 /**
- * Events after which a session's change set may differ. session.agent_state
- * counts only when it says idle (see onSessionEvent): a turn's end is when
+ * Events after which a session's change set may differ. The Router
+ * recomputes it on these (docs/GIT-STATE-DESIGN.md), so here they only mark
+ * it "updating" (router/gitUpdating); the refetch waits for
+ * session.git_state_updated naming it changed. Against a Router that
+ * computes per request (an older mesh peer) they refetch, as before.
+ * session.agent_state counts only when it says idle: a turn's end is when
  * writes no file.changed reported (a shell command's, say) have all landed;
  * the working states in between (one per tool label) change nothing on disk
  * that file.changed doesn't already cover.
@@ -38,11 +43,14 @@ export const CHANGESET_REFRESH_EVENT_TYPES = [
   "commit.undone",
   "session.agent_state",
 ];
+const CHANGESET_BUS_TYPES = ["session.git_state_updated", ...CHANGESET_REFRESH_EVENT_TYPES];
 
-/** Bursts of file writes collapse into one refetch, this long after the last. */
+/** Against an older Router: bursts of file writes collapse into one refetch, this long after the last. */
 export const CHANGESET_REFRESH_DEBOUNCE_MS = 1500;
 /** A steady stream of writes still refetches at least this often. */
 export const CHANGESET_REFRESH_MAX_WAIT_MS = 5000;
+/** After a cold answer (never computed), read again this long after, announced or not. */
+export const CHANGESET_COLD_RETRY_MS = 10_000;
 /** Change sets kept for sessions nobody is showing, so switching back paints at once. */
 export const CHANGESET_KEPT_INACTIVE = 16;
 
@@ -78,6 +86,8 @@ interface Entry {
   inFlight?: AbortController;
   unsubscribe?: () => void;
   lastUsed: number;
+  /** The re-read after a cold answer, in case its announcement never comes. */
+  coldRetry?: ReturnType<typeof setTimeout>;
 }
 
 // The rail (ContextRail) and the Changes tab both show a session's change
@@ -109,6 +119,20 @@ async function fetchEntry(e: Entry): Promise<void> {
   try {
     const cs = await e.client.getChangeSet(e.sessionId, e.vs, { signal: ctl.signal });
     if (gen !== e.generation || entries.get(e.key) !== e) return;
+    const served = typeof cs.updating === "boolean";
+    noteGitStateRead(e.sessionId, "changeset", served, cs.updating === true);
+    // Never computed yet (docs/GIT-STATE-DESIGN.md): still loading; the
+    // compute's session.git_state_updated brings the set, and one more read
+    // a while later makes sure a missed announcement can't leave it loading.
+    if (served && cs.updating && !cs.computed_at) {
+      if (!e.coldRetry) {
+        e.coldRetry = setTimeout(() => {
+          e.coldRetry = undefined;
+          if (gen === e.generation && active(e)) e.coalescer.now();
+        }, CHANGESET_COLD_RETRY_MS);
+      }
+      return;
+    }
     setSnapshot(e, { changeSet: normalizeChangeSet(cs), loaded: true });
   } catch (err) {
     if (gen !== e.generation || entries.get(e.key) !== e) return;
@@ -125,18 +149,29 @@ async function fetchEntry(e: Entry): Promise<void> {
 }
 
 function onSessionEvent(e: Entry, env: Envelope): void {
+  if (env.type === "session.git_state_updated") {
+    const p = env.payload as GitStateUpdatedPayload | undefined;
+    noteGitStateEvent(p);
+    // Only a changed set is worth a read: the kept one is what's on screen.
+    if (Array.isArray(p?.changed) && p.changed.includes("changeset")) e.coalescer.now();
+    return;
+  }
   if (env.type === "session.agent_state" && (env.payload as AgentState | undefined)?.state !== "idle") return;
-  e.coalescer.request();
+  if (!markFromTrigger(e.sessionId, env)) e.coalescer.request();
 }
 
 function start(e: Entry): void {
   const gen = e.generation;
   e.unsubscribe?.();
-  const offEvents = subscribeToEvents({ sessionId: e.sessionId, types: CHANGESET_REFRESH_EVENT_TYPES }, (env) =>
+  const offEvents = subscribeToEvents({ sessionId: e.sessionId, types: CHANGESET_BUS_TYPES }, (env) =>
     onSessionEvent(e, env),
   );
-  // Another session's commit takes files out of "uncommitted" here too (COMMIT-LAND-PUSH D10).
-  const offRepos = subscribeRepoChanges(e.client, e.sessionId, () => e.coalescer.request());
+  // Another session's commit takes files out of "uncommitted" here too
+  // (COMMIT-LAND-PUSH D10): the Router recomputes on it (repoStateStore
+  // marks it); an older one is asked again here.
+  const offRepos = subscribeRepoChanges(e.client, e.sessionId, () => {
+    if (gitStateServed(e.sessionId) !== true) e.coalescer.request();
+  });
   e.unsubscribe = () => {
     offEvents();
     offRepos();
@@ -153,6 +188,8 @@ function start(e: Entry): void {
 function stop(e: Entry): void {
   e.generation++;
   e.coalescer.cancel();
+  if (e.coldRetry) clearTimeout(e.coldRetry);
+  e.coldRetry = undefined;
   e.unsubscribe?.();
   e.unsubscribe = undefined;
   e.inFlight?.abort();
@@ -233,10 +270,11 @@ export function resetChangeSetStoreForTests(): void {
 }
 
 /**
- * The session's ChangeSet against one baseline, refetched (debounced) when
- * the session writes a file, commits, undoes a commit or its turn ends, and
- * when one of its repos' branches moved (repo.changed, COMMIT-LAND-PUSH
- * D10). Every reader of one session and baseline shares one request. A
+ * The session's ChangeSet against one baseline, as the Router keeps it:
+ * refetched when session.git_state_updated says it changed (the Router
+ * recomputes it when the session writes a file, commits, undoes a commit
+ * or its turn ends, and when one of its repos' branches moved —
+ * docs/GIT-STATE-DESIGN.md). `loading` until the first computed answer. Every reader of one session and baseline shares one request. A
  * refetch keeps the previous set on screen until the new one lands, and so
  * does a baseline switch within a session, so selection and scroll don't jump.
  */

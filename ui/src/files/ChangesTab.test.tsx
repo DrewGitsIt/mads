@@ -394,11 +394,12 @@ describe("ChangesTab", () => {
     expect(within(sourceHeader).queryByLabelText("new since you looked")).toBeTruthy();
   });
 
-  it("refetches (debounced) on live events and says when the selected file left the set", async () => {
+  it("refetches when the Router announces a changed set (not on the file write itself) and says when the selected file left the set", async () => {
     const client = new FakeRouterClient();
     render(<ChangesTab sessionId={SID} routerClient={client} />);
     fireEvent.click(await (await inList()).findByText("ingest.go"));
     await screen.findByTestId("fake-diff-editor");
+    await waitFor(() => expect(client.sessionReposCalls.length).toBeGreaterThan(0));
 
     const cs = client.changeSets.get(SID)!;
     cs.files = cs.files.filter((f) => f.path !== "services/data/internal/ingest.go");
@@ -408,11 +409,13 @@ describe("ChangesTab", () => {
       for (const s of FakeEventSource.instances)
         s.emit("file.changed", JSON.stringify({ seq: 9001, type: "file.changed", session_id: SID }));
     });
-    expect(client.changeSetCalls.length).toBe(before);
     await act(async () => {
       vi.advanceTimersByTime(1600);
     });
     vi.useRealTimers();
+    // The Router recomputes on file.changed (docs/GIT-STATE-DESIGN.md); the read waits for its word.
+    expect(client.changeSetCalls.length).toBe(before);
+    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["changeset"]));
     await waitFor(() => expect(client.changeSetCalls.length).toBe(before + 1));
     expect(await screen.findByText(/no longer differs from the baseline/)).toBeTruthy();
     expect(list().queryByText("ingest.go")).toBeNull();
@@ -756,9 +759,10 @@ describe("ChangesTab status chip (COMMIT-LAND-PUSH D3, G3)", () => {
     expect(await screen.findByRole("alertdialog", { name: "Push mads/session/session-isolated to origin?" })).toBeTruthy();
   });
 
-  it("refetches its files when one of the session's repos changed, through the same debounce (D10)", async () => {
+  it("against an older Router, refetches its files when one of the session's repos changed, through the same debounce (D10)", async () => {
     const client = new FakeRouterClient();
     ahead(client, 0);
+    client.sessionReposLegacy.add(SID);
     const getChangeSet = vi.spyOn(client, "getChangeSet");
     await renderChip(inPlace, client);
     await waitFor(() => expect(client.sessionReposCalls.length).toBeGreaterThan(0));
@@ -770,6 +774,20 @@ describe("ChangesTab status chip (COMMIT-LAND-PUSH D3, G3)", () => {
     });
     expect(getChangeSet.mock.calls.length).toBe(before);
     await waitFor(() => expect(getChangeSet.mock.calls.length).toBe(before + 1), { timeout: 3000 });
+  });
+
+  it("reads its files again once the Router says a repo change changed them (D10)", async () => {
+    const client = new FakeRouterClient();
+    ahead(client, 0);
+    const getChangeSet = vi.spyOn(client, "getChangeSet");
+    await renderChip(inPlace, client);
+    await waitFor(() => expect(client.sessionReposCalls.length).toBeGreaterThan(0));
+    const before = getChangeSet.mock.calls.length;
+    act(() => FakeRouterClient.emitRepoChanged("/r/mads/.git"));
+    await new Promise((r) => setTimeout(r, 1700));
+    expect(getChangeSet.mock.calls.length).toBe(before);
+    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["changeset"]));
+    await waitFor(() => expect(getChangeSet.mock.calls.length).toBe(before + 1));
   });
 
   it("lands from the ▾ path through the same confirmation", async () => {

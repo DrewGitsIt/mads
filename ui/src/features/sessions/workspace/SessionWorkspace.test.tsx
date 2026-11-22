@@ -39,6 +39,33 @@ describe("SessionWorkspace", () => {
     resetShellDockCache();
   });
 
+  // docs/GIT-STATE-DESIGN.md: one small mark right after the Changes tab,
+  // in the tab bar, so it is in view whichever tab is open.
+  it("shows the git-updating mark beside the Changes tab while git state recomputes, on any tab", async () => {
+    const client = new FakeRouterClient();
+    renderWorkspace({ routerClient: client });
+    await waitFor(() => expect(client.sessionReposCalls).toContain(SESSION_ID));
+    await waitFor(() => expect(client.changeSetCalls.some((c) => c.sessionId === SESSION_ID)).toBe(true));
+    expect(screen.queryByTestId("git-updating")).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Tasks" }));
+    act(() => {
+      for (const s of FakeEventSource.instances)
+        if (!s.closed && s.url.includes("file.changed"))
+          s.emit("file.changed", JSON.stringify({ seq: 9001, type: "file.changed", actor: "x", session_id: SESSION_ID }));
+    });
+    const mark = await screen.findByTestId("git-updating");
+    expect(mark.getAttribute("aria-label")).toBe("Updating git state");
+    expect(mark.getAttribute("data-what")).toBe("changeset counts");
+    expect(mark.previousElementSibling?.querySelector('[role="tab"]:last-child')?.textContent).toBe("Changes");
+
+    act(() => {
+      FakeRouterClient.emitGitStateUpdated(SESSION_ID, ["changeset"], { changed: [] });
+      FakeRouterClient.emitGitStateUpdated(SESSION_ID, ["counts"]);
+    });
+    await waitFor(() => expect(screen.queryByTestId("git-updating")).toBeNull());
+  });
+
   it("defaults to the Conversation tab, lazy-mounting the other two", async () => {
     renderWorkspace();
 

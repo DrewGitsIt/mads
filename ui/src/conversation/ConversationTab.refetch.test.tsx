@@ -118,14 +118,19 @@ describe("ConversationTab — session refetch", () => {
     );
   });
 
-  it("the session's own session.updated refetches its repo state too", async () => {
+  it("its repo state follows the Router's session.git_state_updated, not the session's own session.updated", async () => {
     const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0 });
     await mount(client);
     await quiet(100);
     expect(screen.getByTestId("dock-status").querySelector('[data-work-state="push"]')).toBeNull();
 
     baseAhead(client, 2);
+    const reads = client.sessionReposCalls.length;
     act(() => emitSessionUpdated());
+    await quiet(100);
+    // session.updated is the Router's own counts write: not a reason to read repos (docs/GIT-STATE-DESIGN.md).
+    expect(client.sessionReposCalls.length).toBe(reads);
+    act(() => FakeRouterClient.emitGitStateUpdated(fixtureIsolatedSession.id, ["repos"]));
     await waitFor(() =>
       expect(screen.getByTestId("dock-status").querySelector('[data-work-state="push"]')).toBeTruthy(),
     );

@@ -295,7 +295,7 @@ export interface RouterClient {
   getWorktreeStatus(sessionId: string, repo?: string): Promise<WorktreeStatus>;
   /** What the Commit dialog lists, across the session's repos (COMMIT-LAND-PUSH D2). Runs git: fetch when the dialog opens. */
   getCommitPlan(sessionId: string, opts?: RequestOptions): Promise<CommitPlan>;
-  /** Recounts the header's Commit/Land counts (cheap; they arrive on the session record). */
+  /** Asks for the header's Commit/Land counts to be recounted: 202 at once (204 from an older Router), the counts arriving on the session record. */
   refreshWorktreeCounts(sessionId: string, opts?: RequestOptions): Promise<void>;
   /** Throws CommitRefusedError for a structured refusal (invalid_paths, git_failed, …). */
   commitSession(sessionId: string, req: CommitRequest): Promise<CommitResult>;
@@ -317,6 +317,12 @@ export interface RouterClient {
   getPushPreview(sessionId: string, opts?: { repo?: string; target?: PushTarget } & RequestOptions): Promise<PushPreview>;
   /** Every repo in the session's set with its branch facts (COMMIT-LAND-PUSH D10). Served from the Router's cache; read through router/repoStateStore. */
   getSessionRepos(sessionId: string, opts?: RequestOptions): Promise<SessionRepoState[]>;
+  /**
+   * getSessionRepos with how current the answer is (docs/GIT-STATE-DESIGN.md):
+   * X-Mads-Updating and X-Mads-Computed-At. A Router (or mesh peer) that
+   * omits the headers computes per request: `gitState` false, not updating.
+   */
+  getSessionReposState(sessionId: string, opts?: RequestOptions): Promise<SessionReposAnswer>;
   /** One checkout's branch facts, by any path inside it. */
   getRepoState(path: string): Promise<RepoWorktree>;
   /** Pushed, refused and conflicted all resolve; only an unexpected failure throws. */
@@ -727,6 +733,29 @@ function toCatalog(res: ModelsResponseWire): ModelCatalog {
     state: res.state,
     detail: res.detail,
     fetchedAt: res.fetched_at,
+  };
+}
+
+/** What GET /sessions/{id}/repos says, with its freshness headers. */
+export interface SessionReposAnswer {
+  repos: SessionRepoState[];
+  /** X-Mads-Updating: 1. Missing reads as not updating. */
+  updating: boolean;
+  /** X-Mads-Computed-At, when sent and readable. */
+  computedAt?: string;
+  /** The Router serves cached git state (it sent X-Mads-Updating). */
+  gitState: boolean;
+}
+
+/** A SessionReposAnswer from a body and its headers. */
+export function reposAnswer(repos: SessionRepoState[], headers: Headers | undefined): SessionReposAnswer {
+  const flag = headers?.get("X-Mads-Updating") ?? null;
+  const at = headers?.get("X-Mads-Computed-At") ?? null;
+  return {
+    repos,
+    updating: flag === "1",
+    computedAt: at && !Number.isNaN(Date.parse(at)) ? at : undefined,
+    gitState: flag !== null,
   };
 }
 
@@ -1145,7 +1174,14 @@ export class FetchRouterClient implements RouterClient {
   }
 
   async refreshWorktreeCounts(sessionId: string, opts: RequestOptions = {}): Promise<void> {
-    return routerPost(this.baseUrl, `/sessions/${sessionId}/worktree/refresh`, undefined, opts.signal);
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/worktree/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
+    // 202: accepted, recounting behind it; 204: an older Router, recounted.
+    if (res.status === 202 || res.status === 204) return;
+    await readJSON<unknown>(res);
   }
 
   async commitSession(sessionId: string, req: CommitRequest): Promise<CommitResult> {
@@ -1237,7 +1273,14 @@ export class FetchRouterClient implements RouterClient {
   }
 
   async getSessionRepos(sessionId: string, opts: RequestOptions = {}): Promise<SessionRepoState[]> {
-    return routerGet(this.baseUrl, `/sessions/${sessionId}/repos`, undefined, opts.signal);
+    return (await this.getSessionReposState(sessionId, opts)).repos;
+  }
+
+  async getSessionReposState(sessionId: string, opts: RequestOptions = {}): Promise<SessionReposAnswer> {
+    const url = buildUrl(this.baseUrl, `/sessions/${sessionId}/repos`);
+    const res = await (opts.signal ? fetch(url, { signal: opts.signal }) : fetch(url));
+    const repos = await readJSON<SessionRepoState[]>(res);
+    return reposAnswer(repos, res.headers);
   }
 
   async getRepoState(path: string): Promise<RepoWorktree> {

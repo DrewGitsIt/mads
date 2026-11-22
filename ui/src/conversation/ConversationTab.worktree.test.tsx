@@ -198,14 +198,19 @@ describe("ConversationTab — Commit and Land", () => {
     await mount(client);
     expect((await waitFor(() => workControl("push")!)).textContent).toBe("Push ↑3");
 
-    // Another session pushed one of them: the Router announces the repo moved.
+    // Another session pushed one of them: the repo moved, and the Router,
+    // having recomputed, says the session's repos changed.
+    const moved = () => {
+      FakeRouterClient.emitRepoChanged("/home/user/repo/mads/.git");
+      FakeRouterClient.emitGitStateUpdated(fixtureIsolatedSession.id, ["repos", "counts"]);
+    };
     baseAhead(client, 2);
-    act(() => FakeRouterClient.emitRepoChanged("/home/user/repo/mads/.git"));
+    act(moved);
     await waitFor(() => expect(workControl("push")!.textContent).toBe("Push ↑2"));
 
     // Everything pushed elsewhere: no Push at all.
     baseAhead(client, 0);
-    act(() => FakeRouterClient.emitRepoChanged("/home/user/repo/mads/.git"));
+    act(moved);
     await waitFor(() => expect(workControl("push")).toBeNull());
   });
 
