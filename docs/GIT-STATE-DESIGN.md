@@ -32,7 +32,12 @@ Each part carries `generation` (monotonic per session), `computed_at`, and
 Recompute runs under the Router's own context with a timeout, never a
 request's, so a window going away can't cancel it (writes are unaffected: all
 git here is read-only). At most 4 computes run at once across all sessions
-(the boot warm-up included); the rest wait their turn, still `updating`. A
+(the boot warm-up included), and at most 2 for one session; the rest wait
+their turn, still `updating`. Two lanes: computes for a session read in the
+last 60 s (a window shows it), whatever started them, go ahead of every other
+waiting compute, and the other lane (warm-up, repo-wide sweeps over sessions
+nobody shows) never holds more than 3 slots, so a shown session's compute
+never waits behind a slow repo. A
 part whose compute failed is retried by a read at most once a minute while it
 keeps failing (a trigger or an explicit refresh retries regardless).
 
@@ -52,13 +57,29 @@ watches for, per session:
 - `file.changed`: changeset + counts, debounced 1.5 s, capped at 5 s;
 - `session.agent_state` to idle (turn end): changeset + counts;
 - `commit.created`, `commit.undone`, `merge.completed`: all parts;
-- `repo.changed` (the `repostate` ref watcher, in-process): repos, changeset
-  and counts for sessions using that git dir (an outside commit, branch
-  switch, stash or reset moves the change set too);
+- `repo.changed` (the `repostate` ref watcher, in-process): repos and counts
+  for every kept session using that git dir; its change sets only where their
+  refs moved. All mads worktrees of a repo share one git dir, so one session's
+  commit reaches every session in the repo, and most change sets don't move
+  with it. Each change set records the refs it was computed against, from the
+  repos part: for `start`, each checkout's HEAD and branch (in-place sessions
+  share a checkout, so another session's commit there moves theirs); for
+  `base`, the base branch's head. The repos recompute this queues reads them
+  again (repostate's branch facts), and its end recomputes `start` if its
+  refs moved, and marks `base` stale if its did (`main`, whose ref repos
+  doesn't read, is always marked stale; stale costs nothing until read).
+  Unknown refs (a change set computed before its repos) count as moved. A
+  stash or an outside edit that moves no ref shows on the next open, focus,
+  Retry or trigger. The UI marks only repos and counts on `repo.changed`;
+  a recomputed change set comes in the same announcement, as changed;
 - `POST /worktree/refresh` (see Response shapes): without a body (a window
   opening the session, or regaining focus, after Phase A's 30 s focus skip),
-  counts and repos, and the changeset against `start` when the kept one is
-  older than 30 s; with a body, the parts it names. Answered at once;
+  counts, and repos and the changeset against `start` when the kept one is
+  older than 30 s; with a body, the parts it names. Answered at once. Any
+  caller (the route is View-class over mesh): a part is never recomputed more
+  than once per 5 s by these asks, `max_age_ms: 0` included; a faster ask
+  waits for the 5 s and every ask in between is that one compute (shown as
+  updating meanwhile). Triggers keep their own debounce;
 - a window opening a session's change set: the change-set store's first read
   after it gains a reader asks for a revalidate with `max_age_ms: 30000`
   (outside-the-agent edits send no `file.changed`);
@@ -91,7 +112,7 @@ done, or the indicator sticks.)
 **One event per batch.** A session's finished parts are collected and
 announced together once none of its kept parts (repos, the `start` change
 set, counts) is still computing, or 5 s (the debounce cap) after the first
-was collected, whichever is first: a `file.changed` burst is one row listing
+was collected, whichever is first (a timer, so it holds with no other end): a `file.changed` burst is one row listing
 `["changeset","counts"]`, not one per part. A part that finishes while it is
 queued again (a trigger in the debounce) is not announced; its queued run is
 (for at most 5 s, so a steady stream still delivers results). A recompute
@@ -219,3 +240,13 @@ cherry-picks); the rail's live state for remote sessions (mesh follow-up).
 - An evicted session keeps nothing: a trigger for it computes nothing, and its
   next read (the fail-safe's, at the latest) is cold, `updating`, and
   recomputes.
+- Round 2: `repo.changed` recomputes a change set only where its recorded refs
+  moved (repos and counts stay unconditional); two compute lanes (a session
+  read in the last 60 s first, the others never holding the last slot) and at
+  most 2 computes per session; the batch's 5 s cap is a timer; Retry marks
+  before it asks; the bodiless refresh gives repos the same 30 s max age as
+  the change set; explicit asks recompute a part at most once per 5 s, for
+  every caller.
+- Known, harmless: a repo leaving the session's set (no longer counted in)
+  stays in the repos part until its next recompute; only new repos are
+  looked for.
