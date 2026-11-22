@@ -1,3 +1,5 @@
+//go:build perf
+
 // Command perfseed writes perf-harness workloads (tools/perf/docs/PLAN.md).
 //
 //	perfseed seed -db <fresh.db> -profile <profile.json> -repo <dir> [-manifest <out.json>]

@@ -3,7 +3,7 @@
 GOBIN := $(CURDIR)/bin
 LINT  := $(GOBIN)/golangci-lint
 
-.PHONY: build test lint check tidy ui-deps app e2e-smoke ui-smoke ui-perf release-gate check-migrations
+.PHONY: build test lint check tidy ui-deps app e2e-smoke ui-smoke ui-perf perf-tools-test release-gate check-migrations
 .PHONY: services ui mads data router session pipeline mesh
 
 build: ui-deps
@@ -154,6 +154,13 @@ ui-smoke: ui-deps
 ui-perf:
 	BASE="$(BASE)" CAND="$(CAND)" PROFILE="$(PROFILE)" N="$(N)" BROWSER="$(BROWSER)" SCENARIOS="$(SCENARIOS)" MODES="$(MODES)" CHECKS="$(CHECKS)" REALISM="$(REALISM)" GITFX="$(GITFX)" GITFX_SRC="$(GITFX_SRC)" \
 		sh tools/perf/run.sh
+
+# The perf tools' Go code (perfseed, the git shim) is behind the `perf` build
+# tag, so no plain build, test, vet, lint or release ever compiles it. Its
+# own tests and vet run here, with the tag.
+perf-tools-test:
+	go vet -tags perf ./services/data/cmd/perfseed/... ./tools/perf/...
+	go test -tags perf -count=1 ./services/data/cmd/perfseed/... ./tools/perf/...
 
 # Release gate: cross-platform build matrix + install/update smokes against
 # the native candidate. Kept out of `check`/CI's fast `test` job (multi-

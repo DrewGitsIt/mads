@@ -1,3 +1,5 @@
+//go:build perf
+
 package main
 
 // perfseed gitfx: real-git fixtures for the git-route scenarios (9x) and

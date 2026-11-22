@@ -1,3 +1,5 @@
+//go:build perf
+
 // Command gitshim stands in for git on a perf stack's PATH (the harness's
 // git metrics, tools/perf/docs/PLAN.md): it runs the real git
 // ($PERF_REAL_GIT) with the same arguments, stdio and environment, passes

@@ -1,3 +1,5 @@
+//go:build perf
+
 package main
 
 import (
@@ -25,23 +27,23 @@ func testProfile() *Profile {
 		Name: "test", Seed: 7, Sessions: 6, ActiveSessions: 1, DelegateSessions: 3, Delegates: 9,
 		RunningDelegates: 2, Links: 2, WatchedRepos: 1, SessionSkew: 1.1,
 		Events: map[string]TypeStats{
-			"session.subagent_event":    ev(900, 2300, 900, 9000, 60000),
-			"session.subagent_task":     ev(300, 430, 300, 1200, 5000),
-			"session.delegate_changed":  ev(40, 930, 900, 1100, 1300),
-			"session.agent_state":       ev(200, 110, 100, 180, 260),
-			"session.created":           ev(9, 350, 340, 400, 1200),
-			"session.deleted":           ev(3, 43, 40, 60, 300),
-			"session.turn_ended":        ev(50, 4900, 2000, 20000, 80000),
-			"session.updated":           ev(20, 0, 0, 0, 0),
-			"session.usage_updated":     ev(20, 2, 2, 2, 2),
-			"file.changed":              ev(80, 141, 130, 220, 254),
-			"job.queued":                ev(100, 55, 55, 59, 59),
-			"repo.changed":              {Count: 5, Mean: 77, P50: 77, P95: 89, Max: 89, GlobalFrac: 1},
-			"link.created":              ev(2, 125, 124, 131, 131),
-			"link.message_injected":     ev(4, 1000, 800, 3000, 7000),
-			"config.updated":            ev(1, 0, 0, 0, 0),
-			"workspace.created":         ev(1, 15, 15, 15, 15),
-			"peer.reachability_changed": ev(3, 112, 110, 150, 157), // not on this build: skipped
+			"session.subagent_event":   ev(900, 2300, 900, 9000, 60000),
+			"session.subagent_task":    ev(300, 430, 300, 1200, 5000),
+			"session.delegate_changed": ev(40, 930, 900, 1100, 1300),
+			"session.agent_state":      ev(200, 110, 100, 180, 260),
+			"session.created":          ev(9, 350, 340, 400, 1200),
+			"session.deleted":          ev(3, 43, 40, 60, 300),
+			"session.turn_ended":       ev(50, 4900, 2000, 20000, 80000),
+			"session.updated":          ev(20, 0, 0, 0, 0),
+			"session.usage_updated":    ev(20, 2, 2, 2, 2),
+			"file.changed":             ev(80, 141, 130, 220, 254),
+			"job.queued":               ev(100, 55, 55, 59, 59),
+			"repo.changed":             {Count: 5, Mean: 77, P50: 77, P95: 89, Max: 89, GlobalFrac: 1},
+			"link.created":             ev(2, 125, 124, 131, 131),
+			"link.message_injected":    ev(4, 1000, 800, 3000, 7000),
+			"config.updated":           ev(1, 0, 0, 0, 0),
+			"workspace.created":        ev(1, 15, 15, 15, 15),
+			"perf.never_registered":    ev(3, 112, 110, 150, 157), // no build registers it: skipped
 		},
 	}
 }
@@ -97,8 +99,8 @@ func TestSeedCountsMatchProfile(t *testing.T) {
 			t.Logf("%s: %d events from the store's bootstrap, not in the profile", typ, n)
 		}
 	}
-	if len(m.Skipped) != 1 || !strings.HasPrefix(m.Skipped[0], "peer.reachability_changed") {
-		t.Errorf("skipped = %v, want only peer.reachability_changed", m.Skipped)
+	if len(m.Skipped) != 1 || !strings.HasPrefix(m.Skipped[0], "perf.never_registered") {
+		t.Errorf("skipped = %v, want only perf.never_registered", m.Skipped)
 	}
 }
 
