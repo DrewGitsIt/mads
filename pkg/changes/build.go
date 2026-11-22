@@ -53,7 +53,10 @@ type Inputs struct {
 // requested baseline doesn't apply to the session, or isn't a known id.
 var ErrBaselineUnavailable = errors.New("baseline unavailable")
 
-var commitHashRe = regexp.MustCompile(`^[0-9a-fA-F]{7,40}$`)
+// commitHashRe gates recorded hashes before they reach a git command line
+// (where "-..." would be an option): hex, abbreviated or full, SHA-1 (40)
+// or SHA-256 (64).
+var commitHashRe = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
 
 // SessionFolder is the session's folder — its worktree, else its
 // configured directory, else where it actually ran — canonicalized with

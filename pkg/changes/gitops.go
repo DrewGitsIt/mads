@@ -509,9 +509,11 @@ func checkIgnored(ctx context.Context, repo, gitDir string, rels []string) map[s
 	return res
 }
 
-// commitFiles lists one commit's files (repo-relative, git's order).
+// commitFiles lists one commit's files (repo-relative, git's order). The
+// hash is peeled to its commit: `git show` of an annotated tag prints the
+// tag's header and message ahead of the names.
 func commitFiles(ctx context.Context, repo, hash string) ([]string, error) {
-	out, err := repoGit(ctx, repo, "show", "--no-color", "--name-only", "-z", "--no-renames", "--format=", hash)
+	out, err := repoGit(ctx, repo, "show", "--no-color", "--name-only", "-z", "--no-renames", "--format=", hash+"^{commit}")
 	if err != nil {
 		return nil, err
 	}

@@ -3,8 +3,12 @@ package changes
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/services/session/shadow"
@@ -18,8 +22,25 @@ import (
 // per-commit calls (resolveRef, isAncestorOfHEAD, commitFiles) give;
 // commitsEach is that version, and what any batch failure falls back to.
 
-// showBatch caps the hashes one `git show` is given on its command line.
-const showBatch = 256
+// showBatch caps the hashes one `git show` is given on its command line;
+// ancestryBatch, one merge-base and rev-list.
+const (
+	showBatch     = 256
+	ancestryBatch = 256
+)
+
+// revListCap bounds the rev-list walk reachableFromHEAD runs: a history
+// longer than this since the hashes forked is asked one hash at a time,
+// rather than walked to the git timeout. A var for tests.
+var revListCap = 20000
+
+// fullHashRe is a full object name, SHA-1 or SHA-256.
+var fullHashRe = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+
+// batchFallbacks counts commits() falling back to commitsEach, and
+// perHashAncestry reachableFromHEAD asking hash by hash: for tests, so a
+// silent fallback can't pass for the batched answer.
+var batchFallbacks, perHashAncestry atomic.Int64
 
 // commitMark starts each commit's record in commitFilesBatch's output
 // (\x01 can't start a path git prints under -z).
@@ -39,6 +60,7 @@ func (b *builder) commits(ctx context.Context) ([]contracts.ChangeCommit, map[st
 	}
 	out, byPath, err := b.commitsBatched(ctx)
 	if err != nil {
+		batchFallbacks.Add(1)
 		return b.commitsEach(ctx)
 	}
 	return out, byPath
@@ -111,7 +133,10 @@ func (b *builder) commitsBatched(ctx context.Context) ([]contracts.ChangeCommit,
 		}
 		full, err := resolveCommits(ctx, repo, hashes)
 		if err != nil {
-			continue // no repo there now: it has none of them, as resolveRef says
+			if repoGone(repo) {
+				continue // it has none of them, as resolveRef says
+			}
+			return nil, nil, err // a timeout, an odd answer: commitsEach decides
 		}
 		var have []string
 		for _, h := range hashes {
@@ -216,6 +241,13 @@ func (b *builder) commitsEach(ctx context.Context) ([]contracts.ChangeCommit, ma
 	return out, byPath
 }
 
+// repoGone: no git checkout at repo any more (deleted, or never one), so
+// every git call there fails and resolveRef says it has no commit.
+func repoGone(repo string) bool {
+	_, err := os.Lstat(filepath.Join(repo, ".git"))
+	return err != nil
+}
+
 // resolveCommits maps each of hashes that names a commit in repo to its
 // full hash (resolveRef for many, in one `git cat-file --batch-check`).
 func resolveCommits(ctx context.Context, repo string, hashes []string) (map[string]string, error) {
@@ -236,7 +268,7 @@ func resolveCommits(ctx context.Context, repo string, hashes []string) (map[stri
 	}
 	res := map[string]string{}
 	for i, line := range lines {
-		if f, ok := strings.CutSuffix(line, " commit"); ok && commitHashRe.MatchString(f) {
+		if f, ok := strings.CutSuffix(line, " commit"); ok && fullHashRe.MatchString(f) {
 			res[hashes[i]] = f
 		}
 	}
@@ -244,26 +276,35 @@ func resolveCommits(ctx context.Context, repo string, hashes []string) (map[stri
 }
 
 // reachableFromHEAD is which of fulls (full commit hashes repo has) its
-// HEAD reaches (isAncestorOfHEAD for many). The octopus merge-base of HEAD
-// and all of them is an ancestor of each, so one of them is reachable from
-// a base only by being that base: the reachable ones are the bases among
-// them and the ones `rev-list HEAD --not <bases>` lists — a walk no longer
-// than the history since the oldest of them forked. No common base
-// (unrelated histories, an unborn HEAD): one merge-base per hash.
+// HEAD reaches (isAncestorOfHEAD for many), ancestryBatch at a time. The
+// octopus merge-base of HEAD and a batch is an ancestor of each of them,
+// so one of them is reachable from a base only by being that base: the
+// reachable ones are the bases among them and the ones `rev-list HEAD
+// --not <bases>` lists — a walk no longer than the history since the
+// oldest of them forked, and capped at revListCap. No common base
+// (unrelated histories, an unborn HEAD), a failed or capped walk: one
+// merge-base per hash.
 func reachableFromHEAD(ctx context.Context, repo string, fulls []string) map[string]bool {
 	res := map[string]bool{}
-	if len(fulls) == 0 {
-		return res
-	}
-	uniq := map[string]bool{}
+	seen := map[string]bool{}
 	var want []string
 	for _, f := range fulls {
-		if !uniq[f] {
-			uniq[f] = true
+		if !seen[f] {
+			seen[f] = true
 			want = append(want, f)
 		}
 	}
+	for start := 0; start < len(want); start += ancestryBatch {
+		for f := range reachableBatch(ctx, repo, want[start:min(start+ancestryBatch, len(want))]) {
+			res[f] = true
+		}
+	}
+	return res
+}
+
+func reachableBatch(ctx context.Context, repo string, want []string) map[string]bool {
 	eachOne := func() map[string]bool {
+		perHashAncestry.Add(1)
 		res := map[string]bool{}
 		for _, f := range want {
 			if isAncestorOfHEAD(ctx, repo, f) {
@@ -272,12 +313,17 @@ func reachableFromHEAD(ctx context.Context, repo string, fulls []string) map[str
 		}
 		return res
 	}
+	uniq := map[string]bool{}
+	for _, f := range want {
+		uniq[f] = true
+	}
 	out, err := repoGit(ctx, repo, append([]string{"merge-base", "--octopus", "--all", "HEAD"}, want...)...)
 	bases := strings.Fields(string(out))
 	if err != nil || len(bases) == 0 {
 		return eachOne()
 	}
-	args := []string{"rev-list", "HEAD", "--not"}
+	res := map[string]bool{}
+	args := []string{"rev-list", "--max-count=" + strconv.Itoa(revListCap), "HEAD", "--not"}
 	for _, base := range bases {
 		args = append(args, base)
 		if uniq[base] {
@@ -287,7 +333,11 @@ func reachableFromHEAD(ctx context.Context, repo string, fulls []string) map[str
 	if out, err = repoGit(ctx, repo, args...); err != nil {
 		return eachOne()
 	}
-	for _, h := range strings.Fields(string(out)) {
+	listed := strings.Fields(string(out))
+	if len(listed) >= revListCap {
+		return eachOne() // maybe cut short: what it didn't list may be reachable
+	}
+	for _, h := range listed {
 		if uniq[h] {
 			res[h] = true
 		}

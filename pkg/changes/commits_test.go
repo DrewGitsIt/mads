@@ -2,6 +2,8 @@ package changes
 
 import (
 	"context"
+	"crypto/sha1" //nolint:gosec // git's object names, not security
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,8 +19,9 @@ import (
 // the histories commits() has to sort out: many commits on the session
 // branch (renames, deletions, odd file names, an empty commit), a clean
 // merge and an evil merge into it, a commit amended away, one landed on
-// the primary's main, hashes that are abbreviated, repeated, missing or
-// not hashes at all, and one recorded in a repo deleted since. Recorded
+// the primary's main, one ahead of HEAD, an annotated tag's hash, hashes
+// that are abbreviated, ambiguous, repeated, missing or not hashes at
+// all, and one recorded in a repo deleted since. Recorded
 // oldest first, as the ledger holds them.
 func commitsFixture(t *testing.T, many int) (primary, wt string, recorded []contracts.Commit) {
 	t.Helper()
@@ -72,12 +75,23 @@ func commitsFixture(t *testing.T, many int) (primary, wt string, recorded []cont
 	git(t, wt, "commit", "-q", "--amend", "-m", "amended")
 	rec(wt, "amended")
 
+	// A commit ahead of the worktree's HEAD (a descendant it doesn't reach).
+	git(t, wt, "checkout", "-q", "-b", "ahead")
+	commit(wt, "ahead of HEAD", map[string]string{"ahead.txt": "a\n"})
+	git(t, wt, "checkout", "-q", "mads/session/s")
+
+	// An annotated tag's own hash, recorded in place of its commit's.
+	git(t, wt, "tag", "-a", "t1", "-m", "a tag", side)
+	tag := git(t, wt, "rev-parse", "t1")
+
 	// Landed in the primary checkout, and one the primary has with no Repo.
 	commit(primary, "on main", map[string]string{"main.txt": "m\n"})
 	recorded[len(recorded)-1].Repo = ""
 	commit(primary, "on main, recorded there", map[string]string{"main2.txt": "m2\n"})
 
 	recorded = append(recorded,
+		contracts.Commit{Hash: tag, Message: "annotated tag"},
+		contracts.Commit{Hash: ambiguousPrefix(t, wt), Message: "ambiguous"},
 		contracts.Commit{Hash: amended[:10], Message: "abbreviated"},
 		contracts.Commit{Hash: side, Message: "again"},
 		contracts.Commit{Hash: side, Repo: filepath.Join(tempDir(t), "deleted since"), Message: "its repo gone"},
@@ -86,6 +100,36 @@ func commitsFixture(t *testing.T, many int) (primary, wt string, recorded []cont
 		contracts.Commit{Hash: "", Message: "none"},
 	)
 	return primary, wt, recorded
+}
+
+// ambiguousPrefix writes two blobs into repo whose names share their first
+// 7 hex digits and returns that prefix: a short hash git can't resolve.
+func ambiguousPrefix(t *testing.T, repo string) string {
+	t.Helper()
+	byPrefix := map[string]string{}
+	for i := 0; ; i++ {
+		content := fmt.Sprintf("blob %d\n", i)
+		sum := sha1.Sum([]byte(fmt.Sprintf("blob %d\x00%s", len(content), content)))
+		prefix := hex.EncodeToString(sum[:])[:7]
+		if other, ok := byPrefix[prefix]; ok {
+			for _, c := range []string{other, content} {
+				cmd := exec.Command("git", "hash-object", "-w", "--stdin")
+				cmd.Dir, cmd.Stdin = repo, strings.NewReader(c)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("hash-object: %v\n%s", err, out)
+				}
+			}
+			return prefix
+		}
+		byPrefix[prefix] = content
+	}
+}
+
+// resetBatchCounters zeroes the fallback counters for a test.
+func resetBatchCounters(t *testing.T) {
+	t.Helper()
+	batchFallbacks.Store(0)
+	perHashAncestry.Store(0)
 }
 
 func commitsBuilder(sess contracts.Session, commits []contracts.Commit, roots ...string) *builder {
@@ -117,9 +161,10 @@ func TestCommitsBatchedMatchesPerCommit(t *testing.T) {
 	}{{"worktree", nil, 1}, {"worktree and primary", []string{primary, wt}, 2}} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := commitsBuilder(sess, recorded, tc.roots...)
-			got, gotBy, err := b.commitsBatched(ctx)
-			if err != nil {
-				t.Fatal(err)
+			resetBatchCounters(t)
+			got, gotBy := b.commits(ctx)
+			if n, m := batchFallbacks.Load(), perHashAncestry.Load(); n != 0 || m != 0 {
+				t.Fatalf("batched path fell back (%d to commitsEach, %d per-hash ancestry): the comparison proves nothing", n, m)
 			}
 			want, wantBy := b.commitsEach(ctx)
 			if !reflect.DeepEqual(got, want) {
@@ -133,6 +178,9 @@ func TestCommitsBatchedMatchesPerCommit(t *testing.T) {
 			}
 			var anchoredPrimary, merges int
 			for _, c := range want {
+				if c.Message == "annotated tag" && (len(c.Paths) != 1 || filepath.Base(c.Paths[0]) != "side.txt") {
+					t.Errorf("annotated tag lists %q, want its commit's side.txt", c.Paths)
+				}
 				if len(c.Paths) > 0 && strings.HasPrefix(c.Paths[0], primary+string(filepath.Separator)) {
 					anchoredPrimary++
 				}
@@ -219,4 +267,98 @@ func TestCommitsGitRunsDoNotScaleWithCommits(t *testing.T) {
 		t.Errorf("per commit: %d git runs; the fixture should cost the old way 3 per commit", len(each))
 	}
 	t.Logf("git runs for %d recorded commits: per commit %d, batched %d", len(recorded), len(each), len(batched))
+}
+
+// A criss-cross history: HEAD and a recorded commit have two merge bases,
+// so the octopus answer is a set and rev-list excludes them all.
+func TestCommitsBatchedCrissCross(t *testing.T) {
+	repo := newRepo(t, map[string]string{"a.txt": "a\n"})
+	commitOn := func(branch, file string) string {
+		git(t, repo, "checkout", "-q", branch)
+		writeFile(t, filepath.Join(repo, file), file+"\n")
+		git(t, repo, "add", "-A")
+		git(t, repo, "commit", "-q", "-m", file)
+		return git(t, repo, "rev-parse", "HEAD")
+	}
+	git(t, repo, "branch", "x1")
+	git(t, repo, "branch", "x2")
+	c1 := commitOn("x1", "c1.txt")
+	c2 := commitOn("x2", "c2.txt")
+	git(t, repo, "checkout", "-q", "x1")
+	git(t, repo, "merge", "-q", "--no-ff", "-m", "m1", c2)
+	m1 := git(t, repo, "rev-parse", "HEAD")
+	git(t, repo, "checkout", "-q", "x2")
+	git(t, repo, "merge", "-q", "--no-ff", "-m", "m2", c1)
+	m2 := git(t, repo, "rev-parse", "HEAD")
+	git(t, repo, "checkout", "-q", "x1") // HEAD = m1
+	if bases := strings.Fields(git(t, repo, "merge-base", "--all", m1, m2)); len(bases) != 2 {
+		t.Fatalf("merge bases of m1 and m2 = %v, want two (criss-cross)", bases)
+	}
+	sess := contracts.Session{ID: "s", Dir: repo}
+	ctx := context.Background()
+	for _, hashes := range [][]string{{m2}, {c1, c2, m1, m2}} {
+		var recorded []contracts.Commit
+		for _, h := range hashes {
+			recorded = append(recorded, contracts.Commit{Hash: h, Repo: repo, Message: h[:7]})
+		}
+		b := commitsBuilder(sess, recorded)
+		resetBatchCounters(t)
+		got, gotBy := b.commits(ctx)
+		if n, m := batchFallbacks.Load(), perHashAncestry.Load(); n != 0 || m != 0 {
+			t.Fatalf("%d recorded: batched path fell back (%d, %d)", len(hashes), n, m)
+		}
+		want, wantBy := b.commitsEach(ctx)
+		if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(gotBy, wantBy) {
+			t.Errorf("%d recorded: differ:\n got %+v\nwant %+v", len(hashes), got, want)
+		}
+	}
+}
+
+// A walk longer than revListCap is asked hash by hash, with the same answer.
+func TestCommitsBatchedRevListCap(t *testing.T) {
+	primary, wt, recorded := commitsFixture(t, 10)
+	b := commitsBuilder(contracts.Session{ID: "s", Dir: primary, WorktreeDir: wt}, recorded)
+	ctx := context.Background()
+	old := revListCap
+	revListCap = 2
+	t.Cleanup(func() { revListCap = old })
+	resetBatchCounters(t)
+	got, gotBy := b.commits(ctx)
+	if batchFallbacks.Load() != 0 || perHashAncestry.Load() == 0 {
+		t.Fatalf("fallbacks %d, per-hash ancestry %d: want the capped walk asked hash by hash", batchFallbacks.Load(), perHashAncestry.Load())
+	}
+	want, wantBy := b.commitsEach(ctx)
+	if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(gotBy, wantBy) {
+		t.Errorf("differ:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+// cat-file failing in a repo that is there (a timeout, say) isn't "it has
+// none of them": commits() falls back to commitsEach, and says the same.
+func TestCommitsCatFileFailureFallsBack(t *testing.T) {
+	primary, wt, recorded := commitsFixture(t, 5)
+	b := commitsBuilder(contracts.Session{ID: "s", Dir: primary, WorktreeDir: wt}, recorded)
+	ctx := context.Background()
+	want, wantBy := b.commitsEach(ctx)
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("no git")
+	}
+	bin := t.TempDir()
+	script := "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = cat-file ] && exit 128; done\nexec '" + real + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	resetBatchCounters(t)
+	got, gotBy := b.commits(ctx)
+	if batchFallbacks.Load() != 1 {
+		t.Fatalf("fallbacks = %d, want 1", batchFallbacks.Load())
+	}
+	if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(gotBy, wantBy) {
+		t.Errorf("differ:\n got %+v\nwant %+v", got, want)
+	}
+	if _, _, err := b.commitsBatched(ctx); err == nil {
+		t.Error("commitsBatched with cat-file failing in a live repo: nil error, want one")
+	}
 }
