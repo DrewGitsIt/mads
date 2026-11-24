@@ -166,6 +166,17 @@ type streamSession struct {
 	// on "Working…" with a climbing counter, 2026-09-30.
 	turnOpen   bool
 	unprompted bool
+	// starting is set by an init line that arrives while no turn is open:
+	// the CLI has begun a turn of its own (a background task's notification,
+	// a Monitor event, a peer message) and hasn't written an assistant line
+	// for it yet. The model can think for many seconds before that first
+	// line, and a Send landing in that gap is folded into the CLI's turn just
+	// as one landing after it is, so it must not open a turn either
+	// (ses_aec91da75bd9e1f9, 2026-11-24: sent 1.1s into a notification turn
+	// whose first assistant line came 8.6s in, the turn's only result was
+	// suppressed and the session sat on "Thinking…"). An init inside an
+	// open turn is that turn's own continuation and leaves this alone.
+	starting bool
 	// compactedTo is the post_tokens of a compaction this turn ran, held
 	// for the turn's result line: /compact's result counts no tokens, so
 	// without it the turn end would report the conversation as empty.
@@ -338,6 +349,7 @@ func (s *streamSession) handleLine(raw []byte) {
 		// second end there would double-fire every per-turn consumer.
 		closesUnprompted = !s.turnOpen && s.unprompted
 		s.unprompted = false
+		s.starting = false
 		if closesUnprompted {
 			turnCost = s.turnCostLocked(l.TotalCostUSD)
 			// A Stop pressed during this turn belongs to it, not the next.
@@ -356,6 +368,7 @@ func (s *streamSession) handleLine(raw []byte) {
 		s.interrupted = false
 		s.turnOpen = false
 		s.unprompted = false
+		s.starting = false
 		compactedTo, s.compactedTo = s.compactedTo, 0
 	case l.isPeerReplay() && !s.turnOpen && !s.unprompted:
 		// A peer message that arrived while nothing ran: the CLI runs a
@@ -366,8 +379,12 @@ func (s *streamSession) handleLine(raw []byte) {
 		// kind. One arriving inside an unprompted turn is absorbed into it,
 		// and that turn keeps its own ending.
 		s.turnOpen = true
+		s.starting = false
 	case l.Type == "assistant" && l.ParentToolUseID == "" && !s.turnOpen:
 		s.unprompted = true
+		s.starting = false
+	case l.Type == "system" && l.Subtype == "init" && !s.turnOpen && !s.unprompted:
+		s.starting = true
 	}
 	dropTask := s.isOtherTask(&l)
 	background, bgChanged := s.noteBackground(&l, time.Now())
@@ -645,8 +662,9 @@ func (s *streamSession) send(text, id string) error {
 	// again: ses_359adef5b1c66ed5, 2026-10-25. The same rule as a peer
 	// message landing in an unprompted turn (handleLine). Should the CLI's
 	// own turn end just ahead of the message, the message runs as an
-	// unprompted turn and its plain result still ends it.
-	if !s.unprompted {
+	// unprompted turn and its plain result still ends it. The CLI's turn
+	// counts from its init line, not its first assistant line (starting).
+	if !s.unprompted && !s.starting {
 		s.turnOpen = true
 	}
 	s.mu.Unlock()
