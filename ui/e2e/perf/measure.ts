@@ -19,6 +19,8 @@ export interface Plan {
   manifestPath: string;
   /** perfseed -transcripts output, copied into each stack's $HOME. */
   transcriptsDir?: string;
+  /** perfseed chat's fake history files (scenario 10x), copied into each stack's $MADS_HOME/fake-transcripts. */
+  fakeTranscriptsDir?: string;
   builds: Build[];
   scenarios: string[];
   n: number;
@@ -451,6 +453,8 @@ export async function bootRig(opts: {
   env?: Record<string, string>;
   /** Electron: leave the first window as it loaded, probe or not (the cold-load leg's own reload carries the probe). */
   coldLoad?: boolean;
+  /** Overrides the plan's holdOutput (a scenario that streams a live reply needs /output through). */
+  holdOutput?: boolean;
 }): Promise<Rig> {
   const gitFx = opts.plan.gitFx ?? undefined;
   const { plan, build, mode, tag, manifest } = opts;
@@ -485,8 +489,9 @@ export async function bootRig(opts: {
       build,
       seededDB: plan.seededDB,
       transcriptsDir: plan.transcriptsDir,
+      fakeTranscriptsDir: plan.fakeTranscriptsDir,
       delays,
-      holdOutput: plan.holdOutput,
+      holdOutput: opts.holdOutput ?? plan.holdOutput,
       tag,
       fastModelURL: opts.fastModelURL,
       env: opts.env,
@@ -637,7 +642,7 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
   let rig: Rig | undefined;
   let fatal: Error | undefined;
   try {
-    rig = await bootRig({ plan, build, mode, tag, manifest, coldLoad: scenario.id === "1-cold-load" });
+    rig = await bootRig({ plan, build, mode, tag, manifest, coldLoad: scenario.id === "1-cold-load", holdOutput: scenario.liveOutput ? false : undefined });
     const { stack, page, watch, metrics, ctx } = rig;
     await scenario.prepare(ctx);
     if (scenario.id !== "1-cold-load") await ctx.quiesce();
@@ -944,6 +949,13 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       r.status ?? null,
     ]);
 
+    // The scenario's own numbers and checks from the window (scenario 10x).
+    if (scenario.collect) {
+      const c = await scenario.collect(ctx);
+      Object.assign(result.det, c.det ?? {});
+      Object.assign(result.timing, c.timing ?? {});
+      result.checks.push(...(c.checks ?? []));
+    }
     // The live-event smoke: something changed through the API shows within 2 s.
     if (scenario.smoke) result.checks.push(await scenario.smoke(ctx));
     result.ok = result.checks.every((c) => c.ok);

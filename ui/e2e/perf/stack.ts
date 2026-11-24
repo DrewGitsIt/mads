@@ -172,6 +172,13 @@ export async function bootPerfStack(opts: {
   seededDB: string;
   /** A ~/.claude/projects tree to copy into the scratch $HOME (perfseed -transcripts). */
   transcriptsDir?: string;
+  /**
+   * The fake's history files (perfseed chat): copied into the scratch
+   * $MADS_HOME/fake-transcripts, where the Router's fake reads a dormant
+   * session's transcript, and named to the session children's fake
+   * (MADS_FAKE_PERF_HISTORY_DIR) so a resumed session finds its history.
+   */
+  fakeTranscriptsDir?: string;
   delays: string;
   holdOutput: boolean;
   tag: string;
@@ -200,6 +207,10 @@ export async function bootPerfStack(opts: {
   if (opts.transcriptsDir && existsSync(opts.transcriptsDir)) {
     cpSync(opts.transcriptsDir, path.join(homeDir, ".claude", "projects"), { recursive: true });
   }
+  const fakeHistory = path.join(homeDir, "fake-transcripts");
+  if (opts.fakeTranscriptsDir && existsSync(opts.fakeTranscriptsDir)) {
+    cpSync(opts.fakeTranscriptsDir, fakeHistory, { recursive: true });
+  }
   // A fresh copy per repetition: the Data Service migrates and appends to
   // it, and no repetition may see another's writes. A clone on APFS.
   copyFileSync(opts.seededDB, path.join(dataDir, "mads.db"), constants.COPYFILE_FICLONE);
@@ -214,6 +225,7 @@ export async function bootPerfStack(opts: {
   for (const k of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]) env[k] = "http://127.0.0.1:1";
   env.NO_PROXY = env.no_proxy = "127.0.0.1,localhost,::1";
   env.GIT_CEILING_DIRECTORIES = process.env.PERF_GIT_CEILING || path.dirname(tmpDir);
+  if (opts.fakeTranscriptsDir) env.MADS_FAKE_PERF_HISTORY_DIR = fakeHistory;
   Object.assign(env, opts.env ?? {});
   // A fixture session's child finds its shadow store where perfseed gitfx made it.
   if (opts.gitFx) env.XDG_DATA_HOME = path.join(opts.gitFx.root, "xdg");

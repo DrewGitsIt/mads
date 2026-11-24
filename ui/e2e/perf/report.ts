@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { DelayMode, Plan, Result } from "./measure";
-import type { Manifest } from "./scenarios";
+import { DELAYS_OFF_ONLY, type Manifest } from "./scenarios";
 import { resolveCheck, UI_ONLY_CHECKS } from "./checkNames";
 
 /**
@@ -32,6 +32,13 @@ const DET_LABELS: Record<string, string> = {
   prep_events_stream_bytes: "append phase: /events bytes to the page (live traffic, not in the window)",
   prep_events_frames: "append phase: /events frames to the page",
   prep_events_connects: "append phase: /events (re)connects",
+  chat_older_pages: "chat: older transcript pages fetched loading the view",
+  chat_rows_loaded: "chat: transcript rows loaded (pages × 100, capped at the conversation)",
+  chat_items: "chat: rendered conversation items",
+  chat_dom_nodes: "chat: DOM nodes, whole page, after loading",
+  chat_stream_dom_nodes: "chat: DOM nodes in the conversation stream",
+  chat_deltas: "chat: text deltas the page received (first delta → turn end)",
+  chat_commits: "chat: React commits, first delta → turn end",
 };
 
 const TIMING_LABELS: Record<string, string> = {
@@ -75,7 +82,89 @@ const TIMING_LABELS: Record<string, string> = {
   abandoned_aborted: "…of which the page aborted",
   abandoned_held_total_ms: "abandoned: socket time held after leaving, summed (ms)",
   abandoned_held_max_ms: "abandoned: longest held after leaving (ms)",
+  chat_window_ms: "chat: stream window, first delta → turn end (ms)",
+  chat_deltas_per_s: "chat: text deltas received per second",
+  chat_commits_per_s: "chat: React commits per second",
+  chat_commits_per_delta: "chat: React commits per delta",
+  chat_busy_pct: "chat: main thread busy (% of the window; trace)",
+  chat_ms_per_commit: "chat: main-thread ms per React commit (trace)",
+  chat_ms_per_delta: "chat: main-thread ms per delta (trace)",
+  chat_js_ms_per_commit: "chat: …JS ms per commit (trace self time)",
+  chat_style_ms_per_commit: "chat: …style ms per commit",
+  chat_layout_ms_per_commit: "chat: …layout ms per commit",
+  chat_paint_ms_per_commit: "chat: …paint/composite ms per commit",
+  chat_gc_ms_per_commit: "chat: …GC ms per commit",
+  chat_other_ms_per_commit: "chat: …other (task overhead, unattributed) ms per commit",
+  chat_frame_p50_ms: "chat: frame interval p50 (rAF, ms)",
+  chat_frame_p95_ms: "chat: frame interval p95 (rAF, ms)",
+  chat_frames_over_50ms: "chat: frames over 50 ms",
+  chat_longtasks: "chat: long tasks in the window",
+  chat_longtask_ms: "chat: long-task time in the window (ms)",
+  chat_on_screen_p50_ms: "chat: delta received → on screen, p50 (ms; paced: the reveal's lag)",
+  chat_on_screen_p95_ms: "chat: delta received → on screen, p95 (ms)",
+  chat_off_bottom_pct: "chat: frames more than 10 px off the bottom (%; runway page turns glide)",
+  chat_off_bottom_max_px: "chat: furthest off the bottom (px)",
+  chat_heap_used_mb: "chat: JS heap used after loading, after a full GC (MB)",
 };
+
+/** The chat scenarios' summary table (renderChatSummary): column → result key. */
+const CHAT_COLUMNS: [string, string, "det" | "timing"][] = [
+  ["rows loaded", "chat_rows_loaded", "det"],
+  ["DOM nodes", "chat_dom_nodes", "det"],
+  ["heap MB", "chat_heap_used_mb", "timing"],
+  ["deltas/s", "chat_deltas_per_s", "timing"],
+  ["commits/s", "chat_commits_per_s", "timing"],
+  ["busy %", "chat_busy_pct", "timing"],
+  ["ms/commit", "chat_ms_per_commit", "timing"],
+  ["ms/delta", "chat_ms_per_delta", "timing"],
+  ["JS", "chat_js_ms_per_commit", "timing"],
+  ["style", "chat_style_ms_per_commit", "timing"],
+  ["layout", "chat_layout_ms_per_commit", "timing"],
+  ["paint", "chat_paint_ms_per_commit", "timing"],
+  ["GC", "chat_gc_ms_per_commit", "timing"],
+  ["frame p50", "chat_frame_p50_ms", "timing"],
+  ["frame p95", "chat_frame_p95_ms", "timing"],
+  ["long tasks", "chat_longtasks", "timing"],
+  ["long ms", "chat_longtask_ms", "timing"],
+  ["on screen p95", "chat_on_screen_p95_ms", "timing"],
+];
+
+/**
+ * One table for the chat scenarios: a row per scenario and build, medians
+ * over its passing repetitions (JS…GC are ms per commit, trace self time).
+ */
+export function renderChatSummary(plan: Plan, results: Result[]): string[] {
+  const ids = plan.scenarios.filter((s) => /^10/.test(s));
+  if (ids.length === 0) return [];
+  const lines = [
+    "## Chat stream (10x): summary",
+    "",
+    "Medians over passing repetitions; JS … GC are main-thread ms per React commit (trace self time). Window: first text delta → turn end.",
+    "",
+    `| scenario | build | ok | ${CHAT_COLUMNS.map((c) => c[0]).join(" | ")} |`,
+    `|---|---|---|${CHAT_COLUMNS.map(() => "---").join("|")}|`,
+  ];
+  for (const sid of ids) {
+    for (const b of plan.builds) {
+      const rs = results.filter((r) => r.scenario === sid && r.build === b.label && !r.scenario.startsWith("check:"));
+      const ok = rs.filter((r) => r.ok);
+      const cells = CHAT_COLUMNS.map(([, k, where]) => {
+        const v = ok.map((r) => (where === "det" ? r.det?.[k] : r.timing?.[k])).filter((x): x is number => typeof x === "number" && Number.isFinite(x));
+        return v.length ? fmtNum(Math.round(quantile(v, 0.5) * 10) / 10) : "–";
+      });
+      lines.push(`| ${sid} | ${b.label} | ${ok.length}/${plan.n} | ${cells.join(" | ")} |`);
+    }
+  }
+  const chatRs = results.filter((r) => /^10/.test(r.scenario));
+  const passed = chatRs.filter((r) => r.ok && r.checks?.length).length;
+  lines.push("", `Checks (the wire carried the agent's whole stored reply; it is all on screen, in order; stick-to-bottom held): ${passed} / ${chatRs.length} repetitions passed every one.`);
+  for (const f of chatRs.filter((r) => !r.ok)) {
+    const bad = (f.checks ?? []).filter((c) => !c.ok).map((c) => `${c.name}: ${c.detail ?? ""}`);
+    lines.push(`- ✗ ${f.scenario} ${f.build} rep ${f.rep}: ${bad.length ? bad.join("; ") : f.error}`);
+  }
+  lines.push("");
+  return lines;
+}
 
 /** The git routes' latency rows (measure.ts result.timing "route <r> …"). */
 const GIT_ROUTE_NAMES = ["repos", "changeset", "worktree/refresh", "worktree", "commit-plan", "push", "land"];
@@ -157,6 +246,11 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
         `${manifest.sessions.length} sessions; parent has ${manifest.parent.delegates} delegates, ` +
         `${manifest.counts["session.subagent_event"] ?? 0} subagent events in the log`,
     );
+    if (manifest.chat) {
+      const c = manifest.chat;
+      const roles = Object.entries(c.by_role).map(([k, v]) => `${k} ${v}`).join(", ");
+      lines.push(`- chat conversation (10x): ${c.source}, ${c.turns} turns, ${c.rows} rows (${roles}), ${(c.text_bytes / 1e6).toFixed(1)} MB of text`);
+    }
   }
   lines.push("", "Deterministic metrics are exact values; ⚠ marks one that varied across a build's repetitions (min … max); (±N B) is a byte total that varied by under 0.1%.");
   lines.push(
@@ -169,7 +263,7 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
   // Every repetition the plan asked for, so missing ones show.
   for (const sid of plan.scenarios) {
     for (const mode of modes) {
-      if (/^9/.test(sid) && mode === "on") continue;
+      if (DELAYS_OFF_ONLY.test(sid) && mode === "on") continue;
       const rs = results.filter((r) => r.scenario === sid && (r.mode ?? "on") === mode && !r.skipped);
       if (rs.length === 0 && plan.realism) {
         lines.push(`## ${sid} — delays ${mode}`, "", "- not run (realism: no suitable data)", "");
@@ -277,6 +371,7 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
       lines.push("");
     }
   }
+  lines.push(...renderChatSummary(plan, results));
   // Correctness checks, per build, step by step; and the live-event smoke after each scenario.
   const checkRs = results.filter((r) => r.scenario.startsWith("check:"));
   if (plan.checks.length) {
@@ -293,8 +388,8 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
 /** Whether every planned repetition exists and succeeded. */
 export function allOk(plan: Plan, results: Result[]): boolean {
   const modes = plan.modes ?? ["on"];
-  // Real-git scenarios (9x) run with delays off only.
-  const runs = plan.scenarios.reduce((n, s) => n + (/^9/.test(s) ? modes.filter((m) => m === "off").length : modes.length), 0);
+  // Real-git (9x) and chat (10x) scenarios run with delays off only.
+  const runs = plan.scenarios.reduce((n, s) => n + (DELAYS_OFF_ONLY.test(s) ? modes.filter((m) => m === "off").length : modes.length), 0);
   const want = (runs * plan.n + plan.checks.length) * plan.builds.length;
   return results.length === want && results.every((r) => r.ok);
 }
