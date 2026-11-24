@@ -35,6 +35,7 @@ const DET_LABELS: Record<string, string> = {
   chat_older_pages: "chat: older transcript pages fetched loading the view",
   chat_rows_loaded: "chat: transcript rows loaded (pages × 100, capped at the conversation)",
   chat_items: "chat: rendered conversation items",
+  chat_return_retries: "chat: extra Ctrl+↓↓ presses before the view was back at the tail, following",
   chat_dom_nodes: "chat: DOM nodes, whole page, after loading",
   chat_stream_dom_nodes: "chat: DOM nodes in the conversation stream",
   chat_deltas: "chat: text deltas the page received (first delta → turn end)",

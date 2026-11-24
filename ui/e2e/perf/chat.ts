@@ -410,24 +410,51 @@ function chatScenario(h: ChatHelpers, size: Size, paced: boolean): Scenario {
         }, 120_000);
       } else {
         // Scroll-up paging: the scroller near its top asks for the page before the oldest row.
+        // Each page counted at the proxy (GET …/transcript?before=…), not by
+        // rendered items (a page can fold into an existing tool group).
+        const olderAsked = async () => {
+          const sn = await ctx.stack.proxy.snapshot();
+          return sn.requests.filter((r) => /\/transcript$/.test(r.path) && /before=/.test(r.query)).length;
+        };
         for (let i = 1; i < size.pages; i++) {
-          const before = await items(ctx.page).count();
-          await stream(ctx.page).evaluate((el) => el.scrollTo({ top: 0 }));
-          // Nothing older (a short transcript): no growth in 10 s, and the paging stops there.
-          const deadline = Date.now() + 10_000;
-          while ((await items(ctx.page).count()) <= before && Date.now() < deadline) await ctx.page.waitForTimeout(50);
+          const before = await olderAsked();
+          let asked = false;
+          // A scroll near the top asks; if the scroller already sat at 0 no scroll event fires, so nudge it first.
+          for (let tries = 0; tries < 3 && !asked; tries++) {
+            await stream(ctx.page).evaluate((el) => {
+              if (el.scrollTop === 0) el.scrollTo({ top: 800 });
+            });
+            await ctx.page.waitForTimeout(50);
+            await stream(ctx.page).evaluate((el) => el.scrollTo({ top: 0 }));
+            const deadline = Date.now() + 5_000;
+            while (!(asked = (await olderAsked()) > before) && Date.now() < deadline) await ctx.page.waitForTimeout(50);
+          }
           await ctx.quiesce();
-          if ((await items(ctx.page).count()) <= before) break;
+          // Nothing older (a short transcript): the paging stops there.
+          if (!asked) break;
         }
       }
       await ctx.quiesce();
-      // Back to the tail, following (Ctrl+↓↓), as a reader returns to the live reply.
-      await stream(ctx.page).hover();
-      await pressTwice(ctx.page, "Control+ArrowDown");
-      await h.until("the view back at the tail, following", async () => {
-        const t = await atTail(ctx.page);
-        return t.d >= 0 && t.d <= STICK_PX && t.mode === "follow";
-      }, T);
+      // Back to the tail, following (Ctrl+↓↓), as a reader returns to the
+      // live reply — and again, as a reader would, if it didn't get there in
+      // 10 s (counted: chat_return_retries).
+      let retries = -1;
+      let last = { d: -1, mode: "" };
+      for (let tries = 0; tries < 4; tries++) {
+        retries++;
+        await stream(ctx.page).hover();
+        await pressTwice(ctx.page, "Control+ArrowDown");
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          last = await atTail(ctx.page);
+          if (last.d >= 0 && last.d <= STICK_PX && last.mode === "follow") break;
+          await ctx.page.waitForTimeout(100);
+        }
+        if (last.d >= 0 && last.d <= STICK_PX && last.mode === "follow") break;
+      }
+      if (!(last.d >= 0 && last.d <= STICK_PX && last.mode === "follow")) {
+        throw new Error(`Ctrl+↓↓ never brought the view back to the tail, following (${retries + 1} tries; ${Math.round(last.d)} px from the bottom, mode ${last.mode || "?"})`);
+      }
       await ctx.quiesce();
       const snap1 = await ctx.stack.proxy.snapshot();
       const seen = new Set(snap0.requests.map((r) => r.id));
@@ -444,6 +471,7 @@ function chatScenario(h: ChatHelpers, size: Size, paced: boolean): Scenario {
       const c2 = chat();
       load = {
         chat_older_pages: pages,
+        chat_return_retries: retries,
         chat_rows_loaded: Math.min(c2.rows + 2, (pages + 1) * PAGE_ROWS),
         chat_items: dom.items,
         chat_dom_nodes: dom.all,
