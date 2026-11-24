@@ -879,6 +879,40 @@ describe("ChatRenderer — quiet-update pills", () => {
     expect(screen.getByText("▸ [System] Leader tools provided to this session · expand to show message")).toBeTruthy();
   });
 
+  it("measures the stream without forcing layout on an ordinary commit, and eases from the height laid out before the fold", () => {
+    const observers: (() => void)[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(cb: () => void) {
+          observers.push(cb);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    let height = 400;
+    const spy = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(() => height);
+    FLAGS.linkedSessions = true;
+    const digest: TranscriptMessage = { role: "user", text: "d", attribution: { source_name: "S", kind: "digest" } };
+    const reply = (text: string): KeyedRow => ({ key: "r", role: "agent", text, live: true });
+    const { container, rerender } = render(<ChatRenderer rows={[...keyed([digest]), reply("N")]} links={[]} viewedSessionId="v" />);
+    // The live reply streams and the stream grows; the observer sees it.
+    spy.mockClear();
+    rerender(<ChatRenderer rows={[...keyed([digest]), reply("NO")]} links={[]} viewedSessionId="v" />);
+    rerender(<ChatRenderer rows={[...keyed([digest]), reply("NOO")]} links={[]} viewedSessionId="v" />);
+    expect(spy).not.toHaveBeenCalled();
+    height = 600;
+    act(() => observers.forEach((cb) => cb()));
+    // Settled as NOOP, the pair folds: 600 → 500 is the drop, not 400 → 500.
+    height = 500;
+    rerender(<ChatRenderer rows={[...keyed([digest]), { key: "r", role: "agent", text: "NOOP" }]} links={[]} viewedSessionId="v" />);
+    const pill = container.querySelector("[data-ease]") as HTMLElement;
+    expect(pill.style.getPropertyValue("--ease-from")).toBe("100px");
+    spy.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
   it("eases the height a new pill replaces, then lets go", () => {
     vi.useFakeTimers();
     let height = 400;

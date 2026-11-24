@@ -527,19 +527,38 @@ export function ChatRenderer({
   const rootRef = useRef<HTMLDivElement>(null);
   const quietTotal = rendered.reduce((n, r) => n + (r.type === "quiet" ? r.digests.length : 0), 0);
   const lastQuiet = [...rendered].reverse().find((r) => r.type === "quiet");
-  const measured = useRef<{ height: number; quiet: number } | null>(null);
-  const [easing, setEasing] = useState<{ key: string; px: number } | null>(null);
-  // Every commit measures against the last one; it sets state only when a
-  // pill grew and the stream shrank, so it settles.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const lastQuietKey = lastQuiet?.key;
+  // The stream's height as last laid out, kept by a ResizeObserver so an
+  // ordinary commit (a streamed delta) never forces layout to read it. Only
+  // a commit that adds quiet checks reads the new height, and compares it
+  // with the last one the browser laid out — the height just before the fold.
+  const height = useRef<number | null>(null);
+  const quietSeen = useRef<number | null>(null);
   useLayoutEffect(() => {
-    const height = rootRef.current?.offsetHeight ?? 0;
-    const prev = measured.current;
-    measured.current = { height, quiet: quietTotal };
-    if (prev && lastQuiet && quietTotal > prev.quiet && height < prev.height) {
-      setEasing({ key: lastQuiet.key, px: prev.height - height });
-    }
-  });
+    const el = rootRef.current;
+    if (!el) return;
+    height.current = el.offsetHeight; // once, at mount
+    if (typeof ResizeObserver === "undefined") return;
+    // Read inside the observer's callback, where layout is already clean.
+    const observer = new ResizeObserver(() => {
+      height.current = el.offsetHeight;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const [easing, setEasing] = useState<{ key: string; px: number } | null>(null);
+  // Sets state only when a pill grew and the stream shrank, so it settles.
+  useLayoutEffect(() => {
+    const prevQuiet = quietSeen.current;
+    quietSeen.current = quietTotal;
+    if (prevQuiet === null || quietTotal <= prevQuiet || !lastQuietKey) return;
+    const el = rootRef.current;
+    if (!el) return;
+    const before = height.current;
+    const after = el.offsetHeight;
+    height.current = after;
+    if (before !== null && after < before) setEasing({ key: lastQuietKey, px: before - after });
+  }, [quietTotal, lastQuietKey]);
   useEffect(() => {
     if (!easing) return;
     const t = window.setTimeout(() => setEasing(null), FOLD_MS);
