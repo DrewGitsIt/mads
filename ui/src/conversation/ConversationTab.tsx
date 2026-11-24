@@ -67,7 +67,7 @@ import {
   type SubStreamItem,
   type TaskModel,
 } from "./activity/conversationItems";
-import { subagentRows } from "./keyed/conversation";
+import { allRows, subagentRows } from "./keyed/conversation";
 import { useKeyedConversation } from "./keyed/useKeyedConversation";
 import { useReveal } from "./keyed/useReveal";
 import { LinkNamesProvider, useLinkNames } from "./activity/linkNames";
@@ -1538,7 +1538,7 @@ export function ConversationTab({
     let toolTimestamp: string | undefined;
     if (dockTarget.toolId) {
       // Any row: the main list's, or a subagent's.
-      for (const r of Object.values(conv.state.rows)) {
+      for (const r of allRows(conv.state)) {
         if (r.role === "tool" && r.tool?.id === dockTarget.toolId) {
           tool = r.tool;
           toolTimestamp = r.timestamp;

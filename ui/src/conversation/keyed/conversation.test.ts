@@ -3,7 +3,9 @@ import type { ToolUse, TranscriptMessage } from "../../router/types";
 import {
   conversationReducer,
   emptyConversation,
+  allRows,
   orderedRows,
+  rowOf,
   subagentRows,
   type ConvAction,
   type ConvState,
@@ -75,8 +77,8 @@ describe("conversationReducer", () => {
       ]),
     );
     expect(view(s)).toEqual(["user:user:1=go", "agent:m1:0=Hi"]);
-    expect(s.rows["m1:0"].paced).toBe(true);
-    expect(s.rows["m1:0"].timestamp).toBe("t");
+    expect(rowOf(s, "m1:0")!.paced).toBe(true);
+    expect(rowOf(s, "m1:0")!.timestamp).toBe("t");
   });
 
   it("keeps older stored rows ahead of the last page and settled rows the page lacks after it", () => {
@@ -117,7 +119,7 @@ describe("conversationReducer", () => {
       ]),
     );
     expect(view(s)).toEqual(["tool:t1=ls"]);
-    expect(s.rows.t1.tool?.result?.text).toBe("out");
+    expect(rowOf(s, "t1")!.tool?.result?.text).toBe("out");
   });
 
   it("a background call's result keeps its task id, stored and live", () => {
@@ -128,7 +130,7 @@ describe("conversationReducer", () => {
         { role: "tool_result", key: "t1", text: "running", tool: { id: "t1", name: "", background: { task_id: "b1" } } },
       ]),
     );
-    expect(stored.rows.t1.tool?.result?.background).toEqual({ task_id: "b1" });
+    expect(rowOf(stored, "t1")!.tool?.result?.background).toEqual({ task_id: "b1" });
 
     let live = run(emptyConversation(), hello(), f("replay_end"));
     live = run(
@@ -137,7 +139,7 @@ describe("conversationReducer", () => {
       f("tool_use", { key: "c", tool: { id: "c", name: "Bash" } }),
       f("tool_result", { key: "c", text: "running", tool: { id: "c", name: "", background: { task_id: "b2" } } }),
     );
-    expect(live.rows.c.tool?.result?.background).toEqual({ task_id: "b2" });
+    expect(rowOf(live, "c")!.tool?.result?.background).toEqual({ task_id: "b2" });
   });
 
   it("drops a replayed result whose call it never saw (a pruned subagent call)", () => {
@@ -155,15 +157,15 @@ describe("conversationReducer", () => {
       f("replay_end"),
     );
     expect(view(s)).toEqual([]);
-    expect(s.rows["tool:toolu_SUB"]).toBeUndefined();
+    expect(rowOf(s, "tool:toolu_SUB")).toBeUndefined();
   });
 
   it("unsaved keeps agent rows and marks a user send failed, in place", () => {
     let s = run(emptyConversation(), hello(), f("replay_end"), f("user_message", { key: "u1", text: "hi" }), ...textItem("a1", "partial"));
     s = run(s, f("unsaved", { keys: ["u1", "a1"] }));
     expect(view(s)).toEqual(["user:u1=hi*", "agent:a1=partial*"]);
-    expect(s.rows.u1.failed).toBe(true);
-    expect(s.rows.a1.unsaved).toBe(true);
+    expect(rowOf(s, "u1")!.failed).toBe(true);
+    expect(rowOf(s, "a1")!.unsaved).toBe(true);
   });
 
   it("swap drops the stale live rows and merges the page in one action", () => {
@@ -218,7 +220,7 @@ describe("conversationReducer", () => {
     expect(s.queued.map((q) => q.text)).toEqual(["later"]);
     s = run(s, f("replay_end"), f("item_start", { key: "a", item: "text" }), f("turn_end"));
     expect(s.turn.active).toBe(false);
-    expect(s.rows.a.open).toBe(false);
+    expect(rowOf(s, "a")!.open).toBe(false);
   });
 
   it("a live user_message opens its turn (a queue delivery too); a replayed one doesn't", () => {
@@ -235,32 +237,32 @@ describe("conversationReducer", () => {
     // Only the replay's latest user message is the send; earlier ones are history.
     let s = run(emptyConversation(), sending, hello(), f("user_message", { key: "u0", text: "old" }));
     s = run(s, f("user_message", { key: "u1", text: "go" }), f("replay_end"));
-    expect(s.rows.u0.paced).toBe(false);
-    expect(s.rows.u1.paced).toBe(true);
+    expect(rowOf(s, "u0")!.paced).toBe(false);
+    expect(rowOf(s, "u1")!.paced).toBe(true);
     expect(s.sending).toBe(false);
     // Arrived: a later replay of it is history again.
     s = run(s, hello(), f("user_message", { key: "u2", text: "x" }), f("replay_end"));
-    expect(s.rows.u2.paced).toBe(false);
+    expect(rowOf(s, "u2")!.paced).toBe(false);
   });
 
   it("a send that arrives live ends the wait; one that failed or queued never marks a replay", () => {
     const live = run(emptyConversation(), { type: "sending", on: true }, hello(), f("replay_end"), f("user_message", { key: "u", text: "q" }));
     expect(live.sending).toBe(false);
     const failed = run(emptyConversation(), { type: "sending", on: true }, { type: "sending", on: false }, hello(), f("user_message", { key: "u", text: "q" }));
-    expect(failed.rows.u.paced).toBe(false);
+    expect(rowOf(failed, "u")!.paced).toBe(false);
   });
 
   it("rows stay current through settling and the stored copy, until the next turn starts", () => {
     let s = run(emptyConversation(), hello(), f("replay_end"), f("user_message", { key: "user:1", text: "go" }));
     s = run(s, f("item_start", { key: "t1", item: "tool_use" }), f("tool_use", { key: "t1", tool: { id: "t1", name: "ls" } }));
     s = run(s, f("settled", { keys: ["user:1", "t1"] }), page([{ role: "user", key: "user:1", text: "go" }, { role: "tool", key: "t1", tool: { id: "t1", name: "ls" } }]));
-    expect(s.rows.t1.live).toBeFalsy();
-    expect(s.rows.t1.current).toBe(true);
+    expect(rowOf(s, "t1")!.live).toBeFalsy();
+    expect(rowOf(s, "t1")!.current).toBe(true);
     s = run(s, f("turn_end"));
-    expect(s.rows.t1.current).toBe(true); // the renderer folds it once the reveal drains
+    expect(rowOf(s, "t1")!.current).toBe(true); // the renderer folds it once the reveal drains
     s = run(s, f("user_message", { key: "user:2", text: "again" }));
-    expect(s.rows.t1.current).toBe(false);
-    expect(s.rows["user:2"].current).toBe(true);
+    expect(rowOf(s, "t1")!.current).toBe(false);
+    expect(rowOf(s, "user:2")!.current).toBe(true);
   });
 
   it("a live item with no turn known to run starts one; a replayed or subagent one doesn't", () => {
@@ -273,17 +275,17 @@ describe("conversationReducer", () => {
 
   it("a turn started from outside (Stop's opposite: agent_state working) clears the last turn's rows", () => {
     let s = run(emptyConversation(), hello(), f("replay_end"), ...textItem("a", "done"), f("turn_end"));
-    expect(s.rows.a.current).toBe(true);
+    expect(rowOf(s, "a")!.current).toBe(true);
     s = run(s, { type: "turn", turn: { active: true, startedAt: "t1" } });
     expect(s.turn).toMatchObject({ active: true, startedAt: "t1" });
-    expect(s.rows.a.current).toBe(false);
+    expect(rowOf(s, "a")!.current).toBe(false);
   });
 
   it("a failed send ends the turn it opened; one with output after it doesn't", () => {
     let s = run(emptyConversation(), hello(), f("replay_end"), f("user_message", { key: "user:1", text: "go" }));
     expect(s.turn.active).toBe(true);
     s = run(s, f("unsaved", { keys: ["user:1"] }));
-    expect(s.rows["user:1"].failed).toBe(true);
+    expect(rowOf(s, "user:1")!.failed).toBe(true);
     expect(s.turn.active).toBe(false);
 
     let t = run(emptyConversation(), hello(), f("replay_end"), f("user_message", { key: "user:1", text: "go" }), ...textItem("a", "working"));
@@ -297,7 +299,7 @@ describe("conversationReducer", () => {
     const tool: ToolUse = { id: "c", name: "Bash", kind: "execute", title: "List files" };
     s = run(s, f("item_start", { key: "c", item: "tool_use" }), f("tool_use", { key: "c", tool }));
     s = run(s, page([{ role: "tool", key: "c", tool: { ...tool, status: "completed" } }]));
-    expect(s.rows.c.tool).toMatchObject(tool);
+    expect(rowOf(s, "c")!.tool).toMatchObject(tool);
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
@@ -307,7 +309,7 @@ describe("conversationReducer", () => {
     let s = run(emptyConversation(), hello(), f("replay_end"));
     s = run(s, f("item_start", { key: "c", item: "tool_use" }), f("tool_use", { key: "c", tool: { id: "c", name: "shell", kind: "execute", title: "shell · ls" } }));
     s = run(s, page([{ role: "tool", key: "c", tool: { id: "c", name: "shell", kind: "other", title: "shell · ls" } }]));
-    expect(s.rows.c.tool?.kind).toBe("other");
+    expect(rowOf(s, "c")!.tool?.kind).toBe("other");
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('stored differs from live: kind "execute" → "other"'));
     warn.mockRestore();
   });
@@ -328,9 +330,9 @@ describe("conversationReducer", () => {
         { role: "tool_result", key: "call_1", text: "a.txt", tool: { id: "call_1", name: "shell" } },
       ]),
     );
-    expect(s.rows.call_1.tool).toMatchObject({ name: "shell", kind: "execute", title: "shell · ls", status: "completed" });
-    expect(s.rows.call_1.tool?.result?.text).toBe("a.txt");
-    expect(s.rows.call_1.live).toBeFalsy();
+    expect(rowOf(s, "call_1")!.tool).toMatchObject({ name: "shell", kind: "execute", title: "shell · ls", status: "completed" });
+    expect(rowOf(s, "call_1")!.tool?.result?.text).toBe("a.txt");
+    expect(rowOf(s, "call_1")!.live).toBeFalsy();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("the stored row lacks kind and title; kept the live one"));
     warn.mockRestore();
   });
@@ -339,8 +341,8 @@ describe("conversationReducer", () => {
     let s = run(emptyConversation(), hello(), f("replay_end"));
     s = run(s, f("item_start", { key: "c", item: "tool_use" }), f("tool_use", { key: "c", tool: { id: "c", name: "shell" } }), f("tool_result", { key: "c", text: "x" }));
     s = run(s, f("settled", { keys: ["c"] })); // settled before the turn-end page lands
-    const started = s.rows.c.timestamp;
-    const ended = s.rows.c.tool?.result?.timestamp;
+    const started = rowOf(s, "c")!.timestamp;
+    const ended = rowOf(s, "c")!.tool?.result?.timestamp;
     s = run(
       s,
       page([
@@ -348,7 +350,31 @@ describe("conversationReducer", () => {
         { role: "tool_result", key: "c", text: "x", timestamp: "2026-10-21T00:00:00Z" },
       ]),
     );
-    expect(s.rows.c.timestamp).toBe(started);
-    expect(s.rows.c.tool?.result?.timestamp).toBe(ended);
+    expect(rowOf(s, "c")!.timestamp).toBe(started);
+    expect(rowOf(s, "c")!.tool?.result?.timestamp).toBe(ended);
+  });
+
+  it("a streamed delta leaves the stored rows' map alone", () => {
+    const history = Array.from({ length: 500 }, (_, i): TranscriptMessage => ({ role: "agent", key: `h${i}`, text: `row ${i}` }));
+    let s = run(emptyConversation(), page(history), hello(), f("replay_end"), f("item_start", { key: "m1:0", item: "text" }));
+    const base = s.base;
+    s = run(s, f("text_delta", { key: "m1:0", text: "Hel" }), f("text_delta", { key: "m1:0", text: "lo" }));
+    expect(s.base).toBe(base);
+    expect(Object.keys(s.hot)).toEqual(["m1:0"]);
+    expect(rowOf(s, "m1:0")!.text).toBe("Hello");
+    expect(view(s).slice(-2)).toEqual(["agent:h499=row 499", "agent:m1:0=Hello*"]);
+    expect(allRows(s)).toHaveLength(501);
+  });
+
+  it("folds the written rows into the stored map past a bound, the same rows either way", () => {
+    let s = run(emptyConversation(), hello(), f("replay_end"), f("user_message", { key: "user:1", text: "go" }));
+    for (let i = 0; i < 300; i++) s = run(s, f("tool_use", { key: `t${i}`, tool: { id: `t${i}`, name: "ls" } }));
+    expect(Object.keys(s.hot).length).toBeLessThanOrEqual(128);
+    expect(view(s)).toHaveLength(301);
+    expect(allRows(s).map((r) => r.key)).toEqual(["user:1", ...Array.from({ length: 300 }, (_, i) => `t${i}`)]);
+    s = run(s, f("turn_end"), page([{ role: "user", key: "user:1", text: "go" }]));
+    expect(s.hot).toEqual({});
+    expect(view(s)[0]).toBe("user:user:1=go");
   });
 });
+
