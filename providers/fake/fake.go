@@ -297,8 +297,12 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 			f.histories[ref] = []provider.Message{}
 		}
 	} else if _, known := f.histories[ref]; !known {
-		f.mu.Unlock()
-		return nil, fmt.Errorf("resume: unknown session ref %q", ref)
+		if h, ok := perfHistory(ref); ok {
+			f.histories[ref] = h
+		} else {
+			f.mu.Unlock()
+			return nil, fmt.Errorf("resume: unknown session ref %q", ref)
+		}
 	}
 	if f.liveRefs[ref] {
 		f.mu.Unlock()
@@ -640,6 +644,8 @@ var (
 	startDelay = func() {}
 	// perfPlan plans a turn for a perf-only dialect; ok=false for any other prompt.
 	perfPlan = func(prompt string) (turnPlan, bool) { return turnPlan{}, false }
+	// perfHistory supplies a resumed ref's history this Fake never saw.
+	perfHistory = func(ref string) ([]provider.Message, bool) { return nil, false }
 )
 
 func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) turnPlan {
