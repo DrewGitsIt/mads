@@ -28,3 +28,5 @@
 20261122-002834  tools/perf/docs/PLAN.md (check i, 9g, 9h: origin/main vs b2)
 20261122-121521  docs/git-routes-overview.html (git routes, A and B)
 20261122-130403  docs/git-routes-overview.html (Open Push then Land, N=5 rerun)
+20261124-182257  tools/perf/docs/PLAN.md (chat stream 10x, main baseline, Chromium, synthetic)
+20261124-182953  tools/perf/docs/PLAN.md (chat stream 10a/10c, main, Electron, N=1)

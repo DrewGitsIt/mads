@@ -514,6 +514,34 @@ Window: the first text delta the page receives → turn end, in page time.
   in view (a runway page turn glides; after Show all the last pin takes
   ~1.4 s).
 
+### Baseline on main (2026-11-24, `tools/perf/results/20261124-182257`)
+
+`make ui-perf BASE=main PROFILE=S SCENARIOS=chat N=3 CHECKS=none`,
+Chromium (headless), synthetic conversation. Medians of 3; every check
+passed in all 18 repetitions; no Ctrl+↓↓ retries.
+
+| | rows / DOM nodes | heap MB | commits/s | busy % | ms/commit | ms/delta | JS / style / layout / paint / GC per commit | frame p50 / p95 | delta → on screen p95 |
+|---|---|---|---|---|---|---|---|---|---|
+| 10a first page | 100 / 1.1k | 8.3 | 182 | 22 | 1.2 | 3.7 | 0.8 / 0 / 0.1 / 0.1 / 0 | 16.7 / 17.7 | 10 ms |
+| 10b 10 pages | 1,000 / 5.8k | 14.2 | 182 | 73 | 4.0 | 12.2 | 2.8 / 0 / 0.5 / 0.4 / 0.1 | 16.7 / 17.4 | 14 ms |
+| 10c every page | 3,541 / 19.1k | 19.8 | 55 | 99.9 | 18.3 | 16.6 | 12.2 / 0.1 / 3.0 / 1.5 / 0.8 | 33.4 / 50.2 | 37 ms |
+| 10ap paced | 100 / 1.1k | 8.3 | 122 | 18 | 1.5 | 3.0 | 1.0 / 0 / 0.1 / 0.1 / 0.1 | 16.7 / 17.6 | (reveal) |
+| 10bp paced | 1,000 / 5.8k | 14.2 | 122 | 57 | 4.6 | 9.4 | 3.5 / 0 / 0.4 / 0.3 / 0.1 | 16.7 / 17.6 | (reveal) |
+| 10cp paced | 3,541 / 19.1k | 19.8 | 53 | 99.9 | 18.8 | 16.6 | 12.4 / 0.1 / 3.0 / 1.5 / 0.8 | 16.7 / 33.4 | (reveal) |
+
+- 60 deltas/s arrive in every case; commits count every React root (about
+  3 per delta at small sizes). At every page React merges them to ~55
+  commits/s and the main thread is saturated: ~17 ms per delta, frames at
+  33 ms (unpaced). The spike's desktop number (29 ms per batch, 58% busy,
+  headless Chrome, 3.6k rows) was measured in a different host; here the
+  same shape costs less per delta but leaves no idle time.
+- Cost grows with rows loaded: 3.7 → 12.2 → 16.6 ms per delta; JS is two
+  thirds of it, layout (the forced layout per commit) about a sixth.
+- No long tasks at any size on desktop; stick-to-bottom held throughout.
+- Electron, N=1 (`20261124-182953`): 10a 4.5 ms/delta, 27% busy, 9.4 MB
+  heap; 10c 16.7 ms/delta, 99.9% busy, 52 commits/s, 19.2 ms/commit, frames
+  33.9 / 50.9 ms, 20.4 MB heap — the same as Chromium.
+
 ## History
 
 - 2026-11-19: plan; seeder, calibration, proxy, collectors, scenarios 1–5.
