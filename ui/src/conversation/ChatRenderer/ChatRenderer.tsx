@@ -34,7 +34,7 @@ import { TaskCard } from "../activity/TaskCard";
 import { Markdown } from "./markdown";
 import { CompactionMarker } from "./CompactionMarker";
 import { collapseFailedSends } from "./failedSends";
-import { formatMessageTime, parseMessageTime } from "./messageTime";
+import { formatMessageTime, messageStamp } from "./messageTime";
 import { InboundMessage } from "./InboundMessage";
 import { MessageAttachments } from "./MessageAttachments";
 import { PermissionCard } from "./PermissionCard";
@@ -502,7 +502,7 @@ export function ChatRenderer({
           key: items[k].key,
           source: m.attribution!.source_name,
           kind: kindOf(m.attribution!) === "signal" ? "signal" : "digest",
-          time: parseMessageTime(m.timestamp),
+          time: messageStamp(m.timestamp)?.date,
           text: m.text ?? "",
           cadence: digestLink(m.attribution!, links, viewedSessionId, linkName)?.cadence,
         };
@@ -657,7 +657,7 @@ export function ChatRenderer({
                 findKey={item.key}
                 source={message.attribution.source_name}
                 kind={kindOf(message.attribution) === "signal" ? "signal" : "digest"}
-                time={parseMessageTime(message.timestamp)}
+                time={messageStamp(message.timestamp)?.date}
                 text={message.text ?? ""}
                 cadence={digestLink(message.attribution, links, viewedSessionId, linkName)?.cadence}
                 anchor={anchorAttrs(item.key)}
@@ -724,7 +724,7 @@ export function ChatRenderer({
           // can start a turn nobody typed. Drawn as a quiet system line, not
           // in the human's voice: as a user bubble it was a wall of raw
           // <task-notification> XML the human never wrote.
-          const at = parseMessageTime(message.timestamp);
+          const at = messageStamp(message.timestamp);
           return (
             <div key={item.key} className={styles.notification} role="note" data-find={item.key}>
               <span aria-hidden="true">⏺</span>
@@ -732,17 +732,17 @@ export function ChatRenderer({
                 {message.text || "Background task finished"}
               </span>
               {at && (
-                <time className={styles.notificationTime} dateTime={at.toISOString()} title={at.toLocaleString()}>
-                  {formatMessageTime(at)}
+                <time className={styles.notificationTime} dateTime={at.iso} title={at.title}>
+                  {at.label}
                 </time>
               )}
             </div>
           );
         }
-        const at = parseMessageTime(message.timestamp);
+        const at = messageStamp(message.timestamp);
         const stamp = at && (
-          <time className={styles.stamp} dateTime={at.toISOString()} title={at.toLocaleString()}>
-            {formatMessageTime(at)}
+          <time className={styles.stamp} dateTime={at.iso} title={at.title}>
+            {at.label}
           </time>
         );
         const isUser = message.role === "user";
