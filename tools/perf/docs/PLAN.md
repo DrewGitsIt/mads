@@ -1,8 +1,9 @@
 # Perf harness: design
 
 Status: in use. Built 2026-11-19..22 to measure the event bus (shipped on
-main 2026-11-21, [EVENT-BUS-RESULTS.md](EVENT-BUS-RESULTS.md)) and then the
-git routes ([docs/GIT-STATE-DESIGN.md](../../../docs/GIT-STATE-DESIGN.md)).
+main 2026-11-21, [EVENT-BUS-RESULTS.md](EVENT-BUS-RESULTS.md)), then the
+git routes ([docs/GIT-STATE-DESIGN.md](../../../docs/GIT-STATE-DESIGN.md)),
+then the chat view's cost per streamed batch (scenarios 10x, below).
 How to run it and where every piece lives: [../README.md](../README.md).
 
 ## Why
@@ -20,7 +21,8 @@ the slow git routes (below).
 
 In scope: the shared event bus (replay volume, reconnects), connection
 starvation, and the git routes (`repos`, `changeset`, `worktree/refresh`, the
-dialogs) with real git. Out of scope: a CI perf gate (runs are local only,
+dialogs) with real git, and the chat view's main-thread cost while a reply
+streams into a long conversation. Out of scope: a CI perf gate (runs are local only,
 `make ui-perf`), mesh and peer buses.
 
 ## Safety rules (non-negotiable)
@@ -52,8 +54,8 @@ and events stay consistent; large transactions make 1M events take seconds.
 Subcommands: `seed` (a profile), `calibrate` (per-type counts, mean and p95
 payload sizes from the live DB, read-only; no content copied), `realism`
 (prepares a backup copy: schema stepped down to BASE's, paths pointed at a
-scratch dir), `gitfx` (the real-git fixture, below) and `append` (scenario
-8's live events). The runner builds it from BASE's tree with this tree's
+scratch dir), `gitfx` (the real-git fixture, below), `append` (scenario
+8's live events) and `chat` (scenario 10x's conversation, below). The runner builds it from BASE's tree with this tree's
 perfseed source laid over it (`go build -overlay`), so the schema is BASE's.
 
 A profile (`tools/perf/profiles/*.json`) gives event counts and payload size
@@ -154,6 +156,7 @@ owing frames with no byte for 30 s fails the repetition.
 | 7b | offline for a while (connections refused: backoff, health, probes), then back |
 | 8 | long-lived window: `PERF_LONGLIVED_N` events (default 50k at `PERF_LONGLIVED_RATE`/s) arrive live via `perfseed append`, then open a delegate |
 | 9a–9h | real git, below |
+| 10a–10cp | a live reply streaming into a long conversation, below |
 
 Each scenario runs N times (default 5) per build and delay mode, with a
 live-event smoke after it (a session renamed through the Router API shows
@@ -188,8 +191,9 @@ f–i are the git checks (below). `CHECKS=a,b|none` picks them.
     real-git fixture (empty under `REALISM=1` means `bus`: the two don't mix);
   - `bus`: 1–8, 3b, 3t, 7b — the event-bus regression set; no fixture build;
   - `git`: 9a–9h (delays off by default);
+  - `chat`: 10a–10c, 10ap–10cp (delays off only);
   - aliases mix with ids (`bus,9a`); `none` runs checks only.
-- `MODES=on,off` (default both; 9x only: off), `CHECKS` (default a–e; none
+- `MODES=on,off` (default both; 9x and 10x only: off), `CHECKS` (default a–e; none
   in realism), `REALISM=1`, `GITFX`, `PERF_PROBE=0` / `PERF_PROBE_CAND=0`
   (lite probe: markers only).
 - Builds each side's binaries and UI into separate temp dirs (a ref via a
@@ -423,6 +427,93 @@ in 9a's spread.
   5.1–5.8 s, 3.0–3.3 s after the change); g known-fail as expected; h passes
   (Commit 81 files = fresh plan; Land 41 to squash; Push 182 commits).
 
+## Chat stream (scenarios 10x)
+
+Added 2026-11-24 for [docs/CHAT-STREAM-PER-BATCH-COST.md](../../../docs/CHAT-STREAM-PER-BATCH-COST.md):
+every streamed batch re-renders every message in the chat view, so the cost
+per batch grows with the rows loaded. The fix comes in two steps (A:
+timestamps, the forced layout, the reducer's copy; B: per-item
+memoization); 10x measures main, then each.
+
+### Conversation (`perfseed chat`)
+
+One long claude-code transcript, read by claude-code's own reader
+(`providers/claudecode` `KeyedTranscript`) and stored as the fake
+provider's history file (`$MADS_HOME/fake-transcripts/<ref>.json`) with a
+fake session resuming it. The Router's fake serves it while the session is
+dormant; the session child's fake resumes it from
+`MADS_FAKE_PERF_HISTORY_DIR` (perf.go), so the rows are exactly
+claude-code's and the fake can stream a live reply into the same
+conversation. (A claude-code session can't stream hermetically: there is no
+claude CLI.) `CHAT_SRC`:
+- `synthetic` (default): a claude-code jsonl generated in the measured
+  shape, `CHAT_TURNS=500` turns → 3,539 rows (500 user, 763 agent, 1,138
+  tool calls and results), 1.2 MB of text; per turn a prompt, sometimes a
+  note, 1–4 tool calls (Bash, Read, Edit, Grep) with results, a Markdown
+  reply; timestamps over 30 days.
+- a real transcript (`.jsonl`): copied into the run's temp dir (the
+  original only read), deleted with it; the manifest and report carry its
+  shape only (source "real", turns, rows by role, text bytes).
+
+### Scenarios
+
+Three sizes, each unpaced and paced (`stream_speed` = `PERF_CHAT_PACE`,
+default fast, 1500 words a minute: useReveal commits every frame):
+
+| # | Loaded before the stream |
+|---|---|
+| 10a / 10ap | the mount's last page (100 rows) |
+| 10b / 10bp | 9 more pages by scroll-up paging (scrollTop 0 → useOlderPages), `PERF_CHAT_MID_PAGES=10` |
+| 10c / 10cp | every page, by Ctrl+↑↑ (loadAllOlder, merged as one) |
+
+Prepare (not measured): set the pace, wake the child with a warm-up turn
+(through the Router), open the session from the rail, load the size, go
+back to the tail with Ctrl+↓↓ (following), then a full GC
+(`HeapProfiler.collectGarbage`) and the heap and DOM counts. The leg: type
+`perf-stream <chars> <rate> <delta>` in the composer and press Enter; the
+fake streams `PERF_CHAT_CHARS=15000` characters of generated Markdown
+(headings, paragraphs with inline code and bold, bullets, fenced code) as
+`PERF_CHAT_DELTA=25`-character deltas at `PERF_CHAT_RATE=60` a second (600
+deltas, 10 s). Its marker: turn end received and, unpaced, the whole reply
+on screen. The proxy passes `/output` through for 10x (nothing held).
+
+### Metrics
+
+Window: the first text delta the page receives → turn end, in page time.
+- **In-page recorder** (`chat.ts` CHAT_PROBE, an init script; records only
+  once armed): every `text_delta` / `turn_end` the app's `/output`
+  EventSource gets (a listener of its own per kind); every React commit,
+  via the DevTools global hook (`__REACT_DEVTOOLS_GLOBAL_HOOK__`, which
+  React calls in production builds; every root's commits count); every
+  frame (rAF); and in the task after each frame (layout clean, nothing
+  forced) the scroller's distance from its bottom, its `data-stick` mode,
+  and the letters and digits of the reply as rendered (its text minus the
+  hover `<time>` and code blocks' Copy buttons).
+- From those: deltas/s, commits/s and per delta, frame interval p50/p95,
+  frames over 50 ms, long tasks (the probe's longtask observer), delta →
+  on screen p50/p95 (the first sample after a delta that renders its
+  running count; paced, the reveal's lag by design), frames off the bottom.
+- **CDP trace** (`PERF_CHAT_TRACE=0` turns it off), started before the
+  leg and read after the window, sliced between the recorder's own
+  `performance.mark`s (`perf-chat-first-delta`, `perf-chat-turn-end`) on
+  their thread: busy = top-level task time / window; ms per commit and per
+  delta; self time by bucket (JS, style, layout, paint/composite, GC,
+  other) per commit, with the spike's buckets.
+- After loading: rows loaded (pages × 100, capped), items rendered, DOM
+  nodes (page, stream), JS heap used after a full GC (MB).
+
+### Checks (every repetition; a failure fails it)
+
+- the wire carried the whole reply: what the page's EventSource received
+  equals the reply the agent stored (`GET /transcript`), 15,000 characters;
+- all of it is on screen, in order: the rendered letters and digits equal
+  the wire's (Markdown syntax is all punctuation; the generator writes no
+  ordered lists, links or HTML); paced, after Show all;
+- stick-to-bottom held: `data-stick` stayed `follow` all window, and within
+  5 s after the scroller is within 10 px of its bottom with the reply's end
+  in view (a runway page turn glides; after Show all the last pin takes
+  ~1.4 s).
+
 ## History
 
 - 2026-11-19: plan; seeder, calibration, proxy, collectors, scenarios 1–5.
@@ -436,3 +527,5 @@ in 9a's spread.
   docs/git-routes-overview.html).
 - 2026-11-22: moved to `tools/perf/` as durable dev tooling (was
   `ui/e2e/perf/` + `docs/`).
+- 2026-11-24: chat stream scenarios 10x, `perfseed chat`, the fake's
+  `perf-stream` dialect and resume from `MADS_FAKE_PERF_HISTORY_DIR`.
