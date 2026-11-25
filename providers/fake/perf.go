@@ -127,9 +127,11 @@ func streamPlan(prompt string) (turnPlan, bool) {
 }
 
 // respondStream plays the "perf-stream" dialect: StreamText(chars) in
-// delta-character text events, rate a second, on a ticker (so a slow
-// consumer doesn't stretch the schedule), then the reply stored and the
-// turn ended. An interrupt stores what was sent.
+// delta-character text events, at most rate a second (one per tick of a
+// time.Ticker), then the reply stored and the turn ended. A tick that comes
+// while emit is still blocked on a slow consumer is dropped, not made up,
+// so such a consumer stretches the stream: the harness reports the rate the
+// page actually got (chat_deltas_per_s). An interrupt stores what was sent.
 func (s *fakeSession) respondStream(prompt string, turn, chars, rate, delta int) {
 	text := StreamText(chars)
 	key := s.itemKey(turn, "reply")
