@@ -731,7 +731,10 @@ function chatScenario(h: ChatHelpers, size: Size, v: Variant): Scenario {
           const sn = await ctx.stack.proxy.snapshot();
           return sn.requests.filter((r) => /\/transcript$/.test(r.path) && /before=/.test(r.query)).length;
         };
-        for (let i = 1; i < size.pages; i++) {
+        // Counted by pages fetched, not scrolls: one scroll can fetch two
+        // when the rows are short (the view is still near its top after the prepend).
+        const start = await olderAsked();
+        while ((await olderAsked()) - start < size.pages - 1) {
           const before = await olderAsked();
           let asked = false;
           // A scroll near the top asks; if the scroller already sat at 0 no scroll event fires, so nudge it first.

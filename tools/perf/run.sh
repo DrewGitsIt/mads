@@ -402,6 +402,7 @@ PERF_PROFILE_FOR_APPEND=$([ -n "$REALISM" ] || echo "$PROFILE_JSON")
 	PERF_PERFSEED="$TMP/perfseed" PERF_PROFILE_JSON="$PERF_PROFILE_FOR_APPEND" \
 	PERF_GIT_SHIM_DIR="$([ "$GITFX" = 1 ] && echo "$TMP/gitshim")" PERF_REAL_GIT="${REAL_GIT:-}" \
 	PERF_STACK_LOG_DIR="$([ -z "$REALISM" ] && [ "$CHAT_REAL" = 0 ] && echo "$RUN_DIR/stack-logs")" \
+	PERF_PW_OUTPUT="$([ -n "$REALISM" ] || [ "$CHAT_REAL" = 1 ] && echo "$TMP/pw-results")" \
 	npx playwright test --config e2e/perf/playwright.perf.config.ts)
 pw=$?
 if [ -n "$REALISM" ]; then
