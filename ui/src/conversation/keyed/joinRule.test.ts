@@ -54,4 +54,19 @@ describe("joinRows", () => {
     const stored = joinRows([text("a", "Steps:\n\n- one\n"), text("b", "- two")]);
     expect(live[0].text).toBe(stored[0].text);
   });
+
+  it("returns the same bubble for the same rows, and a new one when any of them changes", () => {
+    const rows = [text("a", "x"), text("b", "y"), { key: "t", role: "tool" as const }, text("c", "z")];
+    const first = joinRows(rows);
+    const again = joinRows([...rows]);
+    expect(again[0]).toBe(first[0]);
+    // A lone text row is passed through as itself.
+    expect(again[2]).toBe(rows[3]);
+    const grown = joinRows([rows[0], { ...rows[1], text: "y2" }, rows[2], rows[3]]);
+    expect(grown[0]).not.toBe(first[0]);
+    expect(grown[0].text).toBe("x\n\ny2");
+    expect(grown[0].joined).toEqual(["a", "b"]);
+    // One more row in the run is a different bubble too.
+    expect(joinRows([rows[0], rows[1], text("d", "w")])[0]).not.toBe(first[0]);
+  });
 });

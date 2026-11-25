@@ -67,7 +67,7 @@ import {
   type SubStreamItem,
   type TaskModel,
 } from "./activity/conversationItems";
-import { subagentRows } from "./keyed/conversation";
+import { findTool, subagentRows } from "./keyed/conversation";
 import { useKeyedConversation } from "./keyed/useKeyedConversation";
 import { useReveal } from "./keyed/useReveal";
 import { LinkNamesProvider, useLinkNames } from "./activity/linkNames";
@@ -116,6 +116,17 @@ import { refusalOf, type RefusedSend as RefusedSendState } from "./ChatRenderer/
 import { selfStore } from "../router/devices";
 import styles from "./ConversationTab.module.css";
 import { useWorktreeRefresh } from "./Worktree/worktreeRefresh";
+
+/** What ChatRenderer's stable callbacks call: the latest committed render's handlers. */
+interface ChatHandlers {
+  openTool: (tool: ToolUse) => void;
+  openTask: (toolUseId: string, tool: ToolUse) => void;
+  retry: (text: string) => void;
+  signIn: () => void;
+}
+
+/** No permission cards: the terminal transport's, as one array so it's the same every render. */
+const NO_PERMISSIONS: PermissionRequest[] = [];
 
 // When the user last dismissed this session's compaction banner — lets a
 // replayed failure (see replayedCompactStatus) stay acknowledged across
@@ -1331,9 +1342,16 @@ export function ConversationTab({
   // open and again as it runs (its task id is its harness id — the file's
   // name). Live frames for it are the cue to re-read.
   const dockParent = dockTarget?.type === "subagent" ? dockTarget.parentToolUseId : undefined;
-  const dockModel = dockParent
-    ? [...mergeDelegates(tasks, delegates).values()].find((t) => t.toolUseId === dockParent)
-    : undefined;
+  // The record is authoritative wherever one exists (mergeDelegates). Made
+  // once per change, so a task card's model is the same object until it changes.
+  const effectiveTasks = useMemo(() => mergeDelegates(tasks, delegates), [tasks, delegates]);
+  const lastTasksByToolUse = useRef<ReadonlyMap<string, TaskModel>>(new Map());
+  const tasksByToolUseMap = useMemo(() => {
+    const byTool = tasksByToolUse(effectiveTasks, lastTasksByToolUse.current);
+    lastTasksByToolUse.current = byTool;
+    return byTool;
+  }, [effectiveTasks]);
+  const dockModel = dockParent ? [...effectiveTasks.values()].find((t) => t.toolUseId === dockParent) : undefined;
   const dockLive = useMemo(
     () => (dockParent ? rowsSubStream(subagentRows(conv.state, dockParent)) : undefined),
     [conv.state, dockParent],
@@ -1407,6 +1425,41 @@ export function ConversationTab({
     stick.hold(findOpen);
   }, [findOpen, stick]);
 
+  // What ChatRenderer is handed stays the same object until it changes, so
+  // its memoized items skip a render that didn't touch them
+  // (docs/CHAT-STREAM-PER-BATCH-COST.md). Its callbacks are stable and call
+  // the latest render's handlers (chatHandlers, set below).
+  const chatHandlers = useRef<ChatHandlers | null>(null);
+  // This render's handlers, made further down (after the early returns), and
+  // taken up once it commits: a render React throws away never leaves its own.
+  let renderHandlers: ChatHandlers | null = null;
+  useLayoutEffect(() => {
+    if (renderHandlers) chatHandlers.current = renderHandlers;
+  });
+  const chatCallbacks = useMemo(
+    () => ({
+      openTool: (tool: ToolUse) => chatHandlers.current?.openTool(tool),
+      openTask: (toolUseId: string, tool: ToolUse) => chatHandlers.current?.openTask(toolUseId, tool),
+      retry: (text: string) => chatHandlers.current?.retry(text),
+      signIn: () => chatHandlers.current?.signIn(),
+    }),
+    [],
+  );
+  const attachmentUrl = useCallback(
+    (id: string, variant?: "thumbnail") => routerClient.attachmentUrl({ session: sessionId }, id, variant),
+    [routerClient, sessionId],
+  );
+  const resolvePermission = useCallback(
+    (id: string, decision: "allow" | "deny") => routerClient.resolvePermissionRequest(sessionId, id, decision),
+    [routerClient, sessionId],
+  );
+  const allPermissionRequests = useMemo(() => [...permissionRequests.values()], [permissionRequests]);
+  const signInProvider = auth?.signed_out && auth.login ? providerLabel(auth.provider) : undefined;
+  const chatSignIn = useMemo(
+    () => (signInProvider ? { provider: signInProvider, onSignIn: chatCallbacks.signIn } : undefined),
+    [signInProvider, chatCallbacks],
+  );
+
   if (loadError) {
     return (
       <div className={styles.stateWrap}>
@@ -1464,14 +1517,12 @@ export function ConversationTab({
   // transport (providers/claudecode/README.md) — a switch to terminal tears
   // the chat process (and any in-flight hook subprocess) down with it, so
   // there is nothing meaningful left to show mid-turn on that transport.
-  const livePermissionRequests = activeMode === "chat" ? [...permissionRequests.values()] : [];
+  const livePermissionRequests = activeMode === "chat" ? allPermissionRequests : NO_PERMISSIONS;
   // Still-parked calls, oldest first (a Map keeps first-insertion order; a
   // status upsert doesn't move its entry). Derived, not stored, so the
   // approval jump clears itself the moment the terminal-status event
   // (allowed/denied/expired/cancelled) upserts over a pending entry.
   const pendingPermissions = livePermissionRequests.filter((r) => r.status === "pending");
-  const resolvePermission = (id: string, decision: "allow" | "deny") =>
-    routerClient.resolvePermissionRequest(sessionId, id, decision);
   // The dock's subagent stream renders the inner rows themselves, so there a
   // subagent call's card sits right under its own row (keyed by tool_use id).
   const permissionsByToolUse = new Map<string, PermissionRequest[]>();
@@ -1483,8 +1534,6 @@ export function ConversationTab({
     ]);
   }
   // --- Redesign wiring: dock targets, running-subagent substrip ---
-  // The record is authoritative wherever one exists (mergeDelegates).
-  const effectiveTasks = mergeDelegates(tasks, delegates);
   // Stop interrupts claude, which ends every subagent and background process
   // with the reply (perTaskStopAffordance is unset — docs/DELEGATES-DESIGN.md
   // C3b). With any of them running, Stop asks first; the reply alone stops at once.
@@ -1494,7 +1543,6 @@ export function ConversationTab({
     if (subagents + processes === 0) void handleInterrupt();
     else setStopConfirm({ subagents, processes });
   };
-  const tasksByToolUseMap = tasksByToolUse(effectiveTasks);
   // The approval jump's "· <subagent>" — named as its task card titles it.
   const subagentName = (req: PermissionRequest) => {
     if (!req.parent_tool_use_id) return undefined;
@@ -1538,11 +1586,10 @@ export function ConversationTab({
     let toolTimestamp: string | undefined;
     if (dockTarget.toolId) {
       // Any row: the main list's, or a subagent's.
-      for (const r of Object.values(conv.state.rows)) {
-        if (r.role === "tool" && r.tool?.id === dockTarget.toolId) {
-          tool = r.tool;
-          toolTimestamp = r.timestamp;
-        }
+      const r = findTool(conv.state, dockTarget.toolId);
+      if (r?.tool) {
+        tool = r.tool;
+        toolTimestamp = r.timestamp;
       }
     }
     dockView = { type: "tool", tool, timestamp: toolTimestamp };
@@ -1649,6 +1696,19 @@ export function ConversationTab({
     } catch (err) {
       noteSendError(err instanceof Error ? err.message : String(err));
     }
+  };
+  renderHandlers = {
+    openTool,
+    openTask: (toolUseId, tool) =>
+      openSubagent(
+        toolUseId,
+        tasksByToolUseMap.get(toolUseId)?.description ?? toolTitle(tool, linkName),
+        tasksByToolUseMap.get(toolUseId)?.subagentType,
+      ),
+    retry: (text) => void retrySend(text),
+    signIn: () => {
+      if (auth?.login) setSigningIn({ ...auth, login: auth.login });
+    },
   };
   // "Send updates only": wakes a sleeping session within the request, as a
   // send does (the same "Waking the agent…" line, the same wake errors); the
@@ -1860,38 +1920,23 @@ export function ConversationTab({
                       links={links}
                       viewedSessionId={sessionId}
                       linkName={linkName}
-                      attachmentUrl={(id, variant) =>
-                        routerClient.attachmentUrl({ session: sessionId }, id, variant)
-                      }
+                      attachmentUrl={attachmentUrl}
                       turnActive={turnShowing}
                       foldNewCode={wordsPerMinute !== null}
                       toolStatuses={toolStatuses}
                       background={backgroundByTool}
                       tasks={tasksByToolUseMap}
                       selectedToolId={dockTarget?.type === "tool" ? dockTarget.toolId : undefined}
-                      onOpenTool={openTool}
-                      onOpenTask={(toolUseId, tool) =>
-                        openSubagent(
-                          toolUseId,
-                          tasksByToolUseMap.get(toolUseId)?.description ?? toolTitle(tool, linkName),
-                          tasksByToolUseMap.get(toolUseId)?.subagentType,
-                        )
-                      }
+                      onOpenTool={chatCallbacks.openTool}
+                      onOpenTask={chatCallbacks.openTask}
                       worktreeCards={worktree.cards}
                       worktreeActions={worktreeActions}
                       permissionRequests={livePermissionRequests}
                       onResolvePermission={resolvePermission}
                       permissionReveal={permissionReveal}
-                      onRetry={(text) => void retrySend(text)}
+                      onRetry={chatCallbacks.retry}
                       sendFailure={sendFailure}
-                      signIn={
-                        auth?.signed_out && auth.login
-                          ? {
-                              provider: providerLabel(auth.provider),
-                              onSignIn: () => auth.login && setSigningIn({ ...auth, login: auth.login }),
-                            }
-                          : undefined
-                      }
+                      signIn={chatSignIn}
                       find={find.request}
                       onFindStatus={find.onStatus}
                       tail={
