@@ -36,6 +36,16 @@ function checkZone(ms: number): void {
   zone = { name, checkedAt: ms };
 }
 
+/**
+ * What every stamp's label and title are made against: today, in this time
+ * zone. A memoized message re-renders when it changes, so its stamp follows
+ * midnight and a zone change without re-rendering on every commit.
+ */
+export function stampsKey(): string {
+  const day = todayKey(); // first: it checks the zone
+  return `${day} ${zone?.name ?? ""}`;
+}
+
 function todayKey(): string {
   const ms = Date.now();
   checkZone(ms);

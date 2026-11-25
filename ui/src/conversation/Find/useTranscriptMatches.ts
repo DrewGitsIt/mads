@@ -128,9 +128,18 @@ function same(a: TranscriptMatches, b: TranscriptMatches): boolean {
   for (const [k, n] of b.summaries) if (a.summaries.get(k) !== n) return false;
   for (const [k, g] of b.groups) {
     const h = a.groups.get(k);
-    if (!h || h.count !== g.count || h.parts.length !== g.parts.length) return false;
-    // Offsets come from the cache, so the same text matched alike is the same array.
-    if (g.parts.some((p, j) => p.offsets !== h.parts[j].offsets || p.entryKey !== h.parts[j].entryKey)) return false;
+    if (!h || !sameGroupMatches(h, g)) return false;
   }
   return true;
+}
+
+/** One group's matches, the same: a group whose matches didn't change can keep last search's object. */
+export function sameGroupMatches(a: GroupMatches, b: GroupMatches): boolean {
+  if (a === b) return true;
+  if (a.count !== b.count || a.parts.length !== b.parts.length) return false;
+  // Offsets come from the cache, so the same text matched alike is the same array.
+  return !b.parts.some((p, j) => {
+    const q = a.parts[j];
+    return p.offsets !== q.offsets || p.entryKey !== q.entryKey || p.part !== q.part;
+  });
 }

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Chip } from "../../components/Chip/Chip";
 import { FOLD_MS, Fold, useArrivals } from "../../components/Motion";
 import { FLAGS } from "../../featureFlags";
@@ -19,22 +19,27 @@ import {
   anchorPermissions,
   buildItems,
   interleaveCards,
+  reuseAnchored,
+  reuseItems,
   rowsToEntries,
+  sameList,
+  type ConversationItem,
   type TaskModel,
 } from "../activity/conversationItems";
 import type { KeyedRow } from "../keyed/conversation";
 import type { RunwayAnchorAttrs } from "../runway";
 import { joinRows } from "../keyed/joinRule";
 import { PlanWidget } from "../activity/PlanWidget";
-import { NO_MATCHES, useTranscriptMatches, type Searchable } from "../Find/useTranscriptMatches";
+import { NO_MATCHES, sameGroupMatches, useTranscriptMatches, type Searchable } from "../Find/useTranscriptMatches";
+import type { GroupMatches } from "../Find/findText";
 import { useFind, type FindRequest, type FindStatus } from "../Find/useFind";
 import { WorktreeCard, type WorktreeCardActions } from "../Worktree/WorktreeCard";
 import type { WorktreeCardModel } from "../Worktree/worktreeCards";
 import { TaskCard } from "../activity/TaskCard";
 import { Markdown } from "./markdown";
 import { CompactionMarker } from "./CompactionMarker";
-import { collapseFailedSends } from "./failedSends";
-import { formatMessageTime, messageStamp } from "./messageTime";
+import { collapseFailedSends, type Delivery } from "./failedSends";
+import { formatMessageTime, messageStamp, stampsKey } from "./messageTime";
 import { InboundMessage } from "./InboundMessage";
 import { MessageAttachments } from "./MessageAttachments";
 import { PermissionCard } from "./PermissionCard";
@@ -264,7 +269,15 @@ export function quietLabel(digests: QuietDigest[]): string {
  * reveals them, grouped by session. `ease` is the height (px) of what just
  * folded into it, shrunk to nothing so the conversation below glides up
  * instead of jumping. */
-function QuietChecks({ item, ease }: { item: QuietItem; ease?: number }) {
+const QuietChecks = memo(function QuietChecks({
+  item,
+  ease,
+}: {
+  item: QuietItem;
+  ease?: number;
+  /** stampsKey(): a new day or time zone re-renders the digests' stamps. */
+  stamps: string;
+}) {
   const [open, setOpen] = useState(false);
   const sessions = quietSessions(item.digests);
   // Oldest first within a session: the transcript order, grouped.
@@ -292,7 +305,7 @@ function QuietChecks({ item, ease }: { item: QuietItem; ease?: number }) {
       )}
     </div>
   );
-}
+});
 
 /** A short title for a notice, so its collapsed row says what it is. The
  * grant notice (router: orchestrateGrantNotice) is the one worth naming. */
@@ -384,6 +397,73 @@ function noopReplyAt(items: ReturnType<typeof buildItems>, from: number): number
     : -1;
 }
 
+/** What the last render derived, reused where it's unchanged so memoized items skip (RenderCache). */
+interface RenderCache {
+  items: ReadonlyMap<string, ConversationItem>;
+  anchored: ReadonlyMap<string, PermissionRequest[]>;
+  delivery: ReadonlyMap<string, Delivery>;
+  /** Quiet and attached items, and the runs attached to a send, by key. */
+  folded: ReadonlyMap<string, QuietItem | AttachedItem | MessageItem[]>;
+  groupMatches: ReadonlyMap<string, GroupMatches>;
+}
+
+const EMPTY_CACHE: RenderCache = {
+  items: new Map(),
+  anchored: new Map(),
+  delivery: new Map(),
+  folded: new Map(),
+  groupMatches: new Map(),
+};
+
+function sameDelivery(a: Delivery, b: Delivery): boolean {
+  return (
+    a.error === b.error &&
+    a.errorKind === b.errorKind &&
+    a.attempts.length === b.attempts.length &&
+    a.attempts.every(
+      (x, i) => x.error === b.attempts[i].error && x.timestamp === b.attempts[i].timestamp && x.errorKind === b.attempts[i].errorKind,
+    )
+  );
+}
+
+function sameDigests(a: QuietDigest[], b: QuietDigest[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((x, i) => {
+      const y = b[i];
+      return (
+        x.key === y.key &&
+        x.source === y.source &&
+        x.kind === y.kind &&
+        x.time?.getTime() === y.time?.getTime() &&
+        x.text === y.text &&
+        x.cadence === y.cadence
+      );
+    })
+  );
+}
+
+/** A quiet or attached item, or a send's attached run, as last render's when nothing in it changed. */
+function reuseFolded<T extends QuietItem | AttachedItem | MessageItem[]>(
+  prev: RenderCache["folded"],
+  next: Map<string, QuietItem | AttachedItem | MessageItem[]>,
+  key: string,
+  value: T,
+): T {
+  const old = prev.get(key);
+  let kept: T = value;
+  if (old) {
+    if (Array.isArray(value)) {
+      if (Array.isArray(old) && sameList(old, value)) kept = old as T;
+    } else if (!Array.isArray(old) && old.type === value.type) {
+      if (value.type === "quiet" && sameDigests((old as QuietItem).digests, value.digests)) kept = old as T;
+      if (value.type === "attached" && sameList((old as AttachedItem).run, value.run)) kept = old as T;
+    }
+  }
+  next.set(key, kept);
+  return kept;
+}
+
 /**
  * Maps a transcript to prose + always-grouped activity (T12): consecutive
  * tool/thinking events render as one collapsible group of rows, TodoWrite
@@ -391,6 +471,12 @@ function noopReplyAt(items: ReturnType<typeof buildItems>, from: number): number
  * Task subagent cards (T15). Live and stored rows render through the same
  * components, keyed by row key — the only live-only difference is entrance
  * motion and the open-group treatment (`turnActive`).
+ *
+ * Each item renders through a memoized component, handed only what it
+ * uses, and everything derived here is reused from the last render while
+ * its rows are the same objects (RenderCache) — so a streamed delta
+ * re-renders the item it changed, not the whole conversation
+ * (docs/CHAT-STREAM-PER-BATCH-COST.md).
  */
 export function ChatRenderer({
   rows,
@@ -418,9 +504,20 @@ export function ChatRenderer({
   onFindStatus,
   tail,
 }: ChatRendererProps) {
+  // Written during render: everything in it is reused only when equal to
+  // what this render derives, so a render React throws away leaves nothing
+  // wrong behind.
+  const cache = useRef<RenderCache>(EMPTY_CACHE);
+  const prev = cache.current;
   const linksById = new Map(links.map((l) => [l.id, l]));
   // Adjacent text joins into one bubble (§6), then failed sends fold.
-  const { rows: shown, delivery } = collapseFailedSends(joinRows(rows), sendFailure);
+  const collapsed = collapseFailedSends(joinRows(rows), sendFailure);
+  const shown = collapsed.rows;
+  const delivery = new Map<string, Delivery>();
+  for (const [key, d] of collapsed.delivery) {
+    const old = prev.delivery.get(key);
+    delivery.set(key, old && sameDelivery(old, d) ? old : d);
+  }
   const latestSend = [...shown].reverse().find((m) => m.role === "user" && !m.attribution);
   // The reading runway's anchors (useRunway): a person's message, the user's
   // own or a linked session's — never mads' own notices.
@@ -429,14 +526,12 @@ export function ChatRenderer({
       .filter((m) => (m.role === "user" && !isNotice(m)) || m.role === "inbound")
       .map((m) => [m.key, Boolean(m.paced)]),
   );
-  const anchorAttrs = (key: string): RunwayAnchorAttrs => {
-    const live = runwayAnchors.get(key);
-    return live === undefined ? {} : { "data-runway-anchor": key, "data-runway-live": live ? "" : undefined };
-  };
 
   const cardsById = new Map(worktreeCards.map((c) => [c.id, c]));
-  const items = buildItems(interleaveCards(rowsToEntries(shown), worktreeCards));
-  const permissions = anchorPermissions(items, permissionRequests);
+  const reused = reuseItems(prev.items, buildItems(interleaveCards(rowsToEntries(shown), worktreeCards)));
+  const items = reused.items;
+  const anchoredNow = anchorPermissions(items, permissionRequests);
+  const permissions = { ...anchoredNow, anchored: reuseAnchored(prev.anchored, anchoredNow.anchored) };
   // A fallback (unanchored) approval that lands after mount folds in and rings once.
   const arrivedPermission = useArrivals(permissions.unanchored.map((r) => r.id));
 
@@ -454,7 +549,8 @@ export function ChatRenderer({
   // the run of attached rows and the user's own row after it render as one
   // bubble (attachedTo, by the user row's key) — one send, one turn, as
   // linkwrap.SameSend counts it. The rows keep their own keys.
-  const rendered: (ReturnType<typeof buildItems>[number] | QuietItem | AttachedItem)[] = [];
+  const folded = new Map<string, QuietItem | AttachedItem | MessageItem[]>();
+  const rendered: (ConversationItem | QuietItem | AttachedItem)[] = [];
   const acknowledged = new Set<string>();
   const attachedTo = new Map<string, MessageItem[]>();
   for (let i = 0; i < items.length; i++) {
@@ -469,7 +565,7 @@ export function ChatRenderer({
       const run = items.slice(i, end) as MessageItem[];
       const own = items[end];
       if (own?.type === "message" && isOwnSend(own.message)) {
-        attachedTo.set(own.key, run);
+        attachedTo.set(own.key, reuseFolded(prev.folded, folded, `send:${own.key}`, run));
         rendered.push(own);
         i = end;
       } else {
@@ -497,7 +593,7 @@ export function ChatRenderer({
     const runReply = item.type === "message" && isDigestCard(item.message) ? noopReplyAt(items, end) : -1;
     if (runReply >= 0) {
       for (let k = i; k < end; k++) {
-        const m = (items[k] as Extract<(typeof items)[number], { type: "message" }>).message;
+        const m = (items[k] as MessageItem).message;
         const digest: QuietDigest = {
           key: items[k].key,
           source: m.attribution!.source_name,
@@ -517,6 +613,11 @@ export function ChatRenderer({
       continue;
     }
     rendered.push(item);
+  }
+  // Built whole above (a pill gathers its digests as it goes); reused here.
+  for (let i = 0; i < rendered.length; i++) {
+    const r = rendered[i];
+    if (r.type === "quiet" || r.type === "attached") rendered[i] = reuseFolded(prev.folded, folded, r.key, r);
   }
 
   // Folding a digest and its NOOP into a pill drops the stream's height in
@@ -583,24 +684,32 @@ export function ChatRenderer({
   // Closed or emptied, the chips go at once; a new search keeps the last
   // one's until its own are in, as the bar keeps its count.
   const transcript = find?.query ? matched : NO_MATCHES;
-  const groupMatches = transcript.groups;
   const summaryMatches = transcript.summaries;
   const findTarget = useFind(rootRef, find, transcript, onFindStatus);
+  // A new search's matches for a group are new objects even where they're
+  // the last search's again: keep the group's while they're the same.
+  const groupMatches = new Map<string, GroupMatches>();
+  for (const [key, g] of transcript.groups) {
+    const old = prev.groupMatches.get(key);
+    groupMatches.set(key, old && sameGroupMatches(old, g) ? old : g);
+  }
+  const stamps = stampsKey();
+
+  cache.current = { items: reused.byKey, anchored: permissions.anchored, delivery, folded, groupMatches };
 
   return (
     <div className={styles.stream} ref={rootRef} data-chat-rows>
       {rendered.map((item) => {
-        if (item.type === "attached") {
-          return (
-            <div key={item.key} className={styles.user}>
-              <div className={styles.withAttached}>
-                <AttachedUpdates run={item.run} />
-              </div>
-            </div>
-          );
-        }
+        if (item.type === "attached") return <AttachedRow key={item.key} run={item.run} />;
         if (item.type === "quiet") {
-          return <QuietChecks key={item.key} item={item} ease={easing?.key === item.key ? easing.px : undefined} />;
+          return (
+            <QuietChecks
+              key={item.key}
+              item={item}
+              ease={easing?.key === item.key ? easing.px : undefined}
+              stamps={stamps}
+            />
+          );
         }
         if (item.type === "activity") {
           return (
@@ -622,208 +731,63 @@ export function ChatRenderer({
           );
         }
         if (item.type === "plan") {
-          return <PlanWidget key={item.key} todos={item.todos} findKey={item.key} />;
+          return <PlanRow key={item.key} todos={item.todos} findKey={item.key} />;
         }
         if (item.type === "card") {
           const card = cardsById.get(item.id);
-          return card ? (
-            <div key={item.key} className={styles.findable} data-find={item.key}>
-              <WorktreeCard card={card} actions={worktreeActions} />
-            </div>
-          ) : null;
+          return card ? <CardRow key={item.key} findKey={item.key} card={card} actions={worktreeActions} /> : null;
         }
         if (item.type === "task") {
-          const model = item.tool.id ? tasks?.get(item.tool.id) : undefined;
+          const id = item.tool.id;
           return (
-            <div key={item.key} className={styles.findable} data-find={item.key} data-find-tool>
-              <TaskCard
-                tool={item.tool}
-                model={model}
-                status={item.tool.id ? toolStatuses?.get(item.tool.id) : undefined}
-                permissions={item.tool.id ? permissions.anchored.get(item.tool.id) : undefined}
-                onResolvePermission={onResolvePermission}
-                onOpen={
-                  onOpenTask && item.tool.id ? () => onOpenTask(item.tool.id!, item.tool) : undefined
-                }
-              />
-            </div>
+            <TaskRow
+              key={item.key}
+              findKey={item.key}
+              tool={item.tool}
+              model={id ? tasks?.get(id) : undefined}
+              status={id ? toolStatuses?.get(id) : undefined}
+              permissions={id ? permissions.anchored.get(id) : undefined}
+              onResolvePermission={onResolvePermission}
+              onOpenTask={onOpenTask}
+            />
           );
         }
         const message = item.message;
-        // Injected messages carry role "user" at the transport level, but
-        // must never render as the subject user's own turn (decision 2,
-        // docs/LINKED-SESSIONS-DESIGN.md) — attribution wins over role.
-        // What the message is comes from its wrapper's kind: a notice from
-        // mads itself (e.g. a pipeline telling the agent which files a
-        // merge changed under it — never the user's voice, and not gated
-        // on linking), a digest or signal (a card: only the watching side
-        // ever receives one), or a linked session's message (a chip naming
-        // the sender by relation).
-        if (message.attribution && isNotice(message)) {
-          return (
-            <NoticeRow
-              key={item.key}
-              findKey={item.key}
-              attribution={message.attribution}
-              text={message.text ?? ""}
-              acknowledged={acknowledged.has(item.key)}
-            />
-          );
-        }
-        if (message.attribution && FLAGS.linkedSessions) {
-          if (isDigestCard(message)) {
-            return (
-              <DigestCard
-                key={item.key}
-                findKey={item.key}
-                source={message.attribution.source_name}
-                kind={kindOf(message.attribution) === "signal" ? "signal" : "digest"}
-                time={messageStamp(message.timestamp)?.date}
-                text={message.text ?? ""}
-                cadence={digestLink(message.attribution, links, viewedSessionId, linkName)?.cadence}
-                anchor={anchorAttrs(item.key)}
-              />
-            );
-          }
-          return (
-            <div key={item.key} className={styles.injected} data-find={item.key} {...anchorAttrs(item.key)}>
-              <Chip tone="info">
-                ⇄ from {message.attribution.relation ?? "a linked session"} · {message.attribution.source_name}
-              </Chip>
-              <Markdown className={styles.prose} text={message.text ?? ""} breaks />
-            </div>
-          );
-        }
-        if (message.role === "compact") {
-          return (
-            <CompactionMarker
-              key={item.key}
-              findKey={item.key}
-              findMatches={summaryMatches.get(item.key)}
-              findOpen={findTarget?.kind === "summary" && findTarget.itemKey === item.key}
-              marker={message.compact ?? {}}
-              summary={message.text}
-              timestamp={message.timestamp}
-            />
-          );
-        }
-        if (message.role === "inbound" && message.inbound) {
-          // From outside MADS, not through a link: the link (when one
-          // resolves) only names the relationship, never the delivery.
-          const link = message.inbound.link_id ? linksById.get(message.inbound.link_id) : undefined;
-          const relation = link
-            ? link.subject_session_id === viewedSessionId
-              ? "your leader"
-              : "linked to this session"
-            : undefined;
-          return (
-            <InboundMessage
-              key={item.key}
-              text={message.text}
-              inbound={message.inbound}
-              timestamp={message.timestamp}
-              relation={relation}
-              findKey={item.key}
-              anchor={anchorAttrs(item.key)}
-            />
-          );
-        }
-        if (message.notice) {
-          // A row the agent wrote itself rather than said (an interrupt
-          // marker, a failed turn): a quiet system line, not its voice.
-          return (
-            <div key={item.key} className={styles.notification} role="note" data-find={item.key}>
-              <span aria-hidden="true">⏺</span>
-              <span className={styles.notificationText} title={message.text}>
-                {message.text}
-              </span>
-            </div>
-          );
-        }
-        if (message.role === "notification") {
-          // The harness telling the agent a background task finished, which
-          // can start a turn nobody typed. Drawn as a quiet system line, not
-          // in the human's voice: as a user bubble it was a wall of raw
-          // <task-notification> XML the human never wrote.
-          const at = messageStamp(message.timestamp);
-          return (
-            <div key={item.key} className={styles.notification} role="note" data-find={item.key}>
-              <span aria-hidden="true">⏺</span>
-              <span className={styles.notificationText} title={message.text}>
-                {message.text || "Background task finished"}
-              </span>
-              {at && (
-                <time className={styles.notificationTime} dateTime={at.iso} title={at.title}>
-                  {at.label}
-                </time>
-              )}
-            </div>
-          );
-        }
-        const at = messageStamp(message.timestamp);
-        const stamp = at && (
-          <time className={styles.stamp} dateTime={at.iso} title={at.title}>
-            {at.label}
-          </time>
-        );
         const isUser = message.role === "user";
-        const { body, attachments } = isUser
-          ? splitAttachments(message.text ?? "")
-          : { body: message.text ?? "", attachments: [] };
-        const attached = isUser ? attachedTo.get(item.key) : undefined;
-        const text =
-          attachments.length > 0 ? (
-            <div className={styles.withAttachments}>
-              <MessageAttachments attachments={attachments} attachmentUrl={attachmentUrl} />
-              {body && <Markdown className={styles.prose} text={body} breaks />}
-            </div>
-          ) : (
-            <Markdown
-              className={styles.prose}
-              text={body}
-              breaks
-              foldNewCode={foldNewCode && Boolean(item.live)}
-            />
-          );
-        const content = attached ? (
-          <div className={styles.withAttached}>
-            <AttachedUpdates run={attached} />
-            {text}
-          </div>
-        ) : (
-          text
-        );
         const sent = isUser ? delivery.get(item.key) : undefined;
-        const retry =
-          sent?.error && onRetry && !turnActive && item.key === latestSend?.key
-            ? () => onRetry(message.text ?? "")
-            : undefined;
+        const latest = item.key === latestSend?.key;
+        const digest = Boolean(message.attribution && FLAGS.linkedSessions && isDigestCard(message));
+        const inboundLink =
+          message.role === "inbound" && message.inbound?.link_id ? linksById.get(message.inbound.link_id) : undefined;
         return (
-          <div
+          <MessageRow
             key={item.key}
-            className={styles[message.role] ?? styles.agent}
-            data-find={item.key}
-            // Anchor for the Ctrl+↑/↓ "hop between my messages" shortcut.
-            data-user-msg={isUser ? "" : undefined}
-            data-undelivered={sent?.error ? "" : undefined}
-            {...anchorAttrs(item.key)}
-          >
-            {/* Revealed on hover (styles.stamp), on the bubble's open side. */}
-            {isUser && stamp}
-            {sent ? (
-              <div className={styles.sent}>
-                {content}
-                <SendDelivery
-                  delivery={sent}
-                  onRetry={retry}
-                  signIn={item.key === latestSend?.key ? signIn : undefined}
-                />
-              </div>
-            ) : (
-              content
-            )}
-            {!isUser && stamp}
-          </div>
+            item={item}
+            runway={runwayAnchors.get(item.key)}
+            stamps={stamps}
+            linked={FLAGS.linkedSessions}
+            acknowledged={acknowledged.has(item.key)}
+            attached={isUser ? attachedTo.get(item.key) : undefined}
+            delivery={sent}
+            onRetry={sent?.error && onRetry && !turnActive && latest ? onRetry : undefined}
+            signIn={latest ? signIn : undefined}
+            foldNewCode={foldNewCode && Boolean(item.live)}
+            attachmentUrl={attachmentUrl}
+            cadence={
+              digest ? digestLink(message.attribution!, links, viewedSessionId, linkName)?.cadence : undefined
+            }
+            relation={
+              inboundLink
+                ? inboundLink.subject_session_id === viewedSessionId
+                  ? "your leader"
+                  : "linked to this session"
+                : undefined
+            }
+            findMatches={message.role === "compact" ? summaryMatches.get(item.key) : undefined}
+            findOpen={
+              message.role === "compact" && findTarget?.kind === "summary" && findTarget.itemKey === item.key
+            }
+          />
         );
       })}
       {permissions.unanchored.map((req) => {
@@ -838,3 +802,265 @@ export function ChatRenderer({
     </div>
   );
 }
+
+/** A reading-runway anchor's attributes (useRunway): `live` is whether the message is still being paced in. */
+function anchorAttrs(key: string, live: boolean | undefined): RunwayAnchorAttrs {
+  return live === undefined ? {} : { "data-runway-anchor": key, "data-runway-live": live ? "" : undefined };
+}
+
+/** Attached updates with no send after them, on the user's side. */
+const AttachedRow = memo(function AttachedRow({ run }: { run: MessageItem[] }) {
+  return (
+    <div className={styles.user}>
+      <div className={styles.withAttached}>
+        <AttachedUpdates run={run} />
+      </div>
+    </div>
+  );
+});
+
+const PlanRow = memo(PlanWidget);
+
+const CardRow = memo(function CardRow({
+  findKey,
+  card,
+  actions,
+}: {
+  findKey: string;
+  card: WorktreeCardModel;
+  actions?: WorktreeCardActions;
+}) {
+  return (
+    <div className={styles.findable} data-find={findKey}>
+      <WorktreeCard card={card} actions={actions} />
+    </div>
+  );
+});
+
+const TaskRow = memo(function TaskRow({
+  findKey,
+  tool,
+  model,
+  status,
+  permissions,
+  onResolvePermission,
+  onOpenTask,
+}: {
+  findKey: string;
+  tool: ToolUse;
+  model?: TaskModel;
+  status?: ToolStatus;
+  permissions?: PermissionRequest[];
+  onResolvePermission: (id: string, decision: "allow" | "deny") => Promise<void>;
+  onOpenTask?: (toolUseId: string, tool: ToolUse) => void;
+}) {
+  return (
+    <div className={styles.findable} data-find={findKey} data-find-tool>
+      <TaskCard
+        tool={tool}
+        model={model}
+        status={status}
+        permissions={permissions}
+        onResolvePermission={onResolvePermission}
+        onOpen={onOpenTask && tool.id ? () => onOpenTask(tool.id!, tool) : undefined}
+      />
+    </div>
+  );
+});
+
+/**
+ * One message, however it renders: a notice, a digest card, a linked
+ * session's message, a compaction marker, an inbound message, a system
+ * line, or a bubble. Memoized: its props are only what this message uses,
+ * so it re-renders when it changes, not when the conversation does.
+ */
+const MessageRow = memo(function MessageRow({
+  item,
+  runway,
+  stamps: _stamps,
+  linked,
+  acknowledged,
+  attached,
+  delivery: sent,
+  onRetry,
+  signIn,
+  foldNewCode,
+  attachmentUrl,
+  cadence,
+  relation,
+  findMatches,
+  findOpen,
+}: {
+  item: MessageItem;
+  /** Set when the message is a reading-runway anchor: whether it's still pacing in. */
+  runway?: boolean;
+  /** stampsKey(): a new day or time zone re-renders the stamp. */
+  stamps: string;
+  /** FLAGS.linkedSessions, as a prop: a memoized row reads it again when it flips. */
+  linked: boolean;
+  acknowledged: boolean;
+  attached?: MessageItem[];
+  delivery?: Delivery;
+  /** Present only when this message can be resent now. */
+  onRetry?: (text: string) => void;
+  signIn?: ChatRendererProps["signIn"];
+  foldNewCode: boolean;
+  attachmentUrl?: ChatRendererProps["attachmentUrl"];
+  cadence?: Link["cadence"];
+  relation?: string;
+  findMatches?: number;
+  findOpen: boolean;
+}) {
+  const message = item.message;
+  const anchor = anchorAttrs(item.key, runway);
+  // Injected messages carry role "user" at the transport level, but
+  // must never render as the subject user's own turn (decision 2,
+  // docs/LINKED-SESSIONS-DESIGN.md) — attribution wins over role.
+  // What the message is comes from its wrapper's kind: a notice from
+  // mads itself (e.g. a pipeline telling the agent which files a
+  // merge changed under it — never the user's voice, and not gated
+  // on linking), a digest or signal (a card: only the watching side
+  // ever receives one), or a linked session's message (a chip naming
+  // the sender by relation).
+  if (message.attribution && isNotice(message)) {
+    return (
+      <NoticeRow
+        findKey={item.key}
+        attribution={message.attribution}
+        text={message.text ?? ""}
+        acknowledged={acknowledged}
+      />
+    );
+  }
+  if (message.attribution && linked) {
+    if (isDigestCard(message)) {
+      return (
+        <DigestCard
+          findKey={item.key}
+          source={message.attribution.source_name}
+          kind={kindOf(message.attribution) === "signal" ? "signal" : "digest"}
+          time={messageStamp(message.timestamp)?.date}
+          text={message.text ?? ""}
+          cadence={cadence}
+          anchor={anchor}
+        />
+      );
+    }
+    return (
+      <div className={styles.injected} data-find={item.key} {...anchor}>
+        <Chip tone="info">
+          ⇄ from {message.attribution.relation ?? "a linked session"} · {message.attribution.source_name}
+        </Chip>
+        <Markdown className={styles.prose} text={message.text ?? ""} breaks />
+      </div>
+    );
+  }
+  if (message.role === "compact") {
+    return (
+      <CompactionMarker
+        findKey={item.key}
+        findMatches={findMatches}
+        findOpen={findOpen}
+        marker={message.compact ?? {}}
+        summary={message.text}
+        timestamp={message.timestamp}
+      />
+    );
+  }
+  if (message.role === "inbound" && message.inbound) {
+    // From outside MADS, not through a link: the link (when one
+    // resolves) only names the relationship, never the delivery.
+    return (
+      <InboundMessage
+        text={message.text}
+        inbound={message.inbound}
+        timestamp={message.timestamp}
+        relation={relation}
+        findKey={item.key}
+        anchor={anchor}
+      />
+    );
+  }
+  if (message.notice) {
+    // A row the agent wrote itself rather than said (an interrupt
+    // marker, a failed turn): a quiet system line, not its voice.
+    return (
+      <div className={styles.notification} role="note" data-find={item.key}>
+        <span aria-hidden="true">⏺</span>
+        <span className={styles.notificationText} title={message.text}>
+          {message.text}
+        </span>
+      </div>
+    );
+  }
+  if (message.role === "notification") {
+    // The harness telling the agent a background task finished, which
+    // can start a turn nobody typed. Drawn as a quiet system line, not
+    // in the human's voice: as a user bubble it was a wall of raw
+    // <task-notification> XML the human never wrote.
+    const at = messageStamp(message.timestamp);
+    return (
+      <div className={styles.notification} role="note" data-find={item.key}>
+        <span aria-hidden="true">⏺</span>
+        <span className={styles.notificationText} title={message.text}>
+          {message.text || "Background task finished"}
+        </span>
+        {at && (
+          <time className={styles.notificationTime} dateTime={at.iso} title={at.title}>
+            {at.label}
+          </time>
+        )}
+      </div>
+    );
+  }
+  const at = messageStamp(message.timestamp);
+  const stamp = at && (
+    <time className={styles.stamp} dateTime={at.iso} title={at.title}>
+      {at.label}
+    </time>
+  );
+  const isUser = message.role === "user";
+  const { body, attachments } = isUser
+    ? splitAttachments(message.text ?? "")
+    : { body: message.text ?? "", attachments: [] };
+  const text =
+    attachments.length > 0 ? (
+      <div className={styles.withAttachments}>
+        <MessageAttachments attachments={attachments} attachmentUrl={attachmentUrl} />
+        {body && <Markdown className={styles.prose} text={body} breaks />}
+      </div>
+    ) : (
+      <Markdown className={styles.prose} text={body} breaks foldNewCode={foldNewCode} />
+    );
+  const content = attached ? (
+    <div className={styles.withAttached}>
+      <AttachedUpdates run={attached} />
+      {text}
+    </div>
+  ) : (
+    text
+  );
+  const retry = onRetry ? () => onRetry(message.text ?? "") : undefined;
+  return (
+    <div
+      className={styles[message.role] ?? styles.agent}
+      data-find={item.key}
+      // Anchor for the Ctrl+↑/↓ "hop between my messages" shortcut.
+      data-user-msg={isUser ? "" : undefined}
+      data-undelivered={sent?.error ? "" : undefined}
+      {...anchor}
+    >
+      {/* Revealed on hover (styles.stamp), on the bubble's open side. */}
+      {isUser && stamp}
+      {sent ? (
+        <div className={styles.sent}>
+          {content}
+          <SendDelivery delivery={sent} onRetry={retry} signIn={signIn} />
+        </div>
+      ) : (
+        content
+      )}
+      {!isUser && stamp}
+    </div>
+  );
+});
