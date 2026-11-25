@@ -35,11 +35,16 @@ const DET_LABELS: Record<string, string> = {
   chat_older_pages: "chat: older transcript pages fetched loading the view",
   chat_rows_loaded: "chat: transcript rows loaded (pages × 100, capped at the conversation)",
   chat_items: "chat: rendered conversation items",
+  chat_user_msgs: "chat: user messages rendered (checked against the transcript)",
+  chat_time_elements: "chat: <time> elements in the conversation stream",
+  chat_dom_nodes_per_row: "chat: conversation-stream DOM nodes per loaded row",
   chat_return_retries: "chat: extra Ctrl+↓↓ presses before the view was back at the tail, following",
   chat_dom_nodes: "chat: DOM nodes, whole page, after loading",
   chat_stream_dom_nodes: "chat: DOM nodes in the conversation stream",
   chat_deltas: "chat: text deltas the page received (first delta → turn end)",
-  chat_commits: "chat: React commits, first delta → turn end",
+  chat_commits: "chat: React commits in the window",
+  chat_proxy_deltas_matched: "chat: the proxy's text_delta stamps matched the page's deltas (1 = yes)",
+  chat_bubble_scans: "chat: recorder lookups that fell back to scanning every row",
 };
 
 const TIMING_LABELS: Record<string, string> = {
@@ -83,86 +88,170 @@ const TIMING_LABELS: Record<string, string> = {
   abandoned_aborted: "…of which the page aborted",
   abandoned_held_total_ms: "abandoned: socket time held after leaving, summed (ms)",
   abandoned_held_max_ms: "abandoned: longest held after leaving (ms)",
-  chat_window_ms: "chat: stream window, first delta → turn end (ms)",
+  chat_window_ms: "chat: stream window, first delta → turn end (paced: → the reveal's end) (ms)",
   chat_deltas_per_s: "chat: text deltas received per second",
   chat_commits_per_s: "chat: React commits per second",
   chat_commits_per_delta: "chat: React commits per delta",
-  chat_busy_pct: "chat: main thread busy (% of the window; trace)",
-  chat_ms_per_commit: "chat: main-thread ms per React commit (trace)",
+  chat_busy_pct: "chat: main thread busy (% of the window; trace; over 90% = saturated, a ceiling)",
+  chat_busy_ms: "chat: main thread busy in the window (ms; trace)",
+  chat_ms_per_s: "chat: main-thread ms per second of window (trace)",
   chat_ms_per_delta: "chat: main-thread ms per delta (trace)",
-  chat_js_ms_per_commit: "chat: …JS ms per commit (trace self time)",
+  chat_js_ms_per_delta: "chat: …JS ms per delta (trace self time)",
+  chat_style_ms_per_delta: "chat: …style ms per delta",
+  chat_layout_ms_per_delta: "chat: …layout ms per delta",
+  chat_paint_ms_per_delta: "chat: …paint/composite ms per delta",
+  chat_gc_ms_per_delta: "chat: …GC ms per delta",
+  chat_other_ms_per_delta: "chat: …other (task overhead, unattributed) ms per delta",
+  chat_js_ms_per_s: "chat: JS ms per second of window (trace self time)",
+  chat_style_ms_per_s: "chat: …style ms per second",
+  chat_layout_ms_per_s: "chat: …layout ms per second",
+  chat_paint_ms_per_s: "chat: …paint/composite ms per second",
+  chat_gc_ms_per_s: "chat: …GC ms per second",
+  chat_other_ms_per_s: "chat: …other ms per second",
+  chat_ms_per_commit: "chat: main-thread ms per React commit (trace; secondary: a candidate can change commits)",
+  chat_js_ms_per_commit: "chat: …JS ms per commit",
   chat_style_ms_per_commit: "chat: …style ms per commit",
   chat_layout_ms_per_commit: "chat: …layout ms per commit",
   chat_paint_ms_per_commit: "chat: …paint/composite ms per commit",
   chat_gc_ms_per_commit: "chat: …GC ms per commit",
-  chat_other_ms_per_commit: "chat: …other (task overhead, unattributed) ms per commit",
+  chat_other_ms_per_commit: "chat: …other ms per commit",
   chat_frame_p50_ms: "chat: frame interval p50 (rAF, ms)",
   chat_frame_p95_ms: "chat: frame interval p95 (rAF, ms)",
   chat_frames_over_50ms: "chat: frames over 50 ms",
   chat_longtasks: "chat: long tasks in the window",
   chat_longtask_ms: "chat: long-task time in the window (ms)",
-  chat_on_screen_p50_ms: "chat: delta received → on screen, p50 (ms; paced: the reveal's lag)",
-  chat_on_screen_p95_ms: "chat: delta received → on screen, p95 (ms)",
+  chat_wire_on_screen_p50_ms: "chat: delta sent by the proxy → on screen, p50 (ms; unpaced)",
+  chat_wire_on_screen_p95_ms: "chat: delta sent by the proxy → on screen, p95 (ms; unpaced)",
+  chat_on_screen_p50_ms: "chat: delta handled by the page → on screen, p50 (ms; unpaced)",
+  chat_on_screen_p95_ms: "chat: delta handled by the page → on screen, p95 (ms; unpaced)",
+  chat_reveal_after_turn_end_ms: "chat: turn end → the reveal's end (ms; paced)",
   chat_off_bottom_pct: "chat: frames more than 10 px off the bottom (%; runway page turns glide)",
   chat_off_bottom_max_px: "chat: furthest off the bottom (px)",
-  chat_heap_used_mb: "chat: JS heap used after loading, after a full GC (MB)",
+  chat_end_hidden_pct: "chat: frames with the reply's end out of view (%)",
+  chat_end_hidden_max_ms: "chat: longest stretch with the reply's end out of view (ms)",
+  chat_probe_ms_per_s: "chat: the recorder's own time, ms per second of window (in-page clock)",
+  chat_probe_ms_per_sample: "chat: the recorder's per-frame sample (ms)",
+  chat_probe_trace_pct_of_busy: "chat: the recorder's share of busy time (%; trace)",
+  chat_probe_layout_ms_per_s: "chat: style + layout inside the recorder's samples, ms per second (trace; forced)",
 };
 
-/** The chat scenarios' summary table (renderChatSummary): column → result key. */
-const CHAT_COLUMNS: [string, string, "det" | "timing"][] = [
-  ["rows loaded", "chat_rows_loaded", "det"],
-  ["DOM nodes", "chat_dom_nodes", "det"],
-  ["heap MB", "chat_heap_used_mb", "timing"],
-  ["deltas/s", "chat_deltas_per_s", "timing"],
-  ["commits/s", "chat_commits_per_s", "timing"],
-  ["busy %", "chat_busy_pct", "timing"],
-  ["ms/commit", "chat_ms_per_commit", "timing"],
-  ["ms/delta", "chat_ms_per_delta", "timing"],
-  ["JS", "chat_js_ms_per_commit", "timing"],
-  ["style", "chat_style_ms_per_commit", "timing"],
-  ["layout", "chat_layout_ms_per_commit", "timing"],
-  ["paint", "chat_paint_ms_per_commit", "timing"],
-  ["GC", "chat_gc_ms_per_commit", "timing"],
-  ["frame p50", "chat_frame_p50_ms", "timing"],
-  ["frame p95", "chat_frame_p95_ms", "timing"],
-  ["long tasks", "chat_longtasks", "timing"],
-  ["long ms", "chat_longtask_ms", "timing"],
-  ["on screen p95", "chat_on_screen_p95_ms", "timing"],
+type ChatCol = [string, string, "det" | "timing", 1 | 2];
+/** The chat summary's columns, unpaced (renderChatSummary): label → result key. Costs per delta first. */
+const CHAT_UNPACED: ChatCol[] = [
+  ["rows", "chat_rows_loaded", "det", 1],
+  ["nodes/row", "chat_dom_nodes_per_row", "det", 1],
+  ["deltas/s", "chat_deltas_per_s", "timing", 1],
+  ["busy %", "chat_busy_pct", "timing", 1],
+  ["ms/delta", "chat_ms_per_delta", "timing", 2],
+  ["JS", "chat_js_ms_per_delta", "timing", 2],
+  ["style", "chat_style_ms_per_delta", "timing", 2],
+  ["layout", "chat_layout_ms_per_delta", "timing", 2],
+  ["paint", "chat_paint_ms_per_delta", "timing", 2],
+  ["GC", "chat_gc_ms_per_delta", "timing", 2],
+  ["commits/s", "chat_commits_per_s", "timing", 1],
+  ["ms/commit", "chat_ms_per_commit", "timing", 2],
+  ["frame p50", "chat_frame_p50_ms", "timing", 1],
+  ["frame p95", "chat_frame_p95_ms", "timing", 1],
+  ["sent → screen p95", "chat_wire_on_screen_p95_ms", "timing", 1],
+  ["long tasks", "chat_longtasks", "timing", 1],
 ];
+/** Paced: the window is mostly the reveal (a commit a frame), so per second, not per delta. */
+const CHAT_PACED: ChatCol[] = [
+  ["rows", "chat_rows_loaded", "det", 1],
+  ["window s", "chat_window_ms", "timing", 1],
+  ["busy %", "chat_busy_pct", "timing", 1],
+  ["ms/s", "chat_ms_per_s", "timing", 1],
+  ["JS", "chat_js_ms_per_s", "timing", 1],
+  ["style", "chat_style_ms_per_s", "timing", 1],
+  ["layout", "chat_layout_ms_per_s", "timing", 1],
+  ["paint", "chat_paint_ms_per_s", "timing", 1],
+  ["GC", "chat_gc_ms_per_s", "timing", 1],
+  ["commits/s", "chat_commits_per_s", "timing", 1],
+  ["ms/commit", "chat_ms_per_commit", "timing", 2],
+  ["frame p50", "chat_frame_p50_ms", "timing", 1],
+  ["frame p95", "chat_frame_p95_ms", "timing", 1],
+  ["long tasks", "chat_longtasks", "timing", 1],
+];
+/** In a saturated cell (busy over 90%) these are the numbers that still move; the rest are ceilings. */
+const CHAT_HEADLINE_SATURATED = new Set(["chat_frame_p50_ms", "chat_frame_p95_ms", "chat_commits_per_s", "chat_wire_on_screen_p95_ms"]);
+const CHAT_SATURATED_PCT = 90;
 
 /**
- * One table for the chat scenarios: a row per scenario and build, medians
- * over its passing repetitions (JS…GC are ms per commit, trace self time).
+ * The chat scenarios' summary: a row per scenario and build, medians over
+ * its passing repetitions. Unpaced costs are per delta (the work is a
+ * fixed number of deltas; commits are the app's choice); paced per second
+ * of window. A saturated cell (busy over 90%) is flagged ⚠: its busy and
+ * per-delta costs are ceilings, so its headline is frames, commits/s and
+ * on-screen latency (bold), and 10cs measures the cost unsaturated.
  */
 export function renderChatSummary(plan: Plan, results: Result[]): string[] {
   const ids = plan.scenarios.filter((s) => /^10/.test(s));
   if (ids.length === 0) return [];
+  const med = (sid: string, b: string, k: string, where: "det" | "timing") => {
+    const ok = results.filter((r) => r.scenario === sid && r.build === b && r.ok);
+    const v = ok.map((r) => (where === "det" ? r.det?.[k] : r.timing?.[k])).filter((x): x is number => typeof x === "number" && Number.isFinite(x));
+    return v.length ? quantile(v, 0.5) : NaN;
+  };
+  const table = (title: string, cols: ChatCol[], sids: string[], note: string) => {
+    if (sids.length === 0) return [];
+    const out = [`### ${title}`, "", note, "", `| scenario | build | ok | sat | ${cols.map((c) => c[0]).join(" | ")} |`, `|---|---|---|---|${cols.map(() => "---").join("|")}|`];
+    for (const sid of sids) {
+      for (const b of plan.builds) {
+        const n = results.filter((r) => r.scenario === sid && r.build === b.label && r.ok).length;
+        const busy = med(sid, b.label, "chat_busy_pct", "timing");
+        const sat = busy > CHAT_SATURATED_PCT;
+        const cells = cols.map(([, k, where, dp]) => {
+          let v = med(sid, b.label, k, where);
+          if (k === "chat_window_ms") v /= 1000;
+          const t = Number.isFinite(v) ? (dp === 2 ? v.toFixed(2) : fmtNum(Math.round(v * 10) / 10)) : "–";
+          return sat && CHAT_HEADLINE_SATURATED.has(k) ? `**${t}**` : t;
+        });
+        out.push(`| ${sid} | ${b.label} | ${n}/${plan.n} | ${sat ? "⚠" : ""} | ${cells.join(" | ")} |`);
+      }
+    }
+    out.push("");
+    return out;
+  };
   const lines = [
     "## Chat stream (10x): summary",
     "",
-    "Medians over passing repetitions; JS … GC are main-thread ms per React commit (trace self time). Window: first text delta → turn end.",
+    "Medians over passing repetitions; costs are main-thread ms from the CDP trace (self time by bucket). " +
+      "⚠ sat = busy over 90%: the main thread had no idle time, so busy % and ms/delta are ceilings, not costs — read the **bold** columns " +
+      "(frames, commits/s, sent → on screen) there, and 10cs for the cost at every page unsaturated.",
     "",
-    `| scenario | build | ok | ${CHAT_COLUMNS.map((c) => c[0]).join(" | ")} |`,
-    `|---|---|---|${CHAT_COLUMNS.map(() => "---").join("|")}|`,
+    ...table(
+      "Unpaced (window: first delta → turn end; costs per delta)",
+      CHAT_UNPACED,
+      ids.filter((s) => !s.includes("-paced")),
+      "sent → screen: the proxy sent the delta → the first frame showing it (includes the page's backlog).",
+    ),
+    ...table(
+      "Paced (window: first delta → the reveal's end; costs per second)",
+      CHAT_PACED,
+      ids.filter((s) => s.includes("-paced")),
+      "The reveal commits once a frame, so its pace sets commits/s; on-screen latency is the reveal's lag by design and isn't reported.",
+    ),
   ];
-  for (const sid of ids) {
-    for (const b of plan.builds) {
-      const rs = results.filter((r) => r.scenario === sid && r.build === b.label && !r.scenario.startsWith("check:"));
-      const ok = rs.filter((r) => r.ok);
-      const cells = CHAT_COLUMNS.map(([, k, where]) => {
-        const v = ok.map((r) => (where === "det" ? r.det?.[k] : r.timing?.[k])).filter((x): x is number => typeof x === "number" && Number.isFinite(x));
-        return v.length ? fmtNum(Math.round(quantile(v, 0.5) * 10) / 10) : "–";
-      });
-      lines.push(`| ${sid} | ${b.label} | ${ok.length}/${plan.n} | ${cells.join(" | ")} |`);
-    }
-  }
   const chatRs = results.filter((r) => /^10/.test(r.scenario));
   const passed = chatRs.filter((r) => r.ok && r.checks?.length).length;
-  lines.push("", `Checks (the wire carried the agent's whole stored reply; it is all on screen, in order; stick-to-bottom held): ${passed} / ${chatRs.length} repetitions passed every one.`);
+  lines.push(
+    `Checks (the loaded size; the wire carried the agent's whole stored reply; the streamed render was whole and in order, and still is after the merge; stick-to-bottom held): ${passed} / ${chatRs.length} repetitions passed every one.`,
+  );
   for (const f of chatRs.filter((r) => !r.ok)) {
     const bad = (f.checks ?? []).filter((c) => !c.ok).map((c) => `${c.name}: ${c.detail ?? ""}`);
     lines.push(`- ✗ ${f.scenario} ${f.build} rep ${f.rep}: ${bad.length ? bad.join("; ") : f.error}`);
   }
+  // The recorder's own cost, so a reader can see what it adds.
+  const probe = ids
+    .map((sid) => {
+      const b = plan.builds[0].label;
+      const a = med(sid, b, "chat_probe_ms_per_s", "timing");
+      const p = med(sid, b, "chat_probe_trace_pct_of_busy", "timing");
+      const l = med(sid, b, "chat_probe_layout_ms_per_s", "timing");
+      return Number.isFinite(a) ? `${sid} ${a.toFixed(1)} ms/s (${Number.isFinite(p) ? p.toFixed(1) : "–"}% of busy; forced style+layout ${Number.isFinite(l) ? l.toFixed(2) : "–"} ms/s)` : "";
+    })
+    .filter(Boolean);
+  if (probe.length) lines.push("", `Recorder overhead (${plan.builds[0].label}): ${probe.join("; ")}.`);
   lines.push("");
   return lines;
 }
@@ -199,12 +288,16 @@ function detCell(vals: number[], key: string): { text: string; value: number } {
   return { text: `⚠ ${fmtNum(lo, b)} … ${fmtNum(hi, b)}`, value: quantile(vals, 0.5) };
 }
 
-function timingCell(vals: number[]): { text: string; value: number } {
+/** Keys whose values are small per-unit costs: shown to 2 decimals, not rounded to whole ms. */
+const FINE = /^chat_.*_per_(delta|commit|sample)$|^chat_.*(_ms_per_s|_pct_of_busy)$|^chat_commits_per_delta$/;
+
+function timingCell(vals: number[], key = ""): { text: string; value: number } {
   const v = vals.filter(Number.isFinite);
   if (v.length === 0) return { text: "–", value: NaN };
+  const f = FINE.test(key) ? (x: number) => x.toFixed(2) : (x: number) => fmtNum(Math.round(x));
   const med = quantile(v, 0.5);
-  if (v.length < 2) return { text: fmtNum(Math.round(med)), value: med };
-  return { text: `${fmtNum(Math.round(med))} [${fmtNum(Math.round(quantile(v, 0.25)))}–${fmtNum(Math.round(quantile(v, 0.75)))}]`, value: med };
+  if (v.length < 2) return { text: f(med), value: med };
+  return { text: `${f(med)} [${f(quantile(v, 0.25))}–${f(quantile(v, 0.75))}]`, value: med };
 }
 
 function ratio(cand: number, base: number): string {
@@ -239,7 +332,7 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
   lines.push(
     `- browser: ${plan.browser}; N = ${plan.n}; delay modes: ${modes.join(", ")} ` +
       `(on = ${plan.delays || "defaults: repos 10 s, changeset 6 s, worktree/refresh 16 s"}); ` +
-      `/output held open: ${plan.holdOutput ? "yes" : "no"}${plan.realism ? "; REALISM: a sanitised copy of a real database (no names in this report)" : ""}`,
+      `/output held open: ${plan.holdOutput ? "yes" : "no"}${plan.holdOutput && plan.scenarios.some((x) => /^10/.test(x)) ? " (10x: passed through, a reply streams)" : ""}${plan.chatReal ? "; CHAT: a real transcript (no names, content, screenshots or stack logs in these results)" : ""}${plan.realism ? "; REALISM: a sanitised copy of a real database (no names in this report)" : ""}`,
   );
   if (manifest) {
     lines.push(
@@ -328,7 +421,7 @@ export function renderReport(plan: Plan, results: Result[], manifest?: Manifest)
       }
       for (const [k, label] of Object.entries(TIMING_LABELS)) {
         if (headline.includes(k) || !ok.some((r) => k in r.timing)) continue;
-        row(label, labels.map((l) => timingCell(by(l).map((r) => r.timing[k]))));
+        row(label, labels.map((l) => timingCell(by(l).map((r) => r.timing[k]), k)));
       }
       // Git routes: per repetition, p50 and max over the window's requests; cells are the median across repetitions.
       for (const g of GIT_ROUTE_NAMES) {
