@@ -1,11 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { Chip } from "../../components/Chip/Chip";
 import { Fold, useArrivals } from "../../components/Motion";
 import type { BackgroundTask, PermissionRequest, ToolKind, ToolStatus, ToolUse } from "../../router/types";
 import type { PermissionReveal } from "../ApprovalJump/permissionReveal";
 import { PermissionCard } from "../ChatRenderer/PermissionCard";
-import { entryKey, snippet, type EntryMatch } from "../Find/findText";
+import { entryKey, entryMatchCount, snippet, type EntryMatch, type GroupMatches } from "../Find/findText";
 import { BackgroundElapsed } from "./Background";
 import type { ActivityEntry, ToolEntry } from "./conversationItems";
 import { DiffView } from "./DiffView";
@@ -53,7 +53,7 @@ export interface ActivityGroupProps {
   /** This group's item key, for find (useFind's `data-find-group`). */
   findKey?: string;
   /** Find's matches in these rows' full text, which the rows don't show. */
-  findMatches?: EntryMatch[];
+  findMatches?: GroupMatches;
   /** Find's current match, when it's in this group: the group opens and shows it in context. */
   findCurrent?: { id: string; match: EntryMatch };
 }
@@ -143,8 +143,67 @@ function groupDuration(entries: ActivityEntry[]): string | undefined {
  * counts, duration, aggregate status); expanded, one 13.5px row per call
  * with a start-truncated title, location basename, diffstat and status
  * glyph; hover-peek on every row.
+ *
+ * Memoized (sameGroupProps): a streamed delta re-renders only the group
+ * whose rows or calls' state changed, not every group in the conversation
+ * (docs/CHAT-STREAM-PER-BATCH-COST.md).
  */
-export function ActivityGroup({
+export const ActivityGroup = memo(ActivityGroupView, sameGroupProps);
+
+/**
+ * The maps every group is handed are the whole conversation's, so they
+ * compare only on this group's own calls: a status, a background process
+ * or a permission card for another group's call is no change here. So do
+ * the dock's selection and the approval jump's reveal — they matter to a
+ * group only when they name one of its calls or cards. Every other prop
+ * compares by identity, so a prop added later is never skipped.
+ */
+// Relies on ActivityGroupView reading statuses, background and permissions only by its own entries' tool ids.
+export function sameGroupProps(a: ActivityGroupProps, b: ActivityGroupProps): boolean {
+  if (a.entries !== b.entries) return false;
+  const keys = Object.keys(b) as (keyof ActivityGroupProps)[];
+  if (Object.keys(a).length !== keys.length) return false;
+  for (const k of keys) {
+    if (!(k in a)) return false;
+    if (Object.is(a[k], b[k])) continue;
+    switch (k) {
+      case "statuses":
+      case "background":
+      case "permissions": {
+        const x = a[k];
+        const y = b[k];
+        if (b.entries.some((e) => e.type === "tool" && e.tool.id !== undefined && x?.get(e.tool.id) !== y?.get(e.tool.id))) {
+          return false;
+        }
+        break;
+      }
+      case "selectedToolId":
+        if (hasCall(b.entries, a[k]) || hasCall(b.entries, b[k])) return false;
+        break;
+      case "reveal":
+        if (holds(a, a[k]) || holds(b, b[k])) return false;
+        break;
+      default:
+        return false;
+    }
+  }
+  return true;
+}
+
+function hasCall(entries: ActivityEntry[], id: string | undefined): boolean {
+  return id !== undefined && entries.some((e) => e.type === "tool" && e.tool.id === id);
+}
+
+/** Whether a reveal names one of the group's permission cards. */
+function holds(p: ActivityGroupProps, reveal: PermissionReveal | null | undefined): boolean {
+  if (!reveal) return false;
+  return p.entries.some(
+    (e) => e.type === "tool" && e.tool.id !== undefined && (p.permissions?.get(e.tool.id) ?? []).some((r) => r.id === reveal.id),
+  );
+}
+
+// Reads statuses, background and permissions only by its own entries' tool ids — sameGroupProps relies on it.
+function ActivityGroupView({
   entries,
   live = false,
   statuses,
@@ -254,7 +313,7 @@ export function ActivityGroup({
           <span>{label}</span>
           <span className={styles.meta}>
             {!shown && awaiting && <Chip tone="warn">needs your approval</Chip>}
-            {!shown && findMatches && findMatches.length > 0 && <FindHits count={findMatches.length} />}
+            {!shown && findMatches && findMatches.count > 0 && <FindHits count={findMatches.count} />}
             <Diffstat adds={stat.adds} dels={stat.dels} />
             {duration && <span>{duration}</span>}
             {agg === "in_progress" ? <Spinner /> : <StatusGlyph status={agg} />}
@@ -266,7 +325,7 @@ export function ActivityGroup({
               const requests =
                 entry.type === "tool" && entry.tool.id ? permissions?.get(entry.tool.id) : undefined;
               const current = findCurrent?.match.entryKey === keys[i] ? findCurrent : undefined;
-              const hits = findMatches?.filter((m) => m.entryKey === keys[i]).length ?? 0;
+              const hits = entryMatchCount(findMatches, keys[i]);
               return (
                 <Fold key={keys[i]} appear={arrived(keys[i])} fade className={styles.rowFold}>
                   <ActivityRow

@@ -155,6 +155,61 @@ func TestDelegatePutValidates(t *testing.T) {
 	}
 }
 
+// The rail's cold read with no fade asks for what ended after now: only the
+// live ones. A completed delegate still waiting on work it started is live
+// however long ago its run ended; a plain completed one of the same age is
+// not. And a change to WaitingOn alone is a real change (sameDelegate
+// compares JSON), so clearing it announces.
+func TestDelegateLiveOrEndedAfterIncludesWaiting(t *testing.T) {
+	delegates, sessions, l := newDelegateStore(t)
+	ctx := context.Background()
+	sess := mkSession(t, sessions, contracts.Session{Name: "parent"})
+	ended := time.Now().Add(-time.Hour).UTC()
+	finished := func(harnessID string, w *contracts.DelegateWaiting) contracts.Delegate {
+		d := running(sess.ID, harnessID)
+		d.State, d.EndedAt, d.WaitingOn = contracts.DelegateCompleted, &ended, w
+		return d
+	}
+	for _, d := range []contracts.Delegate{
+		running(sess.ID, "live"),
+		finished("waiting", &contracts.DelegateWaiting{Subagents: 1}),
+		finished("done", nil),
+	} {
+		if err := delegates.Put(ctx, &d, "runner"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := delegates.LiveOrEndedAfter(ctx, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, d := range got {
+		ids = append(ids, d.HarnessID)
+	}
+	if len(ids) != 2 || ids[0] != "live" || ids[1] != "waiting" {
+		t.Errorf("live or ended after now = %v, want [live waiting]", ids)
+	}
+	if got[1].WaitingOn == nil || got[1].WaitingOn.Subagents != 1 {
+		t.Errorf("waiting_on did not round-trip: %+v", got[1].WaitingOn)
+	}
+
+	cleared := finished("waiting", nil)
+	if err := delegates.Put(ctx, &cleared, "runner"); err != nil {
+		t.Fatal(err)
+	}
+	evs := delegateEvents(t, l, sess.ID)
+	if last := evs[len(evs)-1]; len(evs) != 4 || last.HarnessID != "waiting" || last.WaitingOn != nil {
+		t.Errorf("clearing waiting_on must announce: %d events, last %+v", len(evs), last)
+	}
+
+	bad := finished("bad", &contracts.DelegateWaiting{Processes: -1})
+	var verr *contracts.ValidationError
+	if err := delegates.Put(ctx, &bad, "runner"); !errors.As(err, &verr) {
+		t.Errorf("negative waiting count: want validation error, got %v", err)
+	}
+}
+
 func TestSessionDeleteRemovesItsDelegates(t *testing.T) {
 	delegates, sessions, _ := newDelegateStore(t)
 	ctx := context.Background()

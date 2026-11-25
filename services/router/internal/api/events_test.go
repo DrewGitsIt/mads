@@ -36,7 +36,7 @@ func newTestServerWithData(t *testing.T) (*httptest.Server, string) {
 
 func mustAppend(t *testing.T, c *dataclient.Client, sessionID string, typ contracts.EventType) contracts.Envelope {
 	t.Helper()
-	env := contracts.Envelope{Type: typ, SessionID: sessionID, Actor: "test"}
+	env := contracts.Envelope{Type: typ, SessionID: sessionID}
 	if err := c.Append(context.Background(), &env); err != nil {
 		t.Fatalf("append %s: %v", typ, err)
 	}
@@ -55,10 +55,19 @@ type sseFrame struct {
 // cancel func tears down the connection, simulating a UI subscriber drop.
 func openSSE(t *testing.T, ctx context.Context, url string) (<-chan sseFrame, context.CancelFunc) {
 	t.Helper()
+	return openSSEWith(t, ctx, url, nil)
+}
+
+// openSSEWith is openSSE sending header too.
+func openSSEWith(t *testing.T, ctx context.Context, url string, header http.Header) (<-chan sseFrame, context.CancelFunc) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(ctx)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for k, v := range header {
+		req.Header[k] = v
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	resp, err := http.DefaultClient.Do(req)
@@ -237,5 +246,29 @@ func TestStreamEventsReconnectWithCursorNoGaps(t *testing.T) {
 	}
 	if missed[0].seq <= lastSeq || missed[1].seq <= lastSeq {
 		t.Fatalf("resumed frames must all have seq > %d, got %d and %d", lastSeq, missed[0].seq, missed[1].seq)
+	}
+}
+
+// GET /events/head proxies the Data Service's log head: 0 on an empty log,
+// then the newest event's seq.
+func TestGetEventsHeadProxiesDataService(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	head := func() int64 {
+		t.Helper()
+		resp, err := http.Get(srv.URL + "/events/head")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET /events/head = %d", resp.StatusCode)
+		}
+		return decodeJSON[map[string]int64](t, resp)["seq"]
+	}
+	before := head()
+	c := dataclient.New(base, "test")
+	mustAppend(t, c, "ses_a", contracts.SessionCreated)
+	last := mustAppend(t, c, "ses_b", contracts.SessionUpdated)
+	if got := head(); got != last.Seq || got <= before {
+		t.Fatalf("head = %d, want %d (was %d)", got, last.Seq, before)
 	}
 }

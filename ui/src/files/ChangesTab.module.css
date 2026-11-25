@@ -26,6 +26,8 @@
   padding: 8px 12px;
   border-bottom: 1px solid var(--line-soft);
   min-height: 41px;
+  /* WorkChip drops its state text when this gets narrow. */
+  container: changes-toolbar / inline-size;
 }
 
 .lbl {

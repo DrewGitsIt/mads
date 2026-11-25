@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import type { PtyBridge, PtySpawnOptions } from "./ptyBridge";
 import { useElectronClipboardBridge, useElectronContextMenu } from "./ptyBridge";
 import { matches } from "../../platform/hotkeys";
+import { isShellToggleKey } from "../shellToggleSignal";
 import "@xterm/xterm/css/xterm.css";
 import styles from "./TerminalView.module.css";
 
@@ -151,7 +152,7 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         // pty and the event bubbles on to the document. Applies in the
         // agent's Terminal mode too, where the chord toggles the same dock
         // and a stray NUL would be noise.
-        if (e.ctrlKey && e.key === "`") return false;
+        if (isShellToggleKey(e)) return false;
 
         // Compose / view-toggle chords: only swallowed when a handler is
         // wired, so e.g. readline's Ctrl+E (end-of-line) still works in the

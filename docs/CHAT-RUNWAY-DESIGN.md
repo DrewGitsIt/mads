@@ -35,13 +35,14 @@ All in the stream's content coordinates:
 A      = anchor top − 12px gap
 T      = the reply's end (the spacer's top)
 U      = usable height = clientHeight − everything after the spacer (pinned cluster, padding)
-page   = max(U − 64px, U / 2)           (64px ≈ 3 lines of context)
-pages  = 0 if T ≤ A + U − 8, else ceil((T − (A + U − 8)) / page)
-floor  = A + pages × page + U           (lowered to `cap` once trimmed or settled)
+page   = max(U − 64px, U / 2)           (64px ≈ 3 lines of context), at the moment of a turn
+turns  = 0 if T ≤ A + O + U − 8, else ceil((T − (A + O + U − 8)) / page)
+O      = offset: the sum of every turn's page, each as it was when it turned (0 at the anchor)
+floor  = A + O + U                      (lowered to `cap` once trimmed or settled)
 spacer = max(0, floor − T)
 ```
 
-At the bottom, `scrollTop = A + pages × page`, which doesn't depend on `U`, so a composer growing a line or the pinned cluster changing size moves nothing. `pages` is a function of where the text is, not of what has happened, which is why coming back to the bottom after a scroll-up is the same as never leaving.
+At the bottom, `scrollTop = A + O`, which doesn't depend on `U`, so a composer growing a line or the pinned cluster changing size moves nothing. Turns are kept, not recomputed from position: when the page size was `U`'s function on every pin, a running subagent's row (shown in the cluster while its card is off screen) changed `U`, moved the text by `pages × Δ`, brought its card back on screen, hid, and moved it off again — every frame (2026-11-10). Turns only add, so the runway also holds when the reply above shrinks; trim takes the leftover space once the turn is over.
 
 ### Known limit
 

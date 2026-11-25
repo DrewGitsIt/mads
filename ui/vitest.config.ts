@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
@@ -9,8 +10,13 @@ export default defineConfig({
     // ui/electron/pty/ (shellEnv, resolveCwd) — they don't touch node-pty or
     // any Electron API, so (unlike *.realtest.ts, see vitest.electron.config.ts)
     // there's no reason to keep them out of the default `make check` gate.
-    include: ["src/**/*.test.{ts,tsx}", "electron/**/*.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}", "electron/**/*.test.ts", "vite-router-proxy.test.ts"],
     exclude: ["e2e/**", "node_modules/**"],
     setupFiles: ["./src/setupTests.ts"],
+    // Workers die with the main process instead of running on as orphans —
+    // see vitest.orphanGuard.cjs.
+    poolOptions: {
+      forks: { execArgv: ["--require", resolve(__dirname, "vitest.orphanGuard.cjs")] },
+    },
   },
 });

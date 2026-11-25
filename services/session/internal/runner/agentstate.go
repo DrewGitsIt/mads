@@ -156,11 +156,14 @@ func mainAgentBackground(bs []provider.BackgroundTask) int {
 }
 
 // clearBackground ends every background process's report when the harness
-// process that ran them is gone: the live list a viewer sees and the count
-// on the agent state.
+// process that ran them is gone: the live list a viewer sees, the count on
+// the agent state, and what the delegates are waiting on (ProcessExit,
+// which runs first at both call sites, already cleared it; this keeps the
+// tracker right if that ever changes).
 func (r *Runner) clearBackground() {
 	r.hub.clearBackground()
 	r.setAgentBackground(0)
+	r.publishDelegates(r.delegates.Background(nil, time.Now()))
 }
 
 // observeAgentState updates the working label from one live main-agent

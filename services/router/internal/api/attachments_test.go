@@ -154,3 +154,21 @@ func TestRemovedAttachmentIsGone(t *testing.T) {
 		t.Fatalf("get after delete status = %d, want 404", code)
 	}
 }
+
+// An attachment and its thumbnail never change under their id, so the
+// browser may keep both: the API's no-store default doesn't apply.
+func TestAttachmentsAreCacheable(t *testing.T) {
+	srv := newTestServer(t)
+	a := uploadAttachment(t, srv.URL+"/attachment-drafts/d/attachments", "pic.png", smallPNG(t))
+	base := srv.URL + "/attachment-drafts/d/attachments/" + a.ID
+	for _, url := range []string{base, base + "/thumbnail"} {
+		resp, err := http.Get(url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if got := resp.Header.Get("Cache-Control"); got != "private, max-age=31536000, immutable" {
+			t.Errorf("GET %s Cache-Control = %q, want immutable", url, got)
+		}
+	}
+}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { router } from "../../router/client";
-import { subscribeToEvents } from "../../router/events";
+import { eventsReadyWithin, subscribeToEvents } from "../../router/events";
 import type { RegistryItemType, RegistryPublishItem } from "../../router/types";
 
 export interface UseRegistryJob {
@@ -52,7 +52,11 @@ export function useRegistryJob(): UseRegistryJob {
     return new Promise<void>((resolve, reject) => {
       resolveRef.current = resolve;
       rejectRef.current = reject;
-      spawn()
+      // The job is started only once the bus is ready (router/events.ts
+      // eventsReady): the bus never replays, so its terminal event could
+      // otherwise land before the subscription hears anything.
+      eventsReadyWithin()
+        .then(spawn)
         .then((result) => {
           jobId.current = result.job_id;
         })

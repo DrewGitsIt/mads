@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DONE_OPEN_KEY, SessionRail, type RailLinkEditor } from "./SessionRail";
+import { DIFFERENT_DEVICE } from "../links/linkDraft";
 import { FLAGS } from "../../../featureFlags";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import { useSessionAgentState } from "../state/useSessionAgentState";
 import type { SessionAgentState } from "./railGroups";
-import type { Link, Session } from "../../../router/types";
+import type { Delegate, Link, Session } from "../../../router/types";
 import { readFileSync } from "node:fs";
+import { HELD_REVEAL_EVENT, takeHeldReveal } from "../../../conversation/HeldUpdates/heldRevealSignal";
 
 function makeSession(overrides: Partial<Session>): Session {
   return {
@@ -56,7 +58,7 @@ describe("SessionRail", () => {
     ]);
   });
 
-  it("says 'Idle · N blocked tasks' in the needs tone for an idle session with blocked work", () => {
+  it("says 'Sleeping · N blocked tasks' in the needs tone for a sleeping session with blocked work", () => {
     render(
       <SessionRail
         sessions={[makeSession({ id: "r1", activity: "inactive", name: "needs work" })]}
@@ -65,7 +67,7 @@ describe("SessionRail", () => {
     );
     const row = screen.getByText("needs work").closest('[role="button"]')!;
     const status = row.querySelector('[role="status"]')!;
-    expect(status.textContent).toBe("Idle · 1 blocked task");
+    expect(status.textContent).toBe("Sleeping · 1 blocked task");
     expect(status.className).toMatch(/status-needs/);
     expect(row.querySelector('[class*="dot"]')).toBeNull();
     expect(screen.getByText("1 blocked")).toBeTruthy();
@@ -86,7 +88,33 @@ describe("SessionRail", () => {
     expect(screen.queryByText(/updates? waiting/)).toBeNull();
   });
 
-  it("stays plain 'Idle' in the idle tone when the open work is only running/ready", () => {
+  it("opens the session at its held list when 'N updates waiting' is clicked", () => {
+    const onSelect = vi.fn();
+    const asks: string[] = [];
+    const onAsk = (e: Event) => asks.push((e as CustomEvent<{ sessionId: string }>).detail.sessionId);
+    window.addEventListener(HELD_REVEAL_EVENT, onAsk);
+    try {
+      render(
+        <SessionRail
+          sessions={[makeSession({ id: "w1", activity: "inactive", name: "asleep", waiting_updates: 2 })]}
+          openTaskCounts={{}}
+          onSelect={onSelect}
+        />,
+      );
+      const waiting = screen.getByRole("button", { name: "2 updates waiting" });
+      expect(waiting.getAttribute("title")).toBe("Held while this session slept; they go with your next message");
+      fireEvent.click(waiting);
+      // Once: the card's own click doesn't open it a second time.
+      expect(onSelect.mock.calls).toEqual([["w1"]]);
+      expect(asks).toEqual(["w1"]);
+      // Parked for a conversation tab that mounts after the selection.
+      expect(takeHeldReveal("w1")).toBe(true);
+    } finally {
+      window.removeEventListener(HELD_REVEAL_EVENT, onAsk);
+    }
+  });
+
+  it("stays plain 'Sleeping' in the idle tone when the open work is only running/ready", () => {
     render(
       <SessionRail
         sessions={[makeSession({ id: "r1", activity: "inactive", name: "steady work" })]}
@@ -95,7 +123,7 @@ describe("SessionRail", () => {
     );
     const row = screen.getByText("steady work").closest('[role="button"]')!;
     const status = row.querySelector('[role="status"]')!;
-    expect(status.textContent).toBe("Idle");
+    expect(status.textContent).toBe("Sleeping");
     expect(status.className).toMatch(/status-idle/);
   });
 
@@ -234,12 +262,9 @@ describe("SessionRail", () => {
     expect(onSelect).toHaveBeenCalledWith("r1");
   });
 
-  it("shows the sleep affordance for active and inactive sessions alike, wired to onSleep", () => {
-    // Sleep/terminate is safe against the Supervisor in every activity
-    // state, and the activity record can drift from the real child state —
-    // so it must never be hidden based on that record alone.
-    const onSleep = vi.fn();
-    const onSelect = vi.fn();
+  it("offers no sleep control on the card, active or asleep", () => {
+    // ✓ (Done + sleep) and the workspace kebab's "Sleep now" cover it; a ⏸ on
+    // every card made a sleeping card look running (HELD-UPDATES-DESIGN.md).
     render(
       <SessionRail
         sessions={[
@@ -247,31 +272,20 @@ describe("SessionRail", () => {
           makeSession({ id: "r1", name: "resume me", activity: "inactive" }),
         ]}
         openTaskCounts={{}}
-        onSelect={onSelect}
-        onSleep={onSleep}
       />,
     );
-
-    expect(screen.getByRole("button", { name: "Sleep live one" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Sleep resume me" })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Sleep resume me" }));
-    // The whole record, not just the id: the gate that decides whether to
-    // ask about unlanded commits lives in useSessionSleep, not here.
-    expect(onSleep).toHaveBeenCalledWith(expect.objectContaining({ id: "r1" }));
-    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /^Sleep / })).toBeNull();
   });
 
-  it("action cluster exposes labeled sleep and archive buttons, grouped under an aria-label", () => {
+  it("action cluster exposes a labeled archive button, grouped under an aria-label", () => {
     render(
       <SessionRail
         sessions={[makeSession({ id: "r1", name: "resume me", activity: "inactive" })]}
         openTaskCounts={{}}
-        onSleep={vi.fn()}
       />,
     );
     const cluster = screen.getByRole("group", { name: "resume me actions" });
-    expect(within(cluster).getByRole("button", { name: "Sleep resume me" })).toBeTruthy();
+    expect(within(cluster).queryByRole("button", { name: "Sleep resume me" })).toBeNull();
     expect(within(cluster).getByRole("button", { name: "Archive resume me" })).toBeTruthy();
   });
 
@@ -497,6 +511,30 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     expect(screen.getByRole("button", { name: "Links for payments refactor" })).toBeTruthy();
   });
 
+  // Link writes stay on a session's own host, so another device's session
+  // has no chain button; its links still nest it read-only.
+  it("gives another device's session no link button, but still shows its links", () => {
+    FLAGS.linkedSessions = true;
+    const peer = { name: "pop-os", self: false, reachable: true };
+    render(
+      <SessionRail
+        sessions={[
+          { ...lead, host: peer },
+          { ...a, host: peer },
+          { ...lead, id: "ses_here", name: "local one", host: { name: "mac", self: true, reachable: true } },
+        ]}
+        openTaskCounts={{}}
+        links={[link]}
+        onOpenLinks={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Links for investigator" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Links for payments refactor" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Links for local one" })).toBeTruthy();
+    const subject = screen.getByText("payments refactor").closest('[role="button"]')!;
+    expect(subject.closest('[class*="subjects"]')).toBeTruthy();
+  });
+
   it("keeps a nested row to one control, whatever the orchestrate state", () => {
     FLAGS.linkedSessions = true;
     for (const status of ["pending_restart", "unsupported", "failed", "active"] as const) {
@@ -624,6 +662,16 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
       expect(within(card as HTMLElement).getByText("separate worktree")).toBeTruthy();
       fireEvent.click(card);
       expect(card.className).toMatch(/nope/);
+    });
+
+    it("tags a session on another device as such", () => {
+      FLAGS.linkedSessions = true;
+      const ed = editor({ blockedReason: (id) => (id === "b" ? DIFFERENT_DEVICE : undefined) });
+      render(<SessionRail sessions={[lead, a, b]} openTaskCounts={{}} links={[link]} linkEditor={ed} />);
+      const card = screen.getByText("gateway hardening").closest("[data-rail-card]")!;
+      expect(card.getAttribute("data-link-edit")).toBe("blocked");
+      expect(within(card as HTMLElement).getByText("different device")).toBeTruthy();
+      expect(within(card as HTMLElement).queryByText("separate worktree")).toBeNull();
     });
 
     it("offers no reorder grip while picking", () => {
@@ -977,9 +1025,9 @@ describe("SessionRail status line", () => {
     expect(card.getAttribute("title") ?? "").not.toContain("Background subagents");
   });
 
-  it("renders the same 'Idle' for an inactive session — the process is not the user's business", () => {
+  it("renders 'Sleeping' for an inactive session — a link holder depends on being awake", () => {
     renderWith({}, makeSession({ id: "s1", name: "the session", activity: "inactive" }));
-    expect(statusOf("the session").textContent).toBe("Idle");
+    expect(statusOf("the session").textContent).toBe("Sleeping");
   });
 
   it("renders 'Done · your turn' in the ok tone, as a closed ring", () => {
@@ -1138,6 +1186,45 @@ describe("SessionRail status line", () => {
     expect(statusOf("the session").textContent).toMatch(/1 subagent running/);
   });
 
+  it("lays the open delegate's own read under the live rows: its finished subagents show past the fade", () => {
+    const rec = (harness_id: string, extra: Partial<Delegate> = {}): Delegate => ({
+      id: `dlg_${harness_id}`,
+      session_id: "s1",
+      harness_id,
+      description: `task ${harness_id}`,
+      state: "running",
+      runs: 1,
+      started_at: inFlight(),
+      created_at: inFlight(),
+      updated_at: inFlight(),
+      ...extra,
+    });
+    const long = "2026-01-01T00:00:00Z";
+    // The live fold says the parent is running; the open read has a stale copy of it.
+    const state = { s1: { subagents: 1, subagentsSince: inFlight(), delegates: [rec("m")] } };
+    const records = [
+      rec("m", { state: "completed", ended_at: long }),
+      rec("old-kid", { parent_harness_id: "m", state: "completed", ended_at: long }),
+    ];
+    const { rerender } = render(
+      <SessionRail
+        sessions={[live]}
+        openTaskCounts={{}}
+        agentStates={state}
+        delegateFadeMs={0}
+        selectedDelegate={{ sessionId: "s1", harnessId: "m", records }}
+      />,
+    );
+    const rows = screen.getByTestId("delegate-rows");
+    expect(rows.textContent).toContain("task old-kid");
+    // The live record wins over the read's copy.
+    expect(within(rows).getByText("task m").closest("button")?.getAttribute("data-state")).toBe("running");
+
+    // Navigated away: the read goes with it.
+    rerender(<SessionRail sessions={[live]} openTaskCounts={{}} agentStates={state} delegateFadeMs={0} />);
+    expect(screen.getByTestId("delegate-rows").textContent).not.toContain("old-kid");
+  });
+
   it("renders the same line shape in every state, so card height can't change with it", () => {
     const states: SessionAgentState[] = [
       { subagents: 0 },
@@ -1268,14 +1355,14 @@ describe("SessionRail status subscription", () => {
     return <SessionRail sessions={sessions} openTaskCounts={{}} agentStates={agentStates} />;
   }
 
-  function emitAgentState(sessionId: string, payload: unknown, seq = 1) {
+  function emitAgentState(sessionId: string, payload: unknown, seq = 1, timestamp = "2026-09-28T13:40:00Z") {
     const source = FakeEventSource.instances.filter((i) => !i.closed)[0];
     act(() => {
       source.emit(
         "session.agent_state",
         JSON.stringify({
           seq,
-          timestamp: "2026-09-28T13:40:00Z",
+          timestamp,
           type: "session.agent_state",
           actor: "agent",
           session_id: sessionId,
@@ -1295,7 +1382,10 @@ describe("SessionRail status subscription", () => {
 
     // The turn's end — reported whether or not the turn produced a digest
     // delta, which is what session.turn_ended could not promise.
-    emitAgentState("s7", { state: "idle", since: "2026-09-28T13:40:00Z" });
+    // Stamped now: "Done" is staged only for a turn that ended since the
+    // rail subscribed.
+    const now = new Date().toISOString();
+    emitAgentState("s7", { state: "idle", since: now }, 1, now);
 
     await waitFor(() => expect(statusOf("session 7").textContent).toBe("Done · your turn"));
     expect(statusOf("session 3").textContent).toBe("Idle");
@@ -1359,7 +1449,7 @@ describe("SessionRail status subscription", () => {
     expect(statusOf("mid-turn one").textContent).toBe("Thinking…20s");
   });
 
-  it("reads a sleeping session's leftover working mirror as idle, never as a live turn", async () => {
+  it("reads a sleeping session's leftover working mirror as asleep, never as a live turn", async () => {
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
     // Only a live Runner clears agent_state, so a hard-killed process leaves
@@ -1371,7 +1461,7 @@ describe("SessionRail status subscription", () => {
       agent_state: { state: "working", label: "Running bash · make check", since: "2026-09-28T09:00:00Z" },
     });
     render(<Harness sessions={[stale]} />);
-    await waitFor(() => expect(statusOf("killed one").textContent).toBe("Idle"));
+    await waitFor(() => expect(statusOf("killed one").textContent).toBe("Sleeping"));
   });
 });
 
@@ -1573,13 +1663,13 @@ describe("SessionRail — Done", () => {
     vi.useRealTimers();
   });
 
-  it("puts a checked-off session under an open 'Done · 1' toggle, below the active list", () => {
+  it("puts a checked-off session under an open 'Done 1' toggle, below the active list", () => {
     vi.useFakeTimers({ now: NOW });
     render(<SessionRail sessions={[kept, finished]} openTaskCounts={{}} />);
 
     expect(activeNames()).toEqual(["keep me"]);
     expect(doneNames()).toEqual(["done with this"]);
-    expect(doneToggle().textContent).toContain("· 1");
+    expect(doneToggle().textContent).toMatch(/Done1$/);
     expect(doneToggle().getAttribute("aria-expanded")).toBe("true");
     // Below, not beside: the whole rail reads active first, then Done.
     expect(cardNames()).toEqual(["keep me", "done with this"]);
@@ -1719,7 +1809,7 @@ describe("SessionRail — Done", () => {
     expect(doneNames()).toEqual(["started first", "in between", "started last"]);
   });
 
-  it("caps Done at five rows behind 'Show N more', which expands and reads 'Show fewer'", () => {
+  it("caps Done at five rows behind 'Show all N completed', which expands and reads 'Show fewer'", () => {
     vi.useFakeTimers({ now: NOW });
     const seven = Array.from({ length: 7 }, (_, i) =>
       makeSession({
@@ -1731,10 +1821,10 @@ describe("SessionRail — Done", () => {
     );
     render(<SessionRail sessions={seven} openTaskCounts={{}} />);
 
-    expect(doneToggle().textContent).toContain("· 7");
+    expect(doneToggle().textContent).toMatch(/Done7$/);
     expect(doneNames()).toEqual(["done 0", "done 1", "done 2", "done 3", "done 4"]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show all 7 completed" }));
     expect(doneNames()).toEqual(seven.map((s) => s.name));
 
     fireEvent.click(screen.getByRole("button", { name: "Show fewer" }));

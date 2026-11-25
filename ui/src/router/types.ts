@@ -55,6 +55,14 @@ export interface Session {
    */
   outside_count?: number;
   /**
+   * The counts above by repo, when the session's work spans more than
+   * its folder's repo or its folder isn't one (docs/COMMIT-LAND-PUSH-DESIGN.md
+   * D1): one entry per repo with uncommitted or unlanded work, the counts
+   * above being their sums. Same writers and moments; absent when there's
+   * nothing to count.
+   */
+  repos?: SessionRepo[];
+  /**
    * The directory the session asked to start in — the Launchpad's folder,
    * else its workspace's primary repo, else Config.default_dir. Absent means
    * nobody asked: the agent runs wherever the Router was started.
@@ -114,6 +122,11 @@ export interface Session {
   last_turn_at?: string;
   created_at: string;
   updated_at: string;
+  /**
+   * The device this session lives on — only on GET /sessions?scope=all
+   * (mesh mode, docs/MESH-MODE-DESIGN.md D4). Absent means this device.
+   */
+  host?: SessionHost;
 }
 
 /**
@@ -194,8 +207,10 @@ export interface SessionDefaults {
   trust: ResolvedSessionField;
   /** Where the session would start. Source "builtin" = the Router's own directory (nobody asked). */
   dir: ResolvedSessionField;
-  /** What's at `dir` on disk — "plain" means worktree isolation will run in the folder itself. */
+  /** What's at `dir` on disk — "plain": not a git repo, so worktree isolation runs in the folder itself and Commit only reaches the repos the agent touches. */
   dir_status?: DirStatus;
+  /** Git repos directly inside a "plain" `dir` (one level), absolute — offered as shortcuts. At most 8. */
+  dir_repos?: string[];
   /** The branch the checkout at `dir` has open — only for a git dir on a branch (absent when detached). */
   dir_branch?: string;
   /** The session whose worktree `dir` is (its branch is mads/session/<id>) — only while that session exists. */
@@ -515,6 +530,9 @@ export interface ToolUse {
   locations?: ToolLocation[];
   // MCP server name, set only when kind is "mcp".
   server?: string;
+  // Set on a tool_result's tool when the call kept running as a background
+  // process (contracts ToolBackground); folded onto result.background.
+  background?: ToolBackground;
   // result is attached client-side (toolPairing.ts's foldToolResults) by
   // correlating a "tool_result" TranscriptMessage back to this tool_use by
   // ID — never present on the wire shape itself.
@@ -525,6 +543,14 @@ export interface ToolResult {
   text?: string;
   is_error?: boolean;
   timestamp?: string; // RFC3339
+  // The call kept running as a background process: its output streams from
+  // GET /sessions/{id}/tools/{toolUseId}/output (RouterClient.streamToolOutput).
+  background?: ToolBackground;
+}
+
+// mirrors pkg/contracts/transcript.go ToolBackground
+export interface ToolBackground {
+  task_id: string;
 }
 
 // mirrors providers/provider/event.go Usage
@@ -646,6 +672,13 @@ export interface Attribution {
   relation?: string;
   /** On a digest: the subject's transcript turn it covers, get_session_turns numbering. */
   turn?: number;
+  /**
+   * Rode along with the human's own send rather than arriving as a turn of
+   * its own: a held update attached to the message that woke its recipient
+   * (docs/HELD-UPDATES-DESIGN.md decision 6). The human's own row follows
+   * the last attached one, with no attribution.
+   */
+  attached?: boolean;
 }
 
 export type AttributionKind = "message" | "digest" | "signal" | "notice";
@@ -697,6 +730,29 @@ export interface TranscriptMessage {
 export interface TranscriptPage {
   rows: TranscriptMessage[];
   has_more: boolean;
+  /**
+   * Set when the agent's store was read and doesn't hold this conversation:
+   * rows is then empty. A session that hasn't had a turn yet reads this way
+   * too (the agent writes its store on the first turn), so weigh it against
+   * the session's own turn record.
+   */
+  missing?: TranscriptMissing;
+}
+
+// mirrors pkg/contracts/transcript.go TranscriptMissing
+export interface TranscriptMissing {
+  /** The agent's own setting for deleting old transcripts, when it has one. */
+  retention?: TranscriptRetention;
+}
+
+// mirrors pkg/contracts/transcript.go TranscriptRetention
+export interface TranscriptRetention {
+  /** The agent's settings file, absolute. */
+  file: string;
+  /** The setting's key in that file. */
+  setting: string;
+  /** Absent when the agent's default isn't known. */
+  default_days?: number;
 }
 
 // mirrors pkg/contracts/transcript.go CompactMarker. Zero/absent fields mean
@@ -729,6 +785,31 @@ export type LinkCadence = "per_turn" | "on_signal" | "manual_only";
 // never sent in a LinkRequest. Empty ("" — omitted from Link.orchestrate_status
 // when the link carries no orchestrate grant) reads the same as absent.
 export type OrchestrateStatus = "pending_restart" | "active" | "unsupported" | "failed";
+
+// mirrors pkg/contracts/link.go HeldUpdate — one push deferred for a
+// sleeping session, as the conversation's held list shows it
+// (docs/HELD-UPDATES-DESIGN.md). source_name is the stored attribution's,
+// else the subject session's current name.
+export interface HeldUpdate {
+  id: number;
+  link_id: string;
+  source_session_id: string;
+  source_name: string;
+  /** The stored attribution's kind; absent when the entry carried none. */
+  kind?: AttributionKind;
+  text: string;
+  created_at: string; // RFC3339
+  noop: boolean;
+}
+
+// mirrors pkg/contracts/link.go HeldUpdates: GET /sessions/{id}/held-updates.
+// Both lists oldest first, never null. `discarded` is what the user
+// discarded since the session's last deferred drain (Undo can restore it);
+// the next send clears it.
+export interface HeldUpdates {
+  held: HeldUpdate[];
+  discarded: HeldUpdate[];
+}
 
 // mirrors pkg/contracts/link.go Link
 export interface Link {
@@ -818,6 +899,13 @@ export interface PermissionRequest {
   reason?: string;
 }
 
+// One entry of the Router's window-wide GET /permission-requests: a live
+// session child's pending request, tagged with the session it belongs to.
+// It never carries `input` (the Router drops it: the rail names only the tool).
+export interface SessionPermissionRequest extends PermissionRequest {
+  session_id: string;
+}
+
 // mirrors providers/provider/event.go CompactStatus — which phase of a
 // native compaction pass this is. Phase "start" is the ongoing state; "done"
 // carries success/error. Only claude-code's stream-json transport emits this
@@ -874,6 +962,14 @@ export interface DelegateCapabilities {
 /** mirrors pkg/contracts/delegate.go DelegateState. No "idle": a finished delegate is finished. */
 export type DelegateState = "running" | "completed" | "failed" | "stopped" | "orphaned";
 
+/** mirrors pkg/contracts/delegate.go DelegateWaiting — what a waiting delegate's ended turn left running (at least one count is non-zero). */
+export interface DelegateWaiting {
+  /** Its direct child subagents still running or waiting. */
+  subagents?: number;
+  /** Its own background processes (a run_in_background command, a watch). */
+  processes?: number;
+}
+
 /**
  * mirrors pkg/contracts/delegate.go Delegate — a harness-run subagent
  * (docs/DELEGATES-DESIGN.md), decided server-side by the session runner and
@@ -887,6 +983,19 @@ export interface Delegate {
   harness_id: string;
   tool_use_id?: string;
   depth?: number;
+  /**
+   * The harness id of the delegate that spawned this one, within the same
+   * session. Absent: the session's own agent spawned it.
+   */
+  parent_harness_id?: string;
+  /**
+   * Set only on a record whose latest run ended (state "completed") while
+   * work it owns still runs — its direct child subagents (running, or
+   * waiting themselves) and its own background processes. It picks up again
+   * when they report back, so it is live, not finished: see
+   * isLiveDelegate. Absent otherwise.
+   */
+  waiting_on?: DelegateWaiting;
   type?: string;
   description?: string;
   backgrounded?: boolean;
@@ -1266,8 +1375,263 @@ export interface WorktreeTenant {
   name: string;
 }
 
+/** One repo's share of a session's Commit/Land counts (Session.repos). mirrors pkg/contracts/session.go SessionRepo */
+export interface SessionRepo {
+  /** The top of the repo's working tree: the session's worktree when isolated, else the checkout the work was done in. */
+  root: string;
+  branch?: string;
+  isolated?: boolean;
+  /** The repo of the session's own folder — the one the dock's one-click Commit and Land act on. */
+  primary?: boolean;
+  uncommitted_count?: number;
+  unlanded_count?: number;
+  outside_count?: number;
+}
+
+/**
+ * One checkout of a repo and the branch it's on (docs/COMMIT-LAND-PUSH-DESIGN.md
+ * D10) — branch facts several sessions share, kept by the Router per repo and
+ * refreshed as git's ref files change. mirrors pkg/contracts/repostate.go
+ */
+export interface RepoWorktree {
+  /** The top of this checkout. */
+  path: string;
+  /** The repo's main checkout; the others are linked worktrees. */
+  main?: boolean;
+  /** The repo's shared git dir — what repo.changed names. */
+  git_dir: string;
+  branch?: string;
+  head?: string;
+  /** No branch checked out: nothing to push. */
+  detached?: boolean;
+  /** Where the branch pushes; empty: no remote. */
+  remote?: string;
+  remote_branch?: string;
+  /** The branch tracks a remote branch. */
+  upstream?: boolean;
+  /** The remote has no such branch yet. */
+  new_branch?: boolean;
+  /** Commits a push would publish, copies of commits already on the remote left out. As of the last fetch. */
+  ahead: number;
+  /** The remote branch's commits this branch lacks. As of the last fetch. */
+  behind: number;
+  /** A linked worktree on a branch: where Land puts its work (COMMIT-LAND-PUSH D12). */
+  base?: string;
+  /** How `base` was worked out. */
+  base_source?: LandBaseSource | string;
+  /** The commit the branch started from, when known. */
+  fork?: string;
+  /** Its commits `base` doesn't have yet, copies left out. */
+  to_land?: number;
+  computed_at: string;
+}
+
+/** GET /sessions/{id}/repos — every repo in the session's set, with its branch facts. */
+export interface SessionRepoState {
+  /** The checkout the session works in (CommitRequest.repo). */
+  root: string;
+  primary?: boolean;
+  isolated?: boolean;
+  /** An isolated session's base branch. */
+  base?: string;
+  worktree: RepoWorktree;
+  /** Isolated: the user's checkout with the base — what a push after Land publishes. */
+  base_worktree?: RepoWorktree;
+}
+
+/** session.git_state_updated's payload (docs/GIT-STATE-DESIGN.md). */
+export type GitStatePart = "repos" | "changeset" | "counts";
+export interface GitStateUpdatedPayload {
+  session_id: string;
+  /** What the finished recompute covered: none of these is "updating" any more as of `generation`. */
+  parts: GitStatePart[];
+  /** Monotonic per session (clock-based, so it survives a Router restart). */
+  generation: number;
+  /** The subset of `parts` whose result differs: refetch these. */
+  changed: GitStatePart[];
+  /**
+   * Set only for a change set against another baseline than session start
+   * ("base", "main"): the announcement covers that baseline's change set
+   * alone. Absent: "changeset" means session start's.
+   */
+  baseline?: ChangeBaselineId;
+}
+
+/** repo.changed's payload: a repo's branches moved (a commit, merge, fetch or push, by anyone). Session-less. */
+export interface RepoChangedPayload {
+  /** The repo's main checkout. */
+  repo: string;
+  /** Its shared git dir: match against RepoWorktree.git_dir. */
+  git_dir: string;
+}
+
+/** When a file the session didn't change was changed: during this session, or already uncommitted before it. */
+export type CommitPlanSince = "session" | "before";
+
+/** One uncommitted file in a repo. Path is relative to the repo's root. */
+export interface CommitPlanFile {
+  path: string;
+  kind: WorktreeFileKind;
+  /** The session's own tools changed it — the dialog checks these. */
+  mine?: boolean;
+  /** Not mine: the other session whose tools last changed it, when the ledger says. */
+  by?: WorktreeTenant;
+  /** Not mine: when it changed, when the session-start snapshot can tell. */
+  since?: CommitPlanSince;
+}
+
+/** One repo's section of the Commit dialog. */
+export interface CommitPlanRepo {
+  /** The top of the repo's working tree — CommitRequest.repo. */
+  root: string;
+  branch?: string;
+  isolated?: boolean;
+  /** The session folder's own repo. */
+  primary?: boolean;
+  files: CommitPlanFile[];
+}
+
+/** A file the session changed outside every repo: it can't be committed where it is. Path is absolute. */
+export interface CommitPlanOutside {
+  path: string;
+  kind: WorktreeFileKind | string;
+}
+
+/**
+ * GET /sessions/{id}/commit-plan (docs/COMMIT-LAND-PUSH-DESIGN.md D2):
+ * every uncommitted file in each of the session's repos, whoever changed
+ * it, and its changed files outside every repo. Runs git per call, so
+ * fetched when the Commit dialog opens, never per render.
+ */
+export interface CommitPlan {
+  /** Repos with anything uncommitted, the folder's repo first. Never null. */
+  repos: CommitPlanRepo[];
+  /** Never null. */
+  outside: CommitPlanOutside[];
+  /**
+   * Repo roots an `outside` file can move into (D4): the repos above, the
+   * repos directly inside a session folder that isn't one, the workspace's
+   * repos. Filled only when `outside` isn't empty; older Routers omit it.
+   */
+  move_targets?: string[];
+}
+
+/** POST /sessions/{id}/move — move a file the session changed outside every repo into one (D4). */
+export interface MoveRequest {
+  /** The file, absolute (CommitPlanOutside.path). */
+  path: string;
+  /** A root from CommitPlan.move_targets. */
+  repo: string;
+  /** A folder inside the repo, relative; empty is the repo's top. */
+  dir?: string;
+}
+
+/** A successful move: where the file is now, absolute. */
+export interface MoveResult {
+  path: string;
+}
+
+export type MoveErrorCode =
+  | "missing"
+  | "not_session_file"
+  | "in_repo"
+  | "unknown_repo"
+  | "outside_repo"
+  | "exists"
+  | "ignored"
+  | "failed";
+
+/** A refused move: `error` is one human sentence, shown as is in the folder picker. */
+export interface MoveError {
+  code: MoveErrorCode | string;
+  error: string;
+}
+
+/** What a Push sends (D5): the branch the work is on (an isolated session's own, for a PR; else the checked-out one), or an isolated session's base after Land. */
+export type PushTarget = "branch" | "base";
+
+/** One commit a push would publish, or one coming in from the remote. */
+export interface PushCommit {
+  hash: string;
+  subject: string;
+}
+
+/** Why a push, or its rebase, won't run. */
+export interface PushRefusal {
+  /** no_remote, detached, nothing_to_push, not_isolated; for a rebase: busy, pipeline, not_checked_out, mid_operation, overlap. */
+  reason: string;
+  detail?: string;
+  /** overlap: the uncommitted files the incoming commits change. */
+  files?: string[];
+}
+
+/**
+ * GET /sessions/{id}/push — what the confirmation shows. It fetches the
+ * remote first, so it takes a moment: ask when the dialog opens.
+ */
+export interface PushPreview {
+  repo: string;
+  target: PushTarget;
+  /** Where the push runs. */
+  dir: string;
+  branch?: string;
+  remote?: string;
+  remote_branch?: string;
+  /** The remote has no such branch yet: the push creates it and sets the upstream. */
+  new_branch?: boolean;
+  /** The tip the confirmation lists — PushRequest.expect. */
+  head?: string;
+  /** Newest first, at most 50; `ahead` counts them all. */
+  commits: PushCommit[];
+  ahead: number;
+  /** The remote's commits this branch lacks; `incoming` lists them, newest first (at most 20). */
+  behind: number;
+  incoming: PushCommit[];
+  /** The fetch failed: the counts are as of the last one, and the push will likely fail the same way. */
+  fetch_error?: string;
+  /** Push can't run at all. */
+  blocked?: PushRefusal;
+  /** "Rebase onto <remote> and push" can't run (meaningful when behind > 0). */
+  rebase_blocked?: PushRefusal;
+}
+
+export interface PushRequest {
+  /** As CommitRequest.repo. */
+  repo?: string;
+  target?: PushTarget;
+  /** The user chose "Rebase onto <remote> and push". Never done otherwise. */
+  rebase?: boolean;
+  /** PushPreview.head: refused ("moved") if the branch moved since, so nothing unseen is published. */
+  expect?: string;
+}
+
+/** POST /sessions/{id}/push — HTTP 200 for every outcome. Never a force push. */
+export interface PushResult {
+  /** conflicted: the rebase hit conflicts and was undone; nothing changed. */
+  outcome: "pushed" | "refused" | "conflicted";
+  branch?: string;
+  remote?: string;
+  remote_branch?: string;
+  rebased?: boolean;
+  head?: string;
+  pushed?: number;
+  /** Refused: a PushRefusal reason, or behind, moved, push_failed, rebase_failed, locked. */
+  reason?: string;
+  /** Human text, or git's output verbatim (push_failed, rebase_failed). */
+  detail?: string;
+  files?: string[];
+}
+
+/** GET /sessions/{id}/move/folders — a folder inside the repo (ends in "/"), and how many files of the asked-for kind it holds. */
+export interface MoveFolder {
+  path: string;
+  matches?: number;
+}
+
 export interface CommitRequest {
-  /** Relative to the session's folder; empty means every uncommitted session file. */
+  /** A repo root from the commit plan; empty is the folder's repo, or the session's only repo. */
+  repo?: string;
+  /** Relative to the repo's root; empty means every uncommitted session file there. Any file git reports changed may be named, the session's or not. */
   paths?: string[];
   /** Empty asks the Fast Model to draft one (only when Config.auto_commit_messages is on). */
   message?: string;
@@ -1276,7 +1640,7 @@ export interface CommitRequest {
 export interface CommitPath {
   path: string;
   status: "committed" | "already_committed" | "rejected";
-  /** Rejected paths only: "outside_folder", "not_session_file", "pipeline_task_file". */
+  /** Rejected paths only: "outside_folder", "pipeline_task_file" (older Routers: "not_session_file"). */
   reason?: string;
 }
 
@@ -1296,7 +1660,8 @@ export type CommitErrorCode =
   | "no_folder"
   | "no_fast_model"
   | "draft_failed"
-  | "locked";
+  | "locked"
+  | "unknown_repo";
 
 /** A refused POST /commit or /commit/draft: rendered in place, keeping the user's selection. */
 export interface CommitError {
@@ -1346,7 +1711,45 @@ export type LandRefusalReason =
   | "primary_dirty"
   | "primary_untracked"
   | "primary_refused"
-  | "locked";
+  | "locked"
+  /** No landing message: the user writes it (D12). */
+  | "message_required";
+
+/**
+ * How a branch's base was worked out (D12): recorded (mads saw the agent
+ * create the branch), confirmed (chosen in an earlier Land), reflog (the
+ * branch's creation names it), default (the repo's default branch, a
+ * guess), chosen (asked for in this request), session (an isolated
+ * session's own base).
+ */
+export type LandBaseSource = "recorded" | "confirmed" | "reflog" | "default" | "chosen" | "session";
+
+/** POST /sessions/{id}/land (D12): squash a branch's work into one commit on its base. */
+export interface LandRequest {
+  /** The worktree to land (SessionRepoState.root); empty is the session's own isolated worktree. */
+  repo?: string;
+  /** Overrides the inferred base; kept as confirmed for the branch's next Land. */
+  base?: string;
+  /** The landing commit's message, written by the user (a draft from draftLandMessage if they like). Required. */
+  message: string;
+}
+
+/** GET /sessions/{id}/land — what the Land confirmation shows. */
+export interface LandPreview {
+  repo: string;
+  branch?: string;
+  base?: string;
+  base_source?: LandBaseSource | string;
+  fork?: string;
+  /** Other local branches it could land into. */
+  bases: string[];
+  /** The branch's commits the base doesn't have yet, copies left out, newest first (at most 50). */
+  commits: PushCommit[];
+  /** All of them. */
+  to_land: number;
+  /** Why Land would be refused right now. */
+  blocked?: LandRefusal;
+}
 
 /** POST /sessions/{id}/land — HTTP 200 for every outcome. */
 export interface LandResult {
@@ -1439,7 +1842,13 @@ export interface ChangeSet {
   commits: ChangeCommit[];
   totals: { files: number; added: number; deleted: number };
   notes?: string[];
+  /** "" before the Router's first compute (docs/GIT-STATE-DESIGN.md). */
   computed_at: string;
+  /**
+   * A recompute is queued or running; the set may be the previous one.
+   * Absent from a Router that computes per request (an older mesh peer).
+   */
+  updating?: boolean;
 }
 
 export interface DeleteScratchResult {
@@ -1894,3 +2303,36 @@ export type TrustChange = {
   restarted: boolean;
   restart_error?: string;
 };
+
+/** Where a session lives in mesh mode (contracts.SessionHost). */
+export interface SessionHost {
+  name: string;
+  self: boolean;
+  peer_id?: string;
+  /** False when the peer couldn't be read just now: its rows are last-known. */
+  reachable: boolean;
+}
+
+/**
+ * A peer's live state as the Router sees it (contracts.PeerReachability).
+ * "unpaired": no device key is pinned for it here, so it is never dialled.
+ */
+export type PeerReachability = "unknown" | "connected" | "unreachable" | "denied" | "version_mismatch" | "unpaired" | "no_shared_network";
+
+/** GET /peers row: a device this node views, plus its live state. */
+export interface PeerStatus {
+  id: string;
+  name: string;
+  dns_name?: string;
+  mesh_url: string;
+  hidden?: boolean;
+  created_at: string;
+  updated_at: string;
+  reachability: PeerReachability;
+  reason?: string;
+  rtt_ms?: number;
+  mads_commit?: string;
+  access?: string[];
+  checked_at?: string;
+}
+

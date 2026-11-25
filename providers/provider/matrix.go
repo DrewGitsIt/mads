@@ -126,6 +126,13 @@ const (
 	// the strategy is implemented; whether a given delegate has one is a
 	// run-time answer.
 	BehaviorDelegateTranscript Behavior = "delegate_transcript"
+	// BehaviorBackgroundOutput — a tool call the harness kept running as a
+	// background process writes its output somewhere the adapter can find
+	// and open (BackgroundOutputReader), and the adapter marks such a call's
+	// result (ToolUse.Background). Native means the strategy is
+	// implemented; whether one call's output is still on disk is a run-time
+	// answer.
+	BehaviorBackgroundOutput Behavior = "background_output"
 	// BehaviorDelegateSteer — a user's message can reach a running or
 	// finished delegate: Native = sent to it directly; Emulated = relayed by
 	// its parent agent (a message to the parent asking it to pass it on —
@@ -219,6 +226,7 @@ var requirements = map[Behavior]Level{
 
 	BehaviorDelegateLifecycle:  LevelOptional,
 	BehaviorDelegateTranscript: LevelOptional,
+	BehaviorBackgroundOutput:   LevelOptional,
 	BehaviorDelegateSteer:      LevelOptional,
 	BehaviorDelegateStop:       LevelOptional,
 

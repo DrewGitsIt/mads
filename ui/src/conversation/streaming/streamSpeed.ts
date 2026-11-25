@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { RouterClient } from "../../router/client";
-import { subscribeToEvents } from "../../router/events";
+import { coalesce } from "../../router/coalesce";
+import { eventsReady, subscribeToEvents } from "../../router/events";
 import type { StreamSpeed } from "../../router/types";
 
 /**
@@ -80,10 +81,21 @@ export function useStreamSpeed(client: RouterClient): StreamPace {
           setPace((cur) => (cur.speed === speed && cur.wpm === wpm ? cur : { speed, wpm }));
         })
         .catch(() => {});
-    void load();
-    const unsubscribe = subscribeToEvents({ types: ["config.updated"] }, () => void load());
+    // A reconnect can bring a burst of config.updated (everything since the
+    // bus's cursor): coalesce those into a run or two (≤ 500 ms
+    // late at worst) instead of one GET /config each. The mount read goes
+    // first, once the bus is ready (below).
+    const reload = coalesce(load);
+    const unsubscribe = subscribeToEvents({ types: ["config.updated"] }, () => reload.request());
+    // The mount read waits for the bus's ready barrier (router/events.ts
+    // eventsReady), subscribed first: the bus never replays, so a read served
+    // before it fixes its cursor could miss an event landing in between.
+    void eventsReady().then(() => {
+      if (!cancelled) reload.now();
+    });
     return () => {
       cancelled = true;
+      reload.cancel();
       unsubscribe();
     };
   }, [client]);

@@ -75,7 +75,8 @@ describe("App", () => {
   // record ("Sleeping", a stale context %) and nothing said it was stale. The
   // warning is the shell's, above whichever surface is showing.
   it("warns that live updates are paused once the event stream keeps failing", async () => {
-    vi.stubGlobal("fetch", routedFetch({ "GET /config": fixtureConfig }));
+    // A reconnect after a drop re-reads the log's head first (a reset log).
+    vi.stubGlobal("fetch", routedFetch({ "GET /config": fixtureConfig, "GET /events/head": { seq: 0 } }));
     render(<App />);
     await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
     expect(screen.queryByText("Live updates paused")).toBeNull();
@@ -89,6 +90,30 @@ describe("App", () => {
 
     await waitFor(() => expect(screen.getByText("Live updates paused")).toBeTruthy());
     expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
+  });
+
+  it("says to restart mads when the services are older than this window (no GET /events/head)", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { resetEventsBusForTests } = await import("./router/events");
+    resetEventsBusForTests(); // the production first connect: read the head
+    const fetchMock = vi.fn((input: URL | string) => {
+      const path = new URL(input.toString()).pathname;
+      if (path === "/events/head") return Promise.resolve(new Response('{"error":"not found"}', { status: 404 }));
+      if (path === "/config") return Promise.resolve(new Response(JSON.stringify(fixtureConfig), { status: 200 }));
+      return Promise.resolve(new Response("[]", { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("Restart mads")).toBeTruthy());
+    expect(screen.getByText(/scripts\/app\.sh --restart/)).toBeTruthy();
+    expect(screen.queryByText("Live updates paused")).toBeNull();
+    const headReads = () =>
+      fetchMock.mock.calls.filter(([input]) => new URL(input.toString()).pathname === "/events/head").length;
+    expect(headReads()).toBe(1);
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(headReads()).toBe(1);
+    expect(FakeEventSource.instances).toHaveLength(0);
+    error.mockRestore();
   });
 
   it("Settings rail item renders SettingsSurface", async () => {
@@ -134,6 +159,34 @@ describe("App", () => {
     allowConfig = true;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
+    await waitFor(() => expect(screen.getByLabelText("Settings")).toBeTruthy());
+  });
+
+  // docs/LOCAL-FRONT-DOOR-DESIGN.md H7: a window whose requests carry no
+  // valid token gets 401 and must say so truthfully — mads couldn't use its
+  // token file — not that the backend is down.
+  it("shows the can't-reach-its-token screen on a 401, and Retry refetches", async () => {
+    let signedIn = false;
+    const fetchMock = vi.fn().mockImplementation((input: URL | string) => {
+      const path = new URL(input.toString()).pathname;
+      if (path === "/config" && !signedIn) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ code: "unauthorized", error: "no token" }), { status: 401 }),
+        );
+      }
+      const body = path === "/config" ? fixtureConfig : [];
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("mads can't reach its token")).toBeTruthy());
+    expect(screen.getByText("$MADS_HOME/local.token")).toBeTruthy();
+    expect(screen.getByText(/Restart the app/)).toBeTruthy();
+    expect(screen.queryByText(/mads open/)).toBeNull();
+    expect(screen.queryByText(/Can.t reach the mads backend/i)).toBeNull();
+
+    signedIn = true;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(screen.getByLabelText("Settings")).toBeTruthy());
   });
 
@@ -274,6 +327,23 @@ describe("App command palette (W6.11)", () => {
 
     fireEvent.keyDown(document, { key: "`", ctrlKey: true });
     expect(screen.queryByText(/Shell requires the Electron shell/)).toBeNull();
+  });
+
+  it("Ctrl+` toggles the Shell dock when the key arrives Unidentified (Electron on Wayland)", async () => {
+    stubRouterFetch();
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy());
+
+    fireEvent.keyDown(document, { key: "P", metaKey: true, shiftKey: true });
+    fireEvent.click(screen.getByTestId("jump:session-active"));
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Conversation" }).getAttribute("aria-selected")).toBe(
+        "true",
+      ),
+    );
+
+    fireEvent.keyDown(document, { key: "Unidentified", code: "Backquote", ctrlKey: true });
+    expect(screen.getByText(/Shell requires the Electron shell/)).toBeTruthy();
   });
 
   it("Ctrl+` has no effect when no session workspace is open", async () => {

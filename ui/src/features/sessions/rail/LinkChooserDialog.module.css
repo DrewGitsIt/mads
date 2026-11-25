@@ -138,6 +138,11 @@
   cursor: pointer;
 }
 
+.subjectElsewhere {
+  color: var(--text3);
+  cursor: not-allowed;
+}
+
 .holderPicker {
   display: flex;
   flex-direction: column;

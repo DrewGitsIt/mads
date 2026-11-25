@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { RouterClient } from "../../router/client";
-import { subscribeToEvents } from "../../router/events";
+import { eventsReady, subscribeToEvents } from "../../router/events";
 import type { Template } from "../../router/types";
 import { useSessionWorkspace } from "../../tasks/useSessionWorkspace";
 
@@ -45,9 +45,14 @@ export function useRunTemplates(routerClient: RouterClient, sessionId: string): 
       }
     }
 
-    void load();
     const unsubscribe = subscribeToEvents({ types: TEMPLATE_EVENT_TYPES }, () => {
       void load();
+    });
+    // The mount read waits for the bus's ready barrier (router/events.ts
+    // eventsReady), subscribed first: the bus never replays, so a read served
+    // before it fixes its cursor could miss an event landing in between.
+    void eventsReady().then(() => {
+      if (!cancelled) void load();
     });
     return () => {
       cancelled = true;

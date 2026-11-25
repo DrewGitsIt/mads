@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RouterClient } from "../../router/client";
-import { subscribeToEvents } from "../../router/events";
+import { eventsReady, subscribeToEvents } from "../../router/events";
 import { WORKTREE_CARD_EVENT_TYPES } from "../../router/sessionEventTypes";
 import { getAllEvents } from "../../router/eventPages";
-import type { CommitResult, Envelope, LandResult, UndoCommitResult } from "../../router/types";
+import type { CommitResult, Envelope, LandRequest, LandResult, UndoCommitResult } from "../../router/types";
 import {
   foldWorktreeEvents,
   landCardFromResult,
@@ -18,8 +18,8 @@ export interface WorktreeCards {
   landing: boolean;
   /** A one-click Commit is in flight. */
   committing: boolean;
-  /** POST /land. Resolves the outcome (each is a card); rejects only on an unexpected failure. */
-  land: () => Promise<LandResult | undefined>;
+  /** POST /land, as LandDialog confirmed it. Resolves the outcome (each is a card); rejects only on an unexpected failure. */
+  land: (req: LandRequest) => Promise<LandResult | undefined>;
   /** The one-click Commit: every session file, message drafted server-side. Rejects with CommitRefusedError. */
   commitAll: () => Promise<CommitResult>;
   /** Shows a Commit dialog's result until its commit.created arrives. */
@@ -59,14 +59,18 @@ export function useWorktreeCards(client: RouterClient, sessionId: string): Workt
       // Replay and live overlap at the seam; the fold drops repeated seqs.
       setEnvelopes((cur) => [...cur, ...incoming]);
     };
-    void getAllEvents(client, { sessionId, types: WORKTREE_CARD_EVENT_TYPES })
+    // Subscribed first, then the history read behind the bus's ready barrier
+    // (router/events.ts eventsReady): the bus never replays, so the history
+    // comes only from this read, and nothing may fall between the two.
+    const unsubscribe = subscribeToEvents({ sessionId, types: WORKTREE_CARD_EVENT_TYPES }, (env) =>
+      add([env]),
+    );
+    void eventsReady(sessionId)
+      .then(() => (cancelled ? [] : getAllEvents(client, { sessionId, types: WORKTREE_CARD_EVENT_TYPES })))
       .then((envs) => {
         if (!cancelled) add(envs);
       })
       .catch(() => {});
-    const unsubscribe = subscribeToEvents({ sessionId, types: WORKTREE_CARD_EVENT_TYPES }, (env) =>
-      add([env]),
-    );
     return () => {
       cancelled = true;
       unsubscribe();
@@ -80,13 +84,13 @@ export function useWorktreeCards(client: RouterClient, sessionId: string): Workt
     return all.map((c) => (c.kind === "committed" && undone.has(c.hash) ? { ...c, undone: true, tip: false } : c));
   }, [folded, echoes, undone]);
 
-  const land = useCallback(async () => {
+  const land = useCallback(async (req: LandRequest) => {
     if (landingRef.current) return undefined;
     landingRef.current = true;
     setLanding(true);
     const afterSeq = maxSeq.current;
     try {
-      const result = await client.landSession(sessionId);
+      const result = await client.landSession(sessionId, req);
       setEchoes((e) => ({ ...e, land: { afterSeq, card: landCardFromResult(result, new Date().toISOString()) } }));
       return result;
     } finally {

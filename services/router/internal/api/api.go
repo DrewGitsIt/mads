@@ -16,17 +16,23 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/preflight"
 	"github.com/drewkidwell/mads/pkg/registryclient"
+	"github.com/drewkidwell/mads/pkg/repostate"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/router/internal/attachments"
+	"github.com/drewkidwell/mads/services/router/internal/gitstate"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/modelcatalog"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
 type server struct {
+	home                 string
+	repoState            *repostate.Service
+	gitState             *gitstate.Service
 	data                 *dataclient.Client
 	sup                  *supervisor.Supervisor
 	jobs                 *job.Runner
@@ -59,6 +65,10 @@ type server struct {
 	// changesets caches recent change sets for the working-diff gate
 	// (changeset.go).
 	changesets changeSetCache
+	// tokens, codes and scoped are the local front door's state
+	// (frontdoor.go); nil disables /auth/* and scoped-token revocation.
+	tokens *localauth.Store
+	scoped *localauth.Registry
 }
 
 // Options bundles server's dependencies so New takes a single argument —
@@ -115,6 +125,27 @@ type Options struct {
 	UIDist    string
 	StartedAt time.Time
 
+	// RepoState keeps branch facts per repo current (pkg/repostate,
+	// docs/COMMIT-LAND-PUSH-DESIGN.md D10). Nil computes them on every
+	// request and watches nothing.
+	RepoState *repostate.Service
+	// GitState keeps each session's git-derived state for GET /changeset
+	// and GET /repos (docs/GIT-STATE-DESIGN.md); NewMux binds the Router's
+	// computes to it. Nil: one of its own, following no events (reads,
+	// refreshes and repo changes still recompute), announcing through Data.
+	GitState *gitstate.Service
+	// Home is $MADS_HOME, for mergiraf's state when landing a worktree mads
+	// didn't make. Empty lands without mergiraf there.
+	Home string
+	// Tokens is the install token, Scoped the session-scoped tokens
+	// (docs/LOCAL-FRONT-DOOR-DESIGN.md). Nil Scoped means there are none to
+	// revoke.
+	Tokens *localauth.Store
+	Scoped *localauth.Registry
+
+	// Devices serves /devices/... (mesh.Manager.Devices); nil answers 503.
+	Devices http.Handler
+
 	// OriginAllowed says which browser pages CORS lets call the Router —
 	// the same list localguard enforces in front of it (main.go). Nil
 	// grants none.
@@ -128,7 +159,8 @@ func New(opts Options) http.Handler {
 	if allowed == nil {
 		allowed = func(string) bool { return false }
 	}
-	return withCORS(allowed, NewMux(opts))
+	mux := NewMux(opts)
+	return withCORS(allowed, withNoStore(Classify(mux, nil), mux))
 }
 
 // NewMux builds the Router's route table without the CORS wrapper. Exported
@@ -142,7 +174,11 @@ func NewMux(opts Options) *http.ServeMux {
 	if opts.StaticHandler == nil {
 		opts.StaticHandler = http.NotFoundHandler()
 	}
-	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, attachments: opts.Attachments, fastModelFlagBaseURL: opts.FastModelFlagBaseURL, models: opts.Models, routerURL: opts.RouterURL, root: opts.Root, uiDist: opts.UIDist, startedAt: opts.StartedAt}
+	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, attachments: opts.Attachments, fastModelFlagBaseURL: opts.FastModelFlagBaseURL, models: opts.Models, routerURL: opts.RouterURL, root: opts.Root, uiDist: opts.UIDist, startedAt: opts.StartedAt, repoState: opts.RepoState, gitState: opts.GitState, home: opts.Home, tokens: opts.Tokens, scoped: opts.Scoped}
+	if s.gitState == nil {
+		s.gitState = gitstate.New(gitstate.Options{Emit: s.emitGitState})
+	}
+	s.gitState.Bind(s.gitStateComputers())
 	if opts.Jobs != nil && opts.Sup != nil {
 		// Job bodies that must reach a dormant session (job.Deps.Waker) wake
 		// it through the same path a composer send uses.
@@ -151,6 +187,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /version", s.handleVersion)
+	mux.HandleFunc("GET /children", s.handleListChildren)
 	mux.HandleFunc("POST /update/check", s.handleUpdateCheck)
 	mux.HandleFunc("POST /sessions", s.handleCreateSession)
 	mux.HandleFunc("GET /sessions/defaults", s.handleSessionDefaults)
@@ -165,6 +202,10 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("POST /sessions/{id}/model", s.handleSetSessionModel)
 	mux.HandleFunc("DELETE /sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /sessions/{id}/messages", s.handleSessionMessages)
+	mux.HandleFunc("GET /sessions/{id}/held-updates", s.handleHeldUpdates)
+	mux.HandleFunc("POST /sessions/{id}/held-updates/deliver", s.handleDeliverHeld)
+	mux.HandleFunc("POST /link-digests/discard", s.handleDiscardHeld)
+	mux.HandleFunc("POST /link-digests/restore", s.handleRestoreHeld)
 	mux.HandleFunc("POST /sessions/{id}/attachments", s.handleUploadAttachment(s.sessionAttachmentOwner))
 	mux.HandleFunc("GET /sessions/{id}/attachments/{aid}", s.handleGetAttachment(s.sessionAttachmentOwner))
 	mux.HandleFunc("GET /sessions/{id}/attachments/{aid}/thumbnail", s.handleGetAttachmentThumbnail(s.sessionAttachmentOwner))
@@ -181,11 +222,13 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("GET /sessions/{id}/transport", s.handleGetSessionTransport)
 	mux.HandleFunc("POST /sessions/{id}/input", s.handleSessionInput)
 	mux.HandleFunc("POST /sessions/{id}/resize", s.handleSessionResize)
+	mux.HandleFunc("GET /permission-requests", s.handleAllPermissionRequests)
 	mux.HandleFunc("GET /sessions/{id}/permission-requests", s.handleSessionPermissionRequests)
 	mux.HandleFunc("POST /sessions/{id}/permission-requests/{reqId}/resolve", s.handleSessionResolvePermission)
 	mux.HandleFunc("POST /pipelines", s.handleStartPipeline)
 	mux.HandleFunc("POST /pipelines/{id}/cancel", s.handleCancelPipeline)
 	mux.HandleFunc("GET /events", s.handleEvents)
+	mux.HandleFunc("GET /events/head", s.handleEventsHead)
 	mux.HandleFunc("GET /sessions/{id}/output", s.handleSessionOutput)
 	mux.HandleFunc("GET /pipelines/{id}/output", s.handlePipelineOutput)
 	mux.HandleFunc("GET /sessions/{id}/pipeline/tasks/{taskId}/output", s.handlePipelineTaskOutput)
@@ -239,6 +282,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("POST /proposals/{id}/approve", s.handleApproveProposal)
 	mux.HandleFunc("POST /proposals/{id}/dismiss", s.handleDismissProposal)
 	mux.HandleFunc("POST /links", s.requireLinkedSessions(s.handleCreateLink))
+	mux.HandleFunc("GET /links", s.requireLinkedSessions(s.handleListLinks))
 	mux.HandleFunc("GET /links/{id}", s.requireLinkedSessions(s.handleGetLink))
 	mux.HandleFunc("PUT /links/{id}", s.requireLinkedSessions(s.handleUpdateLink))
 	mux.HandleFunc("DELETE /links/{id}", s.requireLinkedSessions(s.handleDeleteLink))
@@ -246,14 +290,15 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("GET /delegates", s.handleListDelegates)
 	mux.HandleFunc("GET /sessions/{id}/delegates", s.handleListSessionDelegates)
 	mux.HandleFunc("GET /sessions/{id}/delegates/{harnessId}/transcript", s.handleDelegateTranscript)
+	mux.HandleFunc("GET /sessions/{id}/tools/{toolUseId}/output", s.handleBackgroundOutput)
 	mux.HandleFunc("GET /sessions/{id}/export", s.handleExportSession)
 	mux.HandleFunc("POST /links/{id}/inject", s.requireLinkedSessions(s.handleLinkInject))
-	mux.HandleFunc("GET /sessions/{id}/orchestrate/subjects", s.requireLinkedSessions(s.handleOrchestrateSubjects))
-	mux.HandleFunc("GET /sessions/{id}/orchestrate/summary", s.requireLinkedSessions(s.handleOrchestrateSummary))
-	mux.HandleFunc("GET /sessions/{id}/orchestrate/turns", s.requireLinkedSessions(s.handleOrchestrateGetTurns))
-	mux.HandleFunc("POST /sessions/{id}/orchestrate/attention", s.requireLinkedSessions(s.handleOrchestrateSetAttention))
-	mux.HandleFunc("POST /sessions/{id}/orchestrate/mailbox", s.requireLinkedSessions(s.handleOrchestrateDrainMailbox))
-	mux.HandleFunc("POST /links/{id}/orchestrate/message", s.requireLinkedSessions(s.handleOrchestrateMessage))
+	mux.HandleFunc("GET /sessions/{id}/orchestrate/subjects", s.ownSession(s.requireLinkedSessions(s.handleOrchestrateSubjects)))
+	mux.HandleFunc("GET /sessions/{id}/orchestrate/summary", s.ownSession(s.requireLinkedSessions(s.handleOrchestrateSummary)))
+	mux.HandleFunc("GET /sessions/{id}/orchestrate/turns", s.ownSession(s.requireLinkedSessions(s.handleOrchestrateGetTurns)))
+	mux.HandleFunc("POST /sessions/{id}/orchestrate/attention", s.ownSession(s.requireLinkedSessions(s.handleOrchestrateSetAttention)))
+	mux.HandleFunc("POST /sessions/{id}/orchestrate/mailbox", s.ownSession(s.requireLinkedSessions(s.handleOrchestrateDrainMailbox)))
+	mux.HandleFunc("POST /links/{id}/orchestrate/message", s.ownLink(s.requireLinkedSessions(s.handleOrchestrateMessage)))
 	mux.HandleFunc("GET /sessions/{id}/files", s.handleSessionFiles)
 	mux.HandleFunc("GET /sessions/{id}/commits", s.handleSessionCommits)
 	mux.HandleFunc("GET /sessions/{id}/commits/{hash}/diff", s.handleSessionCommitDiff)
@@ -261,6 +306,15 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("GET /sessions/{id}/changeset", s.handleSessionChangeSet)
 	mux.HandleFunc("POST /sessions/{id}/changeset/delete-scratch", s.handleSessionDeleteScratch)
 	mux.HandleFunc("GET /sessions/{id}/worktree", s.handleSessionWorktree)
+	mux.HandleFunc("GET /sessions/{id}/commit-plan", s.handleSessionCommitPlan)
+	mux.HandleFunc("POST /sessions/{id}/move", s.handleSessionMove)
+	mux.HandleFunc("GET /sessions/{id}/push", s.handleSessionPushPreview)
+	mux.HandleFunc("GET /sessions/{id}/repos", s.handleSessionRepos)
+	mux.HandleFunc("GET /sessions/{id}/land", s.handleSessionLandPreview)
+	mux.HandleFunc("POST /sessions/{id}/land/draft", s.handleSessionLandDraft)
+	mux.HandleFunc("GET /repos/state", s.handleRepoState)
+	mux.HandleFunc("POST /sessions/{id}/push", s.handleSessionPush)
+	mux.HandleFunc("GET /sessions/{id}/move/folders", s.handleSessionMoveFolders)
 	mux.HandleFunc("POST /sessions/{id}/worktree/refresh", s.handleSessionWorktreeRefresh)
 	mux.HandleFunc("POST /sessions/{id}/commit", s.handleSessionCommit)
 	mux.HandleFunc("POST /sessions/{id}/commit/undo", s.handleSessionUndoCommit)
@@ -309,12 +363,55 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("POST /registry/install", s.handleRegistryInstall)
 	mux.HandleFunc("POST /registry/update", s.handleRegistryUpdate)
 	mux.HandleFunc("POST /registry/publish", s.handleRegistryPublish)
+	// Settings → Paired devices (docs/MESH-AUTH-DESIGN.md D5, D6, D8, D9),
+	// served by the mesh layer (opts.Devices). Registered here so the
+	// front door and the mesh route table (authz) classify each one; the
+	// four an admin device may use over the mesh are Admin there, the rest
+	// Deny.
+	devices := opts.Devices
+	if devices == nil {
+		devices = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "mesh_unavailable", "error": "this Router runs without mesh mode"})
+		})
+	}
+	mux.Handle("GET /devices", devices)
+	mux.Handle("POST /devices/check", devices)
+	mux.Handle("GET /devices/self", devices)
+	mux.Handle("PUT /devices/settings", devices)
+	mux.Handle("POST /devices/discoverable", devices)
+	mux.Handle("GET /devices/discovered", devices)
+	mux.Handle("POST /devices/discovered/{fp}/request", devices)
+	mux.Handle("POST /devices/pair/{id}/confirm", devices)
+	mux.Handle("POST /devices/tailscale/login", devices)
+	mux.Handle("POST /devices/{fp}/addresses", devices)
+	mux.Handle("DELETE /devices/{fp}/addresses/{addr}", devices)
+	mux.Handle("POST /devices/{fp}/redial", devices)
+	mux.Handle("GET /devices/activity", devices)
+	mux.Handle("POST /devices/pairing-code", devices)
+	mux.Handle("DELETE /devices/pairing-code/{id}", devices)
+	mux.Handle("POST /devices/pair", devices)
+	mux.Handle("GET /devices/pair/{id}", devices)
+	mux.Handle("GET /devices/pair-requests", devices)
+	mux.Handle("POST /devices/pair-requests/{id}/approve", devices)
+	mux.Handle("POST /devices/pair-requests/{id}/decline", devices)
+	mux.Handle("POST /devices/introduce", devices)
+	mux.Handle("POST /devices/{fp}/introduce", devices)
+	mux.Handle("PUT /devices/{fp}/grant", devices)
+	mux.Handle("DELETE /devices/{fp}", devices)
+	mux.Handle("POST /devices/{fp}/remove-everywhere", devices)
 	mux.Handle("/", opts.StaticHandler)
 	return mux
 }
 
-func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	body := map[string]string{"service": "router", "status": "ok"}
+	// Open to all (an exempt route), but where this Router runs from is
+	// only for the install token's holder (docs/LOCAL-FRONT-DOOR-DESIGN.md
+	// D3; scripts/app.sh sends it).
+	if localauth.FromContext(r.Context()).Kind != localauth.Install {
+		writeJSON(w, http.StatusOK, body)
+		return
+	}
 	if s.root != "" {
 		body["root"] = s.root
 	}
@@ -325,6 +422,16 @@ func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		body["started_at"] = s.startedAt.UTC().Format(time.RFC3339)
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+// handleListChildren lists the live session and pipeline children this
+// Router supervises — id, kind, pid, socket, start time — for `mads ps`.
+func (s *server) handleListChildren(w http.ResponseWriter, _ *http.Request) {
+	if s.sup == nil {
+		writeJSON(w, http.StatusOK, []supervisor.ChildInfo{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.sup.Children())
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

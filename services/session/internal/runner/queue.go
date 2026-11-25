@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/linkwrap"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -20,7 +22,10 @@ import (
 // session is still delivered after the user navigates to another (or
 // reloads): the conversation pane used to hold it in component state and
 // dropped it on unmount, never sent.
-func (r *Runner) SendOrQueue(ctx context.Context, text string) (*contracts.QueuedMessage, error) {
+//
+// attached ride with the message either way (Send): a queued message keeps
+// its attached updates and delivers them with its text.
+func (r *Runner) SendOrQueue(ctx context.Context, text string, attached ...contracts.InjectPart) (*contracts.QueuedMessage, error) {
 	// Two passes at most: the turn can go in flight between the busy check
 	// here and Send's own, in which case Send refuses and the second pass
 	// queues.
@@ -31,10 +36,10 @@ func (r *Runner) SendOrQueue(ctx context.Context, text string) (*contracts.Queue
 			return nil, ErrNotReady
 		}
 		if r.busy || r.landing {
-			return r.queueUserLocked(text), nil
+			return r.queueUserLocked(ctx, text, attached), nil
 		}
 		r.mu.Unlock()
-		err := r.Send(ctx, text)
+		err := r.Send(ctx, text, attached...)
 		if errors.Is(err, provider.ErrTurnInFlight) {
 			// The harness itself refused: it has a turn running that this
 			// runner never marked (every runner-started turn, compaction
@@ -42,7 +47,7 @@ func (r *Runner) SendOrQueue(ctx context.Context, text string) (*contracts.Queue
 			// turn's own EventTurnEnd reaches onTurnEnd, which delivers
 			// the queue, so queueing is right even though busy is false.
 			r.mu.Lock()
-			return r.queueUserLocked(text), nil
+			return r.queueUserLocked(ctx, text, attached), nil
 		}
 		if errors.Is(err, ErrTurnInFlight) && attempt == 0 {
 			continue
@@ -51,14 +56,17 @@ func (r *Runner) SendOrQueue(ctx context.Context, text string) (*contracts.Queue
 	}
 }
 
-// queueUserLocked appends one user message to the queue and announces the
-// new queue. Called with r.mu held; it unlocks r.mu.
-func (r *Runner) queueUserLocked(text string) *contracts.QueuedMessage {
+// queueUserLocked appends one user message (with any attached updates) to
+// the queue and announces the new queue. The attached updates are audited
+// now, as a queued InjectParts is: they are accepted. Called with r.mu held;
+// it unlocks r.mu.
+func (r *Runner) queueUserLocked(ctx context.Context, text string, attached []contracts.InjectPart) *contracts.QueuedMessage {
 	q := contracts.QueuedMessage{ID: newQueueID(), Text: text, QueuedAt: time.Now().UTC()}
-	r.pending = append(r.pending, pendingInjection{text: text, userID: q.ID, queuedAt: q.QueuedAt, msgID: newMessageID()})
+	r.pending = append(r.pending, pendingInjection{text: text, attached: attached, userID: q.ID, queuedAt: q.QueuedAt, msgID: newMessageID()})
 	snapshot := r.queuedLocked()
 	r.mu.Unlock()
 	r.publishQueue(contracts.QueueChanged{Queued: snapshot})
+	r.auditAttached(ctx, attached)
 	return &q
 }
 
@@ -85,11 +93,36 @@ func (r *Runner) CancelQueued(id string) bool {
 		r.mu.Unlock()
 		return false
 	}
-	r.pending = append(r.pending[:idx:idx], r.pending[idx+1:]...)
+	if p := r.pending[idx]; len(p.attached) > 0 {
+		// The updates it carried were drained from the mailbox for it;
+		// cancelling the user's words mustn't drop them. They stay queued
+		// in its place as an injection of their own (InjectParts' shape).
+		r.pending[idx] = attachedAsInjection(p)
+	} else {
+		r.pending = append(r.pending[:idx:idx], r.pending[idx+1:]...)
+	}
 	snapshot := r.queuedLocked()
 	r.mu.Unlock()
 	r.publishQueue(contracts.QueueChanged{Queued: snapshot})
 	return true
+}
+
+// attachedAsInjection is p's attached updates on their own, as a queued
+// multi-part injection: each wrapped on its own (not flagged attached, since
+// no human text follows), delivered as built.
+func attachedAsInjection(p pendingInjection) pendingInjection {
+	attribution := p.attached[0].Attribution
+	texts := make([]string, len(p.attached))
+	wires := make([]string, len(p.attached))
+	for i, a := range p.attached {
+		texts[i] = a.Text
+		wires[i] = linkwrap.Wrap(a.Text, a.Attribution)
+		attribution.DigestAttributed = attribution.DigestAttributed && a.Attribution.DigestAttributed
+	}
+	return pendingInjection{
+		text: strings.Join(texts, "\n\n"), attribution: attribution, preWire: strings.Join(wires, "\n\n"),
+		injectID: newQueueID(), queuedAt: p.queuedAt, msgID: newMessageID(),
+	}
 }
 
 // queuedLocked snapshots r.pending in delivery order: the user's own

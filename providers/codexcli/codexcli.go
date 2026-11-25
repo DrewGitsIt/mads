@@ -150,6 +150,7 @@ func (p *Provider) Matrix() provider.Matrix {
 		// wired: their notifications are filtered out of the main stream.
 		provider.BehaviorDelegateLifecycle:  provider.Unsupported,
 		provider.BehaviorDelegateTranscript: provider.Unsupported,
+		provider.BehaviorBackgroundOutput:   provider.Unsupported,
 		provider.BehaviorDelegateSteer:      provider.Unsupported,
 		provider.BehaviorDelegateStop:       provider.Unsupported,
 		// Every item's key is codex's own item id, the same on the live

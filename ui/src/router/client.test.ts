@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CommitRefusedError, FetchRouterClient, RouterValidationError } from "./client";
+import { CommitRefusedError, FetchRouterClient, isAbortError, MAX_LINK_SESSION_IDS, MoveRefusedError, RouterHTTPError, RouterValidationError, SessionWakeError } from "./client";
 import type { Agent } from "./types";
 
 function mockFetchOnce(body: unknown, ok = true, status = 200) {
@@ -37,6 +37,37 @@ describe("FetchRouterClient", () => {
     const report = await client.getSessionReport("s1");
     expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/report");
     expect(report.billing.mode).toBe("unknown");
+  });
+
+  it("listLinks reads /links with the session ids comma-joined, encoded, and deduped", async () => {
+    const fetchMock = mockFetchOnce([{ id: "l1" }]);
+    const client = new FetchRouterClient("http://router.local");
+    const links = await client.listLinks(["s1", "a b&c", "s1"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/links?session_ids=s1%2Ca%20b%26c");
+    expect(links).toEqual([{ id: "l1" }]);
+  });
+
+  it("listLinks reads a null body as no links", async () => {
+    mockFetchOnce(null);
+    expect(await new FetchRouterClient("http://router.local").listLinks(["s1"])).toEqual([]);
+  });
+
+  it("listLinks surfaces a missing route's status", async () => {
+    mockFetchOnce("404 page not found", false, 404);
+    const err = await new FetchRouterClient("http://router.local").listLinks(["s1"]).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RouterHTTPError);
+    expect(err).toMatchObject({ status: 404 });
+    expect((err as Error).message).toMatch(/^router request failed: 404 /);
+  });
+
+  it("listLinks rejects an empty or oversized list without a request", async () => {
+    const fetchMock = mockFetchOnce([]);
+    const client = new FetchRouterClient("http://router.local");
+    await expect(client.listLinks([])).rejects.toThrow("at least one session id");
+    const tooMany = Array.from({ length: MAX_LINK_SESSION_IDS + 1 }, (_, i) => `s${i}`);
+    await expect(client.listLinks(tooMany)).rejects.toThrow(`at most ${MAX_LINK_SESSION_IDS}`);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("compactSession sends instructions only when there are some", async () => {
@@ -149,6 +180,45 @@ describe("FetchRouterClient", () => {
     expect(cs.baseline).toBe("main");
   });
 
+  it("passes a caller's AbortSignal to fetch on the git-backed reads and the recount", async () => {
+    const ctl = new AbortController();
+    const signal = ctl.signal;
+    const client = new FetchRouterClient("http://router.local");
+    const cases: [() => Promise<unknown>, string, string?][] = [
+      [() => client.getChangeSet("s1", "main", { signal }), "http://router.local/sessions/s1/changeset?vs=main"],
+      [() => client.getSessionRepos("s1", { signal }), "http://router.local/sessions/s1/repos"],
+      [() => client.getCommitPlan("s1", { signal }), "http://router.local/sessions/s1/commit-plan"],
+      [() => client.getPushPreview("s1", { repo: "/r", signal }), "http://router.local/sessions/s1/push?repo=%2Fr"],
+      [() => client.getLandPreview("s1", { base: "main", signal }), "http://router.local/sessions/s1/land?base=main"],
+      [() => client.refreshWorktreeCounts("s1", { signal }), "http://router.local/sessions/s1/worktree/refresh", "POST"],
+    ];
+    for (const [call, url, method] of cases) {
+      const fetchMock = mockFetchOnce({});
+      await call();
+      const [gotUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(gotUrl).toBe(url);
+      expect(init.signal).toBe(signal);
+      if (method) expect(init.method).toBe(method);
+    }
+  });
+
+  it("rejects with an AbortError fetch raises when the signal aborts", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) =>
+        new Promise((_, reject) =>
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))),
+        ),
+      ),
+    );
+    const ctl = new AbortController();
+    const p = new FetchRouterClient("http://router.local").getChangeSet("s1", undefined, { signal: ctl.signal });
+    ctl.abort();
+    const err = await p.catch((e: unknown) => e);
+    expect(isAbortError(err)).toBe(true);
+    expect(isAbortError(new Error("router unreachable"))).toBe(false);
+  });
+
   it("getChangeSet omits vs when not given", async () => {
     const fetchMock = mockFetchOnce({ baseline: "start", files: [] });
     const client = new FetchRouterClient("http://router.local");
@@ -211,6 +281,44 @@ describe("FetchRouterClient", () => {
     );
   });
 
+  it("refreshWorktreeCounts resolves on 202 (the Router recounts behind it)", async () => {
+    mockFetchOnce(undefined, true, 202);
+    const client = new FetchRouterClient("http://router.local");
+    await expect(client.refreshWorktreeCounts("s1")).resolves.toBeUndefined();
+  });
+
+  it("getSessionReposState reads X-Mads-Updating and X-Mads-Computed-At", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("[]", {
+        status: 200,
+        headers: { "Content-Type": "application/json", "X-Mads-Updating": "1" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new FetchRouterClient("http://router.local");
+    expect(await client.getSessionReposState("s1")).toEqual({ repos: [], updating: true, computedAt: undefined, gitState: true });
+    fetchMock.mockResolvedValue(
+      new Response("[]", { status: 200, headers: { "X-Mads-Updating": "0", "X-Mads-Computed-At": "2026-11-21T19:00:00Z" } }),
+    );
+    expect(await client.getSessionReposState("s1")).toEqual({
+      repos: [],
+      updating: false,
+      computedAt: "2026-11-21T19:00:00Z",
+      gitState: true,
+    });
+  });
+
+  it("getSessionReposState takes missing headers (an older peer) as not updating, computed-at unknown", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
+    const client = new FetchRouterClient("http://router.local");
+    expect(await client.getSessionReposState("s1")).toEqual({ repos: [], updating: false, computedAt: undefined, gitState: false });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("[]", { status: 200, headers: { "X-Mads-Updating": "0", "X-Mads-Computed-At": "soon" } })),
+    );
+    expect((await client.getSessionReposState("s1")).computedAt).toBeUndefined();
+  });
+
   it("commitSession POSTs paths and message to /sessions/:id/commit", async () => {
     const fetchMock = mockFetchOnce({ hash: "abc", message: "m", undoable: true, paths: [] });
     const client = new FetchRouterClient("http://router.local");
@@ -253,15 +361,119 @@ describe("FetchRouterClient", () => {
     expect(draft.truncated).toBe(true);
   });
 
+  it("draftCommitMessage and undoCommit name the repo when given one", async () => {
+    let fetchMock = mockFetchOnce({ message: "Fix it" });
+    const client = new FetchRouterClient("http://router.local");
+    await client.draftCommitMessage("s1", ["a.go"], "/repo/mads");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/commit/draft",
+      expect.objectContaining({ body: JSON.stringify({ repo: "/repo/mads", paths: ["a.go"] }) }),
+    );
+    fetchMock = mockFetchOnce({ undone: true, hash: "abc" });
+    await client.undoCommit("s1", "abc", "/repo/mads");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/commit/undo",
+      expect.objectContaining({ body: JSON.stringify({ repo: "/repo/mads", hash: "abc" }) }),
+    );
+  });
+
+  it("getCommitPlan GETs /sessions/:id/commit-plan", async () => {
+    const plan = { repos: [{ root: "/repo/mads", files: [{ path: "a.go", kind: "modified", mine: true }] }], outside: [] };
+    const fetchMock = mockFetchOnce(plan);
+    const client = new FetchRouterClient("http://router.local");
+    expect(await client.getCommitPlan("s1")).toEqual(plan);
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/commit-plan");
+  });
+
+  it("getWorktreeStatus asks about one repo when given one", async () => {
+    const fetchMock = mockFetchOnce({ isolated: false, files: [], uncommitted_count: 0, unlanded_count: 0 });
+    const client = new FetchRouterClient("http://router.local");
+    await client.getWorktreeStatus("s1", "/repo/mads");
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/worktree?repo=%2Frepo%2Fmads");
+  });
+
+  it("moveFile POSTs to /sessions/:id/move and resolves the new path", async () => {
+    const fetchMock = mockFetchOnce({ path: "/repo/mads/docs/mockups/x.html" });
+    const client = new FetchRouterClient("http://router.local");
+    const req = { path: "/repo/x.html", repo: "/repo/mads", dir: "docs/mockups/" };
+    expect(await client.moveFile("s1", req)).toEqual({ path: "/repo/mads/docs/mockups/x.html" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/move",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(req) }),
+    );
+  });
+
+  it("moveFile throws MoveRefusedError carrying the refusal", async () => {
+    const body = { code: "exists", error: "docs/x.html already exists: rename it, or pick another folder." };
+    mockFetchOnce(body, false, 409);
+    const client = new FetchRouterClient("http://router.local");
+    const err = await client.moveFile("s1", { path: "/repo/x.html", repo: "/repo/mads" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MoveRefusedError);
+    expect((err as MoveRefusedError).body).toEqual(body);
+    expect((err as MoveRefusedError).status).toBe(409);
+    expect((err as MoveRefusedError).message).toBe(body.error);
+  });
+
+  it("getMoveFolders GETs the repo's folders for an extension", async () => {
+    const fetchMock = mockFetchOnce([{ path: "docs/mockups/", matches: 3 }]);
+    const client = new FetchRouterClient("http://router.local");
+    expect(await client.getMoveFolders("s1", "/repo/mads", ".html")).toEqual([{ path: "docs/mockups/", matches: 3 }]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/move/folders?repo=%2Frepo%2Fmads&ext=.html",
+    );
+  });
+
+  it("getPushPreview GETs /sessions/:id/push for a repo and target", async () => {
+    const fetchMock = mockFetchOnce({ repo: "/repo/mads", target: "base", dir: "/repo/mads", commits: [], ahead: 0, behind: 0, incoming: [] });
+    const client = new FetchRouterClient("http://router.local");
+    await client.getPushPreview("s1", { repo: "/repo/mads", target: "base" });
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/push?repo=%2Frepo%2Fmads&target=base");
+    mockFetchOnce({ repo: "/repo/mads", target: "branch", dir: "/repo/mads", commits: [], ahead: 0, behind: 0, incoming: [] });
+    await client.getPushPreview("s1");
+  });
+
+  it("pushSession POSTs the confirmation and resolves a refusal too", async () => {
+    const fetchMock = mockFetchOnce({ outcome: "refused", reason: "moved" });
+    const client = new FetchRouterClient("http://router.local");
+    const req = { repo: "/repo/mads", target: "branch" as const, rebase: true, expect: "abc" };
+    expect(await client.pushSession("s1", req)).toEqual({ outcome: "refused", reason: "moved" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/push",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(req) }),
+    );
+  });
+
   it("landSession POSTs to /sessions/:id/land and resolves every outcome", async () => {
     const fetchMock = mockFetchOnce({ outcome: "refused", reason: "busy", base: "main" });
     const client = new FetchRouterClient("http://router.local");
-    const res = await client.landSession("s1");
+    const req = { repo: "/repo/mads-nested", base: "main", message: "nested delegates" };
+    const res = await client.landSession("s1", req);
     expect(fetchMock).toHaveBeenCalledWith(
       "http://router.local/sessions/s1/land",
-      expect.objectContaining({ method: "POST" }),
+      expect.objectContaining({ method: "POST", body: JSON.stringify(req) }),
     );
     expect(res.reason).toBe("busy");
+  });
+
+  it("getLandPreview GETs /sessions/:id/land for a worktree and base", async () => {
+    const fetchMock = mockFetchOnce({ repo: "/repo/mads-nested", bases: [], commits: [], to_land: 0 });
+    const client = new FetchRouterClient("http://router.local");
+    await client.getLandPreview("s1", { repo: "/repo/mads-nested", base: "release" });
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/land?repo=%2Frepo%2Fmads-nested&base=release");
+    mockFetchOnce({ repo: "", bases: [], commits: [], to_land: 0 });
+    await client.getLandPreview("s1");
+  });
+
+  it("draftLandMessage POSTs to /sessions/:id/land/draft and throws a refusal", async () => {
+    const fetchMock = mockFetchOnce({ message: "Land it" });
+    const client = new FetchRouterClient("http://router.local");
+    expect(await client.draftLandMessage("s1", { repo: "/repo/x" })).toEqual({ message: "Land it" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/land/draft",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ repo: "/repo/x" }) }),
+    );
+    mockFetchOnce({ code: "no_fast_model", error: "No Fast Model is set up." }, false, 409);
+    await expect(client.draftLandMessage("s1")).rejects.toBeInstanceOf(CommitRefusedError);
   });
 
   it("getEvents GETs /events with session_id, since, and types query params, no Accept header", async () => {
@@ -449,5 +661,65 @@ describe("FetchRouterClient — typed methods built on the private transport hel
       expect.objectContaining({ method: "DELETE" }),
     );
     expect(result).toEqual({ status: "deleted" });
+  });
+});
+
+describe("FetchRouterClient — held link updates", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("getHeldUpdates reads /sessions/:id/held-updates, defaulting absent lists to empty", async () => {
+    const update = {
+      id: 7,
+      link_id: "lnk_1",
+      source_session_id: "s2",
+      source_name: "Pipeline study",
+      kind: "digest",
+      text: "arm A done",
+      created_at: "2026-11-05T13:54:00Z",
+      noop: true,
+    };
+    const fetchMock = mockFetchOnce({ held: [update] });
+    const client = new FetchRouterClient("http://router.local");
+    const res = await client.getHeldUpdates("s1");
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/held-updates");
+    expect(res).toEqual({ held: [update], discarded: [] });
+  });
+
+  it("discardHeldUpdates and restoreHeldUpdates POST the ids and resolve how many changed", async () => {
+    const fetchMock = mockFetchOnce({ changed: 2 });
+    const client = new FetchRouterClient("http://router.local");
+    expect(await client.discardHeldUpdates([1, 2])).toBe(2);
+    expect(await client.restoreHeldUpdates([3])).toBe(2);
+    expect(fetchMock.mock.calls.map(([url, init]) => [url, (init as RequestInit).method, (init as RequestInit).body])).toEqual([
+      ["http://router.local/link-digests/discard", "POST", JSON.stringify({ ids: [1, 2] })],
+      ["http://router.local/link-digests/restore", "POST", JSON.stringify({ ids: [3] })],
+    ]);
+  });
+
+  it("deliverHeldUpdates POSTs .../held-updates/deliver and resolves the delivered count", async () => {
+    const fetchMock = mockFetchOnce({ delivered: 5 }, true, 202);
+    const client = new FetchRouterClient("http://router.local");
+    expect(await client.deliverHeldUpdates("s1")).toBe(5);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/held-updates/deliver",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("deliverHeldUpdates throws a failed wake as SessionWakeError, like sendMessage", async () => {
+    mockFetchOnce({ error: "no such provider", code: "provider_missing", retryable: false }, false, 400);
+    const client = new FetchRouterClient("http://router.local");
+    const err = await client.deliverHeldUpdates("s1").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SessionWakeError);
+    expect((err as SessionWakeError).code).toBe("provider_missing");
+    expect((err as Error).message).toBe("no such provider");
+  });
+
+  it("deliverHeldUpdates throws a plain error for any other failure", async () => {
+    mockFetchOnce({ error: "gone" }, false, 404);
+    const client = new FetchRouterClient("http://router.local");
+    await expect(client.deliverHeldUpdates("s1")).rejects.toThrow(/404/);
   });
 });

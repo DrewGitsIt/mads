@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -490,5 +491,127 @@ func TestProvisioningReportsModeAndHook(t *testing.T) {
 				t.Errorf("hook skipped = %v, want %v", got, tc.wantSkipped)
 			}
 		})
+	}
+}
+
+// RecountWorktree (POST /worktree/refresh, routed here by the Router for a
+// live child) answers once a recount that started after the ask has
+// published, so a commit made by hand shows in the record on return; asks
+// landing together share the coalesced recount; after Shutdown it refuses.
+func TestRecountWorktreeWaitsForAFreshRecount(t *testing.T) {
+	repo := t.TempDir()
+	initRepo(t, repo)
+	h := newWTHarness(t, contracts.Session{Dir: repo, Isolation: contracts.IsolationWorktree}, fake.Scenario{})
+	if err := h.boot(); err != nil {
+		t.Fatal(err)
+	}
+	h.waitCounts(0, 0)
+
+	dir := h.record().WorktreeDir
+	if err := os.WriteFile(filepath.Join(dir, "by-hand.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", "by-hand.txt")
+	gitRun(t, dir, "commit", "-q", "-m", "by hand")
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 5)
+	for range 5 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- h.runner.RecountWorktree(context.Background())
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("RecountWorktree: %v", err)
+		}
+	}
+	if rec := h.record(); rec.UnlandedCount != 1 {
+		t.Fatalf("unlanded = %d on return, want 1: the answer must follow a fresh recount", rec.UnlandedCount)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := h.runner.RecountWorktree(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled ask: %v", err)
+	}
+
+	r := h.runner
+	h.stop()
+	if err := r.RecountWorktree(context.Background()); !errors.Is(err, ErrCountsClosed) {
+		t.Errorf("after Shutdown: %v, want ErrCountsClosed", err)
+	}
+}
+
+// An ask landing while a recount loop is between its last run and its exit
+// check must get a rerun, not a context.Canceled drain (the Router would
+// then recount itself beside the child's run). Waiter and ask are queued
+// under one lock hold, so whenever a waiter is visible, countsAgain is set.
+func TestRecountWorktreeAskDuringExitCheck(t *testing.T) {
+	repo := t.TempDir()
+	initRepo(t, repo)
+	h := newWTHarness(t, contracts.Session{Dir: repo, Isolation: contracts.IsolationWorktree}, fake.Scenario{})
+	if err := h.boot(); err != nil {
+		t.Fatal(err)
+	}
+	h.waitCounts(0, 0)
+	r := h.runner
+	idle := func() bool {
+		r.countsMu.Lock()
+		defer r.countsMu.Unlock()
+		return !r.countsRunning
+	}
+	for deadline := time.Now().Add(10 * time.Second); !idle(); {
+		if time.Now().After(deadline) {
+			t.Fatal("startup recount never finished")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	asked := make(chan error, 1)
+	var hookCalls atomic.Int32
+	var sawAgain atomic.Bool
+	r.countsMu.Lock()
+	r.countsBeforeExitCheck = func() {
+		if hookCalls.Add(1) != 1 {
+			return
+		}
+		// The ask lands now, between the run and the exit check.
+		go func() { asked <- r.RecountWorktree(context.Background()) }()
+		for {
+			r.countsMu.Lock()
+			queued := len(r.countsWaiters)
+			again := r.countsAgain
+			r.countsMu.Unlock()
+			if queued == 1 {
+				sawAgain.Store(again)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	r.countsMu.Unlock()
+
+	r.refreshCountsAsync()
+	select {
+	case err := <-asked:
+		if err != nil {
+			t.Fatalf("ask during the exit check = %v, want a rerun's nil", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("ask during the exit check never answered")
+	}
+	for deadline := time.Now().Add(10 * time.Second); !idle() && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !sawAgain.Load() {
+		t.Error("a waiter was queued without countsAgain: the loop could exit past it")
+	}
+	if n := hookCalls.Load(); n != 2 {
+		t.Errorf("recount runs = %d, want 2 (the first, and the rerun the ask bought)", n)
 	}
 }

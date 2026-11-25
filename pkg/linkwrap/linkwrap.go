@@ -14,6 +14,22 @@
 // Router's durable one both parse (Expand), so a message is labelled the same
 // whether its session is running or asleep. Not retroactive: a message with no
 // wrapper is the human's own.
+//
+// Attached form (docs/HELD-UPDATES-DESIGN.md decision 6): updates held for a
+// sleeping session ride with the human's message that wakes it. Each is an
+// ordinary block flagged attached="true", and the human's own text follows
+// the last one, unwrapped:
+//
+//	<mads-message kind="digest" from="Pipeline Study" relation="a session you lead" attached="true">
+//	…update…
+//	</mads-message>
+//
+//	…the human's message…
+//
+// Parse reads the text after an attached block as the human's (a Human
+// segment), Expand renders it as a row with no Attribution, and SameSend
+// counts the attached blocks and that text as one send. A message without
+// the flag parses exactly as before.
 package linkwrap
 
 import (
@@ -73,11 +89,34 @@ func Wrap(body string, a contracts.Attribution) string {
 	if a.Turn > 0 {
 		attr(&b, "turn", strconv.Itoa(a.Turn))
 	}
+	if a.Attached {
+		attr(&b, "attached", "true")
+	}
 	b.WriteString(">\n")
 	b.WriteString(escapeTags(body))
 	b.WriteString("\n")
 	b.WriteString(closeTag)
 	return b.String()
+}
+
+// Attach is the wire for a human's message with held updates riding along
+// (docs/HELD-UPDATES-DESIGN.md decision 6): each part wrapped on its own and
+// flagged Attached, joined by blank lines, then a blank line and the human's
+// text, unwrapped. No parts is text unchanged.
+func Attach(parts []contracts.InjectPart, text string) string {
+	if len(parts) == 0 {
+		return text
+	}
+	wires := make([]string, 0, len(parts)+1)
+	for _, p := range parts {
+		a := p.Attribution
+		a.Attached = true
+		wires = append(wires, Wrap(p.Text, a))
+	}
+	if text != "" {
+		wires = append(wires, text)
+	}
+	return strings.Join(wires, "\n\n")
 }
 
 // The body's own tags are escaped so a sender can't close its block and
@@ -106,11 +145,16 @@ type Block struct {
 }
 
 // Segment is a piece of a parsed message: a wrapped Block, or (Block nil)
-// text ahead of a block, outside any wrapper — the re-root note the runner
-// prepends to the first turn it sends after a re-root.
+// text outside any wrapper. Text ahead of a block is MADS's own — the re-root
+// note the runner prepends to the first turn it sends after a re-root. Text
+// after an attached block is the human's message the blocks rode with
+// (Human).
 type Segment struct {
 	Block *Block
 	Text  string
+	// Human marks the text after the last attached block: the user's own
+	// words, not anything MADS wrote.
+	Human bool
 }
 
 // openRe matches an opening tag at the start of a line: kind is required,
@@ -143,7 +187,7 @@ func Parse(text string) (segs []Segment, ok bool) {
 			return nil, false
 		}
 		bodyStart := loc[1]
-		end := closeAt(rest, bodyStart)
+		end := closeAt(rest, bodyStart, a.Attached)
 		if end < 0 {
 			return nil, false
 		}
@@ -151,6 +195,15 @@ func Parse(text string) (segs []Segment, ok bool) {
 		body = unescapeTags(strings.TrimSuffix(body, "\n"))
 		segs = append(segs, Segment{Block: &Block{Attribution: a, Body: body}})
 		rest = rest[end+len(closeTag):]
+		if a.Attached && !startsAttachedBlock(rest) {
+			// The attached run is over: whatever follows is the human's
+			// message, wrapper tags and all.
+			if human := strings.TrimRight(strings.TrimLeft(rest, "\r\n"), " \t\r\n"); strings.TrimSpace(human) != "" {
+				segs = append(segs, Segment{Text: human, Human: true})
+			}
+			rest = ""
+			break
+		}
 	}
 	hasBlock := false
 	for _, s := range segs {
@@ -170,9 +223,23 @@ func Parse(text string) (segs []Segment, ok bool) {
 	return segs, true
 }
 
+// startsAttachedBlock reports whether s, past leading whitespace, opens
+// another attached block — the next update of the same attached run.
+func startsAttachedBlock(s string) bool {
+	s = strings.TrimLeft(s, " \t\r\n")
+	loc := openRe.FindStringSubmatchIndex(s)
+	if loc == nil || loc[0] != 0 {
+		return false
+	}
+	a, ok := parseAttrs(s[loc[2]:loc[3]])
+	return ok && a.Attached
+}
+
 // closeAt finds the index of the close tag ending the block whose body
-// starts at from, or -1.
-func closeAt(s string, from int) int {
+// starts at from, or -1. An attached block's close may be followed by
+// anything (the human's text); any other block's only by whitespace and
+// then the end or the next block.
+func closeAt(s string, from int, attached bool) int {
 	first := -1
 	for i := from; i < len(s); {
 		j := strings.Index(s[i:], closeTag)
@@ -185,7 +252,7 @@ func closeAt(s string, from int) int {
 			continue
 		}
 		after := strings.TrimLeft(s[at+len(closeTag):], " \t\r\n")
-		if after != "" {
+		if after != "" && !attached {
 			if loc := openRe.FindStringIndex(after); loc == nil || loc[0] != 0 {
 				continue
 			}
@@ -230,6 +297,8 @@ func parseAttrs(raw string) (contracts.Attribution, bool) {
 			a.Relation = v
 		case "turn":
 			a.Turn, _ = strconv.Atoi(v)
+		case "attached":
+			a.Attached = v == "true"
 		}
 	}
 	if a.Kind == "" {
@@ -243,8 +312,10 @@ func parseAttrs(raw string) (contracts.Attribution, bool) {
 // holding complete wrapper blocks becomes one message per block, carrying the
 // block's Attribution and its body as Text. Text MADS put outside the
 // wrappers (the re-root note) becomes a notice from mads of its own, ahead of
-// the block it preceded. Every other message passes through untouched —
-// including any Attribution it already carries.
+// the block it preceded. The human's text after attached blocks becomes a row
+// of its own with no Attribution — the human's, like any unwrapped message.
+// Every other message passes through untouched — including any Attribution
+// it already carries.
 //
 // Keys: a message Expand leaves whole (not wrapped, or one segment) keeps
 // its Key; one split into n > 1 rows gives row i the key SegmentKey(key, i,
@@ -270,11 +341,15 @@ func Expand(msgs []contracts.TranscriptMessage) []contracts.TranscriptMessage {
 		for j, s := range segs {
 			tm := m
 			tm.Key = SegmentKey(m.Key, j, len(segs))
-			if s.Block != nil {
+			switch {
+			case s.Block != nil:
 				a := s.Block.Attribution
 				tm.Attribution = &a
 				tm.Text = s.Block.Body
-			} else {
+			case s.Human:
+				tm.Attribution = nil
+				tm.Text = s.Text
+			default:
 				tm.Attribution = &contracts.Attribution{Kind: KindNotice, SourceName: NoticeSource, DigestAttributed: true}
 				tm.Text = s.Text
 			}
@@ -301,11 +376,14 @@ func SegmentKey(key string, i, n int) string {
 
 // SameSend reports whether user message cur continues the send prev began:
 // both came out of one wrapped message Expand split up (a coalesced digest
-// run, a re-root note ahead of its block), with nothing in between. A turn
-// counter must treat such a pair as one turn, since the session was sent
-// one message.
+// run, a re-root note ahead of its block, attached updates and the human's
+// text after them), with nothing in between. A turn counter must treat such
+// a pair as one turn, since the session was sent one message.
 func SameSend(prev, cur contracts.TranscriptMessage) bool {
-	return prev.Role == "user" && cur.Role == "user" && prev.Attribution != nil && cur.Attribution != nil
+	if prev.Role != "user" || cur.Role != "user" || prev.Attribution == nil {
+		return false
+	}
+	return cur.Attribution != nil || prev.Attribution.Attached
 }
 
 // SplitTurns segments a transcript into turns: each user-role message — the

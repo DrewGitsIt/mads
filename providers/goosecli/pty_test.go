@@ -5,7 +5,9 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -82,9 +84,34 @@ func TestPTYArgs(t *testing.T) {
 
 	// A stdio ref: builtin flag first (the ≤1.46 config-suppression
 	// neutralization), then the name-prefixed env-joined spec.
-	eq("stdio named", p.ptyArgs(provider.StartOptions{MCPServers: []provider.MCPServerRef{
-		{Name: "probe", Command: "npx some-mcp --flag", Env: []string{"A=1", "B=2"}},
-	}}), []string{"session", "--with-builtin", "developer", "--with-extension", "probe:A=1 B=2 npx some-mcp --flag"})
+	// A stdio ref with Env: the env never rides argv (H4) — the spec names
+	// an owner-only wrapper that exports it and execs the command.
+	named, wrapDir := p.ptyArgsIn(provider.StartOptions{MCPServers: []provider.MCPServerRef{
+		{Name: "probe", Command: "npx some-mcp --flag", Env: []string{"A=1", "B=it's 2"}},
+	}})
+	t.Cleanup(func() { removeWrapDir(wrapDir) })
+	if len(named) != 5 || named[1] != "--with-builtin" || named[3] != "--with-extension" || !strings.HasPrefix(named[4], "probe:"+wrapDir+"/") {
+		t.Fatalf("stdio named: %q", named)
+	}
+	if strings.Contains(strings.Join(named, " "), "A=1") {
+		t.Fatalf("an extension's env is in goose's argv: %q", named)
+	}
+	wrapper := strings.TrimPrefix(named[4], "probe:")
+	if fi, err := os.Stat(wrapper); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("wrapper %s: %v %v", wrapper, fi, err)
+	}
+	if fi, err := os.Stat(wrapDir); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("wrapper dir: %v %v", fi, err)
+	}
+	out, err := exec.Command("sh", "-c", `cat "$0"`, wrapper).Output()
+	if err != nil || !strings.Contains(string(out), "export A='1'") || !strings.Contains(string(out), `export B='it'\''s 2'`) || !strings.Contains(string(out), "exec 'npx' 'some-mcp' '--flag'") {
+		t.Fatalf("wrapper body:\n%s (%v)", out, err)
+	}
+	// Run it: the env reaches the command.
+	envOut, err := exec.Command(wrapperRunning(t, wrapDir, "env")).Output()
+	if err != nil || !strings.Contains(string(envOut), "B=it's 2") {
+		t.Fatalf("wrapped env: %s %v", envOut, err)
+	}
 
 	// No name → no prefix; empty-command and http refs are skipped, and an
 	// http ref alone leaves the spawn bare (no dangling builtin flag).
@@ -101,6 +128,16 @@ func TestPTYArgs(t *testing.T) {
 	eq("no builtins", none.ptyArgs(provider.StartOptions{MCPServers: []provider.MCPServerRef{
 		{Command: "true"},
 	}}), []string{"session", "--with-extension", "true"})
+}
+
+// wrapperRunning writes a wrapper for cmd with a test env and returns it.
+func wrapperRunning(t *testing.T, dir, cmd string) string {
+	t.Helper()
+	w, err := writeExtensionWrapper(dir, 99, provider.MCPServerRef{Command: cmd, Env: []string{"B=it's 2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return w
 }
 
 // startPTYSession starts a ModePTY session through Start's switch and hands

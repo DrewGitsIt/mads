@@ -10,7 +10,7 @@ const pinnedTop = (r: { floor: number }, usable = 500) => r.floor - usable;
 describe("runwayFor", () => {
   it("reserves the rest of the screen under the anchor", () => {
     const r = runwayFor({ ...base, tail: 1100 });
-    expect(r).toEqual({ pages: 0, floor: 1500, spacer: 400 });
+    expect(r).toEqual({ pages: 0, offset: 0, floor: 1500, spacer: 400 });
     expect(pinnedTop(r)).toBe(1000);
   });
 
@@ -37,6 +37,23 @@ describe("runwayFor", () => {
     const a = runwayFor({ ...base, tail: 1100 });
     const b = runwayFor({ ...base, tail: 1100, usable: 480 });
     expect(pinnedTop(a)).toBe(pinnedTop(b, 480));
+  });
+
+  it("keeps a turned page where it turned when the usable height changes (a cluster row comes and goes)", () => {
+    const turned = runwayFor({ ...base, tail: 1495 });
+    expect(turned.pages).toBe(1);
+    // A running subagent's row shows (usable −60), then hides again.
+    const shown = runwayFor({ ...base, tail: 1495, usable: 440, pages: turned.pages, offset: turned.offset });
+    const hidden = runwayFor({ ...base, tail: 1495, pages: shown.pages, offset: shown.offset });
+    expect(pinnedTop(shown, 440)).toBe(pinnedTop(turned));
+    expect(pinnedTop(hidden)).toBe(pinnedTop(turned));
+  });
+
+  it("turns the next page from where the last one went", () => {
+    const first = runwayFor({ ...base, tail: 1495 });
+    const next = runwayFor({ ...base, tail: 1000 + first.offset + 500, pages: first.pages, offset: first.offset });
+    expect(next.pages).toBe(2);
+    expect(pinnedTop(next)).toBe(1000 + 2 * page);
   });
 
   it("never reserves less than nothing when the reply runs past the floor", () => {

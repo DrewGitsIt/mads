@@ -8,9 +8,9 @@ import { SessionCloseLandDialog } from "./SessionCloseLandDialog";
 /**
  * Sleep and wake, in one place, for every control that offers them.
  *
- * There are two of those controls — the rail card's ⏸ and the workspace
- * kebab's "Sleep now" — and until this hook existed they were two code
- * paths that happened to end in the same request. Only the rail asked
+ * There used to be two sleep controls — the rail card's ⏸ and the
+ * workspace kebab's "Sleep now" — and until this hook existed they were two
+ * code paths that happened to end in the same request. Only the rail asked
  * about unlanded commits (D6), so the same word did two different things
  * depending on which menu you picked it from, and the menu that skipped
  * the question was the one you reach for while actually inside the session
@@ -22,6 +22,10 @@ import { SessionCloseLandDialog } from "./SessionCloseLandDialog";
  * owns only the button. Wake is here too — not because it needs a gate
  * (it never asks anything) but because a caller that can sleep a session
  * should not have to reach somewhere else to wake it.
+ *
+ * The rail's ⏸ has since gone (a sleeping card that offered ⏸ looked
+ * running; docs/HELD-UPDATES-DESIGN.md), leaving the kebab's "Sleep now" as
+ * the one plain sleep control, with the ✓ below as the other way in.
  *
  * So is the rail's ✓, which is Done-and-sleep: checking a session off puts
  * its agent down too, so it asks Sleep's land question — and, before that,
@@ -81,7 +85,8 @@ export function useSessionSleep(
   notices?: DoneRequestNotices,
 ): SessionSleepController {
   const [landTarget, setLandTarget] = useState<Session>();
-  // Whether the land question was asked on behalf of a ✓ rather than a ⏸:
+  // Whether the land question was asked on behalf of a ✓ rather than a plain
+  // sleep ("Sleep now"):
   // answering it then finishes the check-off, not just the sleep.
   const [landForDone, setLandForDone] = useState(false);
   const [stopTarget, setStopTarget] = useState<Session>();
@@ -182,7 +187,7 @@ export function useSessionSleep(
 
 /**
  * The land-or-keep prompt for whichever control asked. Rendered once by the
- * owner of the controller, so the rail's ⏸ and the kebab's "Sleep now" put
+ * owner of the controller, so the rail's ✓ and the kebab's "Sleep now" put
  * up the same dialog rather than each keeping one of their own.
  */
 export function SessionSleepPrompt({

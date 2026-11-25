@@ -141,6 +141,15 @@
   }
 }
 
+/* The git state "updating" mark, tucked into the Changes tab's right
+   padding (the last tab), in the quiet text color. */
+.gitUpdating {
+  display: inline-flex;
+  align-items: center;
+  margin-left: calc(-1 * var(--space-3) - 8px);
+  color: var(--text2);
+}
+
 .spacer {
   flex: 1;
 }
@@ -169,4 +178,13 @@
   flex: 1;
   min-height: 0;
   min-width: 0;
+}
+
+/* A remote session whose live updates don't reach this window. */
+.liveNote {
+  flex: none;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12px;
+  color: var(--warn-fg);
 }

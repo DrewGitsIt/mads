@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { FLAGS, subscribeFlags } from "../../../featureFlags";
-import type { RouterClient } from "../../../router/client";
-import { subscribeToEvents } from "../../../router/events";
+import { RouterHTTPError, type RouterClient } from "../../../router/client";
+import { eventsReady, subscribeToEvents } from "../../../router/events";
 import type { Link } from "../../../router/types";
 import { RUN_EVENT_TYPES } from "../../../features/sessions/workspace/usePipelineRunning";
 
@@ -15,11 +15,21 @@ export interface LinkCommandState {
   pipelineRunning: boolean;
 }
 
-/** The link that leads `sessionId`: one whose subject it is and that grants orchestrate (one per subject, server-enforced). */
+/**
+ * The links that lead `sessionId` — those whose subject it is and that grant
+ * orchestrate — newest first. The server allows one live holder per subject,
+ * but a deleted leader's link stays behind (deletion leaves links dangling),
+ * so a re-led session has more than one; the live one is almost always the newest.
+ */
+export function leaderLinks(links: Link[], sessionId: string): Link[] {
+  return links
+    .filter((l) => l.subject_session_id === sessionId && l.grants.includes("orchestrate"))
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
+}
+
+/** The link that most likely leads `sessionId` (leaderLinks' newest), without checking its holder still exists. */
 export function leaderLink(links: Link[], sessionId: string): Link | undefined {
-  return links.find(
-    (l) => l.subject_session_id === sessionId && l.grants.includes("orchestrate"),
-  );
+  return leaderLinks(links, sessionId)[0];
 }
 
 /**
@@ -37,44 +47,57 @@ export function useLinkCommandState(
   links: Link[] | undefined,
 ): LinkCommandState {
   const linkedSessions = useSyncExternalStore(subscribeFlags, () => FLAGS.linkedSessions);
-  const leaderId = links ? leaderLink(links, sessionId)?.granting_session_id : undefined;
+  // A string, so the effect re-runs only when the candidates change.
+  const candidateIds = links ? leaderLinks(links, sessionId).map((l) => l.granting_session_id).join(" ") : "";
   const [leader, setLeader] = useState<{ id: string; name: string }>();
   const [pipelineRunning, setPipelineRunning] = useState(false);
 
   useEffect(() => {
-    if (!linkedSessions || !leaderId) {
+    const ids = candidateIds ? candidateIds.split(" ") : [];
+    if (!linkedSessions || ids.length === 0) {
       setLeader(undefined);
       return;
     }
     let cancelled = false;
-    // Named by id until the record arrives (or if it can't be read).
-    setLeader({ id: leaderId, name: leaderId });
-    routerClient
-      .getSession(leaderId)
-      .then((s) => {
-        if (!cancelled) setLeader({ id: leaderId, name: s.name || leaderId });
-      })
-      .catch(() => {});
+    // Named by id until the record arrives (or if it can't be read). A 404
+    // means that leader was deleted: try the next, and a session whose
+    // leaders are all gone is unled (the server's holder check agrees).
+    setLeader({ id: ids[0], name: ids[0] });
+    void (async () => {
+      for (const id of ids) {
+        try {
+          const s = await routerClient.getSession(id);
+          if (!cancelled) setLeader({ id, name: s.name || id });
+          return;
+        } catch (err) {
+          if (!(err instanceof RouterHTTPError && err.status === 404)) return;
+          if (cancelled) return;
+        }
+      }
+      if (!cancelled) setLeader(undefined);
+    })();
     return () => {
       cancelled = true;
     };
-  }, [routerClient, leaderId, linkedSessions]);
+  }, [routerClient, candidateIds, linkedSessions]);
 
   useEffect(() => {
     setPipelineRunning(false);
     if (!linkedSessions) return;
     let cancelled = false;
     let heard = false;
-    routerClient
-      .metricsPipelineRuns(sessionId)
-      .then((runs) => {
-        if (!cancelled && !heard) setPipelineRunning(runs.some((r) => r.outcome === "running"));
-      })
-      .catch(() => {});
+    // Subscribed first, the run history read behind the bus's ready barrier
+    // (router/events.ts eventsReady); a run event heard first wins.
     const unsubscribe = subscribeToEvents({ sessionId, types: RUN_EVENT_TYPES }, (envelope) => {
       heard = true;
       setPipelineRunning(envelope.type === "pipeline.started");
     });
+    eventsReady(sessionId)
+      .then(() => (cancelled ? [] : routerClient.metricsPipelineRuns(sessionId)))
+      .then((runs) => {
+        if (!cancelled && !heard) setPipelineRunning(runs.some((r) => r.outcome === "running"));
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
       unsubscribe();

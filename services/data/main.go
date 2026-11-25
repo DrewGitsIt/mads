@@ -5,15 +5,19 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/localguard"
 	"github.com/drewkidwell/mads/services/data/internal/api"
 	"github.com/drewkidwell/mads/services/data/internal/store"
@@ -30,10 +34,51 @@ func defaultDataDir() string {
 	return filepath.Join(home, ".mads")
 }
 
+// newHandler is the Data Service's whole HTTP stack: localguard (browser
+// pages), then the local front door (the install token on every route but
+// GET /health, docs/LOCAL-FRONT-DOOR-DESIGN.md D3), then the API.
+func newHandler(db *sql.DB, ident api.Identity, door func(mux *http.ServeMux) *localauth.Door) http.Handler {
+	mux := api.NewWithIdentity(db, ident)
+	// No browser page ever calls the Data Service; only programs (which send no Origin) may.
+	guard := localguard.New("data", "", nil)
+	return guard.Wrap(door(mux).Wrap(mux))
+}
+
+// dataDoor is the front door over mux: every route needs the install token
+// except GET /health.
+func dataDoor(store *localauth.Store) func(mux *http.ServeMux) *localauth.Door {
+	return func(mux *http.ServeMux) *localauth.Door {
+		return localauth.NewDoor(localauth.DoorOptions{
+			Name:     "data",
+			Store:    store,
+			Classify: func(r *http.Request) string { _, p := mux.Handler(r); return p },
+			Exempt:   []string{"GET /health"},
+		})
+	}
+}
+
 func main() {
+	// Nothing this process starts may inherit a token (it starts nothing
+	// today, but the rule is cheaper to hold everywhere).
+	localauth.TakeChildEnv()
 	addr := flag.String("addr", "localhost:17374", "listen address")
 	dataDir := flag.String("data-dir", defaultDataDir(), "mads data directory (env MADS_DATA_DIR)")
+	madsHome := flag.String("mads-home", localauth.DefaultHome(), "local state root holding the install token, local.token (env MADS_HOME)")
+	insecureNoAuth := flag.Bool("insecure-no-auth", false, "serve without the install token; refused unless this is a go test build")
 	flag.Parse()
+
+	door := func(*http.ServeMux) *localauth.Door { return localauth.Insecure() }
+	if *insecureNoAuth {
+		if !localauth.InsecureAllowed() {
+			log.Fatal("data: -insecure-no-auth is refused: only go test builds may serve without the install token")
+		}
+	} else {
+		tokens, err := localauth.LoadOrCreate(*madsHome)
+		if err != nil {
+			log.Fatalf("data: install token: %v", err)
+		}
+		door = dataDoor(tokens)
+	}
 
 	db, err := store.Open(filepath.Join(*dataDir, "mads.db"))
 	if err != nil {
@@ -118,7 +163,49 @@ func main() {
 	if root, err := os.Getwd(); err == nil {
 		ident.Root = root
 	}
-	// No browser page ever calls the Data Service; only programs (which send no Origin) may.
-	guard := localguard.New("data", "", nil)
-	log.Fatal(http.Serve(ln, guard.Wrap(api.NewWithIdentity(db, ident))))
+	// Request contexts derive from reqCtx so shutdown can end the event
+	// streams, which srv.Shutdown alone waits on forever.
+	reqCtx, reqCancel := context.WithCancel(context.Background())
+	defer reqCancel()
+	srv := &http.Server{Handler: newHandler(db, ident, door), BaseContext: func(net.Listener) context.Context { return reqCtx }}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(ln) }()
+
+	// Signals end in a drain and db.Close (deferred above), not an
+	// instant death; later signals are logged, never fatal.
+	sigs := make(chan os.Signal, 2)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	select {
+	case err := <-serveErr:
+		log.Fatalf("data: serve: %v", err)
+	case <-sigs:
+	}
+	go func() {
+		for sig := range sigs {
+			log.Printf("data: %v while shutting down", sig)
+		}
+	}()
+	log.Printf("data: shutting down")
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownGrace)
+	defer shutdownCancel()
+	httpDone := make(chan error, 1)
+	go func() { httpDone <- srv.Shutdown(shutdownCtx) }()
+	// Writes in flight get streamGrace to finish; then the streams are cut.
+	select {
+	case err := <-httpDone:
+		httpDone <- err
+	case <-time.After(streamGrace):
+	}
+	reqCancel()
+	if err := <-httpDone; err != nil {
+		log.Printf("data: HTTP shutdown: %v", err)
+	}
 }
+
+// shutdownGrace bounds the whole drain; streamGrace is how long requests in
+// flight get before every request context (event streams included) is
+// cancelled.
+const (
+	shutdownGrace = 5 * time.Second
+	streamGrace   = time.Second
+)

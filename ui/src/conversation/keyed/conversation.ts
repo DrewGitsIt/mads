@@ -53,7 +53,14 @@ export interface TurnState {
 }
 
 export interface ConvState {
-  rows: Record<string, KeyedRow>;
+  /**
+   * The rows by key, in two layers: `hot` holds the rows written since the
+   * last bulk change and overrides `base`. A streamed frame copies only
+   * `hot` (a few keys), not every row in a long conversation; a page merge
+   * folds `hot` into `base`. Read through rowOf / allRows, never directly.
+   */
+  base: Record<string, KeyedRow>;
+  hot: Record<string, KeyedRow>;
   /** Keys in transcript order: rows from pages, and live rows the stream said settled. */
   stored: string[];
   /** Keys of live rows, in arrival order; always after `stored`. */
@@ -71,10 +78,18 @@ export interface ConvState {
   keyed: boolean;
   turn: TurnState;
   queued: QueuedMessage[];
+  /**
+   * A send from this tab is on its way: its user_message counts as live
+   * even if it comes back in a replay (a sleeping session's send wakes it,
+   * and the stream reconnects to a replay that holds it). `sentKey`: the
+   * replayed one taken as it so far — the replay's latest.
+   */
+  sending?: boolean;
+  sentKey?: string;
 }
 
 export function emptyConversation(): ConvState {
-  return { rows: {}, stored: [], tail: [], hasMore: false, replaying: false, keyed: true, turn: { active: false }, queued: [] };
+  return { base: {}, hot: {}, stored: [], tail: [], hasMore: false, replaying: false, keyed: true, turn: { active: false }, queued: [] };
 }
 
 /** The frame an action carries: the SSE event name, its parsed data, its id line. */
@@ -100,8 +115,55 @@ export type ConvAction =
   | { type: "queued"; queued: QueuedMessage[] }
   /** The turn state from outside the stream (Stop, the session record). */
   | { type: "turn"; turn: Partial<TurnState> }
+  /** This tab started a send (on) / it failed or was queued (off). */
+  | { type: "sending"; on: boolean }
   /** Another session: start over. */
   | { type: "reset" };
+
+/** The row with `key`, main list or subagent. */
+export function rowOf(s: ConvState, key: string): KeyedRow | undefined {
+  return s.hot[key] ?? s.base[key];
+}
+
+/** Every row, main list and subagents, in the order rows were first added. */
+export function allRows(s: ConvState): KeyedRow[] {
+  return Object.values(flatRows(s));
+}
+
+/**
+ * The last row (in allRows order) whose tool call has `id`, without building
+ * the merged map: base's keys in order, each read through hot, then the keys
+ * only hot has.
+ */
+export function findTool(s: ConvState, id: string): KeyedRow | undefined {
+  let found: KeyedRow | undefined;
+  for (const k in s.base) {
+    const r = s.hot[k] ?? s.base[k];
+    if (r.role === "tool" && r.tool?.id === id) found = r;
+  }
+  for (const k in s.hot) {
+    if (Object.hasOwn(s.base, k)) continue;
+    const r = s.hot[k];
+    if (r.role === "tool" && r.tool?.id === id) found = r;
+  }
+  return found;
+}
+
+/** The rows as one new map, free to modify: `hot` laid over `base`. */
+function flatRows(s: ConvState): Record<string, KeyedRow> {
+  return { ...s.base, ...s.hot };
+}
+
+// Past this many keys in `hot`, a write folds it into `base`: a long turn
+// adding many rows pays one full copy per HOT_CAP new rows, not one per frame.
+const HOT_CAP = 128;
+
+/** `s` with `changed` written over its rows. */
+function withRows(s: ConvState, changed: Record<string, KeyedRow>): ConvState {
+  const hot = { ...s.hot, ...changed };
+  if (Object.keys(hot).length > HOT_CAP) return { ...s, base: { ...s.base, ...hot }, hot: {} };
+  return { ...s, hot };
+}
 
 /** The main list in render order: stored rows, then live ones (subagent rows excluded). */
 export function orderedRows(s: ConvState): KeyedRow[] {
@@ -110,7 +172,7 @@ export function orderedRows(s: ConvState): KeyedRow[] {
   for (const k of [...s.stored, ...s.tail]) {
     if (seen.has(k)) continue;
     seen.add(k);
-    const r = s.rows[k];
+    const r = rowOf(s, k);
     if (r && !r.parent) out.push(r);
   }
   return out;
@@ -118,7 +180,7 @@ export function orderedRows(s: ConvState): KeyedRow[] {
 
 /** A subagent's rows (by its spawning tool call id), in arrival order. */
 export function subagentRows(s: ConvState, parent: string): KeyedRow[] {
-  return s.tail.map((k) => s.rows[k]).filter((r): r is KeyedRow => !!r && r.parent === parent);
+  return s.tail.map((k) => rowOf(s, k)).filter((r): r is KeyedRow => !!r && r.parent === parent);
 }
 
 /**
@@ -135,7 +197,10 @@ export function keyPage(rows: TranscriptMessage[]): KeyedRow[] {
     if (m.role === "tool_result") {
       const call = byKey.get(key) ?? (m.tool?.id ? out.find((r) => r.role === "tool" && r.tool?.id === m.tool?.id) : undefined);
       if (call?.tool) {
-        call.tool = { ...call.tool, result: { text: m.text, is_error: m.is_error, timestamp: m.timestamp } };
+        call.tool = {
+          ...call.tool,
+          result: { text: m.text, is_error: m.is_error, timestamp: m.timestamp, background: m.tool?.background },
+        };
       }
       return; // an orphan result has nothing to attach to
     }
@@ -153,12 +218,13 @@ export function conversationReducer(s: ConvState, a: ConvAction): ConvState {
     case "olderPage":
       return prependPage(s, keyPage(a.rows), a.hasMore);
     case "swap": {
-      const dropped = a.drop === "live" ? new Set(s.tail.filter((k) => s.rows[k]?.live)) : new Set(a.drop);
-      const rows = { ...s.rows };
+      const dropped = a.drop === "live" ? new Set(s.tail.filter((k) => rowOf(s, k)?.live)) : new Set(a.drop);
+      const rows = flatRows(s);
       for (const k of dropped) delete rows[k];
       const next = {
         ...s,
-        rows,
+        base: rows,
+        hot: {},
         stored: s.stored.filter((k) => !dropped.has(k)),
         tail: s.tail.filter((k) => !dropped.has(k)),
       };
@@ -168,6 +234,8 @@ export function conversationReducer(s: ConvState, a: ConvAction): ConvState {
       return applyFrame(s, a.frame);
     case "queued":
       return { ...s, queued: a.queued };
+    case "sending":
+      return { ...s, sending: a.on, sentKey: undefined };
     case "turn": {
       const next = a.turn.active && !s.turn.active ? startTurn(s) : s;
       return { ...next, turn: { ...next.turn, ...a.turn } };
@@ -187,7 +255,7 @@ export function conversationReducer(s: ConvState, a: ConvAction): ConvState {
  * the stored rows and resets the paging cursor.
  */
 function mergePage(s: ConvState, page: KeyedRow[], hasMore: boolean): ConvState {
-  const rows = { ...s.rows };
+  const rows = flatRows(s);
   const pageKeys = new Set(page.map((r) => r.key));
   const overlap = s.stored.findIndex((k) => pageKeys.has(k));
   let before: string[] = [];
@@ -214,7 +282,8 @@ function mergePage(s: ConvState, page: KeyedRow[], hasMore: boolean): ConvState 
   }
   const next: ConvState = {
     ...s,
-    rows,
+    base: rows,
+    hot: {},
     stored: [...before, ...page.map((r) => r.key), ...after],
     tail: s.tail.filter((k) => !pageKeys.has(k)),
   };
@@ -267,12 +336,13 @@ function withLiveDisplay(key: string, stored: ToolUse, live: ToolUse, watched: b
 }
 
 function prependPage(s: ConvState, page: KeyedRow[], hasMore: boolean): ConvState {
-  const rows = { ...s.rows };
+  const rows = flatRows(s);
   const fresh = page.filter((r) => !rows[r.key]);
   for (const r of fresh) rows[r.key] = r;
   return {
     ...s,
-    rows,
+    base: rows,
+    hot: {},
     stored: [...fresh.map((r) => r.key), ...s.stored],
     cursor: page[0]?.key ?? s.cursor,
     hasMore,
@@ -292,7 +362,7 @@ function str(v: unknown): string | undefined {
 
 /** Whether a frame for `key` must be dropped: the stored row has it. */
 function storedHas(s: ConvState, key: string): boolean {
-  const r = s.rows[key];
+  const r = rowOf(s, key);
   return !!r && !r.live;
 }
 
@@ -302,9 +372,9 @@ function storedHas(s: ConvState, key: string): boolean {
  */
 function startTurn(s: ConvState): ConvState {
   if (s.turn.active) return s;
-  const rows = { ...s.rows };
+  const rows = flatRows(s);
   for (const k of Object.keys(rows)) if (rows[k].current) rows[k] = { ...rows[k], current: false };
-  return { ...s, rows, turn: { active: true, startedAt: new Date().toISOString() } };
+  return { ...s, base: rows, hot: {}, turn: { active: true, startedAt: new Date().toISOString() } };
 }
 
 /**
@@ -313,15 +383,14 @@ function startTurn(s: ConvState): ConvState {
  * compaction pass, another client's send seen only from its output).
  */
 function implicitStart(s: ConvState, key: string, parent: unknown): ConvState {
-  return s.replaying || s.rows[key] || parent ? s : startTurn(s);
+  return s.replaying || rowOf(s, key) || parent ? s : startTurn(s);
 }
 
 /** Add or patch a live row, appending a new key to the tail. */
 function upsertLive(s: ConvState, key: string, patch: (prev: KeyedRow | undefined) => KeyedRow): ConvState {
-  const prev = s.rows[key];
+  const prev = rowOf(s, key);
   const row = prev ? patch(prev) : { ...patch(prev), streamed: true };
-  const rows = { ...s.rows, [key]: row };
-  return { ...s, rows, tail: prev ? s.tail : [...s.tail, key] };
+  return { ...withRows(s, { [key]: row }), tail: prev ? s.tail : [...s.tail, key] };
 }
 
 function applyFrame(s0: ConvState, f: Frame): ConvState {
@@ -332,14 +401,15 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
   switch (f.kind) {
     case "hello": {
       const turn = (d.turn ?? {}) as { active?: boolean; started_at?: string; interrupted?: boolean };
-      let rows = s.rows;
+      const stale: Record<string, KeyedRow> = {};
       if (d.resume !== "resumed") {
-        rows = { ...rows };
-        for (const k of s.tail) if (rows[k]?.live) rows[k] = { ...rows[k], stale: true };
+        for (const k of s.tail) {
+          const r = rowOf(s, k);
+          if (r?.live) stale[k] = { ...r, stale: true };
+        }
       }
       return {
-        ...s,
-        rows,
+        ...withRows(s, stale),
         epoch: str(d.epoch),
         keyed: d.keyed !== false,
         replaying: true,
@@ -348,15 +418,27 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
       };
     }
     case "replay_end": {
-      const rows = { ...s.rows };
-      for (const k of s.tail) if (rows[k]?.stale) rows[k] = { ...rows[k], stale: false };
-      return { ...s, rows, replaying: false };
+      const fresh: Record<string, KeyedRow> = {};
+      for (const k of s.tail) {
+        const r = rowOf(s, k);
+        if (r?.stale) fresh[k] = { ...r, stale: false };
+      }
+      // The send was in the replay: it's arrived.
+      const sent = s.sentKey ? { sending: false, sentKey: undefined } : {};
+      return { ...withRows(s, fresh), ...sent, replaying: false };
     }
     case "user_message": {
-      if (!key || s.rows[key]) return s;
+      if (!key || rowOf(s, key)) return s;
       // A send (a queue delivery too) opens its turn; a replayed one doesn't —
       // hello.turn already said whether a turn runs.
-      const base = s.replaying ? s : startTurn(s);
+      let base = s.replaying ? s : startTurn(s);
+      // This tab's send, replayed: the latest user message in the replay is
+      // taken as it (any before it were history after all).
+      const ours = s.replaying && !!s.sending;
+      if (ours) {
+        const prev = s.sentKey ? rowOf(s, s.sentKey) : undefined;
+        base = { ...(prev ? withRows(base, { [s.sentKey!]: { ...prev, paced: false } }) : base), sentKey: key };
+      } else if (!s.replaying) base = { ...base, sending: false, sentKey: undefined };
       return upsertLive(base, key, () => ({
         key,
         role: "user",
@@ -365,15 +447,15 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
         timestamp: str(d.ts),
         live: true,
         current: true,
-        paced,
+        paced: paced || ours,
       }));
     }
     case "item_start": {
-      const prev = s.rows[key];
+      const prev = rowOf(s, key);
       if (prev?.stale) {
         const reset = { ...prev, stale: false, open: d.item === "text" || d.item === "thinking" };
         if (d.item === "text" || d.item === "thinking") reset.text = "";
-        return { ...s, rows: { ...s.rows, [key]: reset } };
+        return withRows(s, { [key]: reset });
       }
       if (!key || prev) return s;
       const item = str(d.item) ?? "text";
@@ -408,9 +490,9 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
       );
     }
     case "item_stop": {
-      const r = s.rows[key];
+      const r = rowOf(s, key);
       if (!r?.open) return s;
-      return { ...s, rows: { ...s.rows, [key]: { ...r, open: false } } };
+      return withRows(s, { [key]: { ...r, open: false } });
     }
     case "tool_use": {
       if (!key || storedHas(s, key)) return s;
@@ -426,6 +508,12 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
     case "tool_result": {
       if (!key || storedHas(s, key)) return s;
       const tool = d.tool as ToolUse | undefined;
+      // A result whose call this tab never saw, with nothing to name it by:
+      // a background subagent's call the runner pruned at a parent turn end,
+      // replayed alone. Its frame carries no parent, so it would land in the
+      // main list as a nameless row; the subagent's dock has it from its
+      // transcript file. As keyPage does, an orphan has nothing to attach to.
+      if (!rowOf(s, key) && !tool?.name) return s;
       return upsertLive(s, key, (prev) => {
         const base = prev?.tool ?? tool ?? { name: "" };
         return {
@@ -434,17 +522,22 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
           tool: {
             ...base,
             ...(tool && !prev?.tool ? tool : {}),
-            result: { text: str(d.text), is_error: !!d.is_error, timestamp: new Date().toISOString() },
+            result: {
+              text: str(d.text),
+              is_error: !!d.is_error,
+              timestamp: new Date().toISOString(),
+              background: tool?.background,
+            },
           },
         };
       });
     }
     case "notice": {
-      if (!key || s.rows[key]) return s;
+      if (!key || rowOf(s, key)) return s;
       return upsertLive(s, key, () => ({ key, role: "agent", notice: true, text: str(d.text) ?? "", live: true, current: true }));
     }
     case "inbound": {
-      if (!key || s.rows[key]) return s;
+      if (!key || rowOf(s, key)) return s;
       return upsertLive(implicitStart(s, key, undefined), key, () => ({
         key,
         role: "inbound",
@@ -460,23 +553,23 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
       const keys = (d.keys as string[] | undefined) ?? [];
       const settled = s.tail.filter((k) => keys.includes(k));
       if (settled.length === 0) return s;
-      const rows = { ...s.rows };
-      for (const k of settled) rows[k] = { ...rows[k], live: false, open: false };
+      const rows: Record<string, KeyedRow> = {};
+      for (const k of settled) rows[k] = { ...rowOf(s, k)!, live: false, open: false };
       const moved = settled.filter((k) => !rows[k].parent);
       return {
-        ...s,
-        rows,
+        ...withRows(s, rows),
         stored: [...s.stored, ...moved.filter((k) => !s.stored.includes(k))],
         tail: s.tail.filter((k) => !moved.includes(k)),
       };
     }
     case "unsaved": {
       const keys = (d.keys as string[] | undefined) ?? [];
-      const rows = { ...s.rows };
+      const rows: Record<string, KeyedRow> = {};
+      const row = (k: string) => rows[k] ?? rowOf(s, k);
       let changed = false;
       let failed = false;
       for (const k of keys) {
-        const r = rows[k];
+        const r = row(k);
         if (!r?.live) continue;
         rows[k] = r.role === "user" ? { ...r, failed: true, open: false } : { ...r, unsaved: true, open: false };
         failed ||= r.role === "user";
@@ -485,17 +578,20 @@ function applyFrame(s0: ConvState, f: Frame): ConvState {
       if (!changed) return s;
       // A failed send opened a turn that never ran (the runner sends no
       // turn_end for it): over, unless something streamed after it.
-      const main = s.tail.filter((k) => !rows[k]?.parent);
+      const main = s.tail.filter((k) => !row(k)?.parent);
       const lastKey = main[main.length - 1];
-      if (failed && !s.replaying && lastKey && rows[lastKey].failed) return { ...s, rows, turn: { active: false } };
-      return { ...s, rows };
+      if (failed && !s.replaying && lastKey && row(lastKey)!.failed) return { ...withRows(s, rows), turn: { active: false } };
+      return withRows(s, rows);
     }
     case "turn_end": {
       // Every item ends with its turn (the server sends item_stop first; a
       // dropped connection may not have).
-      const rows = { ...s.rows };
-      for (const k of s.tail) if (rows[k]?.open) rows[k] = { ...rows[k], open: false };
-      return { ...s, rows, turn: { active: false } };
+      const closed: Record<string, KeyedRow> = {};
+      for (const k of s.tail) {
+        const r = rowOf(s, k);
+        if (r?.open) closed[k] = { ...r, open: false };
+      }
+      return { ...withRows(s, closed), turn: { active: false } };
     }
     default:
       return s;

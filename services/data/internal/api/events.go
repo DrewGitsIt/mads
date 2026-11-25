@@ -33,6 +33,10 @@ func (s *server) handlePostEvent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, &v)
 		return
 	}
+	if why := refusedEvent(r, env); why != "" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"code": "forbidden", "error": why})
+		return
+	}
 	env.Seq = 0 // assigned by the log, never by the caller
 	if err := s.log.Append(r.Context(), &env); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -61,6 +65,18 @@ func (s *server) handleGetEvents(w http.ResponseWriter, r *http.Request) {
 		events = []contracts.Envelope{}
 	}
 	writeJSON(w, http.StatusOK, events)
+}
+
+// handleEventsHead is GET /events/head: {"seq": <the log's max seq>}, 0 when
+// the log is empty. A client that seeds its state over REST streams with
+// ?since=<head> from then on, so the stream never replays history to it.
+func (s *server) handleEventsHead(w http.ResponseWriter, r *http.Request) {
+	head, err := s.log.Head(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"seq": head})
 }
 
 // streamEvents is the live subscription path (spec §15): replay from the
@@ -160,4 +176,36 @@ func parseFilter(r *http.Request) (store.Filter, *contracts.ValidationError) {
 		return f, &v
 	}
 	return f, nil
+}
+
+// writtenBy is the only event types of the device registry (device.*,
+// peer.*, mesh.*) a caller may append through POST /events, and the actor
+// each must carry: the service whose own record it is. Everything else in
+// those domains is written by the store, with the change it records
+// (pairing, grants, the peer list), and a hand-written one would read as
+// that change (docs/MESH-AUTH-DESIGN.md).
+var writtenBy = map[contracts.EventType]string{
+	contracts.DeviceRefused:           "mesh",
+	contracts.DeviceDiscovered:        "mesh",
+	contracts.DeviceLevelUncapped:     "mesh",
+	contracts.DevicePairStarted:       "mesh",
+	contracts.DevicePairingAbandoned:  "mesh",
+	contracts.MeshListening:           "mesh",
+	contracts.PeerReachabilityChanged: "router",
+}
+
+// refusedEvent says why r may not append env, or "".
+func refusedEvent(r *http.Request, env contracts.Envelope) string {
+	switch env.Type.Domain() {
+	case "device", "peer", "mesh":
+	default:
+		return ""
+	}
+	if _, relayed := r.Header[contracts.MeshRelayHeader]; relayed {
+		return string(env.Type) + " can't be written for another device"
+	}
+	if want, ok := writtenBy[env.Type]; !ok || env.Actor != want {
+		return string(env.Type) + " is written by the store with the change it records, never through POST /events"
+	}
+	return ""
 }

@@ -3,17 +3,19 @@ package supervisor_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/testleakcheck"
 	"github.com/drewkidwell/mads/providers/fake"
@@ -88,7 +90,7 @@ func newCredStore(t *testing.T, creds map[string]string) *credstore.Store {
 // observe a separately-spawned process's env from a test.
 func envPresent(t *testing.T, addr, name string) bool {
 	t.Helper()
-	resp, err := http.Get(fmt.Sprintf("http://%s/env?name=%s", addr, name))
+	resp, err := childsock.Client.Get(childsock.URL(addr, "/env?name="+name))
 	if err != nil {
 		t.Fatalf("GET /env?name=%s: %v", name, err)
 	}
@@ -1150,5 +1152,103 @@ func TestCredentialBindingChangeAffectsOnlyNextSpawn(t *testing.T) {
 	}
 	if envPresent(t, secondAddr, "CRED_B") {
 		t.Error("second session has CRED_B, want absent (not bound after switch)")
+	}
+}
+
+// TestSpawnSessionHandsOverTokensAndRevokesOnExit: a session child gets a
+// fresh session-scoped token in its env (docs/LOCAL-FRONT-DOOR-DESIGN.md
+// D4) and never the install token (H4: it reads the file it's pointed at
+// with -token-file), and the scoped token dies with the child — whether the session ends or is deleted — while a respawn gets a
+// new one.
+func TestSpawnSessionHandsOverTokensAndRevokesOnExit(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := newSupervisor(t, data, nil)
+	scoped := localauth.NewRegistry()
+	sup.SetTokenFile("/nonexistent/local.token")
+	sup.SetScopedTokens(scoped)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	addr, err := sup.SpawnSession(ctx, "ses_tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !envPresent(t, addr, localauth.EnvRouterToken) {
+		t.Errorf("%s not in the spawned child's env", localauth.EnvRouterToken)
+	}
+	if envPresent(t, addr, localauth.EnvLocalToken) {
+		t.Errorf("the install token was handed over in %s", localauth.EnvLocalToken)
+	}
+	if scoped.Len() != 1 {
+		t.Fatalf("%d scoped tokens live, want 1", scoped.Len())
+	}
+	if err := sup.TerminateSession(ctx, "ses_tok"); err != nil {
+		t.Fatal(err)
+	}
+	if scoped.Len() != 0 {
+		t.Fatalf("%d scoped tokens live after the session ended, want 0", scoped.Len())
+	}
+	if _, err := sup.SpawnSession(ctx, "ses_tok"); err != nil {
+		t.Fatal(err)
+	}
+	if scoped.Len() != 1 {
+		t.Fatalf("respawn: %d scoped tokens, want 1", scoped.Len())
+	}
+	if err := sup.TerminateSessionForDelete(ctx, "ses_tok"); err != nil {
+		t.Fatal(err)
+	}
+	if scoped.Len() != 0 {
+		t.Fatalf("%d scoped tokens live after delete, want 0", scoped.Len())
+	}
+	// Pipelines get no token in env at all.
+	paddr, err := sup.SpawnPipeline(ctx, "run_tok", "ses_tok", "tpl", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envPresent(t, paddr, localauth.EnvLocalToken) || envPresent(t, paddr, localauth.EnvRouterToken) {
+		t.Error("pipeline child: want no token in its env")
+	}
+}
+
+func TestShutdownGivesChildrenTheirGraceWithAnExpiredContext(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "stopped")
+	t.Setenv("TESTCHILD_TERM_DELAY", "300ms")
+	t.Setenv("TESTCHILD_TERM_MARKER", marker)
+	base := datatest.Start(t)
+	sup := newSupervisor(t, dataclient.New(base, "router"), nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := sup.SpawnSession(ctx, "ses_grace"); err != nil {
+		t.Fatalf("SpawnSession: %v", err)
+	}
+
+	// The Router's shutdown context can be spent by the time it reaches the
+	// children; that must not turn their SIGTERM into an immediate SIGKILL.
+	expired, expire := context.WithCancel(context.Background())
+	expire()
+	sup.Shutdown(expired)
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("child didn't finish its own shutdown (SIGKILLed before its grace?): %v", err)
+	}
+}
+
+func TestSpawnAfterShutdownIsRefused(t *testing.T) {
+	base := datatest.Start(t)
+	sup := newSupervisor(t, dataclient.New(base, "router"), nil)
+	sup.Shutdown(context.Background())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := sup.SpawnSession(ctx, "ses_late"); !errors.Is(err, supervisor.ErrShuttingDown) {
+		t.Fatalf("SpawnSession after Shutdown: err = %v, want ErrShuttingDown", err)
+	}
+	if _, err := sup.SpawnPipeline(ctx, "run_late", "ses_late", "tmpl", nil); !errors.Is(err, supervisor.ErrShuttingDown) {
+		t.Fatalf("SpawnPipeline after Shutdown: err = %v, want ErrShuttingDown", err)
+	}
+	if got := sup.Children(); len(got) != 0 {
+		t.Fatalf("children after refused spawns: %v, want none", got)
 	}
 }

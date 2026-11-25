@@ -9,6 +9,11 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
+
+	"github.com/drewkidwell/mads/pkg/childsock"
+	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/dataclient"
 )
 
 // handleSessionOutput and handlePipelineOutput forward the UI's data-plane
@@ -51,6 +56,13 @@ func (s *server) handlePipelineOutput(w http.ResponseWriter, r *http.Request) {
 // if no child is tracked, it first wakes the session (see ensureSession,
 // sessions.go) rather than 404ing — a composer send should never surface
 // "session not running" to the UI.
+//
+// A send that wakes the session carries the updates held for it while it
+// slept (docs/HELD-UPDATES-DESIGN.md decisions 5-8): sendWaking drains them
+// before the wake, so the start hook's FlushDeferred finds nothing, and
+// forwards them as the body's "attached" parts. A send to an awake session
+// is forwarded unchanged. Either way the Router alone decides what is
+// attached: a client's own "attached" field is dropped.
 func (s *server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	// Before the wake: a send naming a missing attachment fails fast
@@ -58,13 +70,87 @@ func (s *server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	if !s.resolveMessageAttachments(w, r, id) {
 		return
 	}
-	addr, err := s.ensureSession(r.Context(), id)
-	if err != nil {
-		writeWakeError(w, err)
+	body, ok := s.messageBody(w, r)
+	if !ok {
 		return
+	}
+	// A device's message over the mesh is recorded as that device's: the
+	// session child records the turn itself, under the session's name.
+	rec := &sendRecorder{ResponseWriter: w}
+	w = rec
+	defer s.recordDeviceMessage(r, id, rec)
+	unlock := s.lockWake(id)
+	addr, tracked := s.sup.SessionAddr(id)
+	if !tracked {
+		// Held across the drain, the wake and the forward, so a concurrent
+		// wake (a signal job) can neither spawn a second child nor slip its
+		// own turn in ahead of this one.
+		defer unlock()
+		s.sendWaking(w, r, id, body)
+		return
+	}
+	unlock()
+	if deleteFold(body, "attached") {
+		if !setMessageBody(w, r, body) {
+			return
+		}
 	}
 	s.clearAsideOnSend(r.Context(), id)
 	s.proxyTo(w, r, addr, "/messages")
+}
+
+// sendRecorder notes a send's status and the start of its answer.
+type sendRecorder struct {
+	http.ResponseWriter
+	status int
+	head   []byte
+}
+
+func (s *sendRecorder) WriteHeader(code int) {
+	if s.status == 0 {
+		s.status = code
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *sendRecorder) Write(b []byte) (int, error) {
+	if s.status == 0 {
+		s.status = http.StatusOK
+	}
+	if room := 4096 - len(s.head); room > 0 {
+		s.head = append(s.head, b[:min(room, len(b))]...)
+	}
+	return s.ResponseWriter.Write(b)
+}
+
+func (s *sendRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// recordDeviceMessage appends session.device_message for a message a
+// paired device sent over the mesh (the relay mark, with the device actor
+// the Mesh Service set) that the session took, sent or queued. The
+// dataclient writes it as that device (docs/MESH-AUTH-DESIGN.md D8). A
+// local send records nothing new.
+func (s *server) recordDeviceMessage(r *http.Request, id string, rec *sendRecorder) {
+	if _, relayed := dataclient.MeshRelay(r.Context()); !relayed || !strings.HasPrefix(r.Header.Get("X-Mads-Actor"), "device:") {
+		return
+	}
+	if rec.status < 200 || rec.status > 299 {
+		return
+	}
+	var answer struct {
+		Status string `json:"status"`
+	}
+	_ = json.Unmarshal(rec.head, &answer)
+	payload, _ := json.Marshal(contracts.DeviceMessage{Queued: answer.Status == "queued"})
+	// The send succeeded whatever the caller does next.
+	ctx := context.WithoutCancel(r.Context())
+	if err := s.data.Append(ctx, &contracts.Envelope{Type: contracts.SessionDeviceMessage, SessionID: id, Payload: payload}); err != nil {
+		log.Printf("router: record %s's message to %s: %v", r.Header.Get("X-Mads-Actor"), id, err)
+	}
 }
 
 // clearAsideOnSend retires the user's "set aside" judgement because the user
@@ -229,16 +315,32 @@ func (s *server) handleSessionResolvePermission(w http.ResponseWriter, r *http.R
 // and /interrupt forwarders (httputil.ReverseProxy handles both request
 // shapes identically; it isn't SSE-specific).
 func (s *server) proxyTo(w http.ResponseWriter, r *http.Request, addr, childPath string) {
-	target := &url.URL{Scheme: "http", Host: addr}
+	// addr is the child's Unix socket (docs/LOCAL-FRONT-DOOR-DESIGN.md D9);
+	// childsock's Transport dials it. SSE and upgrades pass as before.
+	target := &url.URL{Scheme: "http", Host: childsock.Host(addr)}
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Transport = childsock.Transport
 	r2 := r.Clone(r.Context())
 	r2.URL.Path = childPath
 	r2.URL.RawPath = ""
 	// The browser's own headers stop here: localguard has already checked
 	// them at the Router's door, and a child accepts no browser origin at
 	// all — passing them on would refuse the app's own messages.
-	for _, h := range []string{"Origin", "Referer", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User"} {
+	// Nor do credentials: a child is reached over its own socket and never
+	// needs a cookie or a bearer from the page.
+	for _, h := range []string{"Origin", "Referer", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User", "Cookie", "Authorization"} {
 		r2.Header.Del(h)
+	}
+	// Nor the mesh's stamps: what reaches a child is the actor alone, and
+	// only the one the Mesh Service authenticated for a relayed request
+	// (docs/MESH-AUTH-DESIGN.md D8); a local caller's X-Mads-Actor is its
+	// own say-so, so it's dropped.
+	actor := r2.Header.Get("X-Mads-Actor")
+	for _, h := range []string{"X-Mads-Actor", contracts.MeshRelayHeader, contracts.MeshLevelHeader, contracts.MeshDeviceHeader} {
+		r2.Header.Del(h)
+	}
+	if _, relayed := dataclient.MeshRelay(r.Context()); relayed && strings.HasPrefix(actor, "device:") {
+		r2.Header.Set("X-Mads-Actor", actor)
 	}
 	proxy.ServeHTTP(w, r2)
 }
@@ -255,13 +357,13 @@ func (s *server) postJSONToChild(w http.ResponseWriter, r *http.Request, addr, p
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, "http://"+addr+path, bytes.NewReader(raw))
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, childsock.URL(addr, path), bytes.NewReader(raw))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := childsock.Client.Do(req)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return

@@ -9,7 +9,9 @@ import {
   type LinkPreset,
   type LinkRequest,
   type Session,
+  type SessionHost,
 } from "../../../router/types";
+import { DIFFERENT_DEVICE, deviceOf } from "../links/linkDraft";
 import styles from "./LinkChooserDialog.module.css";
 
 export interface LinkChooserDialogProps {
@@ -35,6 +37,12 @@ export interface LinkChooserDialogProps {
    * instead of failing on submit.
    */
   links?: Link[];
+  /**
+   * Staged mode: the device the new session starts on (the Launchpad's
+   * host; undefined is this one). Sessions on any other device are offered
+   * disabled, with the reason: links never cross devices.
+   */
+  host?: SessionHost;
 }
 
 // Only Monitor and Leader are user-selectable (docs/linked-sessions-mockup.html,
@@ -98,13 +106,19 @@ export function LinkChooserDialog({
   initialPreset,
   initialCadence,
   links = [],
+  host,
 }: LinkChooserDialogProps) {
+  // The host's key as deviceOf has it: "" for this device.
+  const device = host && !host.self ? host.name : "";
   const [preset, setPreset] = useState<UserPreset>(initialPreset ?? "leader");
   const [cadence, setCadence] = useState<LinkCadence>(initialCadence ?? "on_signal");
   const [holderId, setHolderId] = useState<string>(
     stagedHolder ? NEW_SESSION_PLACEHOLDER : (sessionIds[0] ?? ""),
   );
-  const [checkedIds, setCheckedIds] = useState<string[]>(initialSubjectIds ?? []);
+  // A staged subject left on another device (never offered now) drops out.
+  const [checkedIds, setCheckedIds] = useState<string[]>(() =>
+    (initialSubjectIds ?? []).filter((id) => deviceOf(sessions.find((s) => s.id === id)) === device),
+  );
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<{ field: string; message: string }[]>([]);
   const [generalError, setGeneralError] = useState<string>();
@@ -259,17 +273,25 @@ export function LinkChooserDialog({
         {stagedHolder && (
           <div className={styles.subjectPicker}>
             <div className={styles.roleLabel}>Link to which sessions?</div>
-            {sessions.map((s) => (
-              <label key={s.id} className={styles.subjectRow}>
-                <input
-                  type="checkbox"
-                  checked={checkedIds.includes(s.id)}
-                  onChange={() => toggleChecked(s.id)}
-                />
-                {s.name || "Untitled session"}
-                {ledByLabel(s.id)}
-              </label>
-            ))}
+            {sessions.map((s) => {
+              const elsewhere = deviceOf(s) !== device;
+              return (
+                <label
+                  key={s.id}
+                  className={[styles.subjectRow, elsewhere ? styles.subjectElsewhere : ""].filter(Boolean).join(" ")}
+                  title={elsewhere ? DIFFERENT_DEVICE : undefined}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checkedIds.includes(s.id)}
+                    disabled={elsewhere}
+                    onChange={() => toggleChecked(s.id)}
+                  />
+                  {s.name || "Untitled session"}
+                  {elsewhere ? <span className={styles.ledBy}>· different device</span> : ledByLabel(s.id)}
+                </label>
+              );
+            })}
           </div>
         )}
         <div className={styles.holderPicker}>

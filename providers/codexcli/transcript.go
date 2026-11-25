@@ -77,7 +77,7 @@ func (p *Provider) readItems(ctx context.Context, ref string) ([]itemEntry, map[
 	var failed map[string]*turnError
 	list := func(c *conn) error {
 		var err error
-		entries, err = listItems(ctx, c, ref)
+		entries, err = listStoredItems(ctx, c, ref)
 		if err != nil || len(entries) == 0 {
 			// Nothing stored, so no turn to have failed: codex refuses
 			// thread/turns/list before a thread's first user message.
@@ -102,7 +102,20 @@ func (p *Provider) readItems(ctx context.Context, ref string) ([]itemEntry, map[
 	return entries, failed, nil
 }
 
+// listItems lists all of ref's items; a thread codex hasn't stored yet has
+// none (notStoredYet).
 func listItems(ctx context.Context, c *conn, ref string) ([]itemEntry, error) {
+	entries, err := listStoredItems(ctx, c, ref)
+	if errors.Is(err, provider.ErrTranscriptMissing) {
+		return nil, nil
+	}
+	return entries, err
+}
+
+// listStoredItems is listItems with a thread codex doesn't hold as
+// provider.ErrTranscriptMissing: the whole reads (Transcript,
+// KeyedTranscript) report it.
+func listStoredItems(ctx context.Context, c *conn, ref string) ([]itemEntry, error) {
 	var all []itemEntry
 	cursor := ""
 	for range 10000 {
@@ -110,7 +123,7 @@ func listItems(ctx context.Context, c *conn, ref string) ([]itemEntry, error) {
 		if cursor != "" {
 			params["cursor"] = cursor
 		}
-		res, err := listPage(ctx, c, params)
+		res, err := listStoredPage(ctx, c, params)
 		if err != nil {
 			return nil, err
 		}
@@ -359,10 +372,20 @@ type itemsPage struct {
 }
 
 func listPage(ctx context.Context, c *conn, params map[string]any) (itemsPage, error) {
+	res, err := listStoredPage(ctx, c, params)
+	if errors.Is(err, provider.ErrTranscriptMissing) {
+		return itemsPage{}, nil
+	}
+	return res, err
+}
+
+// listStoredPage is listPage with notStoredYet as
+// provider.ErrTranscriptMissing.
+func listStoredPage(ctx context.Context, c *conn, params map[string]any) (itemsPage, error) {
 	var res itemsPage
 	raw, err := c.request(ctx, "thread/items/list", params)
 	if notStoredYet(err) {
-		return res, nil
+		return res, fmt.Errorf("thread/items/list: %w: %w", err, provider.ErrTranscriptMissing)
 	}
 	if err != nil {
 		return res, fmt.Errorf("thread/items/list: %w", err)
@@ -376,8 +399,12 @@ func listPage(ctx context.Context, c *conn, params map[string]any) (itemsPage, e
 // notStoredYet: codex 0.154 answers thread/items/list for a thread its
 // local thread store doesn't have — a new thread before its first turn is
 // written, as well as an unknown id — with -32601 and this exact message
-// (probed 2026-10-21 against a fresh thread/start). Nothing is stored yet:
-// an empty page, not an error.
+// (probed 2026-10-21 against a fresh thread/start; 2026-11-14 an unknown
+// well-formed id in an empty CODEX_HOME). Nothing is stored: an empty page
+// to the incremental reads, provider.ErrTranscriptMissing to the whole
+// ones. A malformed id is -32600 "invalid thread id", an ordinary error.
+// codex gives the same answer when its sessions dir can't be read
+// (probed: chmod 000), so that case can't be told from a missing thread.
 func notStoredYet(err error) bool {
 	var re *rpcError
 	return errors.As(err, &re) && re.Code == errMethodNotFound && re.Message == "thread/items/list is not supported yet"

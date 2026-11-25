@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { router } from "../../../router/client";
-import { subscribeToEvents } from "../../../router/events";
+import { eventsReady, happenedSince, subscribeToEvents, windowNoticesSince } from "../../../router/events";
 import { DEFAULT_DELEGATE_FADE_MS } from "../rail/DelegateRows";
+import { isLiveDelegate } from "../../../router/delegateLive";
 import type { SessionAgentState } from "../rail/railGroups";
 import type { AgentState, Delegate, Envelope, Session } from "../../../router/types";
 
@@ -28,15 +29,29 @@ const AGENT_STATE_EVENT_TYPES = [
   "session.delegate_changed",
 ];
 
-/** Mutable per-session accumulator. Kept out of state: only its projection renders. */
+/**
+ * Mutable per-session accumulator. Kept out of state: only its projection renders.
+ *
+ * The event bus is live-only (router/events.ts), so this fold hears only what
+ * happens after the window subscribed. What it can't get back after a reload
+ * or in a new window, knowingly: "Done · your turn" (`done`, only ever set by
+ * a live idle transition) and "Crashed" (`crashed`, only by a live
+ * session.crashed) — neither has a REST source, and both are momentary
+ * notices rather than state. And a seeded approval's start (`pending[].at`)
+ * is when the seed arrived, not when the session parked: GET
+ * /permission-requests doesn't say. Everything else is seeded: running
+ * agents from the session records' mirror, delegates from the cold read,
+ * approvals from the approvals seed (both in the hook below).
+ */
 interface Fold {
   crashed: boolean;
   /** Unresolved permission parks, request_id → the tool it named and when it parked. */
   pending: Map<string, { tool?: string; at: string }>;
   /**
-   * Running delegates (docs/DELEGATES-DESIGN.md) by harness id — the server
+   * Live delegates (docs/DELEGATES-DESIGN.md) by harness id, at every depth —
+   * running, or waiting on work they own (isLiveDelegate). The server
    * decides their lifecycle, so this only mirrors session.delegate_changed.
-   * `backgrounded`: the main agent is NOT waiting on it.
+   * `backgrounded`: its parent is NOT waiting on it.
    */
   delegates: Map<string, Delegate>;
   /**
@@ -48,10 +63,23 @@ interface Fold {
   recent: Map<string, Delegate>;
   /**
    * Every delegate this connection has heard about live, running or not. The
-   * cold read (GET /delegates?state=running) may answer after a newer event,
+   * cold read (GET /delegates?ended_after=…) may answer after a newer event,
    * and must never resurrect a delegate that event already retired.
    */
   heard: Set<string>;
+  /**
+   * Permission request ids this connection heard live (requested or
+   * resolved). The approvals seed may answer after a newer event, and must
+   * never re-open a park that event resolved.
+   */
+  heardPermissions: Set<string>;
+  /**
+   * This connection heard the session's parks cleared wholesale (a turn
+   * ending, the process going to sleep or crashing). The approvals seed is
+   * older than that, so it adds nothing to this session; a request parked
+   * after the clear announces itself live.
+   */
+  parksClearedLive: boolean;
   /**
    * The latest session.agent_state this connection saw. Once set it supersedes
    * the record mirror for good: the stream is newer than any list refetch.
@@ -69,6 +97,8 @@ function emptyFold(): Fold {
     delegates: new Map(),
     recent: new Map(),
     heard: new Set(),
+    heardPermissions: new Set(),
+    parksClearedLive: false,
     done: false,
   };
 }
@@ -94,19 +124,49 @@ function clearStale(fold: Fold): void {
  */
 function clearInFlight(fold: Fold): void {
   fold.pending.clear();
+  fold.parksClearedLive = true;
   fold.delegates.clear();
 }
 
-/** Drops finished delegates past the fade window (Infinity: never). */
+/**
+ * The finished delegates a live one (running or waiting) descends from, via
+ * parent_harness_id: the rail keeps a parent's row while anything under it
+ * is live, so the row it nests under has to outlast the fade window too.
+ */
+function liveAncestors(fold: Fold): Set<string> {
+  const out = new Set<string>();
+  for (const d of fold.delegates.values()) {
+    let parent = d.parent_harness_id;
+    while (parent && !out.has(parent)) {
+      out.add(parent);
+      parent = (fold.delegates.get(parent) ?? fold.recent.get(parent))?.parent_harness_id;
+    }
+  }
+  return out;
+}
+
+/**
+ * Drops finished delegates past the fade window (Infinity: never) — except
+ * one with a live descendant, which stays until that finishes; after that it
+ * fades from its own ended_at, so it may go at once.
+ */
 function pruneRecent(fold: Fold, fadeMs: number, now: number): void {
   if (fadeMs === Infinity) return;
+  const keep = liveAncestors(fold);
   for (const [id, d] of fold.recent) {
+    if (keep.has(id)) continue;
     const ended = d.ended_at ? Date.parse(d.ended_at) : NaN;
     if (!Number.isFinite(ended) || now - ended >= fadeMs) fold.recent.delete(id);
   }
 }
 
-function apply(fold: Fold, env: Envelope, fadeMs: number): void {
+/**
+ * `news`: the envelope happened since this window's notice epoch
+ * (router/events.ts windowNoticesSince). Anything older folds into state
+ * like anything else but stages no sticky notice ("Done · your turn",
+ * "Crashed") — the same as after a reload.
+ */
+function apply(fold: Fold, env: Envelope, fadeMs: number, news = true): void {
   // Parsed, not string-compared: RFC3339Nano drops trailing zeros, so ".1Z" sorts after ".12Z".
   if (env.timestamp && (!fold.heardAt || Date.parse(env.timestamp) > Date.parse(fold.heardAt))) {
     fold.heardAt = env.timestamp;
@@ -134,7 +194,8 @@ function apply(fold: Fold, env: Envelope, fadeMs: number): void {
       // that spawned it, and only the server's delegate record says when it
       // ends — retiring it here is what used to read a busy session "Ready".
       fold.pending.clear();
-      fold.done = true;
+      fold.parksClearedLive = true;
+      if (news) fold.done = true;
       return;
     }
     case "session.activity_changed": {
@@ -156,7 +217,8 @@ function apply(fold: Fold, env: Envelope, fadeMs: number): void {
       // A crash ends whatever was in flight — nothing is working, parked or
       // waiting on the user any more. The idle marker is deliberate: it stops
       // a stale working mirror on the record from re-animating the card.
-      fold.crashed = true;
+      // Only ever sets: an old crash (not news) must not clear a newer one.
+      if (news) fold.crashed = true;
       fold.done = false;
       fold.live = { state: "idle", since: env.timestamp };
       clearInFlight(fold);
@@ -164,6 +226,7 @@ function apply(fold: Fold, env: Envelope, fadeMs: number): void {
     case "session.permission_requested": {
       const p = (env.payload ?? {}) as { request_id?: string; tool?: string };
       clearStale(fold);
+      if (p.request_id) fold.heardPermissions.add(p.request_id);
       fold.pending.set(p.request_id ?? String(env.seq), { tool: p.tool, at: env.timestamp });
       return;
     }
@@ -171,6 +234,7 @@ function apply(fold: Fold, env: Envelope, fadeMs: number): void {
       const p = (env.payload ?? {}) as { request_id?: string };
       // Resolved either way, the turn carries on — the park is over, the work isn't.
       clearStale(fold);
+      if (p.request_id) fold.heardPermissions.add(p.request_id);
       fold.pending.delete(p.request_id ?? String(env.seq));
       return;
     }
@@ -181,7 +245,9 @@ function apply(fold: Fold, env: Envelope, fadeMs: number): void {
       if (!d.harness_id) return;
       fold.heard.add(d.harness_id);
       const record = { ...d, started_at: d.started_at ?? env.timestamp } as Delegate;
-      if (record.state === "running") {
+      // A waiting one is live: its turn ended, its work didn't. It joins the
+      // fade window only once it stops waiting, counted from its ended_at.
+      if (isLiveDelegate(record)) {
         fold.delegates.set(record.harness_id, record);
         fold.recent.delete(record.harness_id);
       } else {
@@ -193,6 +259,22 @@ function apply(fold: Fold, env: Envelope, fadeMs: number): void {
       return;
     }
   }
+}
+
+/**
+ * Whether the main agent is, in the end, waiting on this running delegate: it
+ * runs in the foreground of a parent that is itself blocking — the main
+ * agent, or a foreground subagent the main agent waits on. A parent this
+ * connection doesn't hold (not live, or never heard) ends the chain at the
+ * delegate's own flag, so a record the rail can't place counts as it always
+ * did.
+ */
+function blocksMainAgent(d: Delegate, live: ReadonlyMap<string, Delegate>, seen = new Set<string>()): boolean {
+  if (d.backgrounded) return false;
+  const parent = d.parent_harness_id ? live.get(d.parent_harness_id) : undefined;
+  if (!parent || seen.has(parent.harness_id)) return true;
+  seen.add(d.harness_id);
+  return parent.state === "running" && blocksMainAgent(parent, live, seen);
 }
 
 /**
@@ -238,13 +320,19 @@ function project(
     // gone, whatever a record that missed its last write still says.
     const delegates =
       fold && (!session || session.activity === "active") ? [...fold.delegates.values()] : [];
-    const state: SessionAgentState = { subagents: delegates.length };
+    // Counted at every depth: a subagent's own subagents are the session's
+    // work too. Running and waiting apart — a waiting one spends nothing
+    // until what it waits on reports back, so it must not spin the card.
+    const running = delegates.filter((d) => d.state === "running");
+    const state: SessionAgentState = { subagents: running.length };
+    const waiting = delegates.length - running.length;
+    if (waiting > 0) state.waitingSubagents = waiting;
     // Only when it says something, like every other field here: absent means
     // "they all block", so the common case keeps the shape it always had.
-    const blocking = delegates.filter((d) => !d.backgrounded).length;
+    const blocking = running.filter((d) => blocksMainAgent(d, fold!.delegates)).length;
     if (blocking !== state.subagents) state.blockingSubagents = blocking;
-    if (delegates.length > 0) {
-      state.subagentsSince = delegates.map((d) => d.started_at).sort()[0];
+    if (running.length > 0) {
+      state.subagentsSince = running.map((d) => d.started_at).sort()[0];
     }
     const recent = fold ? [...fold.recent.values()] : [];
     if (delegates.length + recent.length > 0) {
@@ -302,6 +390,10 @@ export function useSessionAgentState(
   const publish = useCallback(() => setStates(project(folds.current, sessionsRef.current)), []);
 
   useEffect(() => {
+    // The window's notice epoch, not this mount's: after a surface round trip
+    // the resumed connection brings what finished while the rail was gone,
+    // and that is still news (router/events.ts windowNoticesSince).
+    const noticesSince = windowNoticesSince();
     const unsubscribe = subscribeToEvents({ types: AGENT_STATE_EVENT_TYPES }, (env) => {
       if (!env.session_id) return;
       let fold = folds.current.get(env.session_id);
@@ -309,7 +401,7 @@ export function useSessionAgentState(
         fold = emptyFold();
         folds.current.set(env.session_id, fold);
       }
-      apply(fold, env, fadeRef.current);
+      apply(fold, env, fadeRef.current, happenedSince(env, noticesSince));
       // A turn that ends in the session you're looking at was never news.
       if (env.session_id === openRef.current) fold.done = false;
       publish();
@@ -319,19 +411,51 @@ export function useSessionAgentState(
 
   // The cold read: delegates that started or ended before this connection
   // opened never announce themselves again, so one call answers for every
-  // session — the running ones, plus the finished ones the fade window still
-  // shows. Declared after the subscription, so nothing falls in the gap;
-  // anything the stream has spoken about since wins over this older snapshot.
-  // A changed window reads again.
+  // session — the live ones, plus the finished ones the fade window still
+  // shows. "0 min" asks for what ended after now: nothing finished, but every
+  // live one — waiting included, which ?state=running would miss (the store
+  // serves waiting records as live, LiveOrEndedAfter). Read after the
+  // subscription above and behind the bus's ready barrier (eventsReady), so
+  // nothing falls in the gap; anything the stream has spoken about since wins
+  // over this older snapshot. A changed window reads again.
   useEffect(() => {
     let cancelled = false;
-    const read =
+    // A live subagent whose parent ended before the window: the list didn't
+    // carry the parent, and without it the rail has nowhere to nest the row.
+    // One read per such session — not per record — fills the chain in.
+    const fillAncestors = async () => {
+      const missing = [...folds.current.entries()].filter(([, fold]) =>
+        [...liveAncestors(fold)].some((id) => !fold.delegates.has(id) && !fold.recent.has(id)),
+      );
+      await Promise.all(
+        missing.map(async ([sessionId, fold]) => {
+          const list = await router.getSessionDelegates(sessionId).catch(() => [] as Delegate[]);
+          if (cancelled) return;
+          const byId = new Map(list.map((d) => [d.harness_id, d]));
+          // Until nothing new: a filled-in parent may name a parent of its own.
+          for (let added = true; added; ) {
+            added = false;
+            for (const id of liveAncestors(fold)) {
+              const d = byId.get(id);
+              // Only the gaps: anything held already is as new or newer.
+              if (!d || fold.delegates.has(id) || fold.recent.has(id)) continue;
+              if (isLiveDelegate(d)) fold.delegates.set(id, d);
+              else fold.recent.set(id, d);
+              added = true;
+            }
+          }
+        }),
+      );
+      if (!cancelled && missing.length > 0) publish();
+    };
+    const read = () =>
       fadeMs === 0
-        ? router.listDelegates("running")
+        ? router.listDelegatesEndedAfter(new Date().toISOString())
         : fadeMs === Infinity
           ? router.listDelegates()
           : router.listDelegatesEndedAfter(new Date(Date.now() - fadeMs).toISOString());
-    read
+    eventsReady()
+      .then(() => (cancelled ? [] : read()))
       .then((list) => {
         if (cancelled) return;
         for (const d of list) {
@@ -346,13 +470,14 @@ export function useSessionAgentState(
             // snapshot can't be staler than an ending, and a window that has
             // since widened (Never, once Config loads) wants it back.
             const tracked = fold.delegates.has(d.harness_id) || fold.recent.has(d.harness_id);
-            if (tracked || d.state === "running") continue;
+            if (tracked || isLiveDelegate(d)) continue;
           }
-          if (d.state === "running") fold.delegates.set(d.harness_id, d);
+          if (isLiveDelegate(d)) fold.delegates.set(d.harness_id, d);
           else fold.recent.set(d.harness_id, d);
         }
         for (const fold of folds.current.values()) pruneRecent(fold, fadeMs, Date.now());
         publish();
+        return fillAncestors();
       })
       // Best effort: without it, live events still fill the count in.
       .catch(() => undefined);
@@ -360,6 +485,60 @@ export function useSessionAgentState(
       cancelled = true;
     };
   }, [fadeMs, publish]);
+
+  // The approvals seed: the bus never replays session.permission_requested,
+  // so a park from before this window subscribed comes from one window-wide
+  // read (GET /permission-requests), not one per session. Subscribed above,
+  // then behind the ready barrier, then read; a request the stream has
+  // spoken about since, or a session whose parks the stream has since
+  // cleared, wins over this snapshot. The snapshot has no park time, so a
+  // seeded park reads as parked from when the seed arrived.
+  //
+  // Unlike the other seeds this snapshot comes from each live session
+  // child's memory, not the Data Service's log, and the child changes its
+  // memory first and appends the event after (services/session's
+  // RequestPermission / finishPermission). So the snapshot runs AHEAD of the
+  // log, never behind what the log says at the moment it is read:
+  //  - a request parked but not yet appended shows up early; its
+  //    permission_requested follows live and lands as a no-op;
+  //  - a request resolved but not yet appended is already gone; if this
+  //    connection heard it requested, the heard guard keeps it until the
+  //    permission_resolved follows live;
+  //  - an event that reaches the window before the seed's answer does can
+  //    be newer than the snapshot (it was appended after the child was
+  //    read): the heard and cleared guards make it win.
+  // What is still possible: an append that failed (best effort, logged by
+  // the child) leaves the rail and the child disagreeing until the next
+  // event for that request or session; and a child that failed or was too
+  // slow to answer the Router contributes nothing, so its parks appear only
+  // when the next one is requested.
+  useEffect(() => {
+    let cancelled = false;
+    eventsReady()
+      .then(() => (cancelled ? [] : router.listPermissionRequests()))
+      .then((list) => {
+        if (cancelled) return;
+        const now = new Date().toISOString();
+        let changed = false;
+        for (const req of list) {
+          if (req.status !== "pending" || !req.session_id) continue;
+          let fold = folds.current.get(req.session_id);
+          if (!fold) {
+            fold = emptyFold();
+            folds.current.set(req.session_id, fold);
+          }
+          if (fold.parksClearedLive || fold.heardPermissions.has(req.id) || fold.pending.has(req.id)) continue;
+          fold.pending.set(req.id, { tool: req.tool, at: now });
+          changed = true;
+        }
+        if (changed) publish();
+      })
+      // Best effort: live events still bring the next park in.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [publish]);
 
   // Republish when the mirror itself changes — between transitions the stream
   // says nothing, so a refetch is where a cold reader's state arrives. Keyed

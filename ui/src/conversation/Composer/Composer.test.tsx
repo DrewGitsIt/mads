@@ -12,6 +12,7 @@ import { FakeRouterClient } from "../../router/fixtures";
 import { setPlatform } from "../../platform/shortcut";
 import type { Model, Session } from "../../router/types";
 import type { CommandDescriptor } from "./commands/types";
+import { HostScopeProvider } from "../../router/hostScope";
 import { useState } from "react";
 import { Popover } from "../../components/Popover/Popover";
 
@@ -103,6 +104,43 @@ describe("Composer", () => {
     setPlatform("linux");
   });
   afterEach(() => setPlatform(undefined));
+
+  describe("held updates chip", () => {
+    it("names the one session the held updates came from, and × discards them all", () => {
+      const onDiscardAll = vi.fn();
+      render(
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+          held={{ count: 3, sources: ["Pipeline study"], onDiscardAll }}
+        />,
+      );
+      const chip = screen.getByTestId("held-chip");
+      expect(chip.textContent).toBe("⌗ 3 updates · Pipeline study×");
+      expect(chip.getAttribute("title")).toBe("Held while this session slept; they go with your next message");
+      fireEvent.click(within(chip).getByRole("button", { name: "Discard all 3 updates" }));
+      expect(onDiscardAll).toHaveBeenCalledOnce();
+    });
+
+    it("counts sessions past one, and shows nothing when nothing is held", () => {
+      const { rerender } = render(
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+          held={{ count: 5, sources: ["a", "b", "c"], onDiscardAll: vi.fn() }}
+        />,
+      );
+      expect(screen.getByTestId("held-chip").textContent).toBe("⌗ 5 updates · 3 sessions×");
+      rerender(
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+          held={{ count: 0, sources: [], onDiscardAll: vi.fn() }}
+        />,
+      );
+      expect(screen.queryByTestId("held-chip")).toBeNull();
+    });
+  });
 
   it("keeps the placeholder text exactly (e2e specs select on it)", () => {
     render(
@@ -905,7 +943,7 @@ describe("Composer", () => {
     ) as HTMLTextAreaElement;
 
     await waitFor(() =>
-      expect(onSendError).toHaveBeenCalledWith("network down"),
+      expect(onSendError).toHaveBeenCalledWith("network down", expect.objectContaining({ text: expect.any(String) })),
     );
     expect(textarea.value).toBe("fix the deploy script");
   });
@@ -928,7 +966,7 @@ describe("Composer", () => {
     fireEvent.change(textarea, { target: { value: "hello there" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    await waitFor(() => expect(onSendError).toHaveBeenCalledWith("boom"));
+    await waitFor(() => expect(onSendError).toHaveBeenCalledWith("boom", expect.objectContaining({ text: "hello there" })));
     expect(textarea.value).toBe("hello there");
   });
 
@@ -1101,6 +1139,26 @@ describe("Composer", () => {
   });
 
   describe("command registry", () => {
+    it("a command sees the device the session lives on (its host scope)", async () => {
+      const client = new FakeRouterClient();
+      const seen = vi.fn();
+      const pop = { name: "pop-os", self: false, reachable: true };
+      render(
+        <HostScopeProvider host={pop}>
+          <Composer
+            routerClient={client}
+            sessionId="session-active"
+            commands={[{ name: "new", description: "start a session", execute: (_, api) => seen(api.ctx.host) }]}
+          />
+        </HostScopeProvider>,
+      );
+      const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: "/new" } });
+      await waitFor(() => menu().getByRole("option", { name: /^\/new/ }));
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      await waitFor(() => expect(seen).toHaveBeenCalledWith(pop));
+    });
+
     it("renders an unavailable command disabled with its reason; arrows skip it and Enter on it only shows the reason", async () => {
       const client = new FakeRouterClient();
       const sendMessage = vi.spyOn(client, "sendMessage");

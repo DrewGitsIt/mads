@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/linkwrap"
 )
@@ -41,11 +42,11 @@ func subjectTurn(ctx context.Context, deps Deps, sessionID string, needed bool) 
 func fetchTranscript(ctx context.Context, addr string) ([]contracts.TranscriptMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, subjectTurnTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/transcript", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, childsock.URL(addr, "/transcript"), nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := childsock.Client.Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -6,9 +6,8 @@ import {
   WORKTREE_CARD_EVENT_TYPES,
 } from "./sessionEventTypes";
 
-// One type the Router doesn't know fails the whole shared SSE stream, not
-// just its subscriber (events.ts probeRejectedTypes) — so every type these
-// lists subscribe to must be a declared contracts.EventType.
+// Every type these lists subscribe to must be a declared contracts.EventType:
+// the server emits only declared types, so an undeclared one never arrives.
 describe("session event types", () => {
   it("are all declared in pkg/contracts/event.go", () => {
     const go = readFileSync("../pkg/contracts/event.go", "utf8");

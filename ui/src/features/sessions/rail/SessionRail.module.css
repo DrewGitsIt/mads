@@ -200,28 +200,40 @@
 }
 
 /* Anything a day cold folds down here rather than padding the scroll. */
-/* The Done list's header: a quiet section label that folds the list. */
+/* The Done list's header: a section label that folds the list. */
 .sectionToggle {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  padding: var(--space-2) var(--space-3);
+  /* A section of its own, not a footnote to the list above: a full rule over
+     it and the label at a readable size. */
+  margin-top: var(--space-2);
+  padding: var(--space-3) var(--space-3) var(--space-2);
   background: none;
   border: none;
-  color: var(--text3);
-  font: 600 var(--fs-chip) var(--sans);
+  border-top: 1px solid var(--line);
+  color: var(--text2);
+  font: 650 var(--fs-sm) var(--sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   text-align: left;
   cursor: pointer;
 }
 
 .sectionToggle:hover {
-  color: var(--text2);
+  color: var(--text);
 }
 
 .sectionCount {
   display: inline-block;
-  opacity: 0.6;
+  padding: 0 7px;
+  background: var(--bg3);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  color: var(--text2);
+  font: 600 var(--fs-chip) var(--sans);
+  letter-spacing: 0;
 }
 
 /* A card folded into a closed Done list: the count it joined ticks. */
@@ -265,19 +277,25 @@
   opacity: 1;
 }
 
+/* An action, not a footnote: a full-width dashed button under the cards. */
 .showMore {
-  align-self: flex-start;
-  margin: var(--space-1) 0 0 var(--space-3);
-  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  margin: var(--space-1) var(--space-2) 0;
+  padding: 7px var(--space-3);
   background: none;
-  border: none;
-  color: var(--text3);
-  font: 500 var(--fs-chip) var(--sans);
+  border: 1px dashed var(--line);
+  border-radius: var(--r-sm);
+  color: var(--text2);
+  font: 600 var(--fs-sm) var(--sans);
   cursor: pointer;
 }
 .showMore:hover {
-  color: var(--text2);
-  text-decoration: underline;
+  background: var(--bg2);
+  border-style: solid;
+  color: var(--text);
 }
 
 /* One reorderable slot: a holder card with its delegates and subjects. The
@@ -509,21 +527,7 @@
   text-overflow: ellipsis;
 }
 
-/* The work marker (docs/mockups/session-worktrees.html §1): a small accent
-   dot — hollow for uncommitted files, filled for commits to land. */
-.workMark {
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-}
-
-.workMarkHollow {
-  background: transparent;
-  border: 1.5px solid var(--accent);
-}
-
+/* The work note (docs/mockups/session-worktrees.html §1): what's waiting, in words. */
 .workNote {
   flex: none;
   color: var(--text3);
@@ -631,6 +635,25 @@
 
 .bucketWaiting {
   color: var(--accent);
+}
+
+/* "N updates waiting" opens the session at its held list. */
+.waitingLink {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.waitingLink:hover {
+  text-decoration: underline;
+}
+
+.waitingLink:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
 }
 
 .bucketBlocked {
@@ -1191,4 +1214,109 @@
   75% {
     transform: translateX(4px);
   }
+}
+
+/* StatusMark's idle dial as a delegate's "waiting" glyph (WaitingGlyph):
+   centred in the 12px slot the spinner and ✓ share, in a calm tone — it
+   says "pending", not "wants you". */
+.waitingGlyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--text2);
+}
+
+/* Mesh mode (docs/MESH-MODE-DESIGN.md D5). The host chip sits in the top
+   row beside the harness mark, so it never adds a line to the card. */
+.hostChip {
+  flex: none;
+  max-width: 9ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 var(--fs-chip) var(--sans);
+  color: var(--text2);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+
+.hostStale {
+  color: var(--text3);
+  border-style: dashed;
+}
+
+.hostUnreachable {
+  opacity: 0.6;
+}
+
+.deviceDown {
+  font: 500 var(--fs-chip) var(--sans);
+  color: var(--warn-fg);
+  margin-left: var(--space-1);
+}
+
+.deviceMenu {
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  padding: var(--space-1);
+}
+
+.deviceOption {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text2);
+  font: 500 var(--fs-sm) var(--sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.deviceOption:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.deviceOptionOn {
+  color: var(--accent);
+}
+
+.deviceOptionNote {
+  margin-left: auto;
+  color: var(--text3);
+  font-size: var(--fs-chip);
+}
+
+.deviceMenuRule {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--line-soft);
+}
+
+.deviceDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text3);
+}
+
+.deviceDotOk {
+  background: var(--ok-fg);
+}
+
+.deviceDotWarn {
+  background: var(--warn-fg);
+}
+
+.deviceDotBad {
+  background: var(--bad-fg);
 }

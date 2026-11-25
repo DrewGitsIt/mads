@@ -6,6 +6,7 @@ export type SectionId =
   | "sessions"
   | "models"
   | "workspaces"
+  | "devices"
   | "pipelines"
   | "synthesis"
   | "appearance"
@@ -21,7 +22,7 @@ export type SectionId =
  */
 export const SECTION_GROUPS: SectionId[][] = [
   ["profiles"],
-  ["sessions", "models", "workspaces"],
+  ["sessions", "models", "workspaces", "devices"],
   ["pipelines", "synthesis"],
   ["appearance", "editor", "credentials"],
   ["experimental", "system", "about"],
@@ -34,6 +35,7 @@ export const SECTION_LABELS: Record<SectionId, string> = {
   sessions: "New sessions",
   models: "Agents & models",
   workspaces: "Workspaces",
+  devices: "Paired devices",
   pipelines: "Pipelines",
   synthesis: "Synthesis",
   appearance: "Appearance",
@@ -50,6 +52,7 @@ export const SECTION_LEDES: Partial<Record<SectionId, string>> = {
   sessions: "What a session starts with when the Launchpad doesn't say otherwise.",
   models: "The harness your sessions run in, and the cheap model mads uses for background work.",
   workspaces: "Groups of repos a session can start in, with defaults of their own.",
+  devices: "What other devices may do with mads on this device, and whose sessions show here. Each device sets this for itself.",
   pipelines: "How multi-stage runs behave.",
   synthesis: "Summaries and retros mads writes after a session.",
   appearance: "Changes here apply instantly.",
@@ -60,7 +63,7 @@ export const SECTION_LEDES: Partial<Record<SectionId, string>> = {
 };
 
 /** Sections whose controls save themselves (saveFields), never the save bar. */
-export const LIVE_SECTIONS: ReadonlySet<SectionId> = new Set(["appearance", "experimental"]);
+export const LIVE_SECTIONS: ReadonlySet<SectionId> = new Set(["appearance", "devices", "experimental"]);
 
 /** What an old or aliased section link asks for beyond scrolling to `section`. */
 export type SectionIntent = "shells";

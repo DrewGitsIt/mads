@@ -27,6 +27,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/drewkidwell/mads/pkg/gitroot"
 )
 
 // BranchPrefix is the namespace of session branches. The pipeline's task
@@ -62,6 +65,9 @@ func Git(ctx context.Context, dir string, args ...string) (string, error) {
 	return git(ctx, dir, nil, args...)
 }
 
+// gitWaitDelay is how long a killed git's output pipe may stay open behind it.
+const gitWaitDelay = 2 * time.Second
+
 func git(ctx context.Context, dir string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
@@ -69,7 +75,17 @@ func git(ctx context.Context, dir string, env []string, args ...string) (string,
 		"GIT_AUTHOR_NAME=mads-session", "GIT_AUTHOR_EMAIL=session@mads.local",
 		"GIT_COMMITTER_NAME=mads-session", "GIT_COMMITTER_EMAIL=session@mads.local")
 	cmd.Env = append(cmd.Env, env...)
+	// A cancelled ctx (the request that asked went away) kills git; this
+	// bounds the wait for a hook or helper it started that still holds the
+	// output pipe, so the caller returns rather than waiting that out.
+	cmd.WaitDelay = gitWaitDelay
 	out, err := cmd.CombinedOutput()
+	// WaitDelay also fires after a clean exit when a hook left a job holding
+	// the pipe (a post-checkout that backgrounds something): git succeeded,
+	// and so did the command.
+	if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Success() {
+		err = nil
+	}
 	if err != nil {
 		return string(out), fmt.Errorf("git %s: %v\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -113,13 +129,48 @@ func Prefix(ctx context.Context, dir string) (string, error) {
 }
 
 // Toplevel is the absolute root of dir's working tree — what ledger paths are
-// made relative to before counting (SessionFiles, CountUncommitted).
+// made relative to before counting (SessionFiles, CountUncommitted). It is
+// `git rev-parse --show-toplevel`'s answer, found by walking the filesystem
+// (pkg/gitroot) when the walk is sure of it, and by asking git otherwise.
 func Toplevel(ctx context.Context, dir string) (string, error) {
+	if top, ok, err := walkToplevel(dir); ok {
+		return top, err
+	}
 	out, err := Git(ctx, dir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// ErrNotInRepo is Toplevel for a directory in no git work tree, found
+// without asking git.
+var ErrNotInRepo = errors.New("not a git repository (or any of the parent directories)")
+
+// walkToplevel is Toplevel without a git process. ok is false when the walk
+// can't vouch for git's answer: dir missing or not a directory (git's error
+// is the one to return), or anything gitroot.Find is unsure of.
+func walkToplevel(dir string) (top string, ok bool, err error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", false, nil
+	}
+	if info, err := os.Stat(abs); err != nil || !info.IsDir() {
+		return "", false, nil
+	}
+	// git reports the top with symlinks resolved (it works from getcwd).
+	real, ok := gitroot.Resolve(abs)
+	if !ok {
+		return "", false, nil
+	}
+	root, sure := gitroot.Find(real)
+	if !sure {
+		return "", false, nil
+	}
+	if root == "" {
+		return "", true, fmt.Errorf("git rev-parse --show-toplevel in %s: %w", dir, ErrNotInRepo)
+	}
+	return root, true, nil
 }
 
 // commonDir is the absolute path of dir's shared .git directory — the same

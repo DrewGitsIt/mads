@@ -9,7 +9,13 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
-import { FakeRouterClient, fixtureConfig, fixtureIsolatedSession } from "../router/fixtures";
+import {
+  FakeRouterClient,
+  fixtureConfig,
+  fixtureIsolatedRepoState,
+  fixtureIsolatedSession,
+  fixturePushPreview,
+} from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import type { Envelope, LandResult, TranscriptMessage } from "../router/types";
 import { tidyOutsidePrompt } from "./Worktree/worktreeCopy";
@@ -67,6 +73,21 @@ function makeClient(session = fixtureIsolatedSession) {
   return new FakeRouterClient({ [SID]: session }, { [SID]: transcript });
 }
 
+/** Lands through the confirmation (D12): the dialog opens on the dock's Land; a message is written; Land into main. */
+async function confirmLand(message = "deploy: Ubuntu runners") {
+  const dialog = await screen.findByRole("alertdialog", { name: "Land mads/session/session-isolated into main?" });
+  fireEvent.change(within(dialog).getByLabelText("Landing message"), { target: { value: message } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Land into main" }));
+  return dialog;
+}
+
+/** The isolated session's repo state with its base `ahead` of origin: what Push would send after Land (D10). */
+function baseAhead(client: FakeRouterClient, ahead: number) {
+  const own = structuredClone(fixtureIsolatedRepoState);
+  own.base_worktree!.ahead = ahead;
+  client.sessionRepos[SID] = [own];
+}
+
 async function mount(client: FakeRouterClient) {
   render(<ConversationTab sessionId={SID} routerClient={client} />);
   await screen.findByText("Done — the detection works on both runners.");
@@ -77,7 +98,7 @@ async function mount(client: FakeRouterClient) {
  * its own "Land into main" button, so the control is found by its
  * data-work-state (the same hook the e2e suite reads), never by name alone.
  */
-function workControl(state: "commit" | "land" | "landing" | "outside"): HTMLButtonElement | null {
+function workControl(state: "commit" | "land" | "landing" | "outside" | "push"): HTMLButtonElement | null {
   return screen.getByTestId("dock-status").querySelector<HTMLButtonElement>(`[data-work-state="${state}"]`);
 }
 
@@ -138,6 +159,92 @@ describe("ConversationTab — Commit and Land", () => {
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
   });
 
+  it("always opens the dialog when uncommitted files span more than one repo", async () => {
+    const client = makeClient({
+      ...fixtureIsolatedSession,
+      uncommitted_count: 6,
+      repos: [
+        { root: "/home/user/.mads/session-worktrees/session-isolated", primary: true, isolated: true, uncommitted_count: 4 },
+        { root: "/home/user/repo/learnanywhere", uncommitted_count: 2 },
+      ],
+    });
+    vi.spyOn(client, "getConfig").mockResolvedValue({ ...fixtureConfig, auto_commit_messages: true });
+    const status = vi.spyOn(client, "getFastModelStatus");
+    await mount(client);
+    // Both settings answers are in, so a single repo would commit in one click.
+    await waitFor(() => expect(status).toHaveBeenCalled());
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: /Commit…/ }));
+    expect(await screen.findByRole("alertdialog")).toBeTruthy();
+    expect(client.commitCalls).toHaveLength(0);
+  });
+
+  it("Push from the dock confirms, pushes, and says so in a toast", async () => {
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0 });
+    baseAhead(client, 2);
+    await mount(client);
+    fireEvent.click(await waitFor(() => workControl("push")!));
+    const dialog = await screen.findByRole("alertdialog", { name: "Push mads/session/session-isolated to origin?" });
+    expect(client.pushPreviewCalls[0]).toEqual({ sessionId: SID, repo: undefined, target: "base" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Push" }));
+    expect(await screen.findByText("Pushed 2 commits to origin/mads/session/session-isolated")).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(client.pushCalls[0].req).toEqual({ target: "base", expect: "c0ffee1234" });
+  });
+
+  it("reads Push's count from the repo state and follows repo.changed, not the record (D10)", async () => {
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0 });
+    baseAhead(client, 3);
+    await mount(client);
+    expect((await waitFor(() => workControl("push")!)).textContent).toBe("Push ↑3");
+
+    // Another session pushed one of them: the repo moved, and the Router,
+    // having recomputed, says the session's repos changed.
+    const moved = () => {
+      FakeRouterClient.emitRepoChanged("/home/user/repo/mads/.git");
+      FakeRouterClient.emitGitStateUpdated(fixtureIsolatedSession.id, ["repos", "counts"]);
+    };
+    baseAhead(client, 2);
+    act(moved);
+    await waitFor(() => expect(workControl("push")!.textContent).toBe("Push ↑2"));
+
+    // Everything pushed elsewhere: no Push at all.
+    baseAhead(client, 0);
+    act(moved);
+    await waitFor(() => expect(workControl("push")).toBeNull());
+  });
+
+  it("shows Commit and Push together when both apply (D11)", async () => {
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 2, unlanded_count: 0 });
+    baseAhead(client, 3);
+    await mount(client);
+    await waitFor(() => expect(workControl("push")).toBeTruthy());
+    expect(workControl("commit")!.textContent).toContain("Commit… 2");
+    fireEvent.click(workControl("push")!);
+    expect(await screen.findByRole("alertdialog", { name: "Push mads/session/session-isolated to origin?" })).toBeTruthy();
+  });
+
+  it("a conflicted rebase's Ask the agent drafts the rebase in the composer", async () => {
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 0 });
+    baseAhead(client, 1);
+    client.pushPreview = { ...fixturePushPreview, remote_branch: "main", behind: 1, incoming: [] };
+    client.pushOutcome = { outcome: "conflicted", files: ["scripts/deploy.sh"] };
+    const send = vi.spyOn(client, "sendMessage");
+    await mount(client);
+    fireEvent.click(await waitFor(() => workControl("push")!));
+    fireEvent.click(await screen.findByRole("button", { name: "Rebase onto origin and push" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Ask the agent to rebase" }));
+    const composer = screen.getByPlaceholderText(/message the agent/i) as HTMLTextAreaElement;
+    await waitFor(() =>
+      expect(composer.value).toBe(
+        "Please rebase mads/session/session-isolated onto origin/main and resolve the conflicts in: scripts/deploy.sh.",
+      ),
+    );
+    expect(send).not.toHaveBeenCalled();
+    // The composer keeps its draft per session; don't hand it to the next test.
+    fireEvent.change(composer, { target: { value: "" } });
+  });
+
   it("falls back to the dialog, with the reason, when a one-click Commit is refused", async () => {
     const client = makeClient();
     vi.spyOn(client, "getConfig").mockResolvedValue({ ...fixtureConfig, auto_commit_messages: true });
@@ -158,20 +265,20 @@ describe("ConversationTab — Commit and Land", () => {
     await mount(client);
 
     fireEvent.click(workControl("land")!);
+    // The click only opens the confirmation (D12).
+    expect(client.landCalls).toEqual([]);
+    const dialog = await confirmLand();
     await waitFor(() => expect(workControl("landing")?.disabled).toBe(true));
-    expect(client.landCalls).toEqual([SID]);
-    // The click opened the ⎇ popover, which says so at the button.
-    const popover = screen.getByTestId("work-popover");
-    expect(within(popover).getByTestId("land-outcome").getAttribute("data-kind")).toBe("landing");
-    expect((within(popover).getByRole("button", { name: "Landing…" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(client.landRequests).toEqual([{ sessionId: SID, req: { message: "deploy: Ubuntu runners" } }]);
+    expect((within(dialog).getByRole("button", { name: "Landing…" }) as HTMLButtonElement).disabled).toBe(true);
 
     await act(async () => {
       answer({ outcome: "refused", reason: "busy", base: "main", branch: "mads/session/session-isolated" });
     });
     expect(await screen.findByText("Can't land while the agent is working")).toBeTruthy();
     expect(workControl("land")).toBeTruthy();
-    // The refusal shows in the popover too, at the button the user clicked.
-    expect(within(popover).getByTestId("land-outcome").getAttribute("data-reason")).toBe("busy");
+    // The refusal shows in the confirmation too, which stays open.
+    expect(within(dialog).getByRole("alert").getAttribute("data-reason")).toBe("busy");
 
     emitControl("merge.refused", { ...landPayload, reason: "busy" });
     expect(screen.getAllByText("Can't land while the agent is working")).toHaveLength(1);
@@ -205,14 +312,15 @@ describe("ConversationTab — Commit and Land", () => {
     expect(await screen.findByText("Can't land while the agent is working")).toBeTruthy();
     expect(top).toBe(200);
 
-    // ...but their own Land click follows its outcome to the tail.
+    // ...but their own Land follows its outcome to the tail.
     fireEvent.click(workControl("land")!);
+    const dialog = await confirmLand();
     expect(await screen.findByText("Changes outside this session are holding Land back")).toBeTruthy();
     expect(top).toBe(2000);
 
     // The same refusal again (answer, then its event): still one card, counted.
     emitControl("merge.refused", { ...landPayload, reason: "dirty", files: ["scratch.txt"], outside: ["scratch.txt"] });
-    fireEvent.click(workControl("land")!);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Land into main" }));
     await waitFor(() => expect(client.landCalls).toHaveLength(2));
     emitControl("merge.refused", { ...landPayload, reason: "dirty", files: ["scratch.txt"], outside: ["scratch.txt"] });
     await waitFor(() => expect(screen.getByText("×2")).toBeTruthy());
@@ -245,8 +353,8 @@ describe("ConversationTab — Commit and Land", () => {
     const send = vi.spyOn(client, "sendMessage");
     await mount(client);
 
-    // The control opens the popover rather than drafting straight away.
-    fireEvent.click(workControl("outside")!);
+    // The ⎇ popover explains, rather than drafting straight away.
+    fireEvent.click(screen.getByTestId("dock-location"));
     const composer = screen.getByPlaceholderText(/message the agent/i) as HTMLTextAreaElement;
     expect(composer.value).toBe("");
     const explainer = within(screen.getByTestId("work-popover")).getByTestId("outside-explainer");
@@ -255,6 +363,49 @@ describe("ConversationTab — Commit and Land", () => {
     await waitFor(() => expect(composer.value).toBe(tidyOutsidePrompt()));
     expect(screen.queryByTestId("work-popover")).toBeNull();
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("the dock's Changes outside control opens the Commit dialog: Commit takes those files now (D6)", async () => {
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 1, outside_count: 2 });
+    await mount(client);
+    const control = workControl("outside")!;
+    expect(control.getAttribute("title")).toMatch(/Commit can take them as changes by someone else\. Click to choose what to commit\.$/);
+    fireEvent.click(control);
+    expect(await screen.findByRole("alertdialog", { name: "Commit this session's changes" })).toBeTruthy();
+    expect(client.commitPlanCalls).toHaveLength(1);
+    expect(screen.queryByTestId("work-popover")).toBeNull();
+  });
+
+  it("the ⎇ path's Land opens the confirmation too, never landing on the click", async () => {
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0 });
+    await mount(client);
+    fireEvent.click(screen.getByTestId("dock-location"));
+    const step = within(screen.getByTestId("work-popover")).getByTestId("work-step-land");
+    fireEvent.click(within(step).getByRole("button", { name: "Land" }));
+    expect(await screen.findByRole("alertdialog", { name: "Land mads/session/session-isolated into main?" })).toBeTruthy();
+    expect(client.landCalls).toEqual([]);
+    expect(screen.queryByTestId("work-popover")).toBeNull();
+  });
+
+  it("a Land refused over uncommitted files keeps its card and offers Commit them… in the confirmation", async () => {
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0 });
+    client.landOutcome = {
+      outcome: "refused",
+      reason: "dirty",
+      base: "main",
+      files: ["scripts/deploy.sh", "scratch.txt"],
+      outside: ["scratch.txt"],
+    };
+    await mount(client);
+    fireEvent.click(workControl("land")!);
+    const dialog = await confirmLand();
+    expect(await screen.findByText("Changes outside this session are holding Land back")).toBeTruthy();
+    const refusal = await within(dialog).findByRole("alert");
+    expect(refusal.getAttribute("data-reason")).toBe("dirty");
+    fireEvent.click(within(refusal).getByRole("button", { name: "Commit them…" }));
+    // The confirmation gives way to Commit, which lists those files.
+    expect(await screen.findByRole("alertdialog", { name: "Commit this session's changes" })).toBeTruthy();
+    expect(screen.queryByRole("alertdialog", { name: /^Land / })).toBeNull();
   });
 
   it("in terminal view, Ask the agent opens the compose sheet on the prompt and pastes only when asked", async () => {
@@ -271,7 +422,7 @@ describe("ConversationTab — Commit and Land", () => {
     await waitFor(() => expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy());
     expect(screen.queryByTestId("dock-sheet")).toBeNull();
 
-    fireEvent.click(workControl("outside")!);
+    fireEvent.click(screen.getByTestId("dock-location"));
     const explainer = within(screen.getByTestId("work-popover")).getByTestId("outside-explainer");
     fireEvent.click(within(explainer).getByRole("button", { name: "Ask the agent" }));
 
@@ -319,7 +470,10 @@ describe("ConversationTab — Commit and Land", () => {
     fireEvent.click(screen.getByRole("button", { name: "See the changes" }));
     expect(onOpenCommitFile).toHaveBeenCalledWith("9f8e7d6c5b", "scripts/deploy.sh");
 
+    // Land again asks too, like every Land.
     fireEvent.click(screen.getByRole("button", { name: "Land again" }));
+    expect(client.landCalls).toEqual([]);
+    await confirmLand();
     expect(await screen.findByText("Landed into main")).toBeTruthy();
   });
 });

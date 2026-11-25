@@ -41,6 +41,7 @@ type Tracker struct {
 	again   bool
 	stopped bool
 	slow    bool
+	perTurn bool // looks only at turn ends, whatever its speed (NewPerTurn)
 	seq     int
 }
 
@@ -58,6 +59,17 @@ func New(dir string, record Recorder) *Tracker {
 		open: map[string]openCall{}, claimed: map[string]time.Time{}}
 	t.mu.Lock()
 	t.kickLocked()
+	t.mu.Unlock()
+	return t
+}
+
+// NewPerTurn is New for a tracker that looks once per turn rather than
+// after every command — a repo past the session's cap on per-command
+// looks, whose cost would otherwise add up.
+func NewPerTurn(dir string, record Recorder) *Tracker {
+	t := New(dir, record)
+	t.mu.Lock()
+	t.perTurn = true
 	t.mu.Unlock()
 	return t
 }
@@ -92,7 +104,7 @@ func (t *Tracker) Finished(id string, at time.Time) {
 	}
 	delete(t.open, id)
 	t.closed = append(t.closed, Window{Start: c.start, End: at})
-	if !t.slow {
+	if !t.slow && !t.perTurn {
 		t.kickLocked()
 	}
 }

@@ -21,14 +21,19 @@ func actor(r *http.Request) string {
 
 // writeStoreError maps store errors onto the API contract: ValidationError →
 // 422 with every problem listed (spec §10.3), LeaseHeldError → 409 code
-// "lease_held", ErrLeaseLost → 409 code "lease_lost", ErrNotFound → 404,
-// else 500.
+// "lease_held", ErrLeaseLost → 409 code "lease_lost", ErrStale → 409 code
+// "stale", ForbiddenError → 403, ErrNotFound → 404, else 500.
 func writeStoreError(w http.ResponseWriter, err error) {
 	var (
 		verr *contracts.ValidationError
 		lerr *store.LeaseHeldError
+		ferr *store.ForbiddenError
 	)
 	switch {
+	case errors.As(err, &ferr):
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": ferr.Error(), "code": "forbidden"})
+	case errors.Is(err, store.ErrStale):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "code": "stale"})
 	case errors.As(err, &verr):
 		writeJSON(w, http.StatusUnprocessableEntity, verr)
 	case errors.As(err, &lerr):

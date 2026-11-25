@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useRetroGeneration } from "./useRetroGeneration";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
+import { holdEventsHead } from "../../../router/testEventsBarrier";
 
 let nextSeq = 1;
 function envelope(type: string, payload: unknown) {
@@ -17,6 +18,31 @@ describe("useRetroGeneration", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("gives up with an error, never POSTing, when the bus isn't ready within 10 s", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+    holdEventsHead(); // the head never answers: the services are down
+
+    const { result } = renderHook(() => useRetroGeneration());
+    let done = false;
+    act(() => {
+      void result.current.start(["s1"], "").then(() => (done = true));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_000);
+    });
+    expect(done).toBe(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(done).toBe(true);
+    expect(result.current.phase).toBe("failed");
+    expect(result.current.error).toBe("Live updates aren't connected yet. Try again in a moment.");
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/retros"))).toBe(false);
   });
 
   it("walks started -> gathering -> generating -> completed for the matching retro_id", async () => {
@@ -55,6 +81,29 @@ describe("useRetroGeneration", () => {
 
     act(() => source.emit("retro.completed", envelope("retro.completed", { retro_id: "retro-1" })));
     expect(result.current.phase).toBe("completed");
+  });
+
+  // Subscribed before the POST: the job's first events can land before the
+  // POST answers with its retro_id, and the bus never replays them.
+  it("keeps the job's events that land before the POST answers, and only its own", async () => {
+    let answer!: (r: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((r) => (answer = r))));
+    const { result } = renderHook(() => useRetroGeneration());
+    let started!: Promise<void>;
+    act(() => {
+      started = result.current.start(["s1"], "");
+    });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const source = FakeEventSource.instances[0];
+    act(() => {
+      source.emit("retro.progress", envelope("retro.progress", { retro_id: "other", step: "generating" }));
+      source.emit("retro.progress", envelope("retro.progress", { retro_id: "retro-1", step: "gathering" }));
+    });
+    await act(async () => {
+      answer(new Response(JSON.stringify({ job_id: "job-1", retro_id: "retro-1" }), { status: 202 }));
+      await started;
+    });
+    expect(result.current.phase).toBe("gathering");
   });
 
   it("ignores events for a different retro_id", async () => {

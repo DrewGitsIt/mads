@@ -214,3 +214,15 @@
   color: var(--text);
   background: var(--bg2);
 }
+
+/* A background call's output: a read-only terminal tall enough to read a
+   build's tail in, inside the dock's fixed height. */
+.bgTerm {
+  height: 200px;
+}
+
+.trimmed {
+  font: var(--fs-sm) var(--sans);
+  color: var(--text3);
+  margin: 0 0 4px;
+}

@@ -1,4 +1,4 @@
-import type { LandRefusalReason } from "../../router/types";
+import type { CommitPlanFile, LandRefusalReason, PushResult } from "../../router/types";
 
 /**
  * The words Commit and Land speak (docs/mockups/session-worktrees.html).
@@ -87,9 +87,9 @@ export function refusalCopy(
         retry: true,
       };
     case "dirty": {
-      // Commit only offers the change list, so "Commit them first" is
-      // advice the user can't take for files the agent changed through a
-      // shell: say which those are and who can deal with them.
+      // Files off the change list (edited through a shell, most likely)
+      // still show in Commit, under "Changed by someone else" (COMMIT-LAND-
+      // PUSH D6): say which they are, and that they start unchecked there.
       const off = outside ?? [];
       if (off.length > 0) {
         const them = off.length === 1 ? "it" : "them";
@@ -98,8 +98,8 @@ export function refusalCopy(
           title: "Changes outside this session are holding Land back",
           body:
             `${nameFiles(off)} changed in the session's folder but ${off.length === 1 ? "isn't" : "aren't"} on its change list ` +
-            `(edited through a shell, most likely), so Commit can't include ${them}. ` +
-            `Ask the agent to commit or revert ${them}, or commit ${them} yourself in the session's folder, then Land again.` +
+            `(edited through a shell, most likely). Commit lists ${them} under “Changed by someone else”, unchecked: ` +
+            `commit ${them} there, or ask the agent to commit or revert ${them}, then Land again.` +
             (own > 0 ? ` Commit this session's other ${plural(own, "changed file")} too.` : ""),
           tone: "warn",
           retry: true,
@@ -109,7 +109,7 @@ export function refusalCopy(
       return {
         title: "This session has uncommitted changes",
         body: named
-          ? `${named} ${files!.length === 1 ? "is" : "are"} uncommitted in the session's folder. Commit ${it} first — if Commit doesn't list one, ask the agent to commit or revert it. Land only moves committed work.`
+          ? `${named} ${files!.length === 1 ? "is" : "are"} uncommitted in the session's folder. Commit ${it} first. Land only moves committed work.`
           : "Commit them first. Land only moves committed work.",
         tone: "warn",
         retry: false,
@@ -184,6 +184,13 @@ export function refusalCopy(
         tone: "bad",
         retry: true,
       };
+    case "message_required":
+      return {
+        title: "Land needs a message",
+        body: "Land makes one commit on the base, and you write its message. Nothing changed.",
+        tone: "warn",
+        retry: true,
+      };
     default:
       return {
         title: "Land didn't run",
@@ -197,6 +204,26 @@ export function refusalCopy(
 /** The reasons whose detail is git talking — shown verbatim, monospace. */
 export function refusalDetailIsGit(reason: string): boolean {
   return reason === "merge_failed" || reason === "primary_refused";
+}
+
+/** Where a Land confirmation's base came from (LandPreview.base_source, D12), in words. */
+export function baseSourceCopy(source: string | undefined): string {
+  switch (source) {
+    case "recorded":
+      return "from the git worktree add this session ran";
+    case "confirmed":
+      return "chosen in an earlier Land";
+    case "reflog":
+      return "from the branch's creation";
+    case "default":
+      return "the repo's default branch — check it's right";
+    case "session":
+      return "this session's base";
+    case "chosen":
+      return "your choice";
+    default:
+      return "";
+  }
 }
 
 /** Why Undo didn't happen (POST /commit/undo's refusal reasons). */
@@ -225,7 +252,7 @@ export function undoRefusalCopy(reason: string | undefined): string {
 /** The header control's hover text while files off the change list hold Land back. */
 export function outsideControlTitle(n: number): string {
   const them = n === 1 ? "it" : "them";
-  return `${plural(n, "file")} in this session's folder changed outside its change list, so Commit can't include ${them} and Land won't run until ${n === 1 ? "it's" : "they're"} committed or reverted. Click to ask the agent to tidy up.`;
+  return `${plural(n, "file")} in this session's folder changed outside its change list, so Land won't run until ${n === 1 ? "it's" : "they're"} committed or reverted. Commit can take ${them} as changes by someone else. Click to choose what to commit.`;
 }
 
 /** The message "Ask the agent to commit them" puts in the composer: an ordinary, editable user turn. */
@@ -278,6 +305,65 @@ export function commitPathReason(status: string, reason?: string): string {
     default:
       return status === "rejected" ? "not committed" : "";
   }
+}
+
+/**
+ * Why a "Changed by someone else" row isn't this session's
+ * (docs/COMMIT-LAND-PUSH-DESIGN.md D2): the other session the ledger
+ * names, else when it changed, as far as the session-start snapshot can say.
+ */
+export function notMineNote(file: Pick<CommitPlanFile, "by" | "since">): string {
+  if (file.by) return `session “${file.by.name || file.by.id}”`;
+  if (file.since === "session") return "changed while this session ran";
+  if (file.since === "before") return "uncommitted before this session started";
+  return "not by this session";
+}
+
+/** A repo by its folder's name: "/home/u/repo/mads" → "mads". */
+export function repoName(root: string): string {
+  const trimmed = root.replace(/\/+$/, "");
+  return trimmed.slice(trimmed.lastIndexOf("/") + 1) || trimmed;
+}
+
+/** "11 uncommitted", "11 uncommitted in 2 repos" — the session's state in words (Changes' chip, the ⎇ path). */
+export function uncommittedCopy(files: number, repos: number): string {
+  return `${files} uncommitted${repos > 1 ? ` in ${repos} repos` : ""}`;
+}
+
+/** "origin/main", or just the remote or the branch when that's all that's known. */
+export function remoteRef(remote: string | undefined, branch: string | undefined): string {
+  return [remote, branch].filter(Boolean).join("/") || "the remote";
+}
+
+/** The toast after a push: "Pushed 3 commits to origin/main". */
+export function pushedCopy(result: PushResult): string {
+  const what = result.pushed ? plural(result.pushed, "commit") : "the branch";
+  return `Pushed ${what} to ${remoteRef(result.remote, result.remote_branch)}${result.rebased ? " after rebasing" : ""}`;
+}
+
+/** A refused push, in words, for the reasons the confirmation doesn't already explain (D5). */
+export function pushRefusalCopy(reason: string | undefined): string {
+  switch (reason) {
+    case "moved":
+      return "The branch moved since this opened, so nothing was pushed. Here's what Push would send now.";
+    case "behind":
+      return "The remote has commits this branch doesn't, so nothing was pushed. Here's what's coming in.";
+    case "push_failed":
+      return "git push said no. Nothing was forced.";
+    case "rebase_failed":
+      return "The rebase didn't finish, so it was undone. Nothing was pushed.";
+    case "locked":
+      return "Another Land or Push is running here. Try again in a moment.";
+    default:
+      return "Push didn't run.";
+  }
+}
+
+/** The message "Ask the agent to rebase" puts in the composer after a rebase hit conflicts. */
+export function rebasePrompt(branch: string | undefined, upstream: string, files: string[] | undefined): string {
+  const b = branch || "this branch";
+  const what = files && files.length > 0 ? ` and resolve the conflicts in: ${files.join(", ")}` : " and resolve its conflicts";
+  return `Please rebase ${b} onto ${upstream}${what}.`;
 }
 
 function taskName(task: string | undefined): string {

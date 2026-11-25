@@ -59,12 +59,13 @@ func refuseCommit(code, msg string) *CommitRefusal {
 // reading the log (D5) and for Undo to recognize a Commit-made commit.
 func trailer(sessionID string) string { return "Session: " + sessionID }
 
-// SelectPaths checks a Commit request's paths against the session's change
-// list (D5: paths are validated on the server, not trusted). Each must be
-// relative to the session's folder, stay inside it with symlinks followed,
-// and be a file this session changed — rows a pipeline task produced live
-// in task worktrees and never qualify. Empty paths selects every session
-// file. ok is false when any path was rejected; results then say which and
+// SelectPaths checks a Commit request's paths (D5: paths are validated on
+// the server, not trusted). Each must be relative to the repo's top and
+// stay inside it with symlinks followed. A file a pipeline task produced
+// never qualifies: it lives in a task worktree. Any other file may be
+// named — the session's own, or one changed by someone else that the user
+// chose to commit (COMMIT-LAND-PUSH D2); CommitFiles then takes only what
+// git reports changed. Empty paths selects every session file. ok is false when any path was rejected; results then say which and
 // why, and nothing may be committed.
 func SelectPaths(t Target, rows []contracts.FileChange, paths []string) (valid []string, results []contracts.CommitPath, ok bool) {
 	session := SessionFiles(t.Folder, rows)
@@ -101,8 +102,6 @@ func SelectPaths(t Target, rows []contracts.FileChange, paths []string) (valid [
 		case isSession[rel]:
 		case isTask[rel]:
 			reason = "pipeline_task_file"
-		default:
-			reason = "not_session_file"
 		}
 		if reason != "" {
 			ok = false

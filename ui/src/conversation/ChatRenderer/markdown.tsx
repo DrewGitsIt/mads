@@ -4,6 +4,7 @@ import { Fold, useArrivals } from "../../components/Motion";
 import DOMPurify from "dompurify";
 import { useElectronClipboardBridge } from "../TerminalRenderer/ptyBridge";
 import { getLinkOpener, needsDescribing } from "../../platform/links";
+import { useIsRemoteHost } from "../../router/hostScope";
 import { useLinkBase } from "./linkBase";
 import styles from "./markdown.module.css";
 
@@ -144,6 +145,7 @@ export function Markdown({
   }, [text, breaks]);
   const rootRef = useRef<HTMLDivElement>(null);
   const linkBase = useLinkBase();
+  const remoteHost = useIsRemoteHost();
 
   // Ask main which file links point nowhere on this machine, once per link
   // element (a block re-rendered while streaming brings fresh ones). A click
@@ -155,14 +157,14 @@ export function Markdown({
     const ask = fresh.filter((a) => needsDescribing(a.getAttribute(LINK_HREF_ATTR) ?? ""));
     fresh.forEach((a) => (a.dataset.linkChecked = ""));
     if (ask.length === 0) return;
-    void getLinkOpener()
+    void getLinkOpener({ remote: remoteHost })
       .describe(
         ask.map((a) => a.getAttribute(LINK_HREF_ATTR) ?? ""),
         linkBase,
       )
       .then((states) => states.forEach((state, i) => ask[i] && markLink(ask[i], state)))
       .catch(() => undefined);
-  }, [blocks, linkBase]);
+  }, [blocks, linkBase, remoteHost]);
 
   const openLink = (event: MouseEvent<HTMLDivElement>) => {
     const link = clickedLink(event);
@@ -171,7 +173,7 @@ export function Markdown({
     if (!link || (event.button !== 0 && event.button !== 1)) return;
     event.preventDefault();
     const href = link.getAttribute(LINK_HREF_ATTR) ?? "";
-    void getLinkOpener()
+    void getLinkOpener({ remote: remoteHost })
       .open(href, linkBase)
       .then((outcome) => {
         if (outcome === "missing" || outcome === "none") markLink(link, outcome);

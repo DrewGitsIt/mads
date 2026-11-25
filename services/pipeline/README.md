@@ -276,9 +276,19 @@ sends work back to it.
 ## Run it alone
 
 ```sh
-make run        # binds an ephemeral localhost port and logs it (-addr to pin)
-curl localhost:<logged port>/health
+make run        # by hand: TCP on an ephemeral localhost port, with a loud warning
+mads ps         # what the Router runs: Unix sockets under $MADS_HOME/run
+mads api --session <run id> GET /health
 ```
+
+Spawned by the Router it listens on `-socket $MADS_HOME/run/<run id>.sock` and opens no
+TCP port (docs/LOCAL-FRONT-DOOR-DESIGN.md D9); `/health` reports `id` and `pid`.
+
+The install token is never handed over (docs/LOCAL-FRONT-DOOR-DESIGN.md H4): the Router
+passes its path (`-token-file`, default `<mads-home>/local.token`) and the Data Service
+client reads and re-reads the file itself. `main` removes any `MADS_LOCAL_TOKEN` or
+`MADS_ROUTER_TOKEN` from its own environment first thing, so no stage, agent or git
+process it starts inherits one (`TestChildScrubsTokensFromItsEnv`).
 
 ## Test it
 

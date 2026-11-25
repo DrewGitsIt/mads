@@ -15,6 +15,11 @@ export interface PathFieldProps
    * immediately rather than leaving it in the draft).
    */
   onPick?: (path: string) => void;
+  /**
+   * Hide "Browse…": the path names a folder on another device (mesh mode),
+   * which this machine's native dialog can't show.
+   */
+  noNativePicker?: boolean;
 }
 
 /**
@@ -29,10 +34,11 @@ export function PathField({
   onChange,
   dialogTitle,
   onPick,
+  noNativePicker,
   className,
   ...inputProps
 }: PathFieldProps) {
-  const picker = getDirectoryPicker();
+  const picker = noNativePicker ? undefined : getDirectoryPicker();
 
   async function browse() {
     const chosen = await picker?.pickDirectory({

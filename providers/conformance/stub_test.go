@@ -72,6 +72,10 @@ func (s *stub) DelegateTranscript(context.Context, string, string) ([]provider.M
 	return nil, false, nil
 }
 
+func (s *stub) OpenBackgroundOutput(context.Context, string, string) (*provider.BackgroundOutput, error) {
+	return nil, provider.ErrNoBackgroundOutput
+}
+
 func (s *stub) DelegateHistory(context.Context, string) ([]provider.DelegateRecord, error) {
 	return nil, nil
 }

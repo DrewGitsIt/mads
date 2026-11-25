@@ -109,16 +109,6 @@
   white-space: nowrap;
 }
 
-.kv dd.warn {
-  color: var(--warn-fg);
-  font-family: var(--sans);
-  white-space: normal;
-}
-
-.kv dd.plain {
-  font-family: var(--sans);
-}
-
 /* Folder / Worktree: the path (selectable, ellipsized) and its Copy button. */
 .kv dd.path {
   display: flex;
@@ -161,12 +151,6 @@
 .copied:hover {
   color: var(--ok-fg);
   border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
-}
-
-.acts {
-  display: flex;
-  gap: 6px;
-  padding: 4px 8px 8px;
 }
 
 .outcome {

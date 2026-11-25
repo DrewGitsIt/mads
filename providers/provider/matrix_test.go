@@ -93,6 +93,7 @@ func TestRequirementLevels(t *testing.T) {
 		// Most harnesses have no subagents at all.
 		BehaviorDelegateLifecycle:  LevelOptional,
 		BehaviorDelegateTranscript: LevelOptional,
+		BehaviorBackgroundOutput:   LevelOptional,
 		BehaviorDelegateSteer:      LevelOptional,
 		BehaviorDelegateStop:       LevelOptional,
 		// Never emulated: a harness without its own pass just hides Compact.
@@ -110,8 +111,8 @@ func TestRequirementLevels(t *testing.T) {
 	if Requirement("telepathy") != "" {
 		t.Error("unknown behavior should have no level")
 	}
-	if n := len(Behaviors()); n != 27 {
-		t.Errorf("Behaviors() = %d entries, want 27", n)
+	if n := len(Behaviors()); n != 28 {
+		t.Errorf("Behaviors() = %d entries, want 28", n)
 	}
 }
 

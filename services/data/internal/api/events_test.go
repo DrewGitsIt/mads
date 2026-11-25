@@ -3,12 +3,14 @@ package api
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -258,5 +260,113 @@ func TestSSEStreamAndCursorResume(t *testing.T) {
 		if i > 0 && e.id <= got[i-1].id {
 			t.Errorf("event %d: id %d not after %d — duplicate or out of order", i, e.id, got[i-1].id)
 		}
+	}
+}
+
+// The device registry's events can't be hand-written: only
+// a service's own record, under its own actor, and never relayed.
+func TestPostEventsRefusesRegistryEvents(t *testing.T) {
+	srv, _ := newTestServer(t)
+	post := func(env contracts.Envelope, header map[string]string) int {
+		body, _ := json.Marshal(env)
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/events", bytes.NewReader(body))
+		for k, v := range header {
+			req.Header.Set(k, v)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, tc := range []struct {
+		typ    contracts.EventType
+		actor  string
+		header map[string]string
+		want   int
+	}{
+		{contracts.DevicePaired, "user", nil, 403},
+		{contracts.DeviceGrantChanged, "mesh", nil, 403},
+		{contracts.PeerCreated, "router", nil, 403},
+		{contracts.DeviceRefused, "user", nil, 403},
+		{contracts.DeviceRefused, "mesh", nil, 201},
+		{contracts.MeshListening, "router", nil, 403},
+		{contracts.MeshListening, "mesh", nil, 201},
+		{contracts.MeshListening, "mesh", map[string]string{contracts.MeshRelayHeader: "mac"}, 403},
+		{contracts.PeerReachabilityChanged, "router", nil, 201},
+		{contracts.SessionCreated, "anyone", nil, 201},
+	} {
+		if got := post(contracts.Envelope{Type: tc.typ, Actor: tc.actor}, tc.header); got != tc.want {
+			t.Errorf("%s by %s: %d, want %d", tc.typ, tc.actor, got, tc.want)
+		}
+	}
+}
+
+// A row whose payload isn't JSON (a damaged database) doesn't break the
+// batch or the stream that reaches it: it's served as invalid_payload and
+// everything after it still arrives.
+func TestCorruptPayloadDoesntBreakTheLog(t *testing.T) {
+	srv, db := newTestServer(t)
+	first := postEvent(t, srv, contracts.Envelope{Type: contracts.SessionCreated, Actor: "test"})
+	if _, err := db.Exec(`INSERT INTO events (timestamp, type, actor, payload) VALUES (?, 'peer.updated', 'test', '{not json')`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	last := postEvent(t, srv, contracts.Envelope{Type: contracts.SessionRenamed, Actor: "test"})
+	resp, err := srv.Client().Get(srv.URL + "/events?since=" + strconv.FormatInt(first.Seq-1, 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evs []contracts.Envelope
+	err = json.NewDecoder(resp.Body).Decode(&evs)
+	_ = resp.Body.Close()
+	if err != nil || len(evs) != 3 || evs[2].Seq != last.Seq || !strings.Contains(string(evs[1].Payload), `"invalid_payload":"{not json"`) {
+		t.Fatalf("batch: %v %+v", err, evs)
+	}
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/events?since="+strconv.FormatInt(first.Seq, 10), nil)
+	req.Header.Set("Accept", "text/event-stream")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err = srv.Client().Do(req.WithContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		if sc.Text() == "id: "+strconv.FormatInt(last.Seq, 10) {
+			return // past the bad row
+		}
+	}
+	t.Fatal("the stream ended at the bad row")
+}
+
+// GET /events/head is the log's max seq: 0 on an empty log, then the newest
+// event's seq whatever its type or session.
+func TestGetEventsHead(t *testing.T) {
+	srv, _ := newTestServer(t)
+	head := func() int64 {
+		t.Helper()
+		resp, err := srv.Client().Get(srv.URL + "/events/head")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET /events/head = %d", resp.StatusCode)
+		}
+		var out map[string]int64
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out["seq"]
+	}
+	if got := head(); got != 0 {
+		t.Fatalf("empty log head = %d, want 0", got)
+	}
+	postEvent(t, srv, contracts.Envelope{Type: contracts.SessionCreated, Actor: "user", SessionID: "ses_a"})
+	last := postEvent(t, srv, contracts.Envelope{Type: contracts.SessionUpdated, Actor: "user", SessionID: "ses_b"})
+	if got := head(); got != last.Seq {
+		t.Fatalf("head = %d, want %d", got, last.Seq)
 	}
 }

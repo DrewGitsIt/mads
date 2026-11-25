@@ -5,6 +5,7 @@ import { ChangesTab } from "../../../files/ChangesTab";
 import type { ChangesFocus } from "../../../files/changesModel";
 import type { PipelineClient } from "../../../pipeline/client/pipelineClient";
 import type { RouterClient } from "../../../router/client";
+import type { Session } from "../../../router/types";
 import { TasksTab } from "../../../tasks/TasksTab";
 import { useTaskStore } from "../../../tasks/useTaskStore";
 import styles from "./ConversationTabView.module.css";
@@ -28,6 +29,12 @@ export interface WorkspaceTabContext {
   active?: boolean;
   routerClient: RouterClient;
   pipelineClient: PipelineClient;
+  /**
+   * The session record SessionWorkspace already holds and refetches on
+   * session events — the Changes tab's status chip reads its Commit/Land
+   * counts. Unset until the first fetch answers.
+   */
+  session?: Session;
   /** Set for a session just created from the Launchpad — only ConversationTabView consumes these. */
   provisioning?: boolean;
   onProvisioningDone?: () => void;
@@ -131,6 +138,7 @@ function ChangesTabView({
   focusCommitFile,
   focusChanges,
   active,
+  session,
 }: WorkspaceTabContext) {
   return (
     <ChangesTab
@@ -140,6 +148,7 @@ function ChangesTabView({
       focusCommit={focusCommitFile}
       focusView={focusChanges}
       active={active}
+      session={session}
     />
   );
 }

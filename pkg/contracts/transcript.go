@@ -34,6 +34,16 @@ type ToolUse struct {
 	Locations []ToolLocation `json:"locations,omitempty"`
 	// Server is the MCP server name, set only when Kind is "mcp".
 	Server string `json:"server,omitempty"`
+	// Background is set on a tool_result's Tool when the call kept running
+	// as a background process; its output is served by GET
+	// /sessions/{id}/tools/{toolUseId}/output.
+	Background *ToolBackground `json:"background,omitempty"`
+}
+
+// ToolBackground mirrors providers/provider/event.go ToolBackground — the
+// background process a tool call started.
+type ToolBackground struct {
+	TaskID string `json:"task_id"`
 }
 
 // ToolLocation mirrors providers/provider/event.go ToolLocation — one file
@@ -124,6 +134,26 @@ type TranscriptMessage struct {
 type TranscriptPage struct {
 	Rows    []TranscriptMessage `json:"rows"`
 	HasMore bool                `json:"has_more"`
+	// Missing is set when the agent's store was read and doesn't hold this
+	// conversation (provider.ErrTranscriptMissing): Rows is then empty. A
+	// session that hasn't had a turn yet can read this way too (the agent
+	// writes its store on the first turn), so a consumer weighs it against
+	// the session's own turn record.
+	Missing *TranscriptMissing `json:"missing,omitempty"`
+}
+
+// TranscriptMissing is TranscriptPage.Missing.
+type TranscriptMissing struct {
+	// Retention is the agent's own setting for deleting old transcripts,
+	// when it has one (provider.TranscriptRetainer).
+	Retention *TranscriptRetention `json:"retention,omitempty"`
+}
+
+// TranscriptRetention mirrors provider.Retention.
+type TranscriptRetention struct {
+	File        string `json:"file"`
+	Setting     string `json:"setting"`
+	DefaultDays int    `json:"default_days,omitempty"`
 }
 
 // TranscriptPage error codes (the "code" field of a paging error body).
@@ -244,6 +274,13 @@ type Attribution struct {
 	// Turn is, on a digest, the subject session's transcript turn the digest
 	// covers up to (get_session_turns' 1-based turn model); 0 when unknown.
 	Turn int `json:"turn,omitempty"`
+	// Attached marks a message that rode along with the human's own send
+	// rather than being delivered as a turn of its own: a held link update
+	// attached to the message that woke its recipient
+	// (docs/HELD-UPDATES-DESIGN.md decision 6). On the wire it is the
+	// wrapper's attached="true"; the human's text follows the last attached
+	// block, unwrapped.
+	Attached bool `json:"attached,omitempty"`
 }
 
 // InjectRequest is the body of POST /inject (session-service) and

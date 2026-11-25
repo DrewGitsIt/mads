@@ -3,8 +3,8 @@
 GOBIN := $(CURDIR)/bin
 LINT  := $(GOBIN)/golangci-lint
 
-.PHONY: build test lint check tidy ui-deps app e2e-smoke ui-smoke release-gate check-migrations
-.PHONY: services ui mads data router session pipeline
+.PHONY: build test lint check tidy ui-deps app e2e-smoke ui-smoke ui-perf perf-tools-test release-gate check-migrations
+.PHONY: services ui mads data router session pipeline mesh
 
 build: ui-deps
 	go build ./...
@@ -13,6 +13,7 @@ build: ui-deps
 	go build -o $(GOBIN)/router ./services/router
 	go build -o $(GOBIN)/session ./services/session
 	go build -o $(GOBIN)/pipeline ./services/pipeline
+	go build -o $(GOBIN)/mesh ./services/mesh
 	npm --prefix ui run build
 
 test: ui-deps
@@ -43,7 +44,7 @@ ui-deps:
 # What differs is how each one reaches a running instance.
 
 # Every Go binary, no UI, no npm. The whole set is ~2s warm.
-services: mads data router session pipeline
+services: mads data router session pipeline mesh
 
 mads:
 	go build -o $(GOBIN)/mads ./cmd/mads
@@ -55,7 +56,11 @@ pipeline:
 
 # Picked up by the *next* session spawn (-session-cmd is exec'd fresh too).
 # To move an already-running session onto the new binary without disturbing
-# any other session:  curl -sX POST localhost:17373/sessions/<id>/bounce
+# any other session:  mads api POST /sessions/<id>/bounce
+# (or, with curl, keep the token out of its argv, which other users can read:
+#  printf 'header = "Authorization: Bearer %s"\n' "$(cat ~/.mads/local.token)" | curl -K - -sX POST localhost:17373/sessions/<id>/bounce)
+# Children listen on Unix sockets, not ports: `mads ps` lists them (id, pid,
+# socket, state, uptime), `mads api --session <id> GET /status` pokes one.
 session:
 	go build -o $(GOBIN)/session ./services/session
 
@@ -69,6 +74,12 @@ session:
 #   ./bin/router -addr localhost:17373 -session-cmd ./bin/session
 router:
 	go build -o $(GOBIN)/router ./services/router
+
+# A new process, never a restart of anything else: the Mesh Service only
+# forwards to the Router over loopback (docs/MESH-MODE-DESIGN.md). Restart
+# it alone to pick up a rebuild.
+mesh:
+	go build -o $(GOBIN)/mesh ./services/mesh
 
 # Needs a restart, but a survivable one: state lives in ~/.mads/mads.db and
 # the Router's watchers re-subscribe with backoff. In-flight SSE streams break
@@ -101,7 +112,7 @@ e2e-smoke:
 # Playwright journey suite: real data/router/session binaries on ephemeral
 # ports, real UI build, chromium only. Separate from `make check`/CI's fast
 # test job and from `make e2e-smoke` (Go-only, no browser) — see
-# ui/e2e/HANDOFF.md and ui/README.md's "test layers" section. Browsers are
+# ui/README.md's "Test layers" section. Browsers are
 # cached at ~/.cache/ms-playwright on every OS: that is Playwright's Linux
 # default, and PLAYWRIGHT_BROWSERS_PATH pins macOS there too instead of its
 # ~/Library/Caches/ms-playwright default (an explicit PLAYWRIGHT_BROWSERS_PATH
@@ -129,6 +140,30 @@ ui-smoke: ui-deps
 		npx --prefix ui playwright install chromium; \
 	fi
 	npm --prefix ui run test:e2e
+
+# Perf harness (tools/perf/README.md): local only, never in CI.
+#   make ui-perf BASE=<ref> CAND=<ref|worktree dir> PROFILE=S|M|L|XL N=5 BROWSER=chromium|electron
+# CAND is optional (baseline only). Builds each side into temp dirs (refs via
+# a temp `git worktree add`), seeds one workload, runs the scenarios ABBA on
+# hermetic stacks behind the delay proxy, and writes tools/perf/results/<stamp>/.
+# Every scenario runs with the proxy's delays on and off (MODES=on,off).
+# Also: SCENARIOS=1,3b|bus|git|all (default all; bus = 1-8 without the git fixture, git = 9a-9h)  CHECKS=a,b|none  REALISM=1 (a read-only backup of ~/.mads/mads.db)
+#       PERF_DELAYS=<regex>=<ms>,...  PERF_HOLD_OUTPUT=0.
+#       GITFX=auto|1|0 GITFX_SRC=~/repo/mads (real-git fixture for 9x and checks f-i; cloned from, never run in).
+# No ui-deps prerequisite: run.sh installs deps only where they are missing.
+ui-perf:
+	BASE="$(BASE)" CAND="$(CAND)" PROFILE="$(PROFILE)" N="$(N)" BROWSER="$(BROWSER)" SCENARIOS="$(SCENARIOS)" MODES="$(MODES)" CHECKS="$(CHECKS)" REALISM="$(REALISM)" GITFX="$(GITFX)" GITFX_SRC="$(GITFX_SRC)" CHAT_SRC="$(CHAT_SRC)" CHAT_TURNS="$(CHAT_TURNS)" \
+		sh tools/perf/run.sh
+
+# The perf tools' Go code (perfseed, the git shim, providers/fake/perf.go)
+# is behind the `perf` build tag, so no plain build, test, vet, lint or
+# release ever compiles it. Its own vet, lint and tests run here, with the
+# tag (lint only if bin/golangci-lint exists: `make $(LINT)` installs it).
+PERF_PKGS := ./services/data/cmd/perfseed/... ./tools/perf/... ./providers/fake/...
+perf-tools-test:
+	go vet -tags perf $(PERF_PKGS)
+	if [ -x "$(LINT)" ]; then $(LINT) run --build-tags perf $(PERF_PKGS); else echo "perf-tools-test: no $(LINT); lint skipped (vet only)"; fi
+	go test -tags perf -count=1 $(PERF_PKGS)
 
 # Release gate: cross-platform build matrix + install/update smokes against
 # the native candidate. Kept out of `check`/CI's fast `test` job (multi-

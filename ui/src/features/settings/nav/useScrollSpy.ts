@@ -55,9 +55,22 @@ export function useScrollSpy(
     update();
     container.addEventListener("scroll", update, { passive: true });
     window.addEventListener("resize", update);
+    // Sections that load after the page (Paired devices' rows and log, the
+    // providers) move the ones below them with no scroll event, and a
+    // jump to a section can land before they do: recompute on any section
+    // resizing too, or the rail keeps naming the section the reading line
+    // left behind.
+    const resized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    if (resized) {
+      for (const id of SECTION_IDS) {
+        const el = sectionRefs[id].current;
+        if (el) resized.observe(el);
+      }
+    }
     return () => {
       container.removeEventListener("scroll", update);
       window.removeEventListener("resize", update);
+      resized?.disconnect();
     };
   }, [containerRef, sectionRefs, ready]);
 

@@ -81,14 +81,16 @@ cross-session cold read.
 | Field | Meaning |
 |---|---|
 | `harness_id` | the key. Claude Code's `task_id` = `agentId`, stable across resumes |
+| `parent_harness_id` | the delegate that spawned it; empty when the session's own agent did. Live from the nested start's parent tag, else the meta file's `parentAgentId`. First seen wins, never cleared *(2026-11-09)*. Records stored before then (depth ≥ 2, no parent) are backfilled from the meta file when their session's runner next starts — that field only *(2026-11-10)* |
 | `tool_use_id` | the spawning call. First seen wins: a relay re-entry reports the SendMessage call's id and must not move the anchor |
 | `depth`, `type`, `description`, `backgrounded` | harness metadata; `backgrounded` is sticky (a re-entry is always backgrounded) |
 | `state`, `reason`, `inferred` | the state, its evidence (the harness's status word or mads's inference), and whether mads concluded it |
+| `waiting_on` | `{subagents, processes}`, only while its latest run ended `completed` and work it started still runs: direct children running or themselves waiting, and its own background processes. Nil otherwise *(2026-11-09)* |
 | `runs`, `started_at`, `ended_at` | the run count (re-entries increment it), and the latest run's start and end. Arrival time: Claude Code's system task lines carry no timestamp |
 | `transcript_path`, totals | from the notification |
 | `model`, `usage`, `branch` | the model and accounting of its latest API call (`usage.context_tokens` is its context), and the branch it worked on. Live from the stream's `subagent_usage` events, at most every 5s (`UsageEvery`; the latest is held, never dropped). Inspection fills a record with none from its own file, which also gives the branch. The window comes from the parent's result lines when they name the model; the delegate's own lines never do |
 
-Not in the record yet: nesting parent, cwd/worktree, capabilities (#3).
+Not in the record yet: cwd (the worktree and capabilities came with #3).
 
 ### Lifecycle: one owner (`pkg/delegates`)
 
@@ -129,6 +131,25 @@ agent_state-style retry), in `runner/delegates.go`:
 - **Tool status:** the turn-end sweep (`toolstatus.TurnEndExcept`) leaves a
   live delegate's in-flight calls alone. They close out (`EndParent`) when
   the delegate ends. This fixes the stuck-⊘ bug.
+- **Nesting** *(built 2026-11-09)*. A subagent can spawn its own (2.1.285:
+  the child's meta has `spawnDepth: 2` and `parentAgentId`). Claude Code
+  never tags a system line, but the spawning `Agent` call arrives first on
+  an assistant line tagged with the spawner's own spawn, and the child's
+  `task_started` names that call; the provider resolves it (`sideCalls`)
+  into the `EventTask`'s `ParentToolUseID`, which the tracker turns into
+  `parent_harness_id`. The main agent's turn end leaves alone a foreground
+  delegate whose spawner runs in the background: it waits in that turn.
+- **Done isn't done while its work runs** *(built 2026-11-09; UX agreed in
+  docs/mockups/nested-delegates.html)*. A subagent can end its turn with its
+  own subagents or background processes still going. Claude Code reports
+  `completed` anyway and re-enters the same task id when that work reports.
+  The state stays `completed` (its run did complete) and `waiting_on` says
+  what it waits on, so a consumer that doesn't know the field degrades to
+  the old ✓. Recomputed after every change that can move it, as a least
+  fixpoint (a waiting child counts towards its parent); a child ending
+  returns its parent's record too. A failed, stopped or orphaned run waits
+  on nothing. Process exit and runner start clear it. The cold read
+  (`?ended_after=`) counts a waiting record as live whatever its end time.
 - **Thinking ticks between turns** no longer start a "working" state. Claude
   Code doesn't tag a subagent's `thinking_tokens` lines, so a tick between
   turns only relabels a turn already in flight.
@@ -471,7 +492,7 @@ were spot-checked in the code.
    background task from an earlier turn replays as interrupted.
 5. **[#2: fixed]** Tagged or task frames arriving between turns set the conversation's
    phase to live, and nothing ever closes it.
-6. **[#1: the thinking-tick half fixed; nested-spawn tagging open]** Claude Code system lines are never parent-tagged. As a result
+6. **[#1: the thinking-tick half fixed; nested-spawn tagging fixed 2026-11-09, the provider resolves the spawner from its tagged Agent call]** Claude Code system lines are never parent-tagged. As a result
    `SubagentTask.ParentToolUseID` is always empty, and a subagent's
    `thinking_tokens` can flip `agent_state` to working outside a turn (the
    a2256c3 stall class).

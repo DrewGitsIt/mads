@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,55 @@ var ErrNotFound = errors.New("not found")
 
 // ErrConflict maps 409s — for tasks, that's "live-leased by someone else".
 var ErrConflict = errors.New("conflict")
+
+// ConflictError is a 409 (errors.Is ErrConflict): Code and Msg are the
+// answer's "code" and "error", for a caller to pass on without this
+// client's request line or the Data Service's address.
+type ConflictError struct {
+	Method, Path string
+	Code, Msg    string
+	raw          string
+}
+
+func (e *ConflictError) Error() string {
+	return fmt.Sprintf("%s %s: %v: %s", e.Method, e.Path, ErrConflict, e.raw)
+}
+
+func (e *ConflictError) Unwrap() error { return ErrConflict }
+
+// ForbiddenError is a 403: the Data Service refused the write for who made
+// it (or, for a pairing code, refused the code). Code is the answer's
+// "code", when it has one.
+type ForbiddenError struct {
+	Method, Path string
+	Code, Msg    string
+}
+
+func (e *ForbiddenError) Error() string {
+	return e.Method + " " + e.Path + ": status 403: " + e.Msg
+}
+
+// RateLimitedError is a 429: the Data Service is holding the caller off
+// until RetryAfter (zero: not said).
+type RateLimitedError struct {
+	Method, Path string
+	Code, Msg    string
+	RetryAfter   time.Duration
+}
+
+func (e *RateLimitedError) Error() string {
+	return e.Method + " " + e.Path + ": status 429: " + e.Msg
+}
+
+// errorField reads one string field of a JSON error body.
+func errorField(raw []byte, field string) string {
+	var body map[string]any
+	if json.Unmarshal(raw, &body) != nil {
+		return ""
+	}
+	s, _ := body[field].(string)
+	return s
+}
 
 // ErrLeaseLost maps a 409 with code "lease_lost" (Renew): the lease is
 // gone, expired or held under another token, so this client no longer
@@ -42,6 +92,12 @@ type Client struct {
 	base  string
 	actor string
 	http  *http.Client
+	// token is the install token's source (docs/LOCAL-FRONT-DOOR-DESIGN.md
+	// D1/D5), sent as a bearer on every request; nil sends none.
+	token func() string
+	// reach logs the Data Service going unreachable and back
+	// (WithUnreachableLog); nil logs nothing.
+	reach *reachability
 
 	// mu guards held: the leases this client claimed, by task id. The
 	// tokens live only here, in memory: never logged, never in an error.
@@ -54,17 +110,58 @@ type heldLease struct {
 	holder string
 }
 
+// Option configures a Client.
+type Option func(*Client)
+
+// WithToken sends tok, the install token, as a bearer on every request —
+// the Data Service refuses everything but GET /health without it.
+func WithToken(tok string) Option {
+	return func(c *Client) {
+		if tok == "" {
+			c.token = nil
+			return
+		}
+		c.token = func() string { return tok }
+	}
+}
+
+// WithTokenSource is WithToken for a token that can change under a running
+// process (a rotation): src is asked on every request. A *localauth.Store's
+// Token method is the usual source.
+func WithTokenSource(src func() string) Option {
+	return func(c *Client) { c.token = src }
+}
+
 // New builds a client. actor names the mutation identity this client rides
 // under (attribution, not authentication — spec §15); empty means the
-// server-side default, "user".
-func New(baseURL, actor string) *Client {
-	return &Client{
+// server-side default, "user". Authentication is the install token
+// (WithToken / WithTokenSource).
+func New(baseURL, actor string, opts ...Option) *Client {
+	c := &Client{
 		base:  strings.TrimSuffix(baseURL, "/"),
 		actor: actor,
 		http:  &http.Client{Timeout: 30 * time.Second},
 		held:  map[string]heldLease{},
 	}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
 }
+
+// authorize stamps the install token on req.
+func (c *Client) authorize(req *http.Request) {
+	if c.token == nil {
+		return
+	}
+	if tok := c.token(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+}
+
+// TokenSource is this client's token source (nil when it sends none), for
+// a caller building a sibling client to the same Data Service.
+func (c *Client) TokenSource() func() string { return c.token }
 
 func (c *Client) leaseToken(taskID string) string {
 	c.mu.Lock()
@@ -107,8 +204,73 @@ func (c *Client) Health(ctx context.Context) error {
 	return c.do(ctx, http.MethodGet, "/health", nil, nil)
 }
 
+type meshRelayKey struct{}
+
+// WithMeshRelay marks ctx as serving a request a mesh peer's Mesh Service
+// relayed (from node, possibly ""). Every write this client makes under it
+// carries contracts.MeshRelayHeader, so the Data Service never treats it as
+// the host user's own (docs/MESH-AUTH-DESIGN.md Q2).
+func WithMeshRelay(ctx context.Context, node string) context.Context {
+	return context.WithValue(ctx, meshRelayKey{}, node)
+}
+
+// MeshRelay reports whether ctx serves a mesh-relayed request, and for
+// which node.
+func MeshRelay(ctx context.Context) (string, bool) {
+	node, ok := ctx.Value(meshRelayKey{}).(string)
+	return node, ok
+}
+
+type meshActorKey struct{}
+
+// WithMeshActor records, on a mesh-relayed ctx (WithMeshRelay), the
+// authenticated device the relaying Mesh Service named as the request's
+// actor (docs/MESH-AUTH-DESIGN.md D8). Every write this client makes under
+// it carries that actor — X-Mads-Actor, and the actor of an appended event
+// — in place of the client's own, so the history shows which device did
+// what. Without the relay mark it has no effect.
+func WithMeshActor(ctx context.Context, actor string) context.Context {
+	return context.WithValue(ctx, meshActorKey{}, actor)
+}
+
+type meshDeviceKey struct{}
+
+// WithMeshDevice records, on a mesh-relayed ctx (WithMeshRelay), the full
+// fingerprint of the device the relaying Mesh Service authenticated
+// (contracts.MeshDeviceHeader). Every write this client makes under it
+// carries that header with the relay mark, so the Data Service can hold
+// the device to what its own grant there allows. Without the relay mark it
+// has no effect.
+func WithMeshDevice(ctx context.Context, fingerprint string) context.Context {
+	return context.WithValue(ctx, meshDeviceKey{}, fingerprint)
+}
+
+// MeshDevice is ctx's relayed device fingerprint, if any.
+func MeshDevice(ctx context.Context) (string, bool) {
+	if _, relayed := MeshRelay(ctx); !relayed {
+		return "", false
+	}
+	fp, ok := ctx.Value(meshDeviceKey{}).(string)
+	return fp, ok && fp != ""
+}
+
+// meshActor is ctx's relayed device actor, if any.
+func meshActor(ctx context.Context) (string, bool) {
+	if _, relayed := MeshRelay(ctx); !relayed {
+		return "", false
+	}
+	a, ok := ctx.Value(meshActorKey{}).(string)
+	return a, ok && a != ""
+}
+
 // do runs one request; out, when non-nil, receives the decoded 2xx body.
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
+	return c.doIf(ctx, method, path, "", in, out)
+}
+
+// doIf is do with an If-Match precondition (ifMatch non-empty): the
+// Data Service answers 409 when the row changed since.
+func (c *Client) doIf(ctx context.Context, method, path, ifMatch string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		raw, err := json.Marshal(in)
@@ -124,15 +286,29 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if c.actor != "" {
+	if a, ok := meshActor(ctx); ok {
+		req.Header.Set("X-Mads-Actor", a)
+	} else if c.actor != "" {
 		req.Header.Set("X-Mads-Actor", c.actor)
+	}
+	c.authorize(req)
+	if ifMatch != "" {
+		req.Header.Set("If-Match", ifMatch)
+	}
+	if node, relayed := MeshRelay(ctx); relayed && method != http.MethodGet && method != http.MethodHead {
+		req.Header[contracts.MeshRelayHeader] = []string{node}
+		if fp, ok := MeshDevice(ctx); ok {
+			req.Header.Set(contracts.MeshDeviceHeader, fp)
+		}
 	}
 	if id := pathTaskID(path); id != "" {
 		if tok := c.leaseToken(id); tok != "" {
 			req.Header.Set(leaseHeader, tok)
 		}
 	}
+	start := c.reach.begin()
 	resp, err := c.http.Do(req)
+	c.reach.observe(ctx, method+" "+stripQuery(path), start, err)
 	if err != nil {
 		return err
 	}
@@ -149,6 +325,14 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		return json.Unmarshal(raw, out)
 	case resp.StatusCode == http.StatusNotFound:
 		return fmt.Errorf("%s %s: %w", method, path, ErrNotFound)
+	case resp.StatusCode == http.StatusTooManyRequests:
+		e := &RateLimitedError{Method: method, Path: path, Code: errorField(raw, "code"), Msg: firstNonEmpty(errorField(raw, "error"), strings.TrimSpace(string(raw)))}
+		if secs, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && secs > 0 {
+			e.RetryAfter = time.Duration(secs) * time.Second
+		}
+		return e
+	case resp.StatusCode == http.StatusForbidden:
+		return &ForbiddenError{Method: method, Path: path, Code: errorField(raw, "code"), Msg: firstNonEmpty(errorField(raw, "error"), strings.TrimSpace(string(raw)))}
 	case resp.StatusCode == http.StatusConflict:
 		var body struct {
 			Code string `json:"code"`
@@ -156,7 +340,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		if json.Unmarshal(raw, &body) == nil && body.Code == "lease_lost" {
 			return fmt.Errorf("%s %s: %w (%w)", method, path, ErrLeaseLost, ErrConflict)
 		}
-		return fmt.Errorf("%s %s: %w: %s", method, path, ErrConflict, strings.TrimSpace(string(raw)))
+		return &ConflictError{Method: method, Path: path, Code: body.Code, Msg: errorField(raw, "error"), raw: strings.TrimSpace(string(raw))}
 	case resp.StatusCode == http.StatusUnprocessableEntity:
 		var verr contracts.ValidationError
 		if json.Unmarshal(raw, &verr) == nil && !verr.Empty() {
@@ -347,7 +531,7 @@ func (c *Client) LeasesOfKind(ctx context.Context, kind string) ([]contracts.Lea
 // leases of a kind it doesn't own (LeasesOfKind requires the caller's
 // actor); attribution, not authentication (spec §15).
 func (c *Client) As(actor string) *Client {
-	return &Client{base: c.base, actor: actor, http: c.http, held: map[string]heldLease{}}
+	return &Client{base: c.base, actor: actor, http: c.http, token: c.token, reach: c.reach, held: map[string]heldLease{}}
 }
 
 // ReclaimLease is the proof-or-nothing transition (reap-on-launch): if
@@ -495,6 +679,12 @@ func (c *Client) SetSessionWorktree(ctx context.Context, id string, patch contra
 	return c.do(ctx, http.MethodPatch, "/sessions/"+url.PathEscape(id)+"/worktree", patch, nil)
 }
 
+// SetSessionNotes adds and removes notes owed to the session's agent
+// (Session.PendingNotes).
+func (c *Client) SetSessionNotes(ctx context.Context, id string, patch contracts.SessionNotesPatch) error {
+	return c.do(ctx, http.MethodPatch, "/sessions/"+url.PathEscape(id)+"/notes", patch, nil)
+}
+
 func (c *Client) DeleteSession(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodDelete, "/sessions/"+url.PathEscape(id), nil, nil)
 }
@@ -552,6 +742,18 @@ func (c *Client) RecordShellFileChanges(ctx context.Context, sessionID string, c
 func (c *Client) FileChanges(ctx context.Context, sessionID string) ([]contracts.FileChange, error) {
 	var list []contracts.FileChange
 	err := c.do(ctx, http.MethodGet, "/sessions/"+url.PathEscape(sessionID)+"/files", nil, &list)
+	return list, err
+}
+
+// PathTouchers names the session other than exclude that last changed each
+// of paths through its own tools; paths nobody else changed are absent.
+func (c *Client) PathTouchers(ctx context.Context, paths []string, exclude string) ([]contracts.PathToucher, error) {
+	var list []contracts.PathToucher
+	if len(paths) == 0 {
+		return list, nil
+	}
+	err := c.do(ctx, http.MethodPost, "/file-changes/touchers",
+		contracts.PathTouchersRequest{Paths: paths, ExcludeSession: exclude}, &list)
 	return list, err
 }
 
@@ -828,6 +1030,223 @@ func (c *Client) DeleteWorkspace(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodDelete, "/workspaces/"+url.PathEscape(id), nil, nil)
 }
 
+// --- Mesh peers (docs/MESH-MODE-DESIGN.md D3) ---
+
+// Peers lists the mesh peer list: the devices this node views and the
+// paired-only devices (Viewed false) it doesn't.
+func (c *Client) Peers(ctx context.Context) ([]contracts.Peer, error) {
+	var out []contracts.Peer
+	err := c.do(ctx, http.MethodGet, "/peers", nil, &out)
+	return out, err
+}
+
+// Peer fetches one peer by id or name.
+func (c *Client) Peer(ctx context.Context, idOrName string) (contracts.Peer, error) {
+	var out contracts.Peer
+	err := c.do(ctx, http.MethodGet, "/peers/"+url.PathEscape(idOrName), nil, &out)
+	return out, err
+}
+
+// CreatePeer adds a device to the mesh peer list.
+func (c *Client) CreatePeer(ctx context.Context, p *contracts.Peer) error {
+	return c.do(ctx, http.MethodPost, "/peers", p, p)
+}
+
+// UpdatePeer saves changes to a peer (rename, hide).
+func (c *Client) UpdatePeer(ctx context.Context, p *contracts.Peer) error {
+	return c.do(ctx, http.MethodPut, "/peers/"+url.PathEscape(p.ID), p, p)
+}
+
+// DeletePeer removes a device from the peer list.
+func (c *Client) DeletePeer(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/peers/"+url.PathEscape(id), nil, nil)
+}
+
+// UpdatePeerIfUnchanged is UpdatePeer only if the row is still as read
+// (p.UpdatedAt); otherwise ErrConflict and nothing written. A read, edit,
+// write-back uses it so a change made meanwhile (a pairing, a revoke)
+// isn't overwritten.
+func (c *Client) UpdatePeerIfUnchanged(ctx context.Context, p *contracts.Peer) error {
+	return c.doIf(ctx, http.MethodPut, "/peers/"+url.PathEscape(p.ID), p.UpdatedAt.Format(time.RFC3339Nano), p, p)
+}
+
+// DeletePeerIfUnchanged is DeletePeer only if the row is still as read.
+func (c *Client) DeletePeerIfUnchanged(ctx context.Context, p contracts.Peer) error {
+	return c.doIf(ctx, http.MethodDelete, "/peers/"+url.PathEscape(p.ID), p.UpdatedAt.Format(time.RFC3339Nano), nil, nil)
+}
+
+// DeletePeerReconciled is DeletePeerIfUnchanged for a device that no
+// longer has this one paired (docs/MESH-NETWORK-DESIGN.md F6, R4): its
+// device.unpaired says by "reconcile".
+func (c *Client) DeletePeerReconciled(ctx context.Context, p contracts.Peer) error {
+	return c.doIf(ctx, http.MethodDelete, "/peers/"+url.PathEscape(p.ID)+"?by=reconcile", p.UpdatedAt.Format(time.RFC3339Nano), nil, nil)
+}
+
+// --- Pairing by code (docs/MESH-AUTH-DESIGN.md D6) ---
+
+// CreatePairingCode registers a new pairing code by its secret's hash
+// (paircode.Hash); the secret never reaches the Data Service.
+func (c *Client) CreatePairingCode(ctx context.Context, secretHash string) (contracts.PairingCode, error) {
+	var out contracts.PairingCode
+	err := c.do(ctx, http.MethodPost, "/pairing/codes", contracts.PairingCodeCreate{SecretHash: secretHash}, &out)
+	return out, err
+}
+
+// DeletePairingCode retires an unused code.
+func (c *Client) DeletePairingCode(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/pairing/codes/"+url.PathEscape(id), nil, nil)
+}
+
+// RedeemPairingCode consumes a code for the device that presented its
+// secret, opening a request for the host to answer. A bad code is a
+// *ForbiddenError with Code "pairing_refused".
+func (c *Client) RedeemPairingCode(ctx context.Context, in contracts.PairRedeem) (contracts.PairRequest, error) {
+	var out contracts.PairRequest
+	err := c.do(ctx, http.MethodPost, "/pairing/redeem", in, &out)
+	return out, err
+}
+
+// PairRequests lists open and recently answered pairing requests.
+func (c *Client) PairRequests(ctx context.Context) ([]contracts.PairRequest, error) {
+	var out []contracts.PairRequest
+	err := c.do(ctx, http.MethodGet, "/pairing/requests", nil, &out)
+	return out, err
+}
+
+// PairRequest reads one pairing request.
+func (c *Client) PairRequest(ctx context.Context, id string) (contracts.PairRequest, error) {
+	var out contracts.PairRequest
+	err := c.do(ctx, http.MethodGet, "/pairing/requests/"+url.PathEscape(id), nil, &out)
+	return out, err
+}
+
+// ApprovePairRequest pins the requesting device at d.Level.
+func (c *Client) ApprovePairRequest(ctx context.Context, id string, d contracts.PairDecision) (contracts.PairRequest, error) {
+	var out contracts.PairRequest
+	err := c.do(ctx, http.MethodPost, "/pairing/requests/"+url.PathEscape(id)+"/approve", d, &out)
+	return out, err
+}
+
+// DeclinePairRequest declines a pairing request.
+func (c *Client) DeclinePairRequest(ctx context.Context, id string) (contracts.PairRequest, error) {
+	var out contracts.PairRequest
+	err := c.do(ctx, http.MethodPost, "/pairing/requests/"+url.PathEscape(id)+"/decline", struct{}{}, &out)
+	return out, err
+}
+
+// DeviceActivity is the device activity log, newest first: device.*
+// events and events by a device actor. fingerprint "" is every device;
+// before 0 starts at the newest; limit 0 is the service's cap.
+func (c *Client) DeviceActivity(ctx context.Context, fingerprint string, before int64, limit int) ([]contracts.Envelope, error) {
+	q := url.Values{}
+	if fingerprint != "" {
+		q.Set("device", fingerprint)
+	}
+	if before > 0 {
+		q.Set("before", fmt.Sprint(before))
+	}
+	if limit > 0 {
+		q.Set("limit", fmt.Sprint(limit))
+	}
+	var out []contracts.Envelope
+	err := c.do(ctx, http.MethodGet, "/devices/activity?"+q.Encode(), nil, &out)
+	return out, err
+}
+
+// DeviceLastUsed is each device actor's newest event.
+func (c *Client) DeviceLastUsed(ctx context.Context) ([]contracts.DeviceLastUsed, error) {
+	var out []contracts.DeviceLastUsed
+	err := c.do(ctx, http.MethodGet, "/devices/last-used", nil, &out)
+	return out, err
+}
+
+// MeshSettings is this host's mesh settings (GET /devices/settings, the
+// mesh_settings row): no networks when none were chosen.
+func (c *Client) MeshSettings(ctx context.Context) (contracts.MeshSettings, error) {
+	var out contracts.MeshSettings
+	err := c.do(ctx, http.MethodGet, "/devices/settings", nil, &out)
+	return out, err
+}
+
+// SetMeshSettings records this host's mesh settings (PUT
+// /devices/settings). Only this host's own user may: a relayed write is
+// refused.
+// Nil Networks sends none chosen ([]): to change only the Tailscale
+// check, SetTailnetCheck.
+func (c *Client) SetMeshSettings(ctx context.Context, s contracts.MeshSettings) (contracts.MeshSettings, error) {
+	if s.Networks == nil {
+		s.Networks = []contracts.NetworkChoice{}
+	}
+	var out contracts.MeshSettings
+	err := c.do(ctx, http.MethodPut, "/devices/settings", s, &out)
+	return out, err
+}
+
+// SetTailnetCheck sets only the Tailscale network's identity check (the
+// earlier "Only accept devices on my tailnet" form of PUT
+// /devices/settings).
+func (c *Client) SetTailnetCheck(ctx context.Context, on bool) (contracts.MeshSettings, error) {
+	var out contracts.MeshSettings
+	err := c.do(ctx, http.MethodPut, "/devices/settings", map[string]bool{"require_tailnet": on}, &out)
+	return out, err
+}
+
+// Discoverable is this host's setup window (GET /devices/discoverable).
+func (c *Client) Discoverable(ctx context.Context) (contracts.Discoverable, error) {
+	var out contracts.Discoverable
+	err := c.do(ctx, http.MethodGet, "/devices/discoverable", nil, &out)
+	return out, err
+}
+
+// SetDiscoverable opens this host's setup window until until (capped at
+// ten minutes), or closes it (zero). Only this host's own user may.
+func (c *Client) SetDiscoverable(ctx context.Context, until time.Time) (contracts.Discoverable, error) {
+	var out contracts.Discoverable
+	err := c.do(ctx, http.MethodPut, "/devices/discoverable", contracts.Discoverable{Until: until}, &out)
+	return out, err
+}
+
+// CloseDiscoverable closes this host's setup window, saying why (the Mesh
+// Service closing it on abandoned pairings).
+func (c *Client) CloseDiscoverable(ctx context.Context, reason string) (contracts.Discoverable, error) {
+	var out contracts.Discoverable
+	err := c.do(ctx, http.MethodPut, "/devices/discoverable", contracts.Discoverable{Reason: reason}, &out)
+	return out, err
+}
+
+// RenewDiscoverable extends this host's open setup window to until (still
+// at most 30 minutes from when it was opened). A closed window is a
+// *ConflictError with Code "window_closed": open it again.
+func (c *Client) RenewDiscoverable(ctx context.Context, until time.Time) (contracts.Discoverable, error) {
+	var out contracts.Discoverable
+	err := c.do(ctx, http.MethodPut, "/devices/discoverable", contracts.Discoverable{Until: until, Renew: true}, &out)
+	return out, err
+}
+
+// ReportPairMismatch is the joiner fp saying a discovered request's check
+// code didn't match (the Mesh Service, for that joiner): declined, or
+// undone if it was approved.
+func (c *Client) ReportPairMismatch(ctx context.Context, id, fp string) (contracts.PairRequest, error) {
+	var out contracts.PairRequest
+	err := c.do(ctx, http.MethodPost, "/pairing/requests/"+url.PathEscape(id)+"/mismatch", map[string]string{"fingerprint": fp}, &out)
+	return out, err
+}
+
+// ForgetPairing removes the device fp's row (the Mesh Service, for that
+// device's /mesh/forget, F6 R1). Not paired here is ErrNotFound.
+func (c *Client) ForgetPairing(ctx context.Context, fp string) error {
+	return c.do(ctx, http.MethodPost, "/pairing/forget", contracts.PairForget{Fingerprint: fp}, nil)
+}
+
+// CreateDiscoveredPairRequest opens a discovered pairing request (the
+// Mesh Service, for a discovered /mesh/pair). Outside the window it's a
+// *ForbiddenError ("not_discoverable").
+func (c *Client) CreateDiscoveredPairRequest(ctx context.Context, in contracts.PairDiscoveredRequest) (contracts.PairRequest, error) {
+	var out contracts.PairRequest
+	err := c.do(ctx, http.MethodPost, "/pairing/discovered", in, &out)
+	return out, err
+}
+
 // --- Templates (spec §6) ---
 
 // Template fetches by id or name; used_by is dropped — callers wanting
@@ -976,6 +1395,20 @@ func (c *Client) LinksForSession(ctx context.Context, sessionID string) ([]contr
 	return out, err
 }
 
+// LinksForSessions lists links with any of sessionIDs on either side, each
+// link once, ordered by creation — the bulk form of LinksForSession. The
+// Data Service refuses more than contracts.MaxLinkSessionIDs ids; callers
+// chunk. An empty sessionIDs returns an empty list without a request.
+func (c *Client) LinksForSessions(ctx context.Context, sessionIDs []string) ([]contracts.Link, error) {
+	if len(sessionIDs) == 0 {
+		return []contracts.Link{}, nil
+	}
+	q := url.Values{"session_ids": {strings.Join(sessionIDs, ",")}}
+	var out []contracts.Link
+	err := c.do(ctx, http.MethodGet, "/links?"+q.Encode(), nil, &out)
+	return out, err
+}
+
 // AppendLinkDigest queues one compressed digest on an on_signal link's
 // mailbox (docs/LINKED-SESSIONS-DESIGN.md decision 4). Capped server-side;
 // oldest entries drop first.
@@ -998,6 +1431,34 @@ func (c *Client) DrainDeferredLinkDigests(ctx context.Context, id string) ([]con
 	var out []contracts.LinkDigest
 	err := c.do(ctx, http.MethodPost, "/links/"+url.PathEscape(id)+"/digests/drain?deferred=1", nil, &out)
 	return out, err
+}
+
+// HeldUpdates lists the deferred pushes waiting for sessionID (and the ones
+// discarded since its last drain), oldest first.
+func (c *Client) HeldUpdates(ctx context.Context, sessionID string) (contracts.HeldUpdates, error) {
+	var out contracts.HeldUpdates
+	err := c.do(ctx, http.MethodGet, "/sessions/"+url.PathEscape(sessionID)+"/held-updates", nil, &out)
+	return out, err
+}
+
+// DiscardLinkDigests soft-deletes held updates by id; RestoreLinkDigests
+// undoes it. Both return how many entries changed.
+func (c *Client) DiscardLinkDigests(ctx context.Context, ids []int64) (int, error) {
+	return c.setLinkDigestsDiscarded(ctx, "/link-digests/discard", ids)
+}
+
+// RestoreLinkDigests: see DiscardLinkDigests.
+func (c *Client) RestoreLinkDigests(ctx context.Context, ids []int64) (int, error) {
+	return c.setLinkDigestsDiscarded(ctx, "/link-digests/restore", ids)
+}
+
+func (c *Client) setLinkDigestsDiscarded(ctx context.Context, path string, ids []int64) (int, error) {
+	if ids == nil {
+		ids = []int64{}
+	}
+	var out contracts.LinkDigestsChanged
+	err := c.do(ctx, http.MethodPost, path, contracts.LinkDigestIDs{IDs: ids}, &out)
+	return out.Changed, err
 }
 
 // DeferredLinkCounts returns, keyed by granting session, how many deferred
@@ -1028,7 +1489,9 @@ func (c *Client) RemoveHandRaiser(ctx context.Context, sessionID string) error {
 // Append posts one standalone event (envelope minus seq/timestamp); the
 // client's actor fills the envelope unless the caller set one.
 func (c *Client) Append(ctx context.Context, env *contracts.Envelope) error {
-	if env.Actor == "" {
+	if a, ok := meshActor(ctx); ok {
+		env.Actor = a // a relayed device's action is that device's (D8)
+	} else if env.Actor == "" {
 		env.Actor = c.actor
 	}
 	return c.do(ctx, http.MethodPost, "/events", env, env)
@@ -1052,7 +1515,10 @@ func (c *Client) Stream(ctx context.Context, since int64, sessionID string, type
 		return nil, err
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	c.authorize(req)
+	start := c.reach.begin()
 	resp, err := (&http.Client{}).Do(req) // no timeout: the stream lives until ctx ends
+	c.reach.observe(ctx, "GET /events (stream)", start, err)
 	if err != nil {
 		return nil, err
 	}
@@ -1085,6 +1551,24 @@ func (c *Client) Stream(ctx context.Context, since int64, sessionID string, type
 	return ch, nil
 }
 
+// LatestSeq is the seq of the newest event matching sessionID and types
+// (0 if none): where a reader that has just loaded current state starts
+// following. It pages through GET /events, which caps each batch, so the
+// answer is the true latest, not the last of the first batch.
+func (c *Client) LatestSeq(ctx context.Context, sessionID string, types []string) (int64, error) {
+	var since int64
+	for {
+		evs, err := c.Events(ctx, since, sessionID, types)
+		if err != nil {
+			return since, err
+		}
+		if len(evs) == 0 {
+			return since, nil
+		}
+		since = evs[len(evs)-1].Seq
+	}
+}
+
 // Events fetches one filtered batch after the cursor (capped server-side;
 // page with since = last seq).
 func (c *Client) Events(ctx context.Context, since int64, sessionID string, types []string) ([]contracts.Envelope, error) {
@@ -1099,6 +1583,15 @@ func (c *Client) Events(ctx context.Context, since int64, sessionID string, type
 	var out []contracts.Envelope
 	err := c.do(ctx, http.MethodGet, "/events?"+q.Encode(), nil, &out)
 	return out, err
+}
+
+// EventsHead is GET /events/head: the log's current max seq (0 when empty).
+func (c *Client) EventsHead(ctx context.Context) (int64, error) {
+	var out struct {
+		Seq int64 `json:"seq"`
+	}
+	err := c.do(ctx, http.MethodGet, "/events/head", nil, &out)
+	return out.Seq, err
 }
 
 // --- Metrics (spec §8) ---
@@ -1153,4 +1646,13 @@ func (c *Client) MetricsPipelineRuns(ctx context.Context, sessionID string) ([]c
 	var out []contracts.PipelineRun
 	err := c.do(ctx, http.MethodGet, "/metrics/pipelines?"+q.Encode(), nil, &out)
 	return out, err
+}
+
+func firstNonEmpty(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }

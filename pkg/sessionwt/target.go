@@ -33,6 +33,13 @@ type Target struct {
 	// Root is where the session's worktree lives ($MADS_HOME/
 	// session-worktrees), for Ensure.
 	Root string
+	// Managed: mads made this worktree (the session's own), so Ensure may
+	// repair it. A linked worktree an agent made lands the same way but is
+	// never recreated or removed by mads (docs/COMMIT-LAND-PUSH-DESIGN.md
+	// D12).
+	Managed bool
+	// Home is $MADS_HOME, for mergiraf's state when there's no Root.
+	Home string
 }
 
 // Isolated reports whether the session has its own worktree and branch,
@@ -48,6 +55,7 @@ func TargetFor(ctx context.Context, sess contracts.Session) (Target, error) {
 	if sess.WorktreeDir != "" && sess.WorktreeBranch != "" {
 		t.Folder, t.Branch, t.Base = sess.WorktreeDir, sess.WorktreeBranch, sess.WorktreeBase
 		t.Root = filepath.Dir(sess.WorktreeDir)
+		t.Managed = true
 		if !implicit(sess.Dir) {
 			if top, err := Toplevel(ctx, sess.Dir); err == nil {
 				t.Primary = top
@@ -272,21 +280,38 @@ func LandGate(ctx context.Context, t Target, g Gates, unlanded int, folderPresen
 		}
 	}
 	if unlanded == 0 {
-		return refuse(contracts.LandNothingToLand, "Every commit on this session's branch is already in "+t.Base+".")
+		return refuse(contracts.LandNothingToLand, "Every commit on "+t.Branch+" is already in "+t.Base+".")
 	}
-	branch, err := CurrentBranch(ctx, t.Primary)
-	switch {
-	case errors.Is(err, ErrDetachedHEAD):
-		return refuse(contracts.LandBaseNotCheckedOut, "Your checkout at "+t.Primary+" is on a detached HEAD. Check out "+t.Base+" there to land.")
-	case err != nil:
-		return nil, err
-	case branch != t.Base:
-		return refuse(contracts.LandBaseNotCheckedOut, "Your checkout at "+t.Primary+" is on "+branch+", not "+t.Base+". Check out "+t.Base+" there to land.")
+	if !refExists(ctx, t.Primary, "refs/heads/"+t.Base) {
+		return refuse(contracts.LandBaseNotCheckedOut, "The branch "+t.Base+" doesn't exist. Choose another base.")
 	}
-	if op := midOperation(ctx, t.Primary); op != "" {
-		return refuse(contracts.LandPrimaryMidMerge, "Your checkout at "+t.Primary+" is in the middle of a "+op+". Finish or abort it, then land.")
+	// The squash moves the base wherever it's checked out (D12): that
+	// checkout mustn't be mid-way through something of the user's.
+	if holder := checkoutOf(ctx, t.Primary, t.Base); holder != "" {
+		if op := midOperation(ctx, holder); op != "" {
+			return refuse(contracts.LandPrimaryMidMerge, holder+" (where "+t.Base+" is checked out) is in the middle of a "+op+". Finish or abort it, then land.")
+		}
 	}
 	return nil, nil
+}
+
+// checkoutOf is the checkout that has branch checked out, among the
+// repo's worktrees; "" when none does.
+func checkoutOf(ctx context.Context, dir, branch string) string {
+	out, err := Git(ctx, dir, "worktree", "list", "--porcelain")
+	if err != nil {
+		return ""
+	}
+	path := ""
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			path = strings.TrimPrefix(line, "worktree ")
+		case line == "branch refs/heads/"+branch && exists(path):
+			return path
+		}
+	}
+	return ""
 }
 
 // MidOperation names the merge, rebase, cherry-pick or revert dir is in

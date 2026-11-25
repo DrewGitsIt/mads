@@ -11,26 +11,49 @@ import type { KeyedRow } from "./conversation";
  */
 export function joinRows(rows: KeyedRow[]): KeyedRow[] {
   const out: KeyedRow[] = [];
-  let bubble: KeyedRow | null = null;
+  let parts: KeyedRow[] = [];
+  const flush = () => {
+    if (parts.length > 0) out.push(joinBubble(parts));
+    parts = [];
+  };
   for (const r of rows) {
     if (isHidden(r)) continue;
     if (!isAgentText(r)) {
-      bubble = null;
+      flush();
       out.push(r);
       continue;
     }
-    if (bubble) {
-      bubble.text = joinText(bubble.text ?? "", r.text ?? "");
-      bubble.joined = [...(bubble.joined ?? [bubble.key]), r.key];
-      bubble.live = bubble.live || r.live;
-      bubble.open = r.open;
-      bubble.unsaved = bubble.unsaved || r.unsaved;
-      continue;
-    }
-    bubble = { ...r };
-    out.push(bubble);
+    parts.push(r);
   }
+  flush();
   return out;
+}
+
+/**
+ * The bubbles joined last, by their first row: a bubble whose rows are the
+ * same objects as last time is the same object as last time, so what
+ * renders it can tell it didn't change (docs/CHAT-STREAM-PER-BATCH-COST.md).
+ * Rows are immutable (the keyed reducer replaces a row it changes), so the
+ * same rows always join to the same bubble.
+ */
+const joined = new WeakMap<KeyedRow, { parts: KeyedRow[]; bubble: KeyedRow }>();
+
+/** One bubble from a run of adjacent text rows: the row itself when it's alone. */
+function joinBubble(parts: KeyedRow[]): KeyedRow {
+  const [first] = parts;
+  if (parts.length === 1) return first;
+  const hit = joined.get(first);
+  if (hit && hit.parts.length === parts.length && hit.parts.every((r, i) => r === parts[i])) return hit.bubble;
+  const bubble: KeyedRow = { ...first, joined: [first.key] };
+  for (const r of parts.slice(1)) {
+    bubble.text = joinText(bubble.text ?? "", r.text ?? "");
+    bubble.joined!.push(r.key);
+    bubble.live = bubble.live || r.live;
+    bubble.open = r.open;
+    bubble.unsaved = bubble.unsaved || r.unsaved;
+  }
+  joined.set(first, { parts, bubble });
+  return bubble;
 }
 
 /** The agent's own prose: not a notice, not the harness's error, not a subagent's. */

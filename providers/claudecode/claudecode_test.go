@@ -970,6 +970,29 @@ func TestToModelsKeepsAliasNotResolvedModel(t *testing.T) {
 	}
 }
 
+// Releases differ on whether the alias label carries a version ("Opus" vs
+// "Opus 5.5"); the resolved id fills it in so the picker reads the same on
+// every install, without ever touching the ID that --model receives.
+func TestToModelsAddsResolvedVersionToBareLabel(t *testing.T) {
+	got := toModels([]wireModel{
+		{Value: "default", ResolvedModel: "claude-opus-5-5", DisplayName: "Default (recommended)"},
+		{Value: "opus", ResolvedModel: "claude-opus-5-5", DisplayName: "Opus"},
+		{Value: "claude-fable-5-1[1m]", ResolvedModel: "claude-fable-5-1", DisplayName: "Fable"},
+		{Value: "sonnet", ResolvedModel: "claude-sonnet-5-5", DisplayName: "Sonnet 5.5"},
+		{Value: "haiku", ResolvedModel: "claude-haiku-4-5-20251001", DisplayName: "Haiku"},
+		{Value: "custom", ResolvedModel: "custom", DisplayName: "Custom"},
+	})
+	want := []string{"Default (recommended)", "Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 4.5", "Custom"}
+	for i, w := range want {
+		if got[i].Name != w {
+			t.Errorf("models[%d].Name = %q, want %q", i, got[i].Name, w)
+		}
+	}
+	if got[1].ID != "opus" {
+		t.Errorf("ID = %q, want the alias kept", got[1].ID)
+	}
+}
+
 // Config.Models pins the list for operators and tests, and must short-circuit
 // the probe entirely — proven here by a Bin that could not possibly run.
 func TestModelsConfigOverrideSkipsProbe(t *testing.T) {
@@ -1739,5 +1762,26 @@ func TestStreamSessionSubagentUsage(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("%d subagent usage events, want 1 (the main agent's call isn't one)", n)
+	}
+}
+
+// A ref with no file under TranscriptDir reads as provider.ErrTranscriptMissing,
+// both forms, and the retention setting is the config dir's settings.json.
+func TestTranscriptMissingAndRetention(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".claude", "projects")
+	if err := os.MkdirAll(filepath.Join(root, "-"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := New(Config{TranscriptDir: root})
+	if _, err := p.Transcript(context.Background(), "gone-ref"); !errors.Is(err, provider.ErrTranscriptMissing) {
+		t.Fatalf("Transcript err = %v, want ErrTranscriptMissing", err)
+	}
+	if _, err := p.KeyedTranscript(context.Background(), "gone-ref"); !errors.Is(err, provider.ErrTranscriptMissing) {
+		t.Fatalf("KeyedTranscript err = %v, want ErrTranscriptMissing", err)
+	}
+	got := p.TranscriptRetention()
+	want := &provider.Retention{File: filepath.Join(filepath.Dir(root), "settings.json"), Setting: "cleanupPeriodDays", DefaultDays: 30}
+	if got == nil || *got != *want {
+		t.Fatalf("TranscriptRetention = %+v, want %+v", got, want)
 	}
 }

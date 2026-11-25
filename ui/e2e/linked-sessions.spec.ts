@@ -7,6 +7,7 @@ import {
   sendChatMessage,
   setConfig,
 } from "./lib/seed";
+import { apiFetch } from "./lib/auth";
 
 test.describe("linked sessions: link UI behind the flag", () => {
   test.describe.configure({ mode: "serial" });
@@ -207,7 +208,7 @@ test.describe("linked sessions: two isolated sessions can't be linked", () => {
     expect(posted).toBe(false);
 
     // The server holds the same rule, and its refusal is a sentence.
-    const res = await fetch(`${routerURL}/links`, {
+    const res = await apiFetch(`${routerURL}/links`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ granting_session_id: aId, subject_session_id: bId, preset: "monitor" }),
@@ -219,7 +220,7 @@ test.describe("linked sessions: two isolated sessions can't be linked", () => {
     expect(message).toMatch(/each have their own isolated copy of the repo/);
     expect(message).toMatch(/link them when starting the second session/);
     // Nothing was linked.
-    const links = (await (await fetch(`${routerURL}/sessions/${aId}/links`)).json()) as unknown[];
+    const links = (await (await apiFetch(`${routerURL}/sessions/${aId}/links`)).json()) as unknown[];
     expect(links).toEqual([]);
   });
 });
@@ -227,7 +228,7 @@ test.describe("linked sessions: two isolated sessions can't be linked", () => {
 async function pollWorktreeDir(routerURL: string, id: string, timeoutMs = 15_000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const res = await fetch(`${routerURL}/sessions/${id}`);
+    const res = await apiFetch(`${routerURL}/sessions/${id}`);
     if (res.ok) {
       const s = (await res.json()) as { worktree_dir?: string };
       if (s.worktree_dir) return s.worktree_dir;

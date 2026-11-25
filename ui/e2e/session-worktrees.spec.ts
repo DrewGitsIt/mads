@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import path from "node:path";
 import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
+import { apiFetch } from "./lib/auth";
 
 /**
  * Session worktrees, end to end (docs/SESSION-WORKTREES-DESIGN.md): a
@@ -48,7 +49,7 @@ function git(dir: string, ...args: string[]): string {
 }
 
 async function getSession(routerURL: string, id: string): Promise<SessionRecord> {
-  const res = await fetch(`${routerURL}/sessions/${id}`);
+  const res = await apiFetch(`${routerURL}/sessions/${id}`);
   if (!res.ok) throw new Error(`GET /sessions/${id}: ${res.status}`);
   return (await res.json()) as SessionRecord;
 }
@@ -206,12 +207,13 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
     expect(existsSync(path.join(primary, A))).toBe(false);
   });
 
-  test("c. Land merges into the base; the card survives a reload", async ({ page, routerURL }) => {
+  test("c. Land squashes into the base after a confirmation; the card survives a reload", async ({ page, routerURL }) => {
     await page.goto(routerURL);
     await page.locator('[aria-label="Session list"]').getByText(name, { exact: true }).click();
     const work = page.locator("[data-work-state]");
     await expect(work).toHaveAttribute("data-work-state", "land");
     await work.click();
+    await confirmLand(page, `Land wt-a ${token}`);
 
     const panel = page.locator("#workspace-panel-conversation");
     const landed = panel.locator('[data-worktree-card="landed"]');
@@ -220,11 +222,12 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
     await expect(page.locator("[data-work-state]")).toHaveCount(0);
     await shot(page, "05-landed-card.png", landed);
 
-    // Disk: the base branch has the file, as a --no-ff merge of the
-    // session branch, and the user's checkout is on it and clean of merges.
+    // Disk: the base branch has the file, as one squash commit with the
+    // user's message, and the user's checkout is on it and clean of merges.
     expect(git(primary, "show", `${base}:${A}`)).toBe(`alpha ${token}`);
     expect(readFileSync(path.join(primary, A), "utf8")).toBe(`alpha ${token}\n`);
-    expect(git(primary, "log", "-1", "--format=%P", base).split(" ")).toHaveLength(2);
+    expect(git(primary, "log", "-1", "--format=%P", base).split(" ")).toHaveLength(1);
+    expect(git(primary, "log", "-1", "--format=%s", base)).toBe(`Land wt-a ${token}`);
     expect(midMerge(primary)).toBe(false);
     expect((await getSession(routerURL, id)).unlanded_count ?? 0).toBe(0);
 
@@ -256,6 +259,7 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
     const work = page.locator("[data-work-state]");
     await expect(work).toHaveAttribute("data-work-state", "land");
     await work.click();
+    await confirmLand(page, `Land ${C}`);
 
     const panel = page.locator("#workspace-panel-conversation");
     const conflicted = panel.locator('[data-worktree-card="conflicted"]');
@@ -264,13 +268,7 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
     await expect(conflicted).toContainText(C);
     await shot(page, "06-conflict-card.png", conflicted);
 
-    // The Land click opened the dock's ⎇ popover, which shows the same
-    // outcome at the button — and its own Ask the agent (it covers the
-    // card's corner while open, so that's the one to use).
-    const outcome = page.locator('[data-testid="work-popover"] [data-testid="land-outcome"]');
-    await expect(outcome).toHaveAttribute("data-kind", "conflicted");
-    await outcome.getByRole("button", { name: "Ask the agent to resolve" }).click();
-    await expect(page.locator('[data-testid="work-popover"]')).toHaveCount(0);
+    await conflicted.getByRole("button", { name: "Ask the agent to resolve" }).click();
     const composer = page.getByPlaceholder(COMPOSER);
     await expect(composer).toHaveValue(
       `Merge ${base} into this branch and resolve the conflicts in ${C}, keeping both sides' changes. Then commit the merge.`,
@@ -306,6 +304,10 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
     const work = page.locator("[data-work-state]");
     await expect(work).toHaveAttribute("data-work-state", "land");
     await work.click();
+    // The refusal stays in the confirmation; the card records it too.
+    const dialog = await confirmLand(page, `Land ${A}`, { stays: true });
+    await expect(dialog).toContainText(A);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
 
     const panel = page.locator("#workspace-panel-conversation");
     const refused = panel.locator('[data-worktree-card="refused"]').last();
@@ -337,6 +339,7 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
       .last()
       .getByRole("button", { name: "Land again" })
       .click();
+    await confirmLand(page, "Land again after the folder came back");
 
     await expect(panel.locator('[data-worktree-card="ensured"]')).toContainText(
       "Recreated this session's folder",
@@ -380,6 +383,7 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
       const work = page.locator("[data-work-state]");
       await expect(work).toHaveAttribute("data-work-state", "land");
       await work.click();
+      await confirmLand(page, `Land ${M}`);
 
       const panel = page.locator("#workspace-panel-conversation");
       const auto = panel.locator('[data-worktree-card="auto-resolved"]');
@@ -394,13 +398,8 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
       expect(git(folder, "log", "-1", "--format=%P").split(" ")).toContain(baseHead);
       expect(git(folder, "status", "--porcelain")).toBe("");
 
-      // Ask the agent drafts a message, and sends nothing. The Land click
-      // left the dock's ⎇ popover open on the same outcome; its button is
-      // the one in reach (and closes the popover).
-      const outcome = page.locator('[data-testid="work-popover"] [data-testid="land-outcome"]');
-      await expect(outcome).toHaveAttribute("data-kind", "autoResolved");
-      await outcome.getByRole("button", { name: "Ask the agent to check" }).click();
-      await expect(page.locator('[data-testid="work-popover"]')).toHaveCount(0);
+      // Ask the agent drafts a message, and sends nothing.
+      await auto.getByRole("button", { name: "Ask the agent to check" }).click();
       const composer = page.getByPlaceholder(COMPOSER);
       await expect(composer).toHaveValue(new RegExp(`resolved ${M.replace(/\./g, "\\.")} automatically`));
       await composer.fill("");
@@ -420,6 +419,7 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
       // Back in the conversation, Land again lands it.
       await page.locator("#workspace-tab-conversation").click();
       await auto.getByRole("button", { name: "Land again" }).click();
+      await confirmLand(page, `Land ${M} after checking`);
       await expect(panel.locator('[data-worktree-card="landed"]')).toHaveCount(4);
       expect(readFileSync(path.join(primary, M), "utf8")).toMatch(/from the (session|base)\nfrom the (base|session)\n/);
       expect(midMerge(primary)).toBe(false);
@@ -446,8 +446,8 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
     const rail = page.locator('[aria-label="Session list"]');
     const row = rail.getByText(name, { exact: true });
     const card = row.locator('xpath=ancestor::div[@role="button"][1]');
-    // The rail's hollow marker: this session has uncommitted changes.
-    await expect(card.locator('[data-work-mark="commit"]')).toBeVisible();
+    // The rail's work note: this session has uncommitted changes.
+    await expect(card.locator('[data-work-note="commit"]')).toHaveText("· uncommitted changes");
     await shot(page, "09-rail-markers.png");
 
     await row.hover();
@@ -461,7 +461,8 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
 
     // Disk: folder and branch gone; the user's checkout keeps what landed.
     await expect.poll(() => existsSync(folder), { timeout: 10_000 }).toBe(false);
-    expect(git(primary, "branch", "--list", `mads/session/${id}`)).toBe("");
+    // The branch goes after the folder (worktree remove, prune, branch -D).
+    await expect.poll(() => git(primary, "branch", "--list", `mads/session/${id}`), { timeout: 10_000 }).toBe("");
     expect(git(primary, "worktree", "list")).not.toContain(folder);
     expect(readFileSync(path.join(primary, A), "utf8")).toBe(`alpha changed by the session ${token}\n`);
     expect(git(primary, "status", "--porcelain")).toBe("");
@@ -479,7 +480,11 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
 
 /** POST /sessions/{id}/land — setup, where the card isn't under test. */
 async function landViaAPI(routerURL: string, id: string, want: string): Promise<void> {
-  const res = await fetch(`${routerURL}/sessions/${id}/land`, { method: "POST" });
+  const res = await apiFetch(`${routerURL}/sessions/${id}/land`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: `Land (${want}) by the test` }),
+  });
   if (!res.ok) throw new Error(`land: ${res.status} ${await res.text()}`);
   const body = (await res.json()) as { outcome: string };
   if (body.outcome !== want) throw new Error(`land: ${JSON.stringify(body)}, want ${want}`);
@@ -513,7 +518,7 @@ function mergeDriverState(dir: string): string {
 
 /** POST /sessions/{id}/commit with every uncommitted session file — setup, where the dialog isn't under test. */
 async function commitAll(routerURL: string, id: string, message: string): Promise<void> {
-  const res = await fetch(`${routerURL}/sessions/${id}/commit`, {
+  const res = await apiFetch(`${routerURL}/sessions/${id}/commit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message }),
@@ -545,14 +550,14 @@ async function waitForSession(
  */
 async function agentWrites(routerURL: string, id: string, file: string, content: string): Promise<void> {
   const wrote = async () => {
-    const res = await fetch(`${routerURL}/sessions/${id}/transcript`);
+    const res = await apiFetch(`${routerURL}/sessions/${id}/transcript`);
     const messages = res.ok ? ((await res.json()) as { text?: string }[]) : [];
     return messages.filter((m) => m.text?.trim() === `wrote ${file}`).length;
   };
   const before = await wrote();
   const deadline = Date.now() + 15_000;
   for (;;) {
-    const res = await fetch(`${routerURL}/sessions/${id}/messages`, {
+    const res = await apiFetch(`${routerURL}/sessions/${id}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: `write-file ${file} ${content}` }),
@@ -563,4 +568,18 @@ async function agentWrites(routerURL: string, id: string, file: string, content:
     await new Promise((r) => setTimeout(r, 200));
   }
   await expect.poll(wrote, { timeout: 15_000 }).toBeGreaterThan(before);
+}
+
+/**
+ * Land always asks first (D12): writes the landing message in the
+ * confirmation and lands. Unless the outcome keeps it open (a refusal), it
+ * waits for the confirmation to close.
+ */
+async function confirmLand(page: Page, message: string, opts: { stays?: boolean } = {}): Promise<Locator> {
+  const dialog = page.getByRole("alertdialog", { name: /^Land / });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel("Landing message").fill(message);
+  await dialog.getByRole("button", { name: /^Land into / }).click();
+  if (!opts.stays) await expect(dialog).toHaveCount(0, { timeout: 20_000 });
+  return dialog;
 }

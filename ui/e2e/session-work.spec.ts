@@ -11,6 +11,7 @@ import {
   runFakePipeline,
   setupWorkspace,
 } from "./lib/seed";
+import { apiFetch } from "./lib/auth";
 
 const changedFilePath = "src/example.ts";
 const commitMessage = "e2e: seed a real pipeline commit";
@@ -68,7 +69,7 @@ test.describe("session workspace: tasks and changes tabs", () => {
     [secondRunTask] = await importTasks(routerURL, sessionId, ["e2e second pipeline run task"]);
     runFakePipeline(runFakePipelineOpts);
 
-    const runsRes = await fetch(`${routerURL}/metrics/pipelines?session_id=${sessionId}`);
+    const runsRes = await apiFetch(`${routerURL}/metrics/pipelines?session_id=${sessionId}`);
     if (!runsRes.ok) throw new Error(`metricsPipelineRuns: status ${runsRes.status}`);
     const runs = (await runsRes.json()) as { run_seq: number }[];
     if (runs.length !== 2) throw new Error(`expected 2 seeded pipeline runs, got ${runs.length}`);

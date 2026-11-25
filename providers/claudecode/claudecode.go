@@ -162,8 +162,11 @@ func (p *Provider) Matrix() provider.Matrix {
 		// 2.1.285). Stopping one alone (stop_task) isn't wired yet.
 		provider.BehaviorDelegateLifecycle:  provider.Native,
 		provider.BehaviorDelegateTranscript: provider.Native,
-		provider.BehaviorDelegateSteer:      provider.Emulated,
-		provider.BehaviorDelegateStop:       provider.Unsupported,
+		// A run_in_background Bash writes to the CLI's per-session scratch
+		// dir; background_output.go finds and checks that file. Claude Code only.
+		provider.BehaviorBackgroundOutput: provider.Native,
+		provider.BehaviorDelegateSteer:    provider.Emulated,
+		provider.BehaviorDelegateStop:     provider.Unsupported,
 		// Keys are claude's own ids, written the same on stdout and in the
 		// JSONL: message id + block index, tool_use id, the user line's
 		// uuid (stdin "uuid" through SendKeyed) — keys.go, README.

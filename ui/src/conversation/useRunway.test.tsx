@@ -98,6 +98,26 @@ describe("useRunway", () => {
     expect(spacerPx(spacer)).toBe(400);
   });
 
+  // A glide on open runs from the top through the older-page trigger, and the
+  // page landing mid-glide could restore the reader far above the end.
+  it("opens history whose reply is pages long at its end, without a glide", () => {
+    tail = 3000;
+    const { el, spacer } = mount({ active: false, live: false });
+    expect(runway.beforePin(el)).toBe(false);
+    expect(spacer.dataset.pages).toBe("4");
+    expect(spacerPx(spacer)).toBe(0);
+  });
+
+  it("opens a running turn pages in without a glide, then turns the next page as usual", () => {
+    tail = 1495;
+    const { el, spacer } = mount({ active: true, live: false });
+    expect(runway.beforePin(el)).toBe(false);
+    expect(spacer.dataset.pages).toBe("1");
+    tail = 1495 + page;
+    expect(runway.beforePin(el)).toBe(true);
+    expect(spacer.dataset.pages).toBe("2");
+  });
+
   it("trims only what's below the view once the turn is over", () => {
     const { el, spacer, rerender } = mount({ active: true });
     runway.beforePin(el);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RouterClient } from "../../../router/client";
-import { subscribeToEvents } from "../../../router/events";
+import { eventsReady, subscribeToEvents } from "../../../router/events";
 import { getAllEvents } from "../../../router/eventPages";
 import type { Delegate, DelegateCapabilities, Envelope, Session, ToolUse } from "../../../router/types";
 import { ContentColumn } from "../../../components/ContentColumn/ContentColumn";
@@ -17,7 +17,9 @@ import {
 import { KindIcon } from "../../../conversation/activity/primitives";
 import { useDelegateFile } from "../../../conversation/activity/useDelegateFile";
 import { useStickToBottom } from "../../../conversation/useStickToBottom";
+import { glideTo, useJumpKeys } from "../../../conversation/useJumpKeys";
 import { TaskCounters, TaskStatusGlyph } from "../../../conversation/activity/TaskCard";
+import { waitingOnText } from "../../../router/delegateLive";
 import styles from "./DelegateView.module.css";
 
 /**
@@ -47,6 +49,11 @@ export interface DelegateViewProps {
   routerClient: RouterClient;
   /** Back to the parent session's conversation. */
   onBack: () => void;
+  /**
+   * Opens another of the session's delegates in the main pane — one this
+   * delegate spawned, from its card in the stream. The rail's path.
+   */
+  onOpenDelegate?: (d: Delegate) => void;
 }
 
 /**
@@ -61,10 +68,14 @@ export interface DelegateViewProps {
  * prompt, its own text and the harness's timestamps. Where it doesn't — or
  * not yet — it comes from what mads recorded live (session.subagent_event),
  * which has the tool calls but none of the delegate's text, read back in
- * full only then.
+ * full only then; its lifecycle lines add each run's input and report.
  */
-export function DelegateView({ sessionId, harnessId, parent, routerClient, onBack }: DelegateViewProps) {
-  const [record, setRecord] = useState<Delegate>();
+export function DelegateView({ sessionId, harnessId, parent, routerClient, onBack, onOpenDelegate }: DelegateViewProps) {
+  // The session's whole delegate list, keyed by harness id, not just this
+  // one's record: the subagents it spawned show as live cards in its stream,
+  // and its own parent (if a subagent spawned it) is named in the header.
+  const [delegates, setDelegates] = useState<ReadonlyMap<string, Delegate>>(() => new Map());
+  const record = delegates.get(harnessId);
   const [missing, setMissing] = useState(false);
   const [envelopes, setEnvelopes] = useState<Envelope[]>([]);
   // Live and replayed envelopes meet here, deduped by seq, in log order.
@@ -78,28 +89,35 @@ export function DelegateView({ sessionId, harnessId, parent, routerClient, onBac
 
   useEffect(() => {
     let cancelled = false;
-    setRecord(undefined);
+    setDelegates(new Map());
     setMissing(false);
     setEnvelopes([]);
-    // Subscribed before the reads, so nothing falls in the gap; the reads
-    // merge under anything live (dedupe by seq; newest record wins).
+    // Subscribed before the reads, and the reads behind the bus's ready
+    // barrier (router/events.ts eventsReady), so nothing falls in the gap;
+    // the reads merge under anything live (dedupe by seq; newest record wins).
     const unsubRecord = subscribeToEvents({ sessionId, types: ["session.delegate_changed"] }, (env) => {
       const d = env.payload as Delegate | undefined;
-      if (d?.harness_id === harnessId) setRecord(d);
+      if (d?.harness_id) setDelegates((cur) => new Map(cur).set(d.harness_id, d));
     });
     const unsubStream = subscribeToEvents({ sessionId, types: DELEGATE_EVENT_TYPES }, (env) => addEnvelopes([env]));
-    routerClient
-      .getSessionDelegates(sessionId)
+    const ready = eventsReady(sessionId);
+    ready
+      .then(() => (cancelled ? [] : routerClient.getSessionDelegates(sessionId)))
       .then((list) => {
         if (cancelled) return;
-        const d = list.find((x) => x.harness_id === harnessId);
-        if (d) setRecord((cur) => cur ?? d);
-        else setMissing(true);
+        // Under anything live: the stream is newer than this snapshot.
+        setDelegates((cur) => {
+          const next = new Map(cur);
+          for (const d of list) if (!next.has(d.harness_id)) next.set(d.harness_id, d);
+          return next;
+        });
+        if (!list.some((x) => x.harness_id === harnessId)) setMissing(true);
       })
       .catch(() => {
         if (!cancelled) setMissing(true);
       });
-    getAllEvents(routerClient, { sessionId, types: DELEGATE_REPLAY_TYPES })
+    ready
+      .then(() => (cancelled ? [] : getAllEvents(routerClient, { sessionId, types: DELEGATE_REPLAY_TYPES })))
       .then((history) => {
         if (!cancelled) addEnvelopes(history);
       })
@@ -122,7 +140,10 @@ export function DelegateView({ sessionId, harnessId, parent, routerClient, onBac
   useEffect(() => {
     if (!noFile) return;
     let cancelled = false;
-    getAllEvents(routerClient, { sessionId, types: ["session.subagent_event"] })
+    // Behind the ready barrier like the reads above: this merges with the
+    // live session.subagent_event subscription.
+    eventsReady(sessionId)
+      .then(() => (cancelled ? [] : getAllEvents(routerClient, { sessionId, types: ["session.subagent_event"] })))
       .then((stream) => {
         if (!cancelled) addEnvelopes(stream);
       })
@@ -143,6 +164,16 @@ export function DelegateView({ sessionId, harnessId, parent, routerClient, onBac
     () => fromFile ?? ((anchor && history.subagentStreams.get(anchor)) || []),
     [fromFile, anchor, history.subagentStreams],
   );
+  // Its own spawns, by the call that spawned them — never itself, whose
+  // spawning call lives in its parent's stream.
+  const spawned = useMemo(() => {
+    const byTool = new Map<string, Delegate>();
+    for (const d of delegates.values()) {
+      if (d.tool_use_id && d.harness_id !== harnessId) byTool.set(d.tool_use_id, d);
+    }
+    return byTool;
+  }, [delegates, harnessId]);
+  const spawnedBy = record?.parent_harness_id ? delegates.get(record.parent_harness_id) : undefined;
   const title = record?.description || model?.description || record?.type || "Subagent";
   const type = record?.type ?? model?.subagentType;
   const running = model?.running ?? false;
@@ -174,6 +205,18 @@ export function DelegateView({ sessionId, harnessId, parent, routerClient, onBac
   // go the moment the user scrolls up — the conversation pane's rule
   // (useStickToBottom).
   const stick = useStickToBottom();
+  // Cmd/Ctrl ↑↑ / ↓↓: the start of its stream, or back to following the tail
+  // (a delegate has no messages of its own to hop between).
+  useJumpKeys(stick.element, {
+    toTop: (el) => {
+      stick.release();
+      glideTo(el, 0);
+    },
+    toBottom: (el) => {
+      stick.follow();
+      glideTo(el, el.scrollHeight);
+    },
+  });
 
   // The parent's workspace and branch: where the delegate works unless it
   // has a worktree (or a branch) of its own.
@@ -201,7 +244,7 @@ export function DelegateView({ sessionId, harnessId, parent, routerClient, onBac
         </div>
         {record && (
           <div className={styles.facts}>
-            {facts(record)}
+            {facts(record, spawnedBy)}
             {file && (fromFile ? " · From its own transcript" : " · As mads recorded it live")}
           </div>
         )}
@@ -215,17 +258,20 @@ export function DelegateView({ sessionId, harnessId, parent, routerClient, onBac
             <SubagentStream
               items={items}
               running={running}
-              summary={model?.summary}
               statuses={history.statuses}
               selectedToolId={openTool?.id}
               onOpenTool={(tool) => setOpenTool({ id: tool.id, tool })}
+              delegatesByToolUse={spawned}
+              onOpenDelegate={onOpenDelegate}
             />
           )}
         </ContentColumn>
-        {running && (
+        {running ? (
           <div className={styles.pinned}>
             <WorkingIndicator tool={inFlight} since={model?.startedAt ?? record?.started_at} />
           </div>
+        ) : (
+          <div className={styles.end} aria-hidden="true" />
         )}
       </div>
       {record && (
@@ -249,12 +295,21 @@ export function DelegateView({ sessionId, harnessId, parent, routerClient, onBac
   );
 }
 
-/** One line of what the record knows beyond the header: how it ran and how it ended. */
-function facts(d: Delegate): string {
+/**
+ * One line of what the record knows beyond the header: how it ran, who
+ * spawned it when that was another subagent, and how it ended — or, when
+ * its turn ended with work it owns still running, what it is waiting on.
+ */
+function facts(d: Delegate, spawnedBy?: Delegate): string {
   const parts: string[] = [];
   parts.push(d.backgrounded ? "Ran in the background" : "Ran in the foreground");
   if (d.runs > 1) parts.push(`${d.runs} runs`);
-  if (d.state !== "running") {
+  if (d.parent_harness_id) {
+    parts.push(`Spawned by ${spawnedBy?.description || spawnedBy?.type || "another subagent"}`);
+  }
+  if (d.waiting_on && d.state !== "running") {
+    parts.push(`Its turn ended; waiting on ${waitingOnText(d.waiting_on)}. It picks up again when they report back.`);
+  } else if (d.state !== "running") {
     const why = d.reason && d.reason !== d.state ? ` (${d.reason.replace("_", " ")})` : "";
     parts.push(`${d.state[0].toUpperCase()}${d.state.slice(1)}${why}${d.inferred ? " — concluded by mads, no report from the agent" : ""}`);
   }

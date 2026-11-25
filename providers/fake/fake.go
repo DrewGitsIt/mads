@@ -14,12 +14,21 @@
 //	                    journey needs
 //	"slow"      → streams until interrupted
 //	"recall"    → replies with markers echoed earlier in the conversation
+//	"background [n] [ms] [shape] [gone|killed|silent|fail]"
+//	            → starts a background process writing n lines ("line 1"…,
+//	              default 5) every ms (default 200) in a harness's shape
+//	              (default claude-code; see background.go), then its
+//	              closing line; gone removes the file after, killed and
+//	              fail change the closing line, silent writes none
 //	"crash"     → dies mid-turn (event stream closes with no turn end)
 //	"ratelimit" → the turn fails with a rate-limit error
 //	"fail once <x>" → fails like "ratelimit" the first time it's sent in a
 //	                  conversation, then replies as "echo <x>" — a retry
 //	                  that succeeds
 //	anything    → "ok"
+//
+// Built with -tags perf (the perf harness only, never a release), perf.go
+// adds a "permission" dialect and MADS_FAKE_START_DELAY_MS.
 //
 // A message MADS wrapped (pkg/linkwrap — a linked session's message, a
 // digest, a notice) is read as its bodies joined, so an injected "echo <x>"
@@ -29,12 +38,15 @@ package fake
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -95,6 +107,8 @@ type Fake struct {
 	// oneShotResumes records every OneShot's Resume ref, in order
 	// (ResumeCalls).
 	oneShotResumes []string
+	// backgroundDir holds background processes' output (background.go).
+	backgroundDir string
 }
 
 // Option configures a Fake at construction. The zero value of every Option
@@ -238,8 +252,11 @@ func (f *Fake) Matrix() provider.Matrix {
 		// this adapter's wire.
 		provider.BehaviorDelegateLifecycle:  provider.Unsupported,
 		provider.BehaviorDelegateTranscript: provider.Unsupported,
-		provider.BehaviorDelegateSteer:      provider.Unsupported,
-		provider.BehaviorDelegateStop:       provider.Unsupported,
+		// A Background tool step writes its output where OpenBackgroundOutput
+		// finds it, in a scripted harness's shape (background.go).
+		provider.BehaviorBackgroundOutput: provider.Native,
+		provider.BehaviorDelegateSteer:    provider.Unsupported,
+		provider.BehaviorDelegateStop:     provider.Unsupported,
 		// Every item is keyed live and in the in-memory store, and
 		// TranscriptSince reads the store by row index.
 		provider.BehaviorStableKeys: provider.Native,
@@ -254,6 +271,7 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 	if opts.Mode != provider.ModeACP && opts.Mode != provider.ModePTY {
 		return nil, fmt.Errorf("mode %q: %w", opts.Mode, provider.ErrUnsupported)
 	}
+	startDelay()
 	f.mu.Lock()
 	f.starts = append(f.starts, opts)
 	ref := opts.Resume
@@ -279,8 +297,12 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 			f.histories[ref] = []provider.Message{}
 		}
 	} else if _, known := f.histories[ref]; !known {
-		f.mu.Unlock()
-		return nil, fmt.Errorf("resume: unknown session ref %q", ref)
+		if h, ok := perfHistory(ref); ok {
+			f.histories[ref] = h
+		} else {
+			f.mu.Unlock()
+			return nil, fmt.Errorf("resume: unknown session ref %q", ref)
+		}
 	}
 	if f.liveRefs[ref] {
 		f.mu.Unlock()
@@ -315,6 +337,7 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 	s := &fakeSession{
 		f: f, ref: ref, mode: opts.Mode, cwd: opts.Cwd, trust: trust,
 		announced: announced, refAnnounce: timing, refCh: refCh, settle: opts.Keyed,
+		asker:     opts.Permissions,
 		events:    make(chan provider.Event, 256),
 		interrupt: make(chan struct{}, 1),
 	}
@@ -553,7 +576,7 @@ func (f *Fake) KeyedTranscript(_ context.Context, ref string) ([]provider.Messag
 		return append([]provider.Message{}, msgs...), nil
 	}
 	if dir == "" {
-		return nil, fmt.Errorf("unknown session ref %q", ref)
+		return nil, fmt.Errorf("unknown session ref %q: %w", ref, provider.ErrTranscriptMissing)
 	}
 	return readTranscriptFile(dir, ref)
 }
@@ -573,7 +596,8 @@ func (f *Fake) TranscriptSince(ctx context.Context, ref string, cursor provider.
 }
 
 // unwrap is prompt with any MADS wrappers taken off: the block bodies,
-// joined as the runner joins a coalesced run.
+// joined as the runner joins a coalesced run, and the human's text after
+// attached updates.
 func unwrap(prompt string) string {
 	segs, ok := linkwrap.Parse(prompt)
 	if !ok {
@@ -581,8 +605,11 @@ func unwrap(prompt string) string {
 	}
 	parts := make([]string, 0, len(segs))
 	for _, s := range segs {
-		if s.Block != nil {
+		switch {
+		case s.Block != nil:
 			parts = append(parts, s.Block.Body)
+		case s.Human:
+			parts = append(parts, s.Text)
 		}
 	}
 	return strings.Join(parts, "\n\n")
@@ -606,7 +633,20 @@ type turnPlan struct {
 	hold    bool
 	// thinking: the rule's Thinking.
 	thinking string
+	// perf plays the whole turn instead (a perf-tagged dialect, perf.go).
+	perf func(s *fakeSession, prompt string, turn int)
 }
+
+// Hooks for the perf-tagged dialects (perf.go, -tags perf). Untagged
+// builds, releases among them, keep these no-ops.
+var (
+	// startDelay runs at the top of every Start.
+	startDelay = func() {}
+	// perfPlan plans a turn for a perf-only dialect; ok=false for any other prompt.
+	perfPlan = func(prompt string) (turnPlan, bool) { return turnPlan{}, false }
+	// perfHistory supplies a resumed ref's history this Fake never saw.
+	perfHistory = func(ref string) ([]provider.Message, bool) { return nil, false }
+)
 
 func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) turnPlan {
 	prompt = unwrap(prompt)
@@ -629,6 +669,9 @@ func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) tur
 		}
 		p.blocks, p.hold, p.thinking = r.Blocks, r.HoldUntilToolDone, r.Thinking
 		p.userLag = time.Duration(r.UserLagMs) * time.Millisecond
+		return p
+	}
+	if p, ok := perfPlan(prompt); ok {
 		return p
 	}
 	switch {
@@ -691,6 +734,8 @@ func (f *Fake) plan(prompt string, history []provider.Message, resumed bool) tur
 			blocks: [][]string{{"Looking. "}, {"One file."}},
 			tools:  []ToolStep{{Name: "ls", Result: "a.txt"}},
 		}
+	case prompt == "background" || strings.HasPrefix(prompt, "background "):
+		return turnPlan{tools: []ToolStep{{Background: backgroundFromPrompt(strings.TrimPrefix(prompt, "background"))}}, chunks: []string{"started it in the background"}}
 	case prompt == "attempt-command":
 		return turnPlan{
 			tools:  []ToolStep{{Name: "run_command", Command: true}},
@@ -747,8 +792,11 @@ func writeTranscriptFile(dir, ref string, msgs []provider.Message) {
 // instance that never ran ref's turns itself.
 func readTranscriptFile(dir, ref string) ([]provider.Message, error) {
 	raw, err := os.ReadFile(transcriptFilePath(dir, ref))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("unknown session ref %q: %w", ref, provider.ErrTranscriptMissing)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("unknown session ref %q", ref)
+		return nil, fmt.Errorf("transcript %s: %w", ref, err)
 	}
 	var msgs []provider.Message
 	if err := json.Unmarshal(raw, &msgs); err != nil {
@@ -828,10 +876,14 @@ type fakeSession struct {
 
 	// settle: the session asked for EventSettle (StartOptions.Keyed).
 	settle bool
+	// asker is StartOptions.Permissions (asked by perf.go's "permission" dialect).
+	asker provider.PermissionAsker
 
 	mu        sync.Mutex
 	closed    bool
 	announced bool // see Start's construction comment
+
+	bgState // background processes (background.go)
 }
 
 // itemKey is the fake's native id for one item of a turn: unique within
@@ -859,13 +911,17 @@ func (s *fakeSession) SendKeyed(ctx context.Context, text, id string) error {
 // and the refusal reason to emit when it is not. TrustFull (and the zero
 // value, normalized to TrustFull in Start) always allows every tool.
 func (s *fakeSession) toolAllowed(ts ToolStep) (bool, string) {
+	if ts.Background != nil {
+		sh, _ := s.f.shape(ts.Background.Shape)
+		ts.Name = sh.ToolName
+	}
 	switch s.trust {
 	case provider.TrustLimited:
-		if ts.Command {
+		if ts.Command || ts.Background != nil {
 			return false, fmt.Sprintf("trust %s refuses tool %q", s.trust, ts.Name)
 		}
 	case provider.TrustReadOnly:
-		if ts.Command || (ts.Path != "" && ts.Content != "") {
+		if ts.Command || ts.Background != nil || (ts.Path != "" && ts.Content != "") {
 			return false, fmt.Sprintf("trust %s refuses tool %q", s.trust, ts.Name)
 		}
 	}
@@ -1041,6 +1097,10 @@ func (s *fakeSession) respond(prompt string, plan turnPlan, turn int, user provi
 		s.respondBlocks(prompt, plan, turn)
 		return
 	}
+	if plan.perf != nil {
+		plan.perf(s, prompt, turn)
+		return
+	}
 	for i, ts := range plan.tools {
 		if allowed, reason := s.toolAllowed(ts); !allowed {
 			s.emit(provider.Event{Kind: provider.EventError, Text: reason})
@@ -1110,6 +1170,9 @@ func (s *fakeSession) respond(prompt string, plan turnPlan, turn int, user provi
 // instead of storing them (hold_until_tool_done) and stores them all once
 // the result is in; false means the session closed.
 func (s *fakeSession) runTool(ts ToolStep, key string, held *[]provider.Message) bool {
+	if ts.Background != nil {
+		return s.runBackgroundTool(ts, key, held)
+	}
 	ev := toolEvent(ts)
 	ev.Key = key
 	call := provider.Message{Role: "tool", Tool: ev.Tool, Key: key}
@@ -1138,6 +1201,38 @@ func (s *fakeSession) runTool(ts ToolStep, key string, held *[]provider.Message)
 	} else {
 		s.store(result)
 	}
+	return true
+}
+
+// runBackgroundTool is runTool for a Background step: the call, then at
+// once its result (the process is still running), then the process itself
+// writing in the background. An unusable step is an error event, and the
+// turn carries on.
+func (s *fakeSession) runBackgroundTool(ts ToolStep, key string, held *[]provider.Message) bool {
+	call, result, text, path, rec, err := s.startBackground(ts, key)
+	if err != nil {
+		return s.emit(provider.Event{Kind: provider.EventError, Text: err.Error()})
+	}
+	rows := []provider.Message{
+		{Role: "tool", Tool: call, Key: key},
+		{Role: "tool_result", Text: text, Tool: result, Key: key},
+	}
+	if held != nil {
+		*held = append(*held, rows...)
+		for _, m := range *held {
+			s.store(m)
+		}
+		*held = nil
+	} else {
+		for _, m := range rows {
+			s.store(m)
+		}
+	}
+	if !s.emit(provider.Event{Kind: provider.EventToolUse, Key: key, Tool: call}) ||
+		!s.emit(provider.Event{Kind: provider.EventToolResult, Key: key, Text: text, Tool: result}) {
+		return false
+	}
+	s.runBackground(ts, key, path, rec)
 	return true
 }
 
@@ -1274,4 +1369,37 @@ func (lf *LocatingFake) LocateSession(ctx context.Context, cwd string, spawnedAf
 	case <-ctx.Done():
 		return "", false
 	}
+}
+
+// backgroundFromPrompt reads the "background" dialect's arguments.
+func backgroundFromPrompt(args string) *BackgroundStep {
+	bg := &BackgroundStep{LineMs: 200}
+	lines, seenCount := 5, false
+	for _, w := range strings.Fields(args) {
+		if n, err := strconv.Atoi(w); err == nil && n >= 0 {
+			if !seenCount {
+				lines, seenCount = n, true
+			} else {
+				bg.LineMs = n
+			}
+			continue
+		}
+		switch w {
+		case "gone":
+			bg.RemoveAfter = true
+		case "killed":
+			bg.Killed = true
+		case "silent":
+			bg.NoEndLine = true
+		case "fail":
+			bg.ExitCode = 1
+		default:
+			bg.Shape = w
+		}
+	}
+	for i := 1; i <= lines; i++ {
+		bg.Lines = append(bg.Lines, fmt.Sprintf("line %d", i))
+	}
+	bg.Command = strings.TrimSpace("background" + args)
+	return bg
 }

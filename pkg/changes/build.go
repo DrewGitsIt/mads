@@ -53,7 +53,10 @@ type Inputs struct {
 // requested baseline doesn't apply to the session, or isn't a known id.
 var ErrBaselineUnavailable = errors.New("baseline unavailable")
 
-var commitHashRe = regexp.MustCompile(`^[0-9a-fA-F]{7,40}$`)
+// commitHashRe gates recorded hashes before they reach a git command line
+// (where "-..." would be an option): hex, abbreviated or full, SHA-1 (40)
+// or SHA-256 (64).
+var commitHashRe = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
 
 // SessionFolder is the session's folder — its worktree, else its
 // configured directory, else where it actually ran — canonicalized with
@@ -157,8 +160,7 @@ type builder struct {
 	captures  map[string]shadow.Record // path → first capture record
 	files     map[string]*fileBuild
 	notes     []string
-	repoRoots map[string]bool // every repo root seen, for Git and commits
-	unknownN  int
+	repoRoots map[string]bool  // every repo root seen, for Git and commits
 	nested    *nestedWorktrees // subagent worktrees under the folder, left out (worktrees.go)
 }
 
@@ -464,13 +466,11 @@ func (b *builder) ledgerOnlyFile(ctx context.Context, p, root string) *fileBuild
 	}
 	if !known {
 		fb.unknown = true
-		b.unknownN++
 		return fb
 	}
 	e, same, err := noIndexNumstat(ctx, original, p)
 	if err != nil {
 		fb.unknown = true
-		b.unknownN++
 		return fb
 	}
 	if same {
@@ -597,6 +597,16 @@ func (b *builder) finish(ctx context.Context, vs string, baselines []resolvedBas
 
 	commits, commitsByPath := b.commits(ctx)
 
+	// A session working in place shares its folder with the user and other
+	// sessions, so what differs on disk since it started is everyone's work.
+	// List only what this session changed (its tools, per the ledger) or
+	// committed; the Commit dialog still shows the rest when it matters.
+	// Not for a session in its own worktree (anything changed there is for
+	// it), nor one with no ledger rows or commits at all (a harness that
+	// reports no tool use: filtering would empty the list).
+	ownOnly := b.in.Session.WorktreeDir == "" && (len(b.in.Ledger) > 0 || len(b.in.Commits) > 0)
+	others, unknown := 0, 0
+
 	out := make([]contracts.ChangedFile, 0, len(b.files))
 	for _, fb := range b.files {
 		cf := contracts.ChangedFile{
@@ -644,6 +654,13 @@ func (b *builder) finish(ctx context.Context, vs string, baselines []resolvedBas
 		if hs := commitsByPath[fb.path]; len(hs) > 0 {
 			cf.Commits = hs
 		}
+		if ownOnly && !cf.Attributed && len(cf.Commits) == 0 {
+			others++
+			continue
+		}
+		if cf.CountsUnknown {
+			unknown++
+		}
 		cf.Uncommitted = true
 		if fb.root != "" && !facts.Ignored {
 			if rel, ok := relUnder(fb.root, fb.path); ok {
@@ -682,8 +699,12 @@ func (b *builder) finish(ctx context.Context, vs string, baselines []resolvedBas
 		turns[i].Files = turnFiles[turns[i].N]
 	}
 
-	if b.unknownN > 0 {
-		b.note("line counts unavailable for %d %s with no saved original", b.unknownN, plural(b.unknownN, "file", "files"))
+	if others > 0 {
+		b.note("%d %s changed by others since this session started %s not listed; Commit shows them",
+			others, plural(others, "file", "files"), plural(others, "is", "are"))
+	}
+	if unknown > 0 {
+		b.note("line counts unavailable for %d %s with no saved original", unknown, plural(unknown, "file", "files"))
 	}
 
 	list := make([]contracts.ChangeBaseline, len(baselines))
@@ -725,73 +746,6 @@ func (b *builder) classifyRel(fb *fileBuild) string {
 		return rel
 	}
 	return filepath.Base(fb.path)
-}
-
-// commits resolves the session's recorded commits, newest first, with
-// absolute paths, and indexes them by path. A worktree shares its object
-// store with the primary checkout, so every repo can resolve every hash;
-// paths are anchored in the first repo whose checked-out branch contains
-// the commit — the session folder's first, so a worktree session's own
-// commits key the worktree's files, while a commit that landed in the
-// primary checkout keys the primary's. No branch contains it (amended
-// away, say): the first repo that has it.
-func (b *builder) commits(ctx context.Context) ([]contracts.ChangeCommit, map[string][]string) {
-	out := []contracts.ChangeCommit{}
-	byPath := map[string][]string{}
-	recorded := b.in.Commits
-	if len(recorded) == 0 {
-		return out, byPath
-	}
-	var repos []string
-	if b.folder != "" {
-		if r := repoRootOf(b.folder, b.rootCache); r != "" {
-			repos = append(repos, r)
-		}
-	}
-	for _, r := range sortedKeys(b.repoRoots) {
-		if len(repos) == 0 || repos[0] != r {
-			repos = append(repos, r)
-		}
-	}
-	for i := len(recorded) - 1; i >= 0; i-- {
-		c := recorded[i]
-		if !commitHashRe.MatchString(c.Hash) {
-			continue
-		}
-		cc := contracts.ChangeCommit{Hash: c.Hash, Message: firstLine(c.Message), Timestamp: c.Timestamp, Paths: []string{}}
-		tryRepos := repos
-		if c.Repo != "" {
-			tryRepos = append(append([]string{}, repos...), shadow.RealPath(c.Repo))
-		}
-		anchor := ""
-		for _, repo := range tryRepos {
-			if _, ok := resolveRef(ctx, repo, c.Hash); !ok {
-				continue
-			}
-			if anchor == "" {
-				anchor = repo
-			}
-			if isAncestorOfHEAD(ctx, repo, c.Hash) {
-				anchor = repo
-				break
-			}
-		}
-		if repo := anchor; repo != "" {
-			rels, err := commitFiles(ctx, repo, c.Hash)
-			if err != nil {
-				break
-			}
-			if err == nil {
-				for _, rel := range rels {
-					p := filepath.Join(repo, filepath.FromSlash(rel))
-					cc.Paths = append(cc.Paths, p)
-					byPath[p] = append(byPath[p], c.Hash)
-				}
-			}
-		}
-		out = append(out, cc)
-	}
-	return out, byPath
 }
 
 func firstLine(s string) string {

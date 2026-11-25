@@ -18,17 +18,25 @@ import (
 // never the Data Service directly. Every request is actor-stamped
 // X-Mads-Actor: session-<sessionID>, mirroring dataclient's own convention
 // (pkg/dataclient/dataclient.go) so Router-side logging/attribution stays
-// consistent across both clients.
+// consistent across both clients. The Router ignores that header for a
+// scoped caller, taking the actor from the token instead
+// (docs/LOCAL-FRONT-DOOR-DESIGN.md D4).
+//
+// token is the bearer every request carries: the session-scoped
+// MADS_ROUTER_TOKEN for the MCP server, the install token for `mads
+// orchestrate` from a shell.
 type client struct {
 	baseURL   string
 	sessionID string
+	token     string
 	http      *http.Client
 }
 
-func newClient(baseURL, sessionID string) *client {
+func newClient(baseURL, sessionID, token string) *client {
 	return &client{
 		baseURL:   strings.TrimSuffix(baseURL, "/"),
 		sessionID: sessionID,
+		token:     token,
 		http:      &http.Client{Timeout: 35 * time.Second},
 	}
 }
@@ -50,6 +58,9 @@ func (c *client) do(ctx context.Context, method, path string, in any) (status in
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("X-Mads-Actor", "session-"+c.sessionID)
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return 0, nil, err
@@ -118,8 +129,8 @@ type Client struct{ c *client }
 
 // NewClient builds a Client acting as sessionID against the Router at
 // routerURL.
-func NewClient(routerURL, sessionID string) *Client {
-	return &Client{c: newClient(routerURL, sessionID)}
+func NewClient(routerURL, sessionID, token string) *Client {
+	return &Client{c: newClient(routerURL, sessionID, token)}
 }
 
 // Subjects lists the links this session holds (list_linked_sessions reads the same route).

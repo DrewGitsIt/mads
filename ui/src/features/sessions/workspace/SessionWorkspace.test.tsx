@@ -4,6 +4,7 @@ import { SessionWorkspace, openTasksTitle } from "./SessionWorkspace";
 import { FakeRouterClient } from "../../../router/fixtures";
 import { FakePipelineClient } from "../../../pipeline/client/fixtures";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
+import { holdEventsHead } from "../../../router/testEventsBarrier";
 import { makeFakeShellHost } from "../../../conversation/ShellDock/fakeShellHost";
 import { resetShellDockCache } from "../../../conversation/ShellDock/dockState";
 import { task } from "../../../tasks/Metro/testTasks";
@@ -36,6 +37,33 @@ describe("SessionWorkspace", () => {
     delete (window as { mads?: unknown }).mads;
     window.localStorage.clear();
     resetShellDockCache();
+  });
+
+  // docs/GIT-STATE-DESIGN.md: one small mark right after the Changes tab,
+  // in the tab bar, so it is in view whichever tab is open.
+  it("shows the git-updating mark beside the Changes tab while git state recomputes, on any tab", async () => {
+    const client = new FakeRouterClient();
+    renderWorkspace({ routerClient: client });
+    await waitFor(() => expect(client.sessionReposCalls).toContain(SESSION_ID));
+    await waitFor(() => expect(client.changeSetCalls.some((c) => c.sessionId === SESSION_ID)).toBe(true));
+    expect(screen.queryByTestId("git-updating")).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Tasks" }));
+    act(() => {
+      for (const s of FakeEventSource.instances)
+        if (!s.closed && s.url.includes("file.changed"))
+          s.emit("file.changed", JSON.stringify({ seq: 9001, type: "file.changed", actor: "x", session_id: SESSION_ID }));
+    });
+    const mark = await screen.findByTestId("git-updating");
+    expect(mark.getAttribute("aria-label")).toBe("Updating git state");
+    expect(mark.getAttribute("data-what")).toBe("changeset counts");
+    expect(mark.previousElementSibling?.querySelector('[role="tab"]:last-child')?.textContent).toBe("Changes");
+
+    act(() => {
+      FakeRouterClient.emitGitStateUpdated(SESSION_ID, ["changeset"], { changed: [] });
+      FakeRouterClient.emitGitStateUpdated(SESSION_ID, ["counts"]);
+    });
+    await waitFor(() => expect(screen.queryByTestId("git-updating")).toBeNull());
   });
 
   it("defaults to the Conversation tab, lazy-mounting the other two", async () => {
@@ -122,6 +150,75 @@ describe("SessionWorkspace", () => {
       />,
     );
     expect(screen.getByRole("tab", { name: "Tasks" }).textContent).toBe("Tasks");
+  });
+
+  describe("the run seed (the bus never replays pipeline.started)", () => {
+    const running = {
+      session_id: SESSION_ID,
+      run_seq: 10,
+      run_id: "r1",
+      started_at: "2026-10-19T10:00:00Z",
+      outcome: "running" as const,
+      tasks_done: 0,
+      tasks_blocked: 0,
+      tasks_skipped: 0,
+      cost_usd: 0,
+    };
+
+    it("seeds the run-in-flight flag from metricsPipelineRuns", async () => {
+      const tasks = [task("claimed", { session_id: SESSION_ID, status: "in_progress" })];
+      const pipelineClient = new FakePipelineClient(tasks);
+      const routerClient = new FakeRouterClient(undefined, undefined, undefined, undefined, tasks);
+      const runs = vi.spyOn(routerClient, "metricsPipelineRuns").mockResolvedValue([running]);
+      renderWorkspace({ routerClient, pipelineClient, openTaskBreakdown: { running: 1, ready: 0, blocked: 0 } });
+      const tasksTab = await screen.findByRole("tab", { name: "Tasks" });
+      await waitFor(() => expect(within(tasksTab).queryByTestId("tasks-run-badge")).toBeTruthy());
+      expect(runs).toHaveBeenCalledWith(SESSION_ID);
+    });
+
+    // After a load the run is known only from REST: no pipeline.started is
+    // replayed, so the count has to come from the REST catch-up too.
+    it("seeds the run's running count from REST after a load, with no replay", async () => {
+      const tasks = [
+        task("claimed", { session_id: SESSION_ID, status: "in_progress" }),
+        task("mine", { session_id: SESSION_ID, status: "in_progress" }),
+      ];
+      const pipelineClient = new FakePipelineClient(tasks);
+      pipelineClient.runs = [running];
+      pipelineClient.runEvents = [
+        { seq: 10, timestamp: "2026-10-19T10:00:00Z", type: "pipeline.started", session_id: SESSION_ID, actor: "pipeline", payload: { run_id: "r1" } },
+        { seq: 11, timestamp: "2026-10-19T10:00:00Z", type: "task.status_changed", session_id: SESSION_ID, actor: "pipeline", task_id: "claimed", payload: { from: "ready", to: "in_progress" } },
+      ];
+      const routerClient = new FakeRouterClient(undefined, undefined, undefined, undefined, tasks);
+      vi.spyOn(routerClient, "metricsPipelineRuns").mockResolvedValue([running]);
+      const head = holdEventsHead();
+      renderWorkspace({ routerClient, pipelineClient, openTaskBreakdown: { running: 2, ready: 0, blocked: 0 } });
+      const tasksTab = await screen.findByRole("tab", { name: "Tasks" });
+      await act(async () => {});
+      expect(within(tasksTab).queryByTestId("tasks-run-badge")).toBeNull();
+      await head.release(20);
+      await waitFor(() => expect(within(tasksTab).getByTestId("tasks-run-badge").textContent).toBe("1"));
+      expect(within(tasksTab).getByTestId("tasks-run-badge").getAttribute("title")).toBe(
+        "Pipeline running · 1 task running",
+      );
+    });
+
+    it("lets a run event heard first outrank the seed (live wins)", async () => {
+      const routerClient = new FakeRouterClient();
+      let answer!: (v: (typeof running)[]) => void;
+      vi.spyOn(routerClient, "metricsPipelineRuns").mockReturnValue(new Promise((r) => (answer = r)));
+      renderWorkspace({ routerClient, openTaskBreakdown: { running: 1, ready: 0, blocked: 0 } });
+      const tasksTab = await screen.findByRole("tab", { name: "Tasks" });
+      const source = FakeEventSource.instances.find((s) => s.url.includes("pipeline.started"));
+      act(() => {
+        source?.emit(
+          "pipeline.completed",
+          JSON.stringify({ seq: 50, timestamp: "2026-10-19T10:00:00Z", type: "pipeline.completed", session_id: SESSION_ID, actor: "pipeline" }),
+        );
+      });
+      await act(async () => answer([running]));
+      expect(within(tasksTab).queryByTestId("tasks-run-badge")).toBeNull();
+    });
   });
 
   it("swaps the Tasks badge for a spinner and the run's own running count while a run is in flight", async () => {
@@ -401,7 +498,7 @@ describe("SessionWorkspace", () => {
 
   // Sleep and wake are not this shell's to issue: it hands the session to the
   // surface's one controller (useSessionSleep), which is what makes "Sleep
-  // now" here ask about unlanded commits exactly as the rail card's ⏸ does.
+  // now" here ask about unlanded commits exactly as the rail's ✓ does.
   // This shell used to call terminate itself, and skipped that question.
   it("Sleep now hands this session to the shared sleep controller, issuing nothing itself", async () => {
     const routerClient = new FakeRouterClient();

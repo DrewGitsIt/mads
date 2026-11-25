@@ -3,7 +3,9 @@ import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-li
 import type { ReactNode } from "react";
 import { OPEN_CREATED_SESSION_EVENT, OPEN_SESSION_EVENT } from "../../../appNavigation";
 import { setFlags } from "../../../featureFlags";
+import { RouterHTTPError } from "../../../router/client";
 import { FakeRouterClient } from "../../../router/fixtures";
+import { clearSessionHostsForTests, peerOfSession } from "../../../router/sessionHosts";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import type {
   CreateSessionPayload,
@@ -78,13 +80,16 @@ function setup(ctx: Partial<CommandContext> = {}, validation?: Partial<SessionVa
     updateSession: vi.fn(),
     openCard: (r: (close: () => void) => ReactNode) => (card = r),
   } as CommandApi;
-  async function open(command: CommandDescriptor, args = "reproduce DNS error") {
+  async function draw(command: CommandDescriptor, args = "reproduce DNS error") {
     await command.execute({ args }, api);
     render(<>{card!(close)}</>);
+  }
+  async function open(command: CommandDescriptor, args = "reproduce DNS error") {
+    await draw(command, args);
     // The debounced dry run has answered.
     await waitFor(() => expect(validateSession).toHaveBeenCalled());
   }
-  return { client, api, close, createSession, sendMessage, validateSession, open, created };
+  return { client, api, close, createSession, sendMessage, validateSession, draw, open, created };
 }
 
 /** FakeRouterClient.createSession declares no parameter; the card passes the payload. */
@@ -136,17 +141,10 @@ describe("payloads", () => {
   };
 
   it("/new on a full-trust-only provider sends Full, whatever this session ran at", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockImplementation((input: URL) => {
-        if (input.toString().endsWith("/providers")) {
-          const matrix = { trust_limited: "unsupported", trust_read_only: "unsupported", trust_auto_review: "unsupported" };
-          return Promise.resolve(new Response(JSON.stringify([{ name: "hermes", matrix }]), { status: 200 }));
-        }
-        return Promise.resolve(new Response("[]", { status: 200 }));
-      }),
-    );
-    const { open, createSession } = setup({ session: { ...THIS, provider: "hermes", model: "copilot:gpt-4.1", trust: "limited" } });
+    const { client, open, createSession } = setup({ session: { ...THIS, provider: "hermes", model: "copilot:gpt-4.1", trust: "limited" } });
+    // The card reads providers from the session's device's client.
+    const matrix = { trust_limited: "unsupported", trust_read_only: "unsupported", trust_auto_review: "unsupported" };
+    vi.spyOn(client, "listProviders").mockResolvedValue([{ name: "hermes", matrix }] as unknown as Awaited<ReturnType<typeof client.listProviders>>);
     await open(newCommand);
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /trust Full access/ }).getAttribute("title")).toBe(
@@ -358,6 +356,81 @@ describe("naming and a goalless follower", () => {
   });
 });
 
+describe("a session on another device", () => {
+  const POP = { name: "pop-os", self: false, peer_id: "per_pop", reachable: true };
+  const REMOTE: Session = { ...THIS, dir: "/home/me/repo/mads", host: POP };
+  afterEach(() => clearSessionHostsForTests());
+
+  /** The peer's Router behind this one's /peers/pop-os/ proxy: every call recorded. */
+  function stubPeer() {
+    const calls: { method: string; path: string; body?: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const path = new URL(input.toString(), "http://router.test").pathname;
+        const body = init?.body ? JSON.parse(init.body as string) : undefined;
+        calls.push({ method: init?.method ?? "GET", path, body });
+        const json = (v: unknown) => Promise.resolve(new Response(JSON.stringify(v), { status: 200 }));
+        if (path.endsWith("/sessions/validate")) return json({ dir: body.dir ?? "", isolation: body.isolation ?? "worktree", errors: [] });
+        if (path.endsWith("/sessions") && init?.method === "POST") return json({ session: { ...REMOTE, id: "s-new", name: "reproduce DNS error", host: undefined }, addr: "" });
+        if (path.endsWith("/messages")) return json({ queued: true });
+        return json([]);
+      }),
+    );
+    return calls;
+  }
+
+  for (const [command, variant] of [
+    [newCommand, "new"],
+    [newLeaderCommand, "leader"],
+    [newFollowerCommand, "follower"],
+    [newMonitorCommand, "monitor"],
+  ] as const) {
+    it(`/${variant === "new" ? "new" : `new-${variant}`} starts it on that device, with its folder, and sends the goal there`, async () => {
+      const calls = stubPeer();
+      const { open, close, createSession, validateSession, sendMessage, api } = setupRemote(calls);
+      await open(command);
+      fireEvent.click(startBtn());
+      expect(close).toHaveBeenCalled();
+      await waitFor(() => expect(api.notify).toHaveBeenCalledWith("Started reproduce DNS error", expect.anything()));
+      // Nothing went to this device's Router directly.
+      expect(createSession).not.toHaveBeenCalled();
+      expect(validateSession).not.toHaveBeenCalled();
+      expect(sendMessage).not.toHaveBeenCalled();
+      const create = calls.find((c) => c.method === "POST" && c.path === "/peers/pop-os/sessions");
+      expect((create?.body as CreateSessionPayload).dir).toBe("/home/me/repo/mads");
+      if (variant !== "new") expect((create?.body as CreateSessionPayload).links).toHaveLength(1);
+      expect(calls.some((c) => c.method === "POST" && c.path === "/peers/pop-os/sessions/s-new/messages")).toBe(true);
+      // Tagged with its device, so the list and the event bus find it there.
+      expect(peerOfSession("s-new")).toBe("pop-os");
+    });
+  }
+
+  it("⌘Enter opens it tagged with its device", async () => {
+    const calls = stubPeer();
+    const opened = vi.fn();
+    window.addEventListener(OPEN_CREATED_SESSION_EVENT, opened);
+    const { open } = setupRemote(calls);
+    await open(newLeaderCommand);
+    fireEvent.keyDown(goal(), { key: "Enter", metaKey: true });
+    await waitFor(() => expect(opened).toHaveBeenCalledTimes(1));
+    expect((opened.mock.calls[0][0] as CustomEvent).detail.session.host).toEqual(POP);
+    window.removeEventListener(OPEN_CREATED_SESSION_EVENT, opened);
+  });
+
+  function setupRemote(calls: { path: string }[]) {
+    const t = setup({ session: REMOTE, host: POP });
+    return {
+      ...t,
+      async open(command: CommandDescriptor) {
+        await t.draw(command);
+        // The peer's dry run has been asked.
+        await waitFor(() => expect(calls.some((c) => c.path === "/peers/pop-os/sessions/validate")).toBe(true));
+      },
+    };
+  }
+});
+
 describe("validation", () => {
   it("a joined counterpart worktree locks isolation on the folder pill and shows the joined folder", async () => {
     const { open } = setup(
@@ -507,5 +580,25 @@ describe("useLinkCommandState", () => {
     const { result } = renderHook(() => useLinkCommandState(client, "s-this", [monitor]));
     await waitFor(() => expect(result.current.pipelineRunning).toBe(true));
     expect(result.current.leader).toBeUndefined();
+  });
+
+  it("a deleted leader's dangling link doesn't lead; a newer live leader does", async () => {
+    setFlags({ multiRepo: false, linkedSessions: true, remoteRegistry: false });
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "metricsPipelineRuns").mockResolvedValue([]);
+    vi.spyOn(client, "getSession").mockImplementation(async (id) => {
+      if (id === "s-gone") throw new RouterHTTPError(404, "not found");
+      return { ...THIS, id, name: "new-lead" };
+    });
+    const dead: Link = { ...lead, id: "l0", granting_session_id: "s-gone", created_at: "2026-11-01T00:00:00Z" };
+    const { result, rerender } = renderHook(({ links }) => useLinkCommandState(client, "s-this", links), {
+      initialProps: { links: [dead] },
+    });
+    await waitFor(() => expect(result.current.leader).toBeUndefined());
+
+    // Re-led: the live link is newer than the dangling one, whichever order the list holds them in.
+    const live: Link = { ...lead, id: "l2", granting_session_id: "s-new", created_at: "2026-11-02T00:00:00Z" };
+    rerender({ links: [dead, live] });
+    await waitFor(() => expect(result.current.leader).toEqual({ id: "s-new", name: "new-lead" }));
   });
 });

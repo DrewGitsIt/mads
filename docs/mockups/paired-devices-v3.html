@@ -1,0 +1,1439 @@
+<!doctype html>
+<!--
+  mads — Settings → Paired devices, v3 (Layout C + pairing code), after Drew's v2 review
+  ======================================================================================
+  v1 (paired-devices.html) and v2 (paired-devices-v2.html, options A/B/C × P1/P2) are kept.
+  Open from disk. The striped bar is mockup-only: Theme, Screen (Settings / Refused msg),
+  I am (which device's Settings), pop-os offline, Reset. Dashed "MOCKUP" strips in dialogs
+  simulate a device that isn't modelled (spark).
+
+  What v3 settles:
+  - One table, both directions per row: Device · "May … mads on this <host>" (editable verb)
+    · "Lets this <host> …" (read-only, what that device grants us, from its /mesh/hello;
+    last known + "as of" while offline; "—" for devices that don't host mads)
+    · Show sessions (disabled with a reason when there's nothing to show) · Status.
+  - Status says the direction: hosts read Connected · ms / Offline / Doesn't allow this <host>;
+    phones and displays read "Last used this <host> 1 h ago" / "Never used this <host>".
+    Full explanation in a tooltip.
+  - Clicking a row expands its details inline below it, full table width (one open at a time;
+    Esc or a second click collapses). No drawer.
+  - Pairing method appears only in Device activity.
+  - Pairing = copy / paste a single-use code with expiry → approval on the host → the joiner
+    sees what was granted and sets the reverse sentence. Levels in dialogs are a
+    SegmentedControl (no dropdown to run off the dialog).
+  - Introduce a device… is disabled (with a tooltip) unless another device lets this one administer.
+  - Info tooltips explain "Messages to Full access sessions" vs "Highest session trust".
+  - Fingerprints use slashed zero (font-variant-numeric / "zero").
+
+  Class names are <Module>_<class> (= `styles.class` in <Module>.module.css); tokens are the clay
+  palette, dark + light, from ui/src/tokens.
+
+  Block → TSX
+  -----------
+    .App_* / .IconRail_* / .SettingsSurface_* / .ScrollSpyNav_* ... existing
+    .SettingsCard_* / .SettingRow_* / .Button_* / .Switch_* / .Select_* / .SegmentedControl_* / .Chip_* /
+    .Popover_* / .Toast_* / .Caret_* .............................. existing components
+    .Disclosure_* ................................................. ModelsSection's <details> pattern → components/Disclosure
+    .Tooltip_* / .InfoTip_* ....................................... NEW components/Tooltip (hover + focus; InfoTip = (i) button)
+    .PairedDevices_* .............................................. NEW sections/PairedDevicesSection.tsx (replaces DevicesSection)
+    .ThisDevice_* ................................................. NEW sections/paired/ThisDeviceBar.tsx (+ Pair, Introduce)
+    .TableC_* ..................................................... NEW sections/paired/DeviceTable.tsx (+ DeviceTableRow)
+    .VerbPicker_* ................................................. NEW components/VerbPicker (table cell)
+    .TableC_detail ................................................ NEW sections/paired/DeviceDetails.tsx (inline expansion:
+                                                                    limits, fingerprint, paired date, Remove…, activity slice)
+    .LevelChoice_* ................................................ NEW sections/paired/LevelChoice.tsx (sentence + SegmentedControl,
+                                                                    used in dialogs)
+    .Activity_* ................................................... NEW sections/paired/DeviceActivity.tsx
+    .Fingerprint_* / .KindIcon .................................... NEW components/Fingerprint, components/KindIcon
+    .Dialog_* ..................................................... ConfirmDialog / ProfileSwitchDialog shell → components/Dialog
+    .Remove_* ..................................................... NEW sections/paired/RemoveDeviceDialog.tsx
+    .Pairing_* .................................................... NEW sections/paired/pairing/{PairChooser,CopyCode,PasteCode,
+                                                                    PairRequestPrompt,JoinStatus}.tsx, IntroduceDialog.tsx
+    Conversation: .SessionWorkspace_* / .ChatRenderer_* / .SendDelivery_* / .SessionDock_* / .Composer_* /
+    .StatusLine_* existing; .RefusedSend_* NEW (SendDelivery's mesh-refusal variant)
+-->
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — Settings · Paired devices v3 (mockup)</title>
+<style>
+
+/* ===== tokens.css (shared) ===== */
+:root {
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, "SF Pro Text", BlinkMacSystemFont, "Segoe UI", Ubuntu, Roboto, "Helvetica Neue", sans-serif;
+  --r: 8px; --r-sm: 6px;
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px; --space-6: 32px;
+  --dur-fast: 120ms; --dur: 180ms; --dur-slow: 240ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1); --ease-io: cubic-bezier(0.4, 0, 0.2, 1);
+  --measure-prose: 92ch; --content-wide: 76rem; --content-narrow: 44rem;
+  --fs-chip: 10.5px; --fs-sm: 12.5px; --fs-body: 13px; --fs-ui: 14px; --fs-chat: 15px; --fs-chat-code: 13px;
+}
+/* ===== palettes.css: clay dark ===== */
+:root, [data-theme="dark"] {
+  --bg0: #161107; --bg1: #1c160c; --bg2: #241e14; --bg3: #2b261b; --bg4: #332d22;
+  --line: #3d372c; --line-soft: #2f2a1f;
+  --text: #efeadf; --text2: #bdb8ae; --text3: #878175;
+  --accent: #c18b60; --accent-hover: #cc966a; --accent-soft: rgba(193,139,96,0.16); --accent-ink: #15110d;
+  --ok: #76a35c; --ok-soft: #141911; --ok-fg: #aabf9f;
+  --warn: #d18600; --warn-soft: #1e150c; --warn-fg: #d7b287;
+  --bad: #f86927; --bad-soft: #20140f; --bad-fg: #e7aa92;
+  --info: #6f9bc6; --info-soft: #182029; --info-fg: #a8b9ca;
+  --shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+/* ===== palettes.css: clay light ===== */
+[data-theme="light"] {
+  --bg0: #fffbf4; --bg1: #fef6e8; --bg2: #f4ecde; --bg3: #eae2d4; --bg4: #dfd7c9;
+  --line: #d3cbbd; --line-soft: #e5ddcf;
+  --text: #26211a; --text2: #6e6961; --text3: #746f66;
+  --accent: #a1642f; --accent-hover: #925c2c; --accent-soft: rgba(161,100,47,0.14); --accent-ink: #fdf9f7;
+  --ok: #6f9b55; --ok-soft: #f2faef; --ok-fg: #59724c;
+  --warn: #c87f00; --warn-soft: #fff6ec; --warn-fg: #8f6024;
+  --bad: #f1621d; --bad-soft: #fff5f1; --bad-fg: #a15537;
+  --info: #6893be; --info-soft: #e3effb; --info-fg: #132537;
+  --shadow: 0 12px 28px rgba(38,33,26,0.16);
+  color-scheme: light;
+}
+/* ===== styles/global.css ===== */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body { accent-color: var(--accent); margin: 0; background: var(--bg0); color: var(--text); font: 13px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 5px; border: 2px solid var(--bg0); }
+::-webkit-scrollbar-track { background: transparent; }
+code, pre, kbd { font-family: var(--mono); }
+h1, h2, h3, p, ul, ol, dl, dd { margin: 0; }
+
+/* ===== MOCKUP-ONLY control bar (not app chrome) ===== */
+.Mock_bar {
+  position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 1000;
+  display: flex; align-items: center; gap: 14px; padding: 0 12px;
+  background: repeating-linear-gradient(135deg, #0b0b0b 0 10px, #141414 10px 20px);
+  border-bottom: 2px dashed #e0b400; color: #ddd;
+  font: 12px/1 -apple-system, sans-serif; color-scheme: dark;
+}
+.Mock_tag { font-weight: 800; letter-spacing: .08em; color: #111; background: #e0b400; padding: 4px 6px; border-radius: 3px; }
+.Mock_group { display: flex; align-items: center; gap: 4px; }
+.Mock_group > span { color: #999; margin-right: 2px; }
+.Mock_btn { border: 1px solid #555; background: #1d1d1d; color: #ddd; padding: 4px 8px; border-radius: 4px; font: 12px -apple-system, sans-serif; }
+.Mock_btn[aria-pressed="true"] { background: #e0b400; color: #111; border-color: #e0b400; font-weight: 650; }
+.Mock_btn:hover { border-color: #aaa; }
+.Mock_btn:focus-visible { outline: 2px solid #e0b400; outline-offset: 1px; }
+.Mock_sep { width: 1px; height: 20px; background: #444; }
+.Mock_note { color: #aaa; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Mockup-only "simulate the other device" strips inside dialogs. */
+.Mock_sim { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: var(--space-3); padding: 6px 8px; border: 1px dashed #c9a000; border-radius: 4px; background: rgba(224,180,0,.08); font: 11.5px -apple-system, sans-serif; color: var(--text2); }
+.Mock_sim b { color: #c9a000; font-weight: 800; letter-spacing: .06em; font-size: 10px; }
+.Mock_frame { position: fixed; top: 40px; left: 0; right: 0; bottom: 0; }
+
+/* ===== App.module.css ===== */
+.App_shell { display: flex; height: 100%; }
+.App_main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.App_surface { position: relative; flex: 1; min-height: 0; display: flex; }
+
+/* ===== IconRail.module.css ===== */
+.IconRail_slot { position: relative; display: flex; flex: none; width: 44px; }
+.IconRail_rail { position: absolute; top: 0; left: 0; bottom: 0; z-index: 20; display: flex; flex-direction: column; align-items: stretch; width: 44px; background: var(--bg1); border-right: 1px solid var(--line-soft); padding: var(--space-2) 6px; gap: 2px; overflow: hidden; transition: width .15s ease, box-shadow .15s ease; }
+.IconRail_rail:hover { width: 176px; box-shadow: var(--shadow); }
+.IconRail_item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-1); border-radius: var(--r-sm); border-left: 2px solid transparent; color: var(--text2); white-space: nowrap; transition: background .15s, color .15s, border-color .15s; }
+.IconRail_item:hover { color: var(--text); background: var(--bg2); }
+.IconRail_item[aria-selected="true"] { background: var(--accent-soft); border-left-color: var(--accent); color: var(--text); }
+[data-theme="light"] .IconRail_item[aria-selected="true"] { color: var(--accent); }
+.IconRail_icon { flex: none; width: 20px; display: flex; align-items: center; justify-content: center; }
+.IconRail_label { font: 600 var(--fs-sm) var(--sans); }
+
+/* ===== SettingsSurface.module.css ===== */
+.SettingsSurface_surface { display: flex; flex: 1; min-width: 0; height: 100%; min-height: 0; }
+.SettingsSurface_main { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
+.SettingsSurface_body { flex: 1; min-width: 0; overflow-y: auto; padding: var(--space-5); padding-bottom: 96px; }
+.SettingsSurface_section { margin-bottom: var(--space-6); }
+.SettingsSurface_heading { font: 700 18px var(--sans); color: var(--text); margin: 0 0 4px; }
+.SettingsSurface_lede { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-3); color: var(--text3); font-size: var(--fs-sm); }
+.ContentColumn_column { width: 100%; margin-inline: auto; padding-inline: var(--space-4); }
+.ContentColumn_wide { max-width: var(--content-wide); }
+
+/* ===== ScrollSpyNav.module.css ===== */
+.ScrollSpyNav_nav { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3); border-right: 1px solid var(--line-soft); width: 216px; flex: none; overflow-y: auto; }
+.ScrollSpyNav_item { text-align: left; padding: var(--space-2) var(--space-3); border: none; border-radius: var(--r-sm); background: transparent; color: var(--text2); font: 500 var(--fs-ui) var(--sans); cursor: pointer; }
+.ScrollSpyNav_item:hover { background: var(--bg2); color: var(--text); }
+.ScrollSpyNav_item[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
+.ScrollSpyNav_item[data-inert] { cursor: default; }
+.ScrollSpyNav_separator { height: 1px; margin: var(--space-2) var(--space-3); background: var(--line-soft); }
+
+/* ===== SettingsCard.module.css ===== */
+.SettingsCard_card { max-width: 760px; border: 1px solid var(--line-soft); border-radius: var(--r); background: var(--bg1); }
+.SettingsCard_title { margin: 0; padding: var(--space-3) var(--space-4) 0; font: 650 var(--fs-sm) var(--sans); color: var(--text2); text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* ===== SettingRow.module.css ===== */
+.SettingRow_row { display: grid; grid-template-columns: 1fr minmax(240px, 300px); gap: var(--space-4); align-items: center; padding: var(--space-3) var(--space-4); }
+.SettingRow_row + .SettingRow_row { border-top: 1px solid var(--line-soft); }
+.SettingRow_stacked { grid-template-columns: 1fr; gap: var(--space-2); }
+.SettingRow_nested { margin-left: var(--space-4); padding-left: calc(var(--space-4) - 2px); border-left: 2px solid var(--line); }
+.SettingRow_row + .SettingRow_nested { border-top: none; }
+.SettingRow_disabled { opacity: 0.45; pointer-events: none; }
+.SettingRow_text { min-width: 0; }
+.SettingRow_labelLine { display: flex; align-items: center; gap: var(--space-2); }
+.SettingRow_label { font: 500 var(--fs-ui) var(--sans); color: var(--text); }
+.SettingRow_help { margin-top: 2px; color: var(--text3); font-size: var(--fs-sm); line-height: 1.45; }
+.SettingRow_control { display: flex; justify-content: flex-end; min-width: 0; }
+.SettingRow_control .Select_trigger { padding: 7px 10px; background: var(--bg0); border-color: var(--line); }
+.SettingRow_tag { white-space: nowrap; padding: 2px 6px; border-radius: 4px; font: 600 var(--fs-chip) var(--sans); text-transform: uppercase; letter-spacing: 0.05em; }
+.SettingRow_ok { background: var(--ok-soft); color: var(--ok-fg); }
+.SettingRow_bad { background: var(--bad-soft); color: var(--bad-fg); }
+.SettingRow_warn { background: var(--warn-soft); color: var(--warn-fg); }
+.SettingRow_info { background: var(--info-soft); color: var(--info-fg); }
+.SettingRow_muted { background: var(--bg3); color: var(--text3); }
+.settingInput_input { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg0); color: var(--text); font: 400 var(--fs-body) / 1.5 var(--sans); }
+.settingInput_input::placeholder { color: var(--text3); }
+.settingInput_mono { font-family: var(--mono); }
+
+/* ===== Button.module.css ===== */
+.Button_button { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); font: 650 var(--fs-ui) var(--sans); border-radius: var(--r-sm); padding: 7px var(--space-3); cursor: pointer; border: 1px solid transparent; transition: filter .15s, background .15s, color .15s, border-color .15s, box-shadow .15s, transform .05s; white-space: nowrap; }
+.Button_button:disabled { opacity: 0.4; cursor: default; }
+.Button_button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.Button_button:active:not(:disabled) { transform: translateY(1px); }
+.Button_primary { background: var(--accent); color: var(--accent-ink); }
+.Button_primary:hover:not(:disabled) { background: var(--accent-hover); box-shadow: 0 2px 10px var(--accent-soft); }
+.Button_secondary { background: transparent; color: var(--text2); border-color: var(--line); }
+.Button_secondary:hover:not(:disabled) { color: var(--text); background: var(--bg2); border-color: var(--text3); }
+.Button_ghost { background: transparent; color: var(--text2); border-color: transparent; padding-left: var(--space-2); padding-right: var(--space-2); }
+.Button_ghost:hover:not(:disabled) { color: var(--text); background: var(--bg2); }
+.Button_sm { font-size: var(--fs-sm); padding: 4.5px var(--space-2); }
+.ConfirmDialog_confirmDanger { background: var(--bad); color: #fff; }
+.ConfirmDialog_confirmDanger:hover:not(:disabled) { background: var(--bad-fg); box-shadow: 0 2px 10px var(--bad-soft); }
+
+/* ===== Switch.module.css ===== */
+.Switch_switch { position: relative; flex: none; width: 34px; height: 20px; padding: 0; border: 0; border-radius: 10px; background: var(--bg4); cursor: pointer; transition: background .12s; }
+.Switch_switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--text2); transition: left .12s; }
+.Switch_switch[aria-checked="true"] { background: var(--accent); }
+.Switch_switch[aria-checked="true"]::after { left: 17px; background: var(--accent-ink); }
+.Switch_switch:disabled { opacity: 0.5; cursor: default; }
+.Switch_switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 10px; }
+
+/* ===== Caret.module.css ===== */
+.Caret_caret { flex: none; display: inline-block; width: 0.55em; height: 0.55em; margin: 0 0.15em; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-0.15em) rotate(45deg); }
+
+/* ===== Select.module.css ===== */
+.Select_root { position: relative; display: inline-block; width: 100%; }
+.Select_trigger { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); width: 100%; background: var(--bg2); border: 1px solid var(--line-soft); border-radius: var(--r-sm); padding: var(--space-2); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.Select_trigger:hover:not(:disabled) { border-color: var(--line); }
+.Select_trigger:disabled { opacity: .5; cursor: default; }
+.Select_value { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.Select_chevron { color: var(--text3); }
+.Select_listbox { position: absolute; z-index: 30; top: calc(100% + var(--space-1)); left: 0; right: 0; margin: 0; padding: var(--space-1) 0; list-style: none; background: var(--bg2); border: 1px solid var(--line); border-radius: var(--r-sm); box-shadow: var(--shadow); max-height: 260px; overflow-y: auto; }
+.Select_option { padding: var(--space-2) var(--space-3); font-size: var(--fs-body); color: var(--text); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.Select_option:hover, .Select_optionHighlighted { background: var(--bg3); }
+.Select_option[aria-selected="true"] { color: var(--accent); font-weight: 600; }
+.Select_option[aria-disabled="true"] { opacity: .5; cursor: default; }
+
+/* ===== NEW LevelPicker.module.css: Select's trigger, pills.module.css's option + description ===== */
+.LevelPicker_root { position: relative; display: inline-block; width: 100%; }
+.LevelPicker_root .Select_trigger { padding: 6px 10px; background: var(--bg0); border-color: var(--line); font: 600 var(--fs-body) var(--sans); }
+.LevelPicker_listbox { position: absolute; z-index: 30; top: calc(100% + var(--space-1)); left: 0; width: 330px; margin: 0; padding: var(--space-1); list-style: none; background: var(--bg2); border: 1px solid var(--line); border-radius: var(--r-sm); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 2px; }
+.LevelPicker_option { padding: 6px var(--space-2); border-radius: var(--r-sm); cursor: pointer; }
+.LevelPicker_option:hover, .LevelPicker_optionHighlighted { background: var(--bg3); }
+.LevelPicker_option[aria-selected="true"] { background: var(--accent-soft); }
+.LevelPicker_option[aria-selected="true"] .LevelPicker_optionLabel { color: var(--accent); }
+.LevelPicker_option[aria-disabled="true"] { opacity: .55; cursor: default; background: none; }
+.LevelPicker_optionLabel { display: flex; align-items: center; gap: var(--space-2); font: 600 var(--fs-sm) var(--sans); color: var(--text); }
+.LevelPicker_optionDescription { display: block; margin-top: 1px; font-size: var(--fs-chip); line-height: 1.4; color: var(--text3); white-space: normal; }
+.LevelPicker_rule { height: 1px; margin: 2px var(--space-1); background: var(--line-soft); }
+
+/* ===== SegmentedControl.module.css ===== */
+.SegmentedControl_group { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg0); }
+.SegmentedControl_option { padding: 5px 10px; border: 0; border-radius: 4px; background: none; color: var(--text2); font: 500 var(--fs-sm) var(--sans); white-space: nowrap; cursor: pointer; }
+.SegmentedControl_option:hover:not(:disabled) { color: var(--text); }
+.SegmentedControl_option[aria-checked="true"] { background: var(--bg3); color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
+
+/* ===== Chip.module.css ===== */
+.Chip_chip { display: inline-flex; align-items: center; gap: var(--space-1); font: 650 var(--fs-chip)/1 var(--sans); letter-spacing: 0.07em; text-transform: uppercase; border-radius: 4px; padding: 3px 6px; white-space: nowrap; border: 1px solid transparent; }
+.Chip_neutral { color: var(--text2); background: var(--bg3); }
+.Chip_ok { color: var(--ok-fg); background: var(--ok-soft); }
+.Chip_warn { color: var(--warn-fg); background: var(--warn-soft); }
+.Chip_bad { color: var(--bad-fg); background: var(--bad-soft); }
+.Chip_info { color: var(--info-fg); background: var(--info-soft); }
+
+/* ===== Banner.module.css (inline variant) ===== */
+.Banner_banner { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: var(--space-3); padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4); font: var(--fs-body) var(--sans); border: 1px solid var(--line); border-left-width: 3px; border-radius: var(--r-sm); }
+.Banner_icon { width: 16px; text-align: center; font-weight: 650; }
+.Banner_message { min-width: 0; color: var(--text); }
+.Banner_title { font-weight: 650; margin-right: 6px; }
+.Banner_description { color: var(--text2); }
+.Banner_warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); border-left-color: var(--warn); }
+.Banner_warn .Banner_icon { color: var(--warn); }
+.Banner_bad { background: var(--bad-soft); border-color: color-mix(in srgb, var(--bad) 35%, var(--line)); border-left-color: var(--bad); }
+.Banner_bad .Banner_icon { color: var(--bad); }
+.Banner_info { background: var(--info-soft); border-color: color-mix(in srgb, var(--info) 35%, var(--line)); border-left-color: var(--info); }
+.Banner_info .Banner_icon { color: var(--info); }
+
+/* ===== Popover.module.css ===== */
+.Popover_root { position: relative; display: inline-block; }
+.Popover_popover { position: absolute; top: calc(100% + var(--space-2)); left: 0; z-index: 20; min-width: 200px; background: var(--bg2); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); padding: var(--space-2); }
+
+/* ===== Toast.module.css ===== */
+.Toast_viewport { position: absolute; top: calc(var(--space-6) + var(--space-5)); right: var(--space-4); z-index: 50; display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-2); width: 380px; max-width: calc(100% - 2 * var(--space-4)); }
+.Toast_toast { position: relative; display: grid; grid-template-columns: 1fr auto; column-gap: var(--space-2); row-gap: 2px; width: 100%; min-width: 240px; background: var(--bg2); border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: var(--r-sm); padding: var(--space-3) var(--space-2) var(--space-3) var(--space-4); box-shadow: var(--shadow); overflow: hidden; animation: Toast_enter var(--dur-slow) var(--ease-out); }
+@keyframes Toast_enter { from { opacity: 0; transform: translateX(16px); } }
+.Toast_title { grid-column: 1; font: 650 var(--fs-ui)/20px var(--sans); color: var(--text); padding-top: 3px; }
+.Toast_description { grid-column: 1; font: var(--fs-body) var(--sans); color: var(--text2); }
+.Toast_x, .Banner_x { grid-column: 2; grid-row: 1; width: 26px; height: 26px; display: grid; place-items: center; border: 0; background: transparent; color: var(--text2); font: 14px/1 var(--sans); border-radius: var(--r-sm); cursor: pointer; }
+.Toast_x:hover { color: var(--text); background: color-mix(in srgb, var(--text) 10%, transparent); }
+.Toast_ok { border-left-color: var(--ok); }
+.Toast_warn { border-left-color: var(--warn); }
+.Toast_info { border-left-color: var(--info); }
+
+/* ===== Dialog shell: ProfileSwitchDialog.module.css / ConfirmDialog.module.css ===== */
+.Dialog_backdrop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.5); z-index: 200; }
+.Dialog_dialog { display: flex; flex-direction: column; gap: var(--space-3); width: 560px; max-width: calc(100vw - var(--space-6)); max-height: calc(100vh - var(--space-6)); overflow-y: auto; background: var(--bg1); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); padding: var(--space-4); }
+.Dialog_confirm { width: 420px; }
+.Dialog_title { font: 650 var(--fs-ui) var(--sans); color: var(--text); }
+.Dialog_description { font: var(--fs-body) var(--sans); color: var(--text2); line-height: 1.5; }
+.Dialog_description p + p { margin-top: var(--space-2); }
+.Dialog_description b { color: var(--text); font-weight: 600; }
+.Dialog_actions { display: flex; justify-content: flex-end; align-items: center; gap: var(--space-2); }
+.Dialog_actionsStart { margin-right: auto; }
+.Dialog_sectionTitle { font: 600 var(--fs-chip) var(--sans); color: var(--text3); letter-spacing: .05em; text-transform: uppercase; margin-bottom: var(--space-1); }
+
+/* ===== NEW PairedDevicesSection.module.css (from DevicesSection.module.css) ===== */
+.PairedDevices_panel { display: flex; flex-direction: column; gap: var(--space-4); }
+.PairedDevices_list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.PairedDevices_footer { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line-soft); }
+.PairedDevices_footerNote { margin-left: auto; color: var(--text3); font-size: var(--fs-sm); }
+.PairedDevices_candidates { padding: 0 var(--space-4) var(--space-3); }
+.PairedDevices_candidatesTitle { padding: var(--space-3) 0 var(--space-1); font: 600 var(--fs-chip) var(--sans); color: var(--text3); letter-spacing: .05em; text-transform: uppercase; }
+.PairedDevices_candidate { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) 0; color: var(--text2); }
+.PairedDevices_candidate .DeviceRow_name { font-size: var(--fs-body); }
+.PairedDevices_dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--text3); }
+.PairedDevices_ok { background: var(--ok-fg); }
+.PairedDevices_warn { background: var(--warn-fg); }
+.PairedDevices_bad { background: var(--bad-fg); }
+.PairedDevices_off { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text3); }
+.PairedDevices_muted { color: var(--text3); }
+.PairedDevices_text { color: var(--text2); font: 400 var(--fs-body)/1.5 var(--sans); }
+
+/* ===== NEW DeviceRow.module.css ===== */
+.DeviceRow_row { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line-soft); }
+.DeviceRow_row:last-child { border-bottom: 0; }
+.DeviceRow_self { background: color-mix(in srgb, var(--bg2) 45%, transparent); border-radius: var(--r) var(--r) 0 0; }
+.DeviceRow_head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.DeviceRow_kind { flex: none; width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--r-sm); background: var(--bg3); color: var(--text2); }
+.DeviceRow_kind svg { width: 16px; height: 16px; }
+.DeviceRow_name { font: 600 var(--fs-ui) var(--sans); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.DeviceRow_kindLabel { color: var(--text3); font-size: var(--fs-sm); }
+.DeviceRow_spacer { flex: 1; }
+.DeviceRow_seen { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text3); font-size: var(--fs-sm); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.DeviceRow_name, .DeviceRow_head > .SettingRow_tag, .DeviceRow_head > .Popover_root { flex: none; }
+.DeviceRow_expand { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--text3); }
+.DeviceRow_expand:hover { background: var(--bg2); color: var(--text); }
+.DeviceRow_expand .Caret_caret { transition: transform var(--dur) var(--ease-io); }
+.DeviceRow_expand[aria-expanded="true"] .Caret_caret { transform: translateY(0.1em) rotate(225deg); }
+/* The two directions, side by side, each its own well: who can use whom. */
+.DeviceRow_directions { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); margin: var(--space-2) 0 0 36px; }
+.DeviceRow_cell { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--line-soft); border-radius: var(--r-sm); background: var(--bg0); }
+.DeviceRow_cellHead { display: flex; align-items: center; gap: 6px; color: var(--text3); font: 600 var(--fs-chip) var(--sans); letter-spacing: .05em; text-transform: uppercase; }
+.DeviceRow_cellHead svg { flex: none; width: 14px; height: 14px; color: var(--text2); }
+.DeviceRow_cellBody { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.DeviceRow_cellBody .LevelPicker_root { width: 132px; flex: none; }
+.DeviceRow_cellNote { color: var(--text3); font-size: var(--fs-sm); line-height: 1.4; min-width: 0; }
+.DeviceRow_cellNote b { color: var(--text2); font-weight: 600; }
+.DeviceRow_status { display: inline-flex; align-items: center; gap: 6px; color: var(--text2); font-size: var(--fs-sm); min-width: 0; }
+.DeviceRow_link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.DeviceRow_link:hover { text-decoration-color: currentColor; }
+.DeviceRow_selfNote { margin: var(--space-1) 0 0 36px; color: var(--text3); font-size: var(--fs-sm); }
+.DeviceRow_detail { margin: var(--space-3) 0 var(--space-1) 36px; display: flex; flex-direction: column; gap: var(--space-3); }
+.DeviceRow_detail .SettingsCard_card { background: var(--bg0); }
+.DeviceRow_detail .SettingRow_row { grid-template-columns: 1fr minmax(200px, 240px); padding: var(--space-2) var(--space-3); }
+.DeviceRow_detail .SettingsCard_title { padding: var(--space-2) var(--space-3) 0; font-size: var(--fs-chip); }
+.DeviceRow_facts { display: grid; grid-template-columns: 110px 1fr; gap: 6px var(--space-3); padding: var(--space-2) var(--space-3) var(--space-3); font-size: var(--fs-sm); }
+.DeviceRow_facts dt { color: var(--text3); }
+.DeviceRow_facts dd { color: var(--text2); min-width: 0; }
+.DeviceRow_actions { display: flex; gap: var(--space-2); align-items: center; }
+.DeviceRow_actionsNote { color: var(--text3); font-size: var(--fs-sm); }
+
+/* ===== NEW Fingerprint.module.css ===== */
+.Fingerprint_chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border: 1px solid var(--line-soft); border-radius: 4px; background: transparent; color: var(--text3); font: 500 11px var(--mono); letter-spacing: .02em; white-space: nowrap; }
+.Fingerprint_chip:hover, .Fingerprint_chip[aria-expanded="true"] { color: var(--text); border-color: var(--line); background: var(--bg2); }
+.Fingerprint_popover { width: 300px; padding: var(--space-3); }
+.Fingerprint_label { font: 600 var(--fs-chip) var(--sans); color: var(--text3); letter-spacing: .05em; text-transform: uppercase; margin-bottom: var(--space-2); }
+.Fingerprint_groups { display: grid; grid-template-columns: repeat(4, auto); justify-content: start; gap: 3px 10px; font: 500 13px/1.5 var(--mono); color: var(--text); letter-spacing: .04em; }
+.Fingerprint_groups span:nth-child(-n+4) { color: var(--accent); }
+.Fingerprint_full { display: grid; grid-template-columns: repeat(7, auto); justify-content: start; gap: 2px 8px; font: 500 12px/1.5 var(--mono); color: var(--text); letter-spacing: .03em; }
+.Fingerprint_full span:nth-child(-n+4) { color: var(--accent); }
+.Fingerprint_big { grid-template-columns: repeat(7, auto); font-size: 14px; gap: 4px 12px; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg0); }
+.Fingerprint_help { margin-top: var(--space-2); color: var(--text3); font-size: var(--fs-sm); line-height: 1.4; }
+.Fingerprint_help code { font-size: 11.5px; color: var(--text2); }
+.Fingerprint_row { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-3); }
+
+/* ===== NEW RecentActions.module.css ===== */
+.RecentActions_list { list-style: none; padding: var(--space-1) var(--space-3) var(--space-2); margin: 0; display: flex; flex-direction: column; }
+.RecentActions_item { display: grid; grid-template-columns: 1fr auto; gap: var(--space-3); padding: 5px 0; font-size: var(--fs-sm); color: var(--text2); border-top: 1px solid var(--line-soft); }
+.RecentActions_item:first-child { border-top: 0; }
+.RecentActions_item time { color: var(--text3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.RecentActions_item q { quotes: "\201C" "\201D"; color: var(--text); }
+.RecentActions_item .Chip_chip { margin-right: 6px; vertical-align: 1px; }
+.RecentActions_empty { padding: var(--space-2) var(--space-3) var(--space-3); color: var(--text3); font-size: var(--fs-sm); }
+
+/* ===== NEW Pairing*.module.css ===== */
+.Pairing_choices { display: flex; flex-direction: column; gap: var(--space-2); }
+.Pairing_choice { display: grid; grid-template-columns: 28px 1fr auto; gap: var(--space-3); align-items: center; width: 100%; text-align: left; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg0); color: var(--text); }
+.Pairing_choice:hover:not(:disabled) { border-color: var(--text3); background: var(--bg2); }
+.Pairing_choice:disabled { opacity: .5; cursor: default; }
+.Pairing_choiceIcon { width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--r-sm); background: var(--bg3); color: var(--text2); font: 700 13px var(--mono); }
+.Pairing_choiceTitle { font: 600 var(--fs-ui) var(--sans); }
+.Pairing_choiceHelp { display: block; margin-top: 2px; color: var(--text3); font-size: var(--fs-sm); line-height: 1.4; }
+.Pairing_choice .Caret_caret { transform: rotate(-45deg); color: var(--text3); }
+.Pairing_codeBox { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); padding: var(--space-4) var(--space-3) var(--space-3); border: 1px solid var(--line); border-radius: var(--r); background: var(--bg0); }
+.Pairing_code { font: 650 40px/1 var(--mono); letter-spacing: .14em; color: var(--text); font-variant-numeric: tabular-nums; }
+.Pairing_codeExpired { color: var(--text3); text-decoration: line-through; text-decoration-thickness: 2px; }
+.Pairing_timer { width: 220px; height: 3px; border-radius: 2px; background: var(--bg3); overflow: hidden; }
+.Pairing_timer i { display: block; height: 100%; background: var(--accent); transform-origin: left; transition: transform 1s linear; }
+.Pairing_timerText { color: var(--text3); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.Pairing_field { display: flex; flex-direction: column; gap: 6px; }
+.Pairing_field .Select_trigger { padding: 7px 10px; background: var(--bg0); border-color: var(--line); }
+.Pairing_label { font: 500 var(--fs-body) var(--sans); color: var(--text); }
+.Pairing_help { color: var(--text3); font-size: var(--fs-sm); line-height: 1.45; }
+.Pairing_codeInput { font: 600 22px var(--mono); letter-spacing: .18em; text-align: center; padding: 8px 10px; width: 200px; }
+.Pairing_error { color: var(--bad-fg); font-size: var(--fs-sm); }
+.Pairing_grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+.Pairing_who { display: flex; align-items: center; gap: var(--space-2); }
+.Pairing_compare { display: grid; grid-template-columns: 1fr; gap: var(--space-2); }
+.Pairing_ask { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--line-soft); border-radius: var(--r-sm); background: var(--bg0); }
+.Pairing_askRow { display: flex; align-items: center; gap: var(--space-3); }
+.Pairing_askRow .LevelPicker_root { width: 150px; }
+.Pairing_askText { flex: 1; min-width: 0; }
+.Pairing_askTitle { font: 500 var(--fs-body) var(--sans); color: var(--text); }
+.Pairing_raise { display: flex; gap: var(--space-2); color: var(--warn-fg); font-size: var(--fs-sm); line-height: 1.45; }
+.Pairing_raise::before { content: "!"; flex: none; width: 16px; text-align: center; font-weight: 700; color: var(--warn); }
+.Pairing_steps { display: flex; gap: var(--space-1); align-items: center; color: var(--text3); font-size: var(--fs-chip); font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
+.Pairing_steps span[aria-current="step"] { color: var(--accent); }
+.Pairing_spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--bg4); border-top-color: var(--accent); animation: Pairing_spin .8s linear infinite; flex: none; }
+@keyframes Pairing_spin { to { transform: rotate(360deg); } }
+.Pairing_doneMark { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--ok-soft); color: var(--ok-fg); font-weight: 700; flex: none; }
+.Pairing_textarea { word-break: break-all; min-height: 64px; resize: vertical; font: 500 13px/1.5 var(--mono); letter-spacing: .03em; }
+.Pairing_results { list-style: none; padding: 0; margin: 0; border: 1px solid var(--line-soft); border-radius: var(--r-sm); background: var(--bg0); }
+.Pairing_result { display: grid; grid-template-columns: 1fr auto; gap: 2px var(--space-3); align-items: center; padding: var(--space-2) var(--space-3); border-top: 1px solid var(--line-soft); }
+.Pairing_result:first-child { border-top: 0; }
+.Pairing_resultName { font-weight: 600; color: var(--text); }
+.Pairing_resultHelp { grid-column: 1 / -1; color: var(--text3); font-size: var(--fs-sm); }
+
+/* ===== NEW IntroductionRules.module.css ===== */
+.Rules_list { list-style: none; margin: 0; padding: 0 var(--space-4); }
+.Rules_item { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; border-bottom: 1px solid var(--line-soft); color: var(--text2); }
+.Rules_item b { color: var(--text); font-weight: 600; }
+.Rules_add { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-4); }
+.Rules_from { width: 200px; }
+.Rules_cap { width: 120px; }
+.Rules_add .Select_trigger { padding: 5px 10px; background: var(--bg0); border-color: var(--line); }
+.Rules_empty { padding: var(--space-2) var(--space-4) 0; color: var(--text3); font-size: var(--fs-sm); }
+
+/* ===== Conversation: SessionWorkspace / ChatRenderer / SendDelivery / Dock ===== */
+.SessionWorkspace_workspace { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; flex: 1; background: var(--bg0); }
+.SessionWorkspace_bar { flex: none; display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--line-soft); }
+.SessionWorkspace_name { display: flex; align-items: center; gap: var(--space-2); min-width: 0; font: 650 var(--fs-ui)/1 var(--sans); color: var(--text); }
+.SessionWorkspace_tabs { display: flex; gap: 2px; margin-left: var(--space-4); }
+.SessionWorkspace_tab { position: relative; display: flex; align-items: center; background: none; border: 0; color: var(--text2); font: 500 var(--fs-sm) var(--sans); padding: 7px 14px 9px; border-radius: var(--r-sm) var(--r-sm) 0 0; }
+.SessionWorkspace_tab:hover { background: var(--bg2); color: var(--text); }
+.SessionWorkspace_tab[aria-selected="true"] { color: var(--text); font-weight: 600; }
+.SessionWorkspace_tab[aria-selected="true"]::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; background: var(--accent); border-radius: 2px; }
+.SessionRail_hostChip { flex: none; max-width: 9ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 var(--fs-chip) var(--sans); color: var(--text2); border: 1px solid var(--line-soft); border-radius: 999px; padding: 0 6px; line-height: 16px; }
+.ConversationTab_stream { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; }
+.ChatRenderer_stream { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-4); max-width: 980px; width: 100%; margin: 0 auto; }
+.ChatRenderer_user, .ChatRenderer_agent { display: flex; min-width: 0; gap: var(--space-2); align-items: flex-end; }
+.ChatRenderer_user { justify-content: flex-end; }
+.ChatRenderer_stamp { flex: none; padding-bottom: 2px; font: var(--fs-chip) var(--mono); color: var(--text3); white-space: nowrap; opacity: 0; transition: opacity 120ms ease; }
+.ChatRenderer_user:hover .ChatRenderer_stamp, .ChatRenderer_agent:hover .ChatRenderer_stamp { opacity: 1; }
+.ChatRenderer_prose { max-width: var(--measure-prose); min-width: 0; overflow-wrap: break-word; font: var(--fs-chat) var(--sans); color: var(--text); line-height: 1.6; }
+.ChatRenderer_prose p + p { margin-top: .6em; }
+.ChatRenderer_prose code { font: var(--fs-chat-code) var(--mono); background: var(--bg2); border-radius: 3px; padding: 1px 4px; }
+.ChatRenderer_user .ChatRenderer_prose { background: var(--accent-soft); border-radius: var(--r); padding: var(--space-2) var(--space-3); }
+.ChatRenderer_sent { display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-1); min-width: 0; }
+.ChatRenderer_user[data-undelivered] .ChatRenderer_prose { outline: 1px dashed var(--bad); outline-offset: -1px; }
+.ChatRenderer_attribution { font-size: var(--fs-chip); color: var(--text3); }
+.SendDelivery_delivery { display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-1); max-width: var(--measure-prose); min-width: 0; font: var(--fs-sm) var(--sans); color: var(--text3); }
+.SendDelivery_failed { display: flex; align-items: center; gap: var(--space-2); max-width: 100%; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
+.SendDelivery_failedLabel { flex: none; font-weight: 600; color: var(--bad-fg); }
+.SendDelivery_attempts { padding: 0; border: none; background: none; color: var(--text3); font: inherit; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+.SendDelivery_attempts:hover { color: var(--text2); }
+/* NEW RefusedSend: the mesh refusal's plain reason (sans, not the harness's mono error) and its Why panel. */
+.RefusedSend_line { flex-wrap: wrap; justify-content: flex-end; row-gap: 0; }
+.RefusedSend_reason { min-width: 0; color: var(--text2); text-align: right; }
+.RefusedSend_reason .SendDelivery_failedLabel { margin-right: 4px; }
+.RefusedSend_actions { display: inline-flex; align-items: center; gap: var(--space-2); }
+.RefusedSend_detail { width: min(520px, 100%); padding: var(--space-3); border: 1px solid var(--line-soft); border-left: 3px solid var(--bad); border-radius: var(--r-sm); background: var(--bg1); color: var(--text2); font-size: var(--fs-sm); line-height: 1.5; text-align: left; }
+.RefusedSend_detail h4 { margin: 0 0 4px; font: 600 var(--fs-chip) var(--sans); letter-spacing: .05em; text-transform: uppercase; color: var(--text3); }
+.RefusedSend_detail ul { margin: 0 0 var(--space-2); padding-left: 18px; }
+.RefusedSend_detail li + li { margin-top: 2px; }
+.RefusedSend_detail b { color: var(--text); font-weight: 600; }
+.RefusedSend_where { font-family: var(--mono); font-size: 11.5px; color: var(--text2); }
+.SessionDock_dock { position: relative; flex: none; background: var(--bg1); }
+.SessionDock_dock:has(textarea:focus) { background: color-mix(in srgb, var(--bg1) 55%, var(--bg2)); }
+.Composer_inputRow { position: relative; display: flex; align-items: flex-end; gap: 6px; padding: 10px 10px 8px 8px; max-width: 980px; margin: 0 auto; }
+.Composer_plus { display: block; flex: none; width: 32px; height: 32px; padding: 0; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--text2); font-size: 18px; line-height: 1; }
+.Composer_textarea { display: block; flex: 1; min-width: 0; resize: none; min-height: 32px; max-height: 220px; padding: 5px 2px; border: 0; outline: 0; background: transparent; color: var(--text); font: var(--fs-chat)/1.5 var(--sans); field-sizing: content; }
+.Composer_textarea:focus-visible { outline: none; }
+.Composer_textarea::placeholder { color: var(--text3); }
+.Composer_send { flex: none; height: 32px; padding: 0 14px; border: 0; border-radius: var(--r-sm); background: var(--accent); color: var(--accent-ink); font: 650 var(--fs-body) var(--sans); }
+.Composer_send:hover { background: var(--accent-hover); }
+.StatusLine_status { display: flex; align-items: center; gap: 2px; height: 30px; padding: 0 6px; border-top: 1px solid var(--line-soft); background: var(--bg0); font: 11.5px var(--sans); color: var(--text3); white-space: nowrap; min-width: 0; }
+.StatusLine_seg { display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px; border-radius: 4px; color: inherit; }
+.StatusLine_trust { color: var(--text2); }
+.StatusLine_spacer { flex: 1; }
+.Phone_frame { width: 390px; margin: 16px auto; height: calc(100% - 32px); border: 1px solid var(--line); border-radius: 28px; overflow: hidden; display: flex; flex-direction: column; box-shadow: var(--shadow); }
+.Phone_frame .ChatRenderer_prose { font-size: 15px; }
+.Phone_frame .SessionWorkspace_tabs { display: none; }
+.Phone_note { text-align: center; color: var(--text3); font-size: 11px; padding: 4px; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ================= v2 additions ================= */
+.Mock_frame { transform: translateZ(0); } /* fixed children (drawer, dialogs) stay inside the app frame */
+.Mock_bar { gap: 10px; }
+
+/* ModelsSection.module.css .disclosure/.summary → components/Disclosure */
+.Disclosure_disclosure > .Disclosure_summary { display: flex; align-items: center; gap: 10px; padding: var(--space-3) var(--space-4); list-style: none; cursor: pointer; }
+.Disclosure_disclosure > .Disclosure_summary::-webkit-details-marker { display: none; }
+.Disclosure_disclosure > .Disclosure_summary::before { content: "\25B8"; width: 10px; color: var(--text3); }
+.Disclosure_disclosure[open] > .Disclosure_summary::before { content: "\25BE"; }
+.Disclosure_summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--r-sm); }
+.Disclosure_summaryLabel { flex: 1; font: 500 var(--fs-ui) var(--sans); color: var(--text); }
+/* The in-card variant: quieter, under a device's controls. */
+.Disclosure_inline > .Disclosure_summary { padding: var(--space-1) 0; gap: 6px; }
+.Disclosure_inline > .Disclosure_summary .Disclosure_summaryLabel { flex: none; font: 500 var(--fs-sm) var(--sans); color: var(--text2); }
+.Disclosure_inline > .Disclosure_summary:hover .Disclosure_summaryLabel { color: var(--text); }
+.Disclosure_body { padding: 0 0 var(--space-1); }
+.Disclosure_body .SettingsCard_card { background: var(--bg0); max-width: none; }
+.Disclosure_body .SettingRow_row { grid-template-columns: 1fr minmax(190px, 230px); padding: var(--space-2) var(--space-3); }
+
+/* ThisDeviceBar */
+.ThisDevice_bar { max-width: 760px; display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid var(--line-soft); border-radius: var(--r); background: var(--bg1); }
+.ThisDevice_who { display: flex; align-items: center; gap: var(--space-2); min-width: 0; flex: 1; }
+.ThisDevice_label { white-space: nowrap; color: var(--text3); font: 600 var(--fs-chip) var(--sans); letter-spacing: .05em; text-transform: uppercase; }
+.ThisDevice_name { font: 650 var(--fs-ui) var(--sans); color: var(--text); white-space: nowrap; }
+.ThisDevice_platform { color: var(--text3); font-size: var(--fs-sm); white-space: nowrap; }
+.ThisDevice_actions { display: flex; gap: var(--space-2); flex: none; }
+
+/* AccessSentence + VerbPicker */
+.AccessSentence_sentence { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font: 400 var(--fs-chat)/1.4 var(--sans); color: var(--text2); }
+.AccessSentence_sentence b { color: var(--text); font-weight: 650; }
+.AccessSentence_small { font-size: var(--fs-ui); }
+.VerbPicker_root { position: relative; display: inline-block; }
+.VerbPicker_root .Select_trigger { width: auto; display: inline-flex; gap: 6px; padding: 3px 8px 3px 10px; background: var(--bg0); border-color: var(--line); font: 650 inherit/1.3 var(--sans); font-size: inherit; color: var(--text); }
+.VerbPicker_root .Select_trigger:hover:not(:disabled) { border-color: var(--text3); }
+.VerbPicker_root[data-level="none"] .Select_value { color: var(--text3); }
+.VerbPicker_root[data-level="control"] .Select_trigger, .VerbPicker_root[data-level="admin"] .Select_trigger { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.VerbPicker_root .LevelPicker_listbox { font-size: var(--fs-body); }
+
+/* ShowSessionsSwitch */
+.ShowSessions_row { display: flex; align-items: flex-start; gap: var(--space-2); }
+.ShowSessions_row .Switch_switch { margin-top: 1px; }
+.ShowSessions_text { display: flex; flex-direction: column; min-width: 0; }
+.ShowSessions_label { font: 500 var(--fs-body) var(--sans); color: var(--text); }
+.ShowSessions_label[data-disabled] { color: var(--text3); }
+.ShowSessions_status { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--text3); font-size: var(--fs-sm); line-height: 1.45; }
+
+/* Layout A: one card per device */
+.CardsA_list { display: flex; flex-direction: column; gap: var(--space-3); }
+.CardsA_card { padding: var(--space-3) var(--space-4) var(--space-2); display: flex; flex-direction: column; gap: var(--space-3); }
+.CardsA_head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.CardsA_name { font: 600 var(--fs-ui) var(--sans); color: var(--text); white-space: nowrap; }
+.CardsA_meta { color: var(--text3); font-size: var(--fs-sm); white-space: nowrap; }
+.CardsA_spacer { flex: 1; }
+.CardsA_conn { display: inline-flex; align-items: center; gap: 6px; color: var(--text3); font-size: var(--fs-sm); white-space: nowrap; }
+.CardsA_rule { height: 1px; background: var(--line-soft); }
+
+/* Layout B: two lists by direction */
+.ListsB_list { list-style: none; margin: 0; padding: 0; }
+.ListsB_row { padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line-soft); }
+.ListsB_row:first-child { border-top: 0; }
+.ListsB_line { display: flex; align-items: center; gap: var(--space-3); }
+.ListsB_line .AccessSentence_sentence { flex: 1; }
+.ListsB_head { display: flex; align-items: baseline; gap: var(--space-2); padding: var(--space-3) var(--space-4) var(--space-2); border-bottom: 1px solid var(--line-soft); }
+.ListsB_head .SettingsCard_title { padding: 0; }
+.ListsB_headNote { color: var(--text3); font-size: var(--fs-sm); }
+
+/* DeviceTable: rows expand inline */
+.TableC_table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
+.TableC_table th { text-align: left; padding: var(--space-2) var(--space-3); color: var(--text3); font: 600 var(--fs-chip) var(--sans); letter-spacing: .05em; text-transform: uppercase; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
+.TableC_table td { padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+.TableC_table tr:last-child td { border-bottom: 0; }
+.TableC_row { cursor: pointer; }
+.TableC_row:hover td { background: color-mix(in srgb, var(--bg2) 55%, transparent); }
+.TableC_row[aria-selected="true"] td { background: var(--accent-soft); }
+.TableC_nameBtn { display: inline-flex; align-items: center; gap: var(--space-2); padding: 0; color: var(--text); font: 600 var(--fs-body) var(--sans); text-align: left; }
+.TableC_nameBtn:hover { text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--text3); }
+.TableC_table .VerbPicker_root .Select_trigger { padding: 2px 8px; font-size: var(--fs-body); }
+.TableC_status { display: inline-flex; align-items: center; gap: 6px; color: var(--text3); font-size: var(--fs-sm); white-space: nowrap; }
+.TableC_chev { color: var(--text3); }
+.TableC_chev .Caret_caret { transform: rotate(-45deg); }
+.SideSheet_sheet { position: fixed; top: 0; right: 0; bottom: 0; display: flex; flex-direction: column; background: var(--bg1); border-left: 1px solid var(--line); box-shadow: -18px 0 44px rgba(0,0,0,.4); z-index: 40; width: 440px; animation: Sheet_in var(--dur-slow) var(--ease-out); }
+[data-theme="light"] .SideSheet_sheet { box-shadow: -18px 0 44px rgba(38,33,26,.14); }
+@keyframes Sheet_in { from { transform: translateX(24px); opacity: 0; } }
+.SideSheet_header { flex: none; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-4); border-bottom: 1px solid var(--line-soft); font: 650 var(--fs-ui) var(--sans); color: var(--text); }
+.SideSheet_body { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-4); }
+.SettingsSheet_close { margin-left: auto; padding: 2px 6px; border: 0; border-radius: var(--r-sm); background: none; color: var(--text3); font: 400 var(--fs-ui) var(--sans); cursor: pointer; }
+.SettingsSheet_close:hover { background: var(--bg3); color: var(--text); }
+.SideSheet_body .SettingsCard_card { background: var(--bg0); }
+.SideSheet_body .SettingRow_row { grid-template-columns: 1fr; gap: var(--space-2); padding: var(--space-2) var(--space-3); }
+.SideSheet_body .SettingRow_control { justify-content: flex-start; }
+.SideSheet_body .SettingRow_control .Select_root { width: 220px; }
+.Drawer_title { font: 600 var(--fs-chip) var(--sans); color: var(--text3); letter-spacing: .05em; text-transform: uppercase; margin-bottom: var(--space-2); }
+
+/* DeviceActivity */
+.Activity_head { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4) var(--space-2); }
+.Activity_head .SettingsCard_title { padding: 0; flex: 1; }
+.Activity_head .Select_root { width: 200px; }
+.Activity_head .Select_trigger { padding: 5px 10px; background: var(--bg0); border-color: var(--line); font-size: var(--fs-sm); }
+.Activity_list { list-style: none; margin: 0; padding: 0 var(--space-4) var(--space-2); }
+.Activity_item { display: grid; grid-template-columns: 104px 1fr auto; gap: var(--space-3); align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line-soft); font-size: var(--fs-sm); color: var(--text2); }
+.Activity_item:first-child { border-top: 0; }
+.Activity_item b { color: var(--text); font-weight: 600; }
+.Activity_item q { quotes: "\201C" "\201D"; color: var(--text); }
+.Activity_item time { color: var(--text3); white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+.Activity_item .Chip_chip { justify-self: start; }
+.Activity_empty { padding: 0 var(--space-4) var(--space-3); color: var(--text3); font-size: var(--fs-sm); }
+.SideSheet_body .Activity_list { padding: 0 var(--space-3) var(--space-2); }
+.SideSheet_body .Activity_item { grid-template-columns: 1fr auto; }
+.SideSheet_body .Activity_item .Chip_chip { display: none; }
+
+/* Fingerprint inside Advanced */
+.Fingerprint_inline { display: flex; align-items: flex-start; gap: var(--space-3); }
+
+/* Remove device */
+.Remove_list { list-style: none; padding: 0; margin: 0; border: 1px solid var(--line-soft); border-radius: var(--r-sm); background: var(--bg0); }
+.Remove_item { display: grid; grid-template-columns: 1fr auto; gap: 2px var(--space-3); align-items: center; padding: var(--space-2) var(--space-3); border-top: 1px solid var(--line-soft); }
+.Remove_item:first-child { border-top: 0; }
+.Remove_name { color: var(--text); font-weight: 600; }
+.Remove_name span { color: var(--text3); font-weight: 400; }
+.Remove_help { grid-column: 1 / -1; color: var(--text3); font-size: var(--fs-sm); }
+.Remove_result { display: inline-flex; align-items: center; gap: var(--space-2); }
+.Remove_note { color: var(--text3); font-size: var(--fs-sm); line-height: 1.45; }
+
+/* Pairing (both options) */
+.Pairing_number { font: 650 40px/1 var(--mono); letter-spacing: .12em; color: var(--text); font-variant-numeric: tabular-nums; }
+.Pairing_found { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line-soft); border-radius: var(--r-sm); background: var(--bg0); }
+.Pairing_foundItem { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-top: 1px solid var(--line-soft); }
+.Pairing_foundItem:first-child { border-top: 0; }
+.Pairing_foundName { font-weight: 600; color: var(--text); }
+.Pairing_foundMeta { color: var(--text3); font-size: var(--fs-sm); }
+.Pairing_looking { display: flex; align-items: center; gap: var(--space-2); color: var(--text3); font-size: var(--fs-sm); }
+.Pairing_looking .Pairing_spinner { width: 12px; height: 12px; border-width: 1.5px; }
+.Pairing_codeString { font: 500 13px/1.6 var(--mono); color: var(--text); word-break: break-all; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg0); user-select: all; }
+.Pairing_codeRow { display: flex; align-items: center; gap: var(--space-3); }
+.Pairing_headless { color: var(--text3); font-size: var(--fs-sm); }
+.Pairing_headless code { color: var(--text2); font-size: 11.5px; background: var(--bg2); border-radius: 3px; padding: 1px 4px; }
+.Pairing_status { display: flex; gap: var(--space-3); align-items: flex-start; }
+.Pairing_grant { font: 400 var(--fs-chat)/1.45 var(--sans); color: var(--text); }
+.Pairing_grant b { font-weight: 650; }
+.Pairing_preview { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--line-soft); border-radius: var(--r-sm); background: var(--bg0); }
+.Pairing_failMark { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--warn-soft); color: var(--warn-fg); font-weight: 700; flex: none; }
+.Pairing_linkRow { display: flex; justify-content: flex-start; }
+.Pairing_ask .AccessSentence_sentence { font-size: var(--fs-ui); }
+.Mock_sim .Mock_go { border: 1px solid #c9a000; background: transparent; color: #c9a000; border-radius: 4px; padding: 2px 8px; font: 600 11.5px -apple-system, sans-serif; }
+.Mock_sim .Mock_go:hover { background: rgba(224,180,0,.15); }
+.Disclosure_body .Fingerprint_full, .SideSheet_body .Fingerprint_full { grid-template-columns: repeat(4, auto); font-size: 11.5px; }
+
+/* ================= v3 ================= */
+.PairedDevices_panel { max-width: 1060px !important; }
+.PairedDevices_panel .SettingsCard_card, .PairedDevices_panel .ThisDevice_bar { max-width: none; }
+.Dialog_dialog { overflow: visible; max-height: none; }
+/* Fingerprints and codes: a zero that can't pass for O. */
+.Fingerprint_chip, .Fingerprint_groups, .Fingerprint_full, .Pairing_codeString, .Pairing_textarea, .Pairing_foundMeta { font-variant-numeric: slashed-zero; font-feature-settings: "zero" 1; }
+.Fingerprint_full { font-family: Menlo, "SF Mono", ui-monospace, monospace; }
+
+/* Tooltip / InfoTip (NEW components/Tooltip) */
+.Tooltip_anchor { position: relative; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
+.Tooltip_anchor:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.Tooltip_tip { position: absolute; z-index: 60; bottom: calc(100% + 8px); left: 50%; transform: translate(-50%, 2px); width: max-content; max-width: 300px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg3); box-shadow: var(--shadow); color: var(--text); font: 400 var(--fs-sm)/1.45 var(--sans); text-align: left; white-space: normal; letter-spacing: 0; text-transform: none; opacity: 0; pointer-events: none; transition: opacity var(--dur-fast), transform var(--dur-fast); }
+.Tooltip_end .Tooltip_tip { left: auto; right: 0; transform: translateY(2px); }
+.Tooltip_start .Tooltip_tip { left: 0; transform: translateY(2px); }
+.Tooltip_anchor:hover > .Tooltip_tip, .Tooltip_anchor:focus-visible > .Tooltip_tip, .Tooltip_anchor:focus-within > .Tooltip_tip { opacity: 1; transform: translate(-50%, 0); }
+.Tooltip_end:hover > .Tooltip_tip, .Tooltip_end:focus-visible > .Tooltip_tip, .Tooltip_end:focus-within > .Tooltip_tip,
+.Tooltip_start:hover > .Tooltip_tip, .Tooltip_start:focus-visible > .Tooltip_tip, .Tooltip_start:focus-within > .Tooltip_tip { transform: none; }
+.InfoTip_button { display: inline-grid; place-items: center; width: 16px; height: 16px; padding: 0; border-radius: 50%; color: var(--text3); }
+.InfoTip_button:hover { color: var(--text); }
+.InfoTip_button svg { width: 14px; height: 14px; }
+.Button_button[aria-disabled="true"] { opacity: .4; cursor: default; }
+.Button_button[aria-disabled="true"]:hover { background: transparent; color: var(--text2); }
+
+/* Table with inline expansion (NEW DeviceTable) */
+.TableC_wrap { container-type: inline-size; }
+.TableC_table th, .TableC_table td { white-space: nowrap; }
+.TableC_table th:first-child, .TableC_table td:first-child { padding-left: var(--space-4); }
+.TableC_lets { color: var(--text); font-weight: 500; }
+.TableC_lets[data-level="none"], .TableC_lets[data-level="na"] { color: var(--text3); font-weight: 400; }
+.TableC_lets[data-stale] { color: var(--text2); font-style: italic; }
+.TableC_statusText { white-space: nowrap; }
+.TableC_chev { width: 36px; text-align: center; }
+.TableC_chev .Caret_caret { transform: rotate(-45deg); transition: transform var(--dur) var(--ease-io); }
+.TableC_row[aria-expanded="true"] .TableC_chev .Caret_caret { transform: translateY(-0.1em) rotate(45deg); }
+.TableC_row[aria-expanded="true"] td { background: var(--bg2); border-bottom-color: transparent; }
+.TableC_row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.TableC_detailRow > td { padding: 0 !important; background: var(--bg2); border-bottom: 1px solid var(--line-soft); white-space: normal !important; }
+.TableC_detail { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: var(--space-3); padding: 0 var(--space-4) var(--space-4); animation: Detail_in var(--dur) var(--ease-out); }
+@keyframes Detail_in { from { opacity: 0; transform: translateY(-4px); } }
+.TableC_detail .SettingsCard_card { background: var(--bg1); }
+.TableC_detail .SettingRow_row { grid-template-columns: 1fr minmax(180px, 220px); padding: var(--space-2) var(--space-3); }
+.TableC_detail .Drawer_title { margin: 0 0 6px; }
+.TableC_detail .Activity_list { padding: 0 var(--space-3) var(--space-2); }
+.TableC_detail .Activity_item { grid-template-columns: 1fr auto; }
+.TableC_detail .Activity_item .Chip_chip { display: none; }
+.TableC_detailFoot { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-top: 1px solid var(--line-soft); color: var(--text3); font-size: var(--fs-sm); }
+.TableC_detailFoot .DeviceRow_spacer { flex: 1; }
+.TableC_detail .Fingerprint_full { grid-template-columns: repeat(4, auto); font-size: 11.5px; }
+@container (max-width: 900px) { .TableC_statusText { display: none; } .TableC_table th.TableC_statusHead { font-size: 0; } }
+@container (max-width: 900px) { .TableC_table th, .TableC_table td { padding-left: var(--space-2); padding-right: var(--space-2); } }
+@container (max-width: 620px) { .TableC_letsCol { display: none; } }
+@container (max-width: 760px) { .TableC_detail { grid-template-columns: 1fr; } }
+
+/* LevelChoice: the sentence + SegmentedControl, for dialogs */
+.LevelChoice_root { display: flex; flex-direction: column; gap: var(--space-2); }
+.LevelChoice_sentence { font: 400 var(--fs-ui)/1.4 var(--sans); color: var(--text2); }
+.LevelChoice_sentence b { color: var(--text); font-weight: 650; }
+.LevelChoice_sentence .LevelChoice_verb { color: var(--accent); font-weight: 650; }
+.LevelChoice_desc { color: var(--text3); font-size: var(--fs-sm); line-height: 1.45; min-height: 1.45em; }
+</style>
+</head>
+<body>
+<div id="mockbar"></div>
+<div class="Mock_frame" id="app"></div>
+<script>
+"use strict";
+/* ================================================================ data == */
+const PLATFORM_KIND = { macOS: "computer", Linux: "computer", Windows: "computer", iOS: "phone", Android: "phone" };
+const kindOf = (dev) => PLATFORM_KIND[DEV[dev].platform] || "unknown";
+const DEV = {
+  mac:     { name: "Alexs-MacBook-Air", short: "MacBook-Air", platform: "macOS", fp: "JZHVB5F7CZEZT2X4STFI2OGSKWA4WLVA5AHMI7L266KCKCOYPZ5Q", dns: "alexs-macbook-air.tail4c2e.ts.net" },
+  pop:     { name: "pop-os", short: "pop-os", platform: "Linux", fp: "UQDUPBGTB6PCPZYH4ISNMOWUZYWTJKFO2IV7GANMQUQO7KPOUDFA", dns: "pop-os.tail4c2e.ts.net" },
+  iphone:  { name: "Drew’s iPhone", platform: "iOS", fp: "7QHNMZ3CA2LDVKX4RP6EJW5TNOBYGF2SHU7IK3QZDLMAX6VC4RTE", dns: "drews-iphone.tail4c2e.ts.net" },
+  display: { name: "Kitchen display", platform: "unknown", fp: "CJ4W2NRTPYXE6HDAZQ7KLMB3SVU5OIF2WKXN7GEPAR4DYJ3TBQ6L", dns: "kitchen-display.tail4c2e.ts.net" },
+  spark:   { name: "spark", platform: "macOS", fp: "H6RDKZ2YPM4QWXN7VEC3TL5JAB2UFGI6SOKM3YQRWDPLE7ZNX4HA", dns: "spark.tail4c2e.ts.net" },
+};
+const LEVELS = ["none", "view", "chat", "control", "admin"];
+const VERB = { none: "not use", view: "view", chat: "chat with", control: "control", admin: "administer" };
+const LEVEL_DESC = {
+  none: () => "Nothing. It can’t reach mads here.",
+  view: () => "See sessions, transcripts and live output.",
+  chat: () => "View, plus message, interrupt and answer prompts in sessions that already exist, at their trust.",
+  control: () => "Everything you can do: start sessions at any trust, run a shell, commit, land and push.",
+  admin: () => "Control, plus pairing devices and changing what they may do here. Only ever set on the device itself.",
+};
+const SUGGEST = { computer: "control", phone: "chat", unknown: "view" };
+const KIND_LABEL = { computer: "Computer", phone: "Phone", unknown: "Unknown platform" };
+const TRUST = [["", "No limit"], ["auto_review", "Auto-review"], ["limited", "Limited"], ["read_only", "Read-only"]];
+const TRUST_LABEL = { "": "No limit", auto_review: "Auto-review", limited: "Limited", read_only: "Read-only" };
+const MODELLED = ["mac", "pop"];
+
+function peer(dev, o) {
+  return Object.assign({ dev, level: "none", chat: "allowed", maxTrust: "", viewed: false, lastSeen: "never",
+    how: "number", pairedAt: "Nov 17", introducedBy: null, remoteLevel: "none" }, o);
+}
+const L = (dev, type, text, t) => ({ dev, type, text, t });
+function seed() {
+  return {
+    theme: "dark", me: "pop", view: "settings", popOffline: false, failNext: false,
+    sender: "iphone", menu: null, fp: null, toast: null, pending: null, disc: {}, codes: {},
+    ui: { mac: { dialog: null, row: null, filter: "all", open: {} }, pop: { dialog: null, row: null, filter: "all", open: {} } },
+    hosts: {
+      pop: {
+        tailnetOnly: true,
+        peers: [
+          peer("mac", { level: "control", lastSeen: "2 min ago", pairedAt: "Nov 17, 21:40" }),
+          peer("iphone", { level: "chat", chat: "refused", lastSeen: "5 min ago", pairedAt: "Nov 18, 08:12" }),
+          peer("display", { level: "view", lastSeen: "just now", how: "introduction", introducedBy: "mac", pairedAt: "Nov 18, 19:03" }),
+        ],
+        log: [
+          L("iphone", "refused", `sent a message to <q>meta arctic review</q>. Refused: it runs at Full access.`, "5 min ago"),
+          L("display", "refused", `sent a message to <q>docs sweep</q>. Refused: it may only view.`, "1 h ago"),
+          L("mac", "level", `changed from administer to control, by this device`, "Nov 18"),
+          L("display", "introduced", `introduced by <b>Alexs-MacBook-Air</b>; may view`, "Nov 18"),
+          L("iphone", "paired", `paired with a pairing code; may chat with`, "Nov 18"),
+          L("mac", "level", `changed from control to administer, by this device`, "Nov 18"),
+          L("mac", "paired", `paired with a pairing code; may control`, "Nov 17"),
+        ],
+      },
+      mac: {
+        tailnetOnly: true,
+        peers: [
+          peer("pop", { level: "none", viewed: true, lastSeen: "just now", pairedAt: "Nov 17, 21:40" }),
+          peer("display", { level: "view", lastSeen: "1 h ago", pairedAt: "Nov 18, 18:55" }),
+        ],
+        log: [
+          L("display", "paired", `paired with a pairing code; may view`, "Nov 18"),
+          L("pop", "paired", `paired with a pairing code; pop-os lets this MacBook-Air control mads there`, "Nov 17"),
+        ],
+      },
+    },
+    convo: seedConvo(),
+  };
+}
+let S = seed();
+
+/* ============================================================= helpers == */
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const groups = (fp) => fp.match(/.{4}/g);
+const shortFp = (fp) => groups(fp).slice(0, 4).join("-");
+const me = () => S.me;
+const other = () => (S.me === "pop" ? "mac" : "pop");
+const H = () => S.hosts[S.me];
+const U = () => S.ui[S.me];
+const nm = (dev) => (dev ? DEV[dev].name : "This device");
+const hw = (dev = me()) => DEV[dev].short || DEV[dev].name; // "this MacBook-Air", "this pop-os"
+const lvlIdx = (l) => LEVELS.indexOf(l);
+const findPeer = (hostKey, dev) => S.hosts[hostKey]?.peers.find((p) => p.dev === dev);
+const isModelled = (k) => MODELLED.includes(k);
+
+let HANDLERS = {}, KEYS = {}, hc = 0;
+const on = (fn) => { const k = "h" + (++hc); HANDLERS[k] = fn; return k; };
+const onKey = (fn) => { const k = "k" + (++hc); KEYS[k] = fn; return k; };
+
+const ICON = {
+  computer: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><rect x="2.5" y="3" width="11" height="7.5" rx="1.2"/><path d="M1 13h14"/></svg>`,
+  phone: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><rect x="4.5" y="1.5" width="7" height="13" rx="1.6"/><path d="M7 12.5h2"/></svg>`,
+  unknown: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="8.5" rx="1"/><path d="M6 14h4M8 11v3"/></svg>`,
+};
+const kindIcon = (dev) => `<span class="DeviceRow_kind KindIcon" title="${esc(DEV[dev].platform === "unknown" ? "Unknown platform" : DEV[dev].platform)}">${ICON[kindOf(dev)]}</span>`;
+const platformLabel = (dev) => (DEV[dev].platform === "unknown" ? "unknown platform" : DEV[dev].platform);
+const caret = (cls = "") => `<span class="Caret_caret ${cls}" aria-hidden="true"></span>`;
+const btn = (label, fn, o = {}) =>
+  `<button type="button" ${o.id ? `id="${o.id}"` : ""} class="Button_button Button_${o.variant || "secondary"} ${o.size === "md" ? "" : "Button_sm"} ${o.cls || ""}" data-h="${on(fn)}" ${o.disabled ? "disabled" : ""} ${o.title ? `title="${esc(o.title)}"` : ""}>${label}</button>`;
+const tag = (tone, text) => `<span class="SettingRow_tag SettingRow_${tone}">${text}</span>`;
+const chip = (tone, text) => `<span class="Chip_chip Chip_${tone}">${text}</span>`;
+const sw = (id, checked, fn, o = {}) =>
+  `<button type="button" role="switch" id="${id}" class="Switch_switch" aria-checked="${checked}" ${o.label ? `aria-label="${esc(o.label)}"` : ""} ${o.labelledBy ? `aria-labelledby="${o.labelledBy}"` : ""} ${o.disabled ? "disabled" : ""} ${o.title ? `title="${esc(o.title)}"` : ""} data-h="${on(() => fn(!checked))}"></button>`;
+const seg = (id, value, options, fn, label, disabled) =>
+  `<div role="radiogroup" class="SegmentedControl_group" aria-label="${esc(label)}" ${disabled ? `aria-disabled="true"` : ""}>${options
+    .map(([v, l]) => `<button type="button" role="radio" id="${id}-${v}" class="SegmentedControl_option" aria-checked="${v === value}" tabindex="${v === value ? 0 : -1}" ${disabled ? "disabled" : ""} data-h="${on(() => { fn(v); render(); document.getElementById(`${id}-${v}`)?.focus(); })}">${l}</button>`)
+    .join("")}</div>`;
+function settingRow({ label, help, tagHtml = "", control = "", htmlFor, labelId, disabled }) {
+  return `<div class="SettingRow_row ${disabled ? "SettingRow_disabled" : ""}"><div class="SettingRow_text"><div class="SettingRow_labelLine">${htmlFor ? `<label class="SettingRow_label" for="${htmlFor}">${label}</label>` : `<span class="SettingRow_label" ${labelId ? `id="${labelId}"` : ""}>${label}</span>`}${tagHtml}</div>${help ? `<div class="SettingRow_help">${help}</div>` : ""}</div>${control ? `<div class="SettingRow_control">${control}</div>` : ""}</div>`;
+}
+let tipN = 0;
+/* components/Tooltip: hover/focus; `end`/`start` align it to the anchor's edge. */
+function tip(anchorHtml, text, o = {}) {
+  const id = `tip-${++tipN}`;
+  return `<span class="Tooltip_anchor ${o.align ? `Tooltip_${o.align}` : ""}" ${o.focusable === false ? "" : `tabindex="0"`} aria-describedby="${id}">${anchorHtml}<span role="tooltip" id="${id}" class="Tooltip_tip">${text}</span></span>`;
+}
+const INFO_SVG = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.3"/><path d="M8 7.2v4" stroke-linecap="round"/><circle cx="8" cy="4.9" r=".6" fill="currentColor" stroke="none"/></svg>`;
+function infoTip(label, text) {
+  const id = `tip-${++tipN}`;
+  return `<span class="Tooltip_anchor Tooltip_start"><button type="button" class="InfoTip_button" aria-label="About ${esc(label)}" aria-describedby="${id}">${INFO_SVG}</button><span role="tooltip" id="${id}" class="Tooltip_tip">${text}</span></span>`;
+}
+/* LevelChoice (dialogs): the live sentence over a SegmentedControl, so nothing drops off the dialog. */
+function levelChoice(id, { subject, where, value, onPick, levels = ["none", "view", "chat", "control"] }) {
+  return `<div class="LevelChoice_root"><div class="LevelChoice_sentence" id="${id}-l"><b>${esc(subject)}</b> may <span class="LevelChoice_verb">${VERB[value]}</span> mads ${where}</div>
+    <div>${seg(id, value, levels.map((l) => [l, VERB[l]]), onPick, `What ${subject} may do`)}</div>
+    <div class="LevelChoice_desc">${LEVEL_DESC[value]()}</div></div>`;
+}
+const dot = (cls) => `<span class="PairedDevices_dot ${cls}" aria-hidden="true"></span>`;
+
+/* Select / LevelPicker / VerbPicker: one listbox engine (components/Select). */
+function listbox(id, { value, options, onPick, rich, verb, placeholder = "—", labelledBy, ariaLabel, disabled }) {
+  const open = S.menu?.id === id;
+  const sel = options.find((o) => o.value === value);
+  const hi = open ? S.menu.hi : -1;
+  const pick = (i) => {
+    const o = options[i]; if (!o || o.disabled) return;
+    S.menu = null; onPick(o.value); render();
+    const t = document.getElementById(id); if (t && (!curDialog() || t.closest(".Dialog_dialog"))) t.focus();
+  };
+  const kh = onKey((e) => {
+    const n = options.length;
+    const step = (from, d) => { for (let k = 0, i = from; k < n; k++, i = (i + d + n) % n) if (!options[i].disabled) return i; return from; };
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) { S.menu = { id, hi: Math.max(options.indexOf(sel), 0) }; render(); return; }
+      const d = e.key === "ArrowDown" ? 1 : -1; S.menu.hi = step((hi + d + n) % n, d); render();
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault(); if (open) pick(hi); else { S.menu = { id, hi: Math.max(options.indexOf(sel), 0) }; render(); }
+    } else if (e.key === "Escape" && open) { e.preventDefault(); S.menu = null; render(); }
+  });
+  const toggle = on(() => { S.menu = open ? null : { id, hi: Math.max(options.indexOf(sel), 0) }; S.fp = null; render(); });
+  const rootCls = verb ? "VerbPicker_root" : rich ? "LevelPicker_root" : "Select_root";
+  const list = !open ? "" : `<ul class="${rich || verb ? "LevelPicker_listbox" : "Select_listbox"}" role="listbox" id="${id}-list">${options
+    .map((o, i) => {
+      const cls = rich || verb ? `LevelPicker_option ${i === hi ? "LevelPicker_optionHighlighted" : ""}` : `Select_option ${i === hi ? "Select_optionHighlighted" : ""}`;
+      const inner = rich || verb ? `<span class="LevelPicker_optionLabel">${o.label}${o.tagHtml || ""}</span><span class="LevelPicker_optionDescription">${o.desc || ""}</span>` : o.label;
+      return `<li role="option" class="${cls}" aria-selected="${o.value === value}" ${o.disabled ? `aria-disabled="true"` : ""} data-h="${on(() => pick(i))}" data-hover="${id}:${i}">${inner}</li>`;
+    }).join("")}</ul>`;
+  const name = ariaLabel ? `aria-label="${esc(ariaLabel)}"` : labelledBy ? `aria-labelledby="${labelledBy} ${id}"` : "";
+  return `<span class="${rootCls}" ${verb ? `data-level="${value}"` : ""}><button type="button" id="${id}" class="Select_trigger" aria-haspopup="listbox" aria-expanded="${open}" ${name} ${disabled ? "disabled" : ""} data-h="${toggle}" data-k="${kh}"><span class="Select_value">${sel ? sel.plain || sel.label : placeholder}</span>${caret("Select_chevron")}</button>${list}</span>`;
+}
+function verbOptions({ allowAdmin = true, allowNone = true, max, maxWhy } = {}) {
+  return LEVELS.filter((l) => l !== "none" || allowNone).map((l) => {
+    let disabled = false, why = "";
+    if (l === "admin" && !allowAdmin) { disabled = true; why = "Administer is only ever set on the device itself, in its own Settings."; }
+    if (max && lvlIdx(l) > lvlIdx(max)) { disabled = true; why = maxWhy; }
+    return { value: l, label: VERB[l], plain: VERB[l], desc: disabled ? why : LEVEL_DESC[l](), disabled,
+      tagHtml: l === "admin" && allowAdmin ? ` <span class="SettingRow_tag SettingRow_muted">Set here only</span>` : "" };
+  });
+}
+function sentence(dev, id, o = {}) {
+  const p = findPeer(me(), dev);
+  return `<div class="AccessSentence_sentence ${o.small ? "AccessSentence_small" : ""}"><b>${esc(nm(dev))}</b> may ${listbox(id, { value: p.level, verb: true, ariaLabel: `What ${nm(dev)} may do with mads on this ${hw()}`, options: verbOptions(), onPick: (v) => setLevel(dev, v) })} mads on this ${esc(hw())}</div>`;
+}
+
+function fingerprintChip(id, dev, self) {
+  const fp = DEV[dev].fp, open = S.fp === id;
+  const copy = on((el) => { try { navigator.clipboard?.writeText(groups(fp).join("-")); } catch (e) {} el.textContent = "Copied"; });
+  return `<span class="Popover_root"><button type="button" id="${id}" class="Fingerprint_chip" aria-expanded="${open}" aria-haspopup="dialog" title="Show the full fingerprint" data-h="${on(() => { S.fp = open ? null : id; S.menu = null; render(); })}"><span class="sr-only">Fingerprint </span>${shortFp(fp)}</button>${
+    !open ? "" : `<div class="Popover_popover Fingerprint_popover" role="dialog" aria-label="${esc(nm(dev))} fingerprint"><div class="Fingerprint_label">${esc(nm(dev))} · fingerprint</div>
+      <div class="Fingerprint_groups">${groups(fp).map((g) => `<span>${g}</span>`).join("")}</div>
+      <p class="Fingerprint_help">${self ? "This device’s. Other devices check it when you pair." : `Compare with <code>mads device</code> on ${esc(nm(dev))}.`} The first four groups are its short form.</p>
+      <div class="Fingerprint_row"><button type="button" class="Button_button Button_secondary Button_sm" data-h="${copy}">Copy</button></div></div>`}</span>`;
+}
+const fpGroups = (dev, big) => `<div class="Fingerprint_full ${big ? "Fingerprint_big" : ""}">${groups(DEV[dev].fp).map((g) => `<span>${g}</span>`).join("")}</div>`;
+
+/* ============================================================== reach == */
+function reach(hostKey, p) {
+  if (kindOf(p.dev) !== "computer") return null;
+  if (S.popOffline && p.dev === "pop") return { state: "unreachable" };
+  if (isModelled(p.dev)) {
+    const rec = findPeer(p.dev, hostKey);
+    if (!rec || rec.level === "none") return { state: "denied" };
+    return { state: "connected", rtt: p.dev === "pop" ? 14 : 9 };
+  }
+  return p.remoteLevel === "none" ? { state: "denied" } : { state: "connected", rtt: 6 };
+}
+/* What `p` lets this device do there, as its /mesh/hello last said. null: it doesn't host mads. */
+function letsUs(p) {
+  if (kindOf(p.dev) !== "computer") return null;
+  if (isModelled(p.dev)) return findPeer(p.dev, me())?.level || "none";
+  return p.remoteLevel;
+}
+const stale = (p) => S.popOffline && p.dev === "pop";
+function letsCell(p) {
+  const v = letsUs(p), dn = esc(nm(p.dev)), h = esc(hw());
+  if (v === null) return tip(`<span class="TableC_lets" data-level="na">—</span>`, `${dn} doesn’t host mads sessions, so there’s nothing it could let this ${h} do.`);
+  const text = `<span class="TableC_lets" data-level="${v}" ${stale(p) ? "data-stale" : ""}>${VERB[v]}</span>`;
+  const why = stale(p) ? `Last known, as of 4 min ago. ${dn} is offline right now.` : `What ${dn} lets this ${h} do with mads there. Set on ${dn}, in its Settings → Paired devices.`;
+  return tip(text, why);
+}
+const usedLine = (p) => (p.lastSeen === "never" ? `It has never used this ${esc(hw())}.` : `It last used this ${esc(hw())} ${p.lastSeen}.`);
+function statusCell(p) {
+  const dn = esc(nm(p.dev)), h = esc(hw());
+  let d, text, why;
+  if (kindOf(p.dev) !== "computer") {
+    d = p.lastSeen === "never" ? "PairedDevices_off" : "PairedDevices_ok";
+    text = p.lastSeen === "never" ? `Never used this ${h}` : `Last used this ${h} ${p.lastSeen}`;
+    why = `The last time ${dn} made a request to mads on this ${h}. ${dn} doesn’t host mads, so this ${h} never connects to it.`;
+  } else if (stale(p)) {
+    d = "PairedDevices_bad"; text = "Offline"; why = `This ${h} can’t reach ${dn} right now; last reached 4 min ago. ${usedLine(p)}`;
+  } else if (letsUs(p) === "none") {
+    d = "PairedDevices_warn"; text = `Doesn’t allow this ${h}`; why = `${dn} answers, but lets this ${h} not use mads there. That’s set on ${dn}. ${usedLine(p)}`;
+  } else {
+    const rtt = p.dev === "pop" ? 14 : p.dev === "mac" ? 9 : 6;
+    d = "PairedDevices_ok"; text = `Connected · ${rtt} ms`; why = `This ${h} reaches mads on ${dn} (${rtt} ms round trip). ${usedLine(p)}`;
+  }
+  return tip(`<span class="TableC_status">${dot(d)}<span class="TableC_statusText">${text}</span></span>`, why, { align: "end" });
+}
+function showSwitchCell(p, id) {
+  const v = letsUs(p), dn = nm(p.dev);
+  const why = v === null ? `${dn} doesn’t host mads sessions.` : v === "none" ? `${dn} lets this ${hw()} not use mads, so there are no sessions to show.` : "";
+  const s = sw(id, p.viewed && !why, (val) => { p.viewed = val; render(); }, { label: `Show mads sessions from ${dn}`, disabled: !!why });
+  return why ? tip(s, esc(why), { focusable: true }) : s;
+}
+
+
+
+
+
+/* ========================================================== mutations == */
+function log(hostKey, dev, type, text) { S.hosts[hostKey].log.unshift(L(dev, type, text, "just now")); }
+function setLevel(dev, level, confirmed) {
+  const p = findPeer(me(), dev), prev = p.level;
+  if (level === prev) return;
+  if (!confirmed && lvlIdx(level) > lvlIdx(prev) && (level === "control" || level === "admin")) { openDialog({ type: "raise", dev, level }); return; }
+  p.level = level;
+  log(me(), dev, "level", `changed from ${VERB[prev]} to ${VERB[level]}, by this device`);
+  render();
+}
+function setLimit(dev, key, val) {
+  const p = findPeer(me(), dev); p[key] = val;
+  render();
+}
+
+/* ============================================================ dialogs == */
+let lastFocus = null;
+function curDialog() {
+  const pd = S.pending;
+  if (pd && pd.host === me() && pd.state === "waiting") return { type: "approve" };
+  return U().dialog;
+}
+function openDialog(d) { lastFocus = document.activeElement?.id || null; U().dialog = d; S.menu = null; S.fp = null; render(); focusDialog(); }
+function closeDialog() { U().dialog = null; render(); if (lastFocus) document.getElementById(lastFocus)?.focus(); }
+function focusDialog() { (document.querySelector(".Dialog_dialog [data-autofocus]") || document.querySelector(".Dialog_dialog button:not([disabled]), .Dialog_dialog input"))?.focus(); }
+function toast(title, desc = "", tone = "ok") { S.toast = { title, desc, tone, at: Date.now(), dev: S.me }; render(); const at = S.toast.at; setTimeout(() => { if (S.toast?.at === at) { S.toast = null; render(); } }, 6000); }
+const cancelBtn = (label = "Cancel", fn = closeDialog) => btn(label, fn, { variant: "ghost", size: "md" });
+function dialogShell(title, body, actions, o = {}) {
+  return `<div class="Dialog_backdrop" data-h="${on(() => (o.onDismiss || closeDialog)())}" data-backdrop>
+    <div role="${o.alert ? "alertdialog" : "dialog"}" aria-modal="true" aria-labelledby="dlg-title" class="Dialog_dialog ${o.confirm ? "Dialog_confirm" : ""}" data-stop>
+      <h2 id="dlg-title" class="Dialog_title">${title}</h2>${body}<div class="Dialog_actions">${actions}</div></div></div>`;
+}
+const mm = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+const raiseLine = (devName, level, host) =>
+  `${esc(devName)} will be able to start Full access sessions, run a shell, and commit, land and push on ${esc(host)}.${level === "admin" ? " It can also pair devices and change what every device may do there." : ""}`;
+
+function renderDialog() {
+  const d = curDialog(); if (!d) return "";
+  const host = hw();
+  switch (d.type) {
+    case "raise":
+      return dialogShell(`Let ${esc(nm(d.dev))} ${VERB[d.level]} mads on this ${esc(host)}?`,
+        `<div class="Dialog_description"><p>${raiseLine(nm(d.dev), d.level, nm(me()))}</p>${d.level === "admin" ? `<p>Administer can only be given here, never from another device.</p>` : ""}</div>`,
+        cancelBtn() + btn(`Let it ${VERB[d.level]}`, () => { U().dialog = null; setLevel(d.dev, d.level, true); }, { variant: "primary", size: "md" }), { confirm: true, alert: true });
+    case "remove": return renderRemove(d);
+    case "introduce": return renderIntroduce(d);
+    case "choose": return renderChoose();
+    case "copy": return renderCopy(d);
+    case "paste": return renderPaste(d);
+    case "join": return renderJoin(d);
+    case "approve": return renderApprove();
+  }
+  return "";
+}
+
+/* ---- Remove device: here + every host where this device administers ---- */
+function knownHosts(dev) { // computers this device knows, other than the one being removed
+  return H().peers.filter((p) => kindOf(p.dev) === "computer" && p.dev !== dev).map((p) => p.dev);
+}
+function adminThere(hk) { return isModelled(hk) ? findPeer(hk, me())?.level === "admin" : findPeer(me(), hk)?.remoteLevel === "admin"; }
+function tryRemove(hk, dev) {
+  if (hk === "pop" && S.popOffline) return "offline";
+  if (S.failNext) { S.failNext = false; return "failed"; }
+  if (isModelled(hk)) { const h = S.hosts[hk]; const had = h.peers.some((p) => p.dev === dev); h.peers = h.peers.filter((p) => p.dev !== dev); if (had) log(hk, dev, "removed", `removed by <b>${esc(nm(me()))}</b>`); }
+  return "removed";
+}
+function renderRemove(d) {
+  const dn = esc(nm(d.dev));
+  const hosts = knownHosts(d.dev), admin = hosts.filter(adminThere), not = hosts.filter((h) => !adminThere(h));
+  const neverSeen = `<p class="Remove_note">Devices this ${esc(hw())} has never seen can’t be checked. If ${dn} was paired anywhere else, remove it there too.</p>`;
+  const notList = not.map((h) => `<li class="Remove_item"><span class="Remove_name">${esc(nm(h))}</span>${chip("neutral", "Not yours to manage")}<span class="Remove_help">You’re not an admin there. Remove it on ${esc(nm(h))}.</span></li>`).join("");
+  if (!d.results) {
+    return dialogShell(`Remove ${dn}?`,
+      `<div class="Dialog_description"><p>${dn} is removed from this ${esc(hw())} now: it can’t use mads here from its next request${findPeer(me(), d.dev).viewed ? `, and its sessions stop showing here` : ""}.</p></div>
+       <div><div class="Dialog_sectionTitle">Where it’s removed</div><ul class="Remove_list">
+        <li class="Remove_item"><span class="Remove_name">${esc(nm(me()))} <span>(this device)</span></span>${chip("neutral", "Here")}</li>
+        ${admin.map((h) => `<li class="Remove_item"><span class="Remove_name">${esc(nm(h))}</span>${chip("info", "You administer it")}</li>`).join("")}
+        ${notList}</ul></div>${neverSeen}
+       <div class="Mock_sim"><b>MOCKUP</b> ${btn(S.failNext ? "Next remove fails ✓" : "Make the next remote remove fail", () => { S.failNext = !S.failNext; render(); })}</div>`,
+      cancelBtn() + btn("Remove device", () => {
+        H().peers = H().peers.filter((p) => p.dev !== d.dev);
+        log(me(), d.dev, "removed", "removed by this device");
+        d.results = Object.fromEntries(admin.map((h) => [h, tryRemove(h, d.dev)]));
+        U().row = null; render(); focusDialog();
+      }, { variant: "primary", size: "md", cls: "ConfirmDialog_confirmDanger" }), { alert: true });
+  }
+  const res = (h) => {
+    const r = d.results[h], retry = btn("Retry", () => { d.results[h] = tryRemove(h, d.dev); render(); }, { variant: "ghost" });
+    if (r === "removed") return chip("ok", "Removed");
+    if (r === "offline") return `<span class="Remove_result">${chip("warn", "Offline")}${retry}</span>`;
+    return `<span class="Remove_result">${chip("bad", "Failed")}${retry}</span>`;
+  };
+  const help = (h) => d.results[h] === "offline" ? `<span class="Remove_help">Not reached. Retry when ${esc(nm(h))} is back.</span>` : d.results[h] === "failed" ? `<span class="Remove_help">${esc(nm(h))} answered with an error and still has it paired.</span>` : "";
+  return dialogShell(`${dn} removed from this ${esc(hw())}`,
+    `<ul class="Remove_list" aria-label="Results by device">
+      <li class="Remove_item"><span class="Remove_name">${esc(nm(me()))} <span>(this device)</span></span>${chip("ok", "Removed")}</li>
+      ${admin.map((h) => `<li class="Remove_item"><span class="Remove_name">${esc(nm(h))}</span>${res(h)}${help(h)}</li>`).join("")}
+      ${notList}</ul>${neverSeen}
+     ${admin.length ? `<div class="Mock_sim"><b>MOCKUP</b> Toggle “pop-os offline” in the bar, then Retry. ${btn(S.failNext ? "Next remove fails ✓" : "Make the next remote remove fail", () => { S.failNext = !S.failNext; render(); })}</div>` : ""}`,
+    btn("Done", closeDialog, { variant: "primary", size: "md", id: "done-btn" }));
+}
+
+/* ---- Introduce: needs administer on the host; level capped at control ---- */
+function renderIntroduce(d) {
+  const targets = MODELLED.filter((hk) => hk !== me() && findPeer(hk, me())?.level === "admin");
+  if (!targets.length) {
+    return dialogShell("Introduce a device",
+      `<div class="Dialog_description"><p>Introducing adds a device you’ve paired here to another device, without pairing there.</p><p>This ${esc(hw())} needs to <b>administer</b> mads on that device first. That’s set on that device: Settings → Paired devices.</p></div>
+       <div class="Mock_sim"><b>MOCKUP</b> Switch “I am” to ${esc(nm(other()))} and set ${esc(nm(me()))} to administer.</div>`,
+      btn("Close", closeDialog, { variant: "secondary", size: "md" }));
+  }
+  d.host = targets.includes(d.host) ? d.host : targets[0];
+  const opts = H().peers.filter((p) => p.dev !== d.host).map((p) => { const there = !!findPeer(d.host, p.dev); return { value: p.dev, label: nm(p.dev) + (there ? ` · already on ${nm(d.host)}` : ""), plain: nm(p.dev), disabled: there }; });
+  if (!d.dev || opts.find((o) => o.value === d.dev)?.disabled) d.dev = opts.find((o) => !o.disabled)?.value || "";
+  if (!d.level) d.level = d.dev ? SUGGEST[kindOf(d.dev)] : "view";
+  const none = !d.dev;
+  return dialogShell("Introduce a device",
+    `<div class="Dialog_description">Adds a device paired here to ${esc(nm(d.host))}, without pairing there. ${esc(nm(d.host))} records it as introduced by this ${esc(hw())}.</div>
+     <div class="Pairing_grid2"><div class="Pairing_field"><span class="Pairing_label" id="intro-dev-l">Device</span>${listbox("intro-dev", { value: d.dev, labelledBy: "intro-dev-l", placeholder: "Nothing to introduce", options: opts, onPick: (v) => { d.dev = v; d.level = null; } })}
+       ${none ? `<span class="Pairing_help">Every device paired here is already on ${esc(nm(d.host))}.</span>` : ""}</div>
+       <div class="Pairing_field"><span class="Pairing_label" id="intro-host-l">To</span>${listbox("intro-host", { value: d.host, labelledBy: "intro-host-l", options: targets.map((h) => ({ value: h, label: nm(h) })), onPick: (v) => { d.host = v; } })}<span class="Pairing_help">This ${esc(hw())} administers mads there.</span></div></div>
+     ${none ? "" : `<div class="Pairing_ask">${levelChoice("intro-level", { subject: nm(d.dev), where: `on ${nm(d.host)}`, value: d.level, levels: ["view", "chat", "control"], onPick: (v) => { d.level = v; } })}
+       <span class="Pairing_help">Up to control. Administer is only set on ${esc(nm(d.host))} itself.</span></div>`}`,
+    cancelBtn() + btn("Introduce", () => {
+      S.hosts[d.host].peers.push(peer(d.dev, { level: d.level, how: "introduction", introducedBy: me(), pairedAt: "just now" }));
+      log(d.host, d.dev, "introduced", `introduced by <b>${esc(nm(me()))}</b>; may ${VERB[d.level]}`);
+      log(me(), d.dev, "introduced", `introduced to <b>${esc(nm(d.host))}</b>; may ${VERB[d.level]} there`);
+      U().dialog = null; toast(`Introduced ${nm(d.dev)} to ${nm(d.host)}`, `It may ${VERB[d.level]} mads there.`);
+    }, { variant: "primary", size: "md", disabled: none }));
+}
+
+/* ---- Pairing: copy / paste a code ---- */
+function choice(icon, title, help, fn) {
+  return `<button type="button" class="Pairing_choice" data-h="${on(fn)}"><span class="Pairing_choiceIcon" aria-hidden="true">${icon}</span><span><span class="Pairing_choiceTitle">${title}</span><span class="Pairing_choiceHelp">${help}</span></span>${caret()}</button>`;
+}
+function renderChoose() {
+  const h = esc(hw());
+  return dialogShell("Pair a device", `<div class="Dialog_description">Both devices check each other’s identity. Each one then decides for itself what the other may do on it.</div><div class="Pairing_choices">
+    ${choice("⎘", "Copy this device’s pairing code", `Paste it on the other device. You approve it here and choose what it may do on this ${h}.`, startCopy)}
+    ${choice("⎙", "Paste a pairing code", `From the other device. It approves this ${h} and chooses what it may do there.`, () => openDialog({ type: "paste", text: "", error: null }))}</div>`, cancelBtn());
+}
+
+
+
+
+
+
+
+function startCopy() {
+  const secret = Math.random().toString(36).slice(2, 8).toUpperCase().replace(/[01OI]/g, "7");
+  S.codes[me()] = { left: 300, code: `mads-pair:${DEV[me()].name}:${DEV[me()].fp}:${secret}` };
+  openDialog({ type: "copy" });
+}
+function renderCopy() {
+  const c = S.codes[me()];
+  if (!c || c.left <= 0) {
+    return dialogShell("Pairing code expired", `<div class="Pairing_status"><span class="Pairing_failMark" aria-hidden="true">!</span><div class="Dialog_description">Codes last 5 minutes and work once. Nothing was paired.</div></div>`,
+      cancelBtn("Close") + btn("Make a new code", startCopy, { variant: "primary", size: "md" }));
+  }
+  const copy = on((el) => { try { navigator.clipboard?.writeText(c.code); } catch (e) {} el.textContent = "Copied"; });
+  return dialogShell("Copy this device’s pairing code",
+    `<div class="Dialog_description">Paste it on the other device: Pair a device → Paste a pairing code. It holds this ${esc(hw())}’s name, fingerprint and a one-time secret.</div>
+     <div class="Pairing_codeString" id="pair-code" aria-label="Pairing code">${esc(c.code)}</div>
+     <div class="Pairing_codeRow"><button type="button" class="Button_button Button_primary" data-h="${copy}" data-autofocus>Copy</button><span class="Pairing_timerText" id="code-left">Works once · expires in ${mm(c.left)}</span></div>
+     <p class="Pairing_help">When it’s pasted, you approve the device here and choose what it may do.</p>
+     <div class="Mock_sim"><b>MOCKUP</b> ${btn("spark pastes it", () => request(me(), "spark", "p2"))} ${btn("Skip to the end", () => { c.left = 3; })} Or switch “I am” to ${esc(nm(other()))} → Paste a pairing code.</div>`,
+    btn("Stop", () => { delete S.codes[me()]; closeDialog(); }, { variant: "secondary", size: "md" }));
+}
+function renderPaste(d) {
+  const parse = () => {
+    const m = d.text.trim().match(/^mads-pair:([^:]+):([A-Z2-7]{52}):([A-Z0-9]+)$/);
+    if (!m) return { error: "That isn’t a mads pairing code. Copy the whole line from the other device." };
+    const k = Object.keys(DEV).find((x) => DEV[x].name === m[1] && DEV[x].fp === m[2]);
+    if (k === me()) return { error: "That’s this device’s own code." };
+    if (!k || (isModelled(k) && S.codes[k]?.code !== d.text.trim())) return { error: "That code has expired or was already used. Ask for a new one." };
+    if (findPeer(me(), k)) return { error: `${nm(k)} is already paired here. Remove it first to pair again.` };
+    return { dev: k };
+  };
+  const r = d.text.trim() ? parse() : {};
+  const preview = r.dev ? `<div class="Pairing_preview">${kindIcon(r.dev)}<span><b>${esc(nm(r.dev))}</b> <span class="Pairing_foundMeta">${esc(platformLabel(r.dev))} · ${shortFp(DEV[r.dev].fp)}</span></span></div>` : "";
+  const fill = (txt) => () => { d.text = txt; render(); };
+  return dialogShell("Paste a pairing code",
+    `<div class="Pairing_field"><label class="Pairing_label" for="paste-code">Pairing code from the other device</label>
+       <textarea id="paste-code" class="settingInput_input settingInput_mono Pairing_textarea" spellcheck="false" placeholder="mads-pair:…" data-input="text" data-autofocus>${esc(d.text)}</textarea>
+       ${r.error ? `<p class="Pairing_error" role="alert">${esc(r.error)}</p>` : ""}</div>
+     ${preview}
+     <div class="Mock_sim"><b>MOCKUP</b> ${btn("Fill spark’s code", fill(`mads-pair:spark:${DEV.spark.fp}:Q4XN7K`))} ${btn(`Fill ${esc(nm(other()))}’s code`, fill(S.codes[other()]?.code || `mads-pair:${DEV[other()].name}:${DEV[other()].fp}:OLD2AB`))} ${btn("Fill junk", fill("pop-os UQDU-PBGT"))}</div>`,
+    cancelBtn() + btn("Ask to pair", () => request(r.dev, me(), "p2"), { variant: "primary", size: "md", disabled: !r.dev }));
+}
+
+/* ---- shared: request → approval on the host → result on the joiner ---- */
+function request(host, joiner, via) {
+  S.pending = { host, joiner, via, state: "waiting", level: SUGGEST[kindOf(joiner)], granted: null };
+  if (isModelled(host)) { delete S.codes[host]; S.ui[host].dialog = null; } // the approval prompt replaces the discoverable/code dialog
+  if (joiner === me()) openDialog({ type: "join" });
+  render(); focusDialog();
+}
+function renderApprove() {
+  const pd = S.pending, j = pd.joiner, jn = esc(nm(j)), h = esc(hw(pd.host));
+  const decline = () => { pd.state = "declined"; finishHostSide(); toast("Declined", `${nm(j)} wasn’t paired.`, "info"); };
+  const k = kindOf(j);
+  return dialogShell(`${jn} wants to pair`,
+    `<div class="Pairing_preview">${kindIcon(j)}<span><b>${jn}</b> <span class="Pairing_foundMeta">${esc(platformLabel(j))} · ${shortFp(DEV[j].fp)} · used this ${h}’s pairing code</span></span></div>
+     <div class="Pairing_ask">${levelChoice("approve-level", { subject: nm(j), where: `on this ${hw(pd.host)}`, value: pd.level, onPick: (v) => { pd.level = v; } })}
+       <span class="Pairing_help">Suggested for a ${KIND_LABEL[k].toLowerCase()} (${esc(platformLabel(j))}). You can change it later; administer is only set from the row.</span>
+       ${pd.level === "control" ? `<div class="Pairing_raise">${raiseLine(nm(j), "control", nm(pd.host))}</div>` : ""}</div>
+     <p class="Remove_note">Not expecting ${jn}? Decline. The code is used up either way.</p>`,
+    btn("Decline", decline, { variant: "ghost", size: "md" }) + btn("Pair", () => {
+      const p = findPeer(pd.host, j);
+      if (p) Object.assign(p, { level: pd.level, pairedAt: "just now", lastSeen: "just now" });
+      else S.hosts[pd.host].peers.push(peer(j, { level: pd.level, pairedAt: "just now", lastSeen: "just now" }));
+      log(pd.host, j, "paired", `paired with a pairing code; may ${VERB[pd.level]}`);
+      pd.state = "approved"; pd.granted = pd.level; finishHostSide();
+      toast(`${nm(j)} is paired`, `It may ${VERB[pd.level]} mads on this ${hw(pd.host)}.`);
+    }, { variant: "primary", size: "md", id: "approve-btn" }), { onDismiss: decline });
+}
+
+function finishHostSide() { if (!isModelled(S.pending.joiner)) S.pending = null; render(); }
+function joinerRecord(pd) { // the joiner's own row for the host, once approved
+  let p = findPeer(pd.joiner, pd.host);
+  if (!p) { p = peer(pd.host, { level: "none", viewed: kindOf(pd.host) === "computer" && pd.granted !== "none", pairedAt: "just now", lastSeen: "never" }); S.hosts[pd.joiner].peers.push(p); log(pd.joiner, pd.host, "paired", `paired with a pairing code; ${esc(nm(pd.host))} lets this ${esc(hw(pd.joiner))} ${VERB[pd.granted]} mads there`); }
+  p.remoteLevel = pd.granted;
+  return p;
+}
+function renderJoin() {
+  const pd = S.pending;
+  const done = () => { S.pending = null; closeDialog(); };
+  if (!pd || pd.joiner !== me()) return dialogShell("Pairing", `<div class="Dialog_description">Nothing in progress.</div>`, btn("Close", done, { size: "md" }));
+  const hn = esc(nm(pd.host));
+  if (pd.state === "waiting") {
+    const sim = isModelled(pd.host)
+      ? `<div class="Mock_sim"><b>MOCKUP</b> <button type="button" class="Mock_go" data-h="${on(() => { S.me = pd.host; render(); focusDialog(); })}">Switch “I am” to ${hn} to approve</button></div>`
+      : `<div class="Mock_sim"><b>MOCKUP</b> ${btn(`${hn} approves: control`, () => simApprove("control"))} ${btn("approves: view", () => simApprove("view"))} ${btn("declines", () => { pd.state = "declined"; render(); })} ${btn("times out", () => { pd.state = "timeout"; render(); })}</div>`;
+    return dialogShell(`Waiting for ${hn}`,
+      `<div class="Pairing_looking" role="status"><span class="Pairing_spinner" aria-hidden="true"></span>Waiting for ${hn} to approve this ${esc(hw())} and choose what it may do there…</div>${sim}`,
+      cancelBtn("Cancel", () => { S.pending = null; closeDialog(); }));
+  }
+  if (pd.state === "declined" || pd.state === "timeout") {
+    return dialogShell(pd.state === "declined" ? `${hn} declined` : `${hn} didn’t answer`,
+      `<div class="Pairing_status"><span class="Pairing_failMark" aria-hidden="true">!</span><div class="Dialog_description">${pd.state === "declined" ? "Nothing was paired." : "Nobody approved within 2 minutes. Nothing was paired."} To try again, ask ${hn} for a new code.</div></div>`,
+      btn("Close", done, { variant: "primary", size: "md" }));
+  }
+  const p = joinerRecord(pd);
+  const g = pd.granted;
+  return dialogShell(`Paired with ${hn}`,
+    `<div class="Pairing_status"><span class="Pairing_doneMark" aria-hidden="true">✓</span><p class="Pairing_grant">${g === "none" ? `${hn} paired with this ${esc(hw())} but doesn’t let it use mads there yet.` : `${hn} lets this ${esc(hw())} <b>${VERB[g]}</b> mads there.`}</p></div>
+     ${kindOf(pd.host) === "computer" ? `<div class="Pairing_ask"><div class="ShowSessions_row">${sw("join-show", p.viewed && g !== "none", (v) => { p.viewed = v; render(); }, { labelledBy: "join-show-l", disabled: g === "none" })}<div class="ShowSessions_text"><span class="ShowSessions_label" id="join-show-l">Show mads sessions from ${hn}</span><span class="ShowSessions_status">${g === "none" ? "Nothing to show until it lets this " + esc(hw()) + " view." : "They appear under All devices. Showing gives it nothing here."}</span></div></div></div>` : ""}
+     <div class="Pairing_ask">${levelChoice("join-back", { subject: nm(pd.host), where: `on this ${hw()}`, value: p.level, onPick: (v) => { p.level = v; } })}
+       <span class="Pairing_help">Your choice, set here on this ${esc(hw())}. Nothing until you choose.</span>
+       ${p.level === "control" ? `<div class="Pairing_raise">${raiseLine(nm(pd.host), "control", nm(me()))}</div>` : ""}</div>`,
+    btn("Done", done, { variant: "primary", size: "md", id: "done-btn" }));
+}
+function simApprove(level) { S.pending.state = "approved"; S.pending.granted = level; render(); }
+
+/* ======================================================== settings page == */
+const NAV = [["profiles"], ["sessions", "models", "workspaces", "devices"], ["pipelines", "synthesis"], ["appearance", "editor", "credentials"], ["experimental", "system", "about"]];
+const NAV_LABEL = { profiles: "Profiles", sessions: "New sessions", models: "Agents & models", workspaces: "Workspaces", devices: "Paired devices", pipelines: "Pipelines", synthesis: "Synthesis", appearance: "Appearance", editor: "Editor", credentials: "Credentials & environment", experimental: "Experimental", system: "System", about: "About mads" };
+function iconRail(active) {
+  const items = [["sessions", "Sessions", "S"], ["retro", "Retro", "R"], ["library", "Library", "L"], ["settings", "Settings", "⚙"], ["dashboard", "Dashboard", "D"]];
+  return `<div class="IconRail_slot"><nav aria-label="Main navigation" class="IconRail_rail">${items.map(([id, l, i]) => `<button type="button" class="IconRail_item" aria-selected="${id === active}" aria-label="${l}" data-h="${on(() => { if (id === "settings") S.view = "settings"; if (id === "sessions") S.view = "conversation"; render(); })}"><span class="IconRail_icon">${i}</span><span class="IconRail_label">${l}</span></button>`).join("")}</nav></div>`;
+}
+function disclosure(key, label, body, inline, extra = "") {
+  return `<details class="Disclosure_disclosure ${inline ? "Disclosure_inline" : ""}" data-adv="${key}" ${U().open[key] ? "open" : ""}><summary class="Disclosure_summary"><span class="Disclosure_summaryLabel">${label}</span>${extra}</summary><div class="Disclosure_body">${body}</div></details>`;
+}
+function deviceAdvanced(p, idp) {
+  const chatOn = p.level === "chat", ctlOn = p.level === "control" || p.level === "admin";
+  const c1 = infoTip("Messages to Full access sessions", "Only matters while it may <b>chat with</b> mads here. Refused blocks its chat messages to sessions that already run at Full access; other sessions are unaffected.");
+  const c3 = infoTip("Highest session trust", "Caps the trust it can start a session at, or raise one to, while it may <b>control</b> or <b>administer</b>. Anything below Full access also keeps it out of the agent’s terminal.");
+  return `<div class="SettingsCard_card">
+    ${settingRow({ label: "Messages to Full access sessions", labelId: `${idp}-chat-l`, tagHtml: c1, help: chatOn ? "" : "Only matters at chat with.",
+      control: seg(`${idp}-chat`, p.chat, [["allowed", "Allowed"], ["refused", "Refused"]], (v) => setLimit(p.dev, "chat", v), "Messages to Full access sessions", !chatOn) })}
+    ${settingRow({ label: "Highest session trust", labelId: `${idp}-trust-l`, tagHtml: c3, help: ctlOn ? "" : "Only matters at control or administer.",
+      control: listbox(`${idp}-trust`, { value: p.maxTrust, labelledBy: `${idp}-trust-l`, options: TRUST.map(([v, l]) => ({ value: v, label: l })), onPick: (v) => setLimit(p.dev, "maxTrust", v), disabled: !ctlOn }) })}
+    ${settingRow({ label: "Fingerprint", help: `Compare with <code>mads device</code> on ${esc(nm(p.dev))}.`, control: fpGroups(p.dev) })}
+    <div class="TableC_detailFoot"><span>Paired ${esc(p.pairedAt)}${p.introducedBy ? ` · introduced by ${esc(nm(p.introducedBy))}` : ""}</span><span class="DeviceRow_spacer"></span>${btn("Remove device…", () => openDialog({ type: "remove", dev: p.dev }), { id: `${idp}-remove` })}</div>
+  </div>`;
+}
+
+
+
+function thisDeviceBar() {
+  const canIntro = MODELLED.some((hk) => hk !== me() && findPeer(hk, me())?.level === "admin");
+  const intro = canIntro
+    ? btn("Introduce a device…", () => openDialog({ type: "introduce" }), { id: "intro-btn", variant: "ghost", size: "md" })
+    : tip(`<button type="button" id="intro-btn" class="Button_button Button_ghost" aria-disabled="true">Introduce a device…</button>`, "You can introduce devices to a device that lets this one administer mads.", { focusable: false, align: "end" });
+  return `<div class="ThisDevice_bar"><div class="ThisDevice_who">${kindIcon(me())}<span class="ThisDevice_label">This device</span><span class="ThisDevice_name">${esc(nm(me()))}</span>${fingerprintChip("fp-self", me(), true)}</div>
+    <div class="ThisDevice_actions">${intro}${btn("Pair a device", () => openDialog({ type: "choose" }), { id: "pair-btn", variant: "primary", size: "md" })}</div></div>`;
+}
+
+
+
+
+
+function deviceTable() {
+  const ps = H().peers;
+  if (!ps.length) return emptyState();
+  const h = esc(hw());
+  const rows = ps.map((p) => {
+    const id = p.dev, open = U().row === id;
+    const toggle = on((el, e) => {
+      if (e && e.target.closest("button:not(.TableC_nameBtn), [role=switch], .Select_listbox, .LevelPicker_listbox, .Tooltip_anchor[tabindex]")) return;
+      U().row = open ? null : id; render(); document.getElementById(`row-${id}`)?.focus();
+    });
+    const kh = onKey((e) => { if (e.target.id === `row-${id}` && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); U().row = open ? null : id; render(); document.getElementById(`row-${id}`)?.focus(); } });
+    const row = `<tr class="TableC_row" id="row-${id}" tabindex="0" aria-expanded="${open}" aria-controls="detail-${id}" data-h="${toggle}" data-k="${kh}" data-device="${esc(nm(id))}">
+      <td><span class="TableC_nameBtn">${kindIcon(id)}${esc(nm(id))}</span></td>
+      <td>${listbox(`verb-${id}`, { value: p.level, verb: true, ariaLabel: `What ${nm(id)} may do with mads on this ${hw()}`, options: verbOptions(), onPick: (v) => setLevel(id, v) })}</td>
+      <td class="TableC_letsCol">${letsCell(p)}</td>
+      <td>${showSwitchCell(p, `show-${id}`)}</td>
+      <td>${statusCell(p)}</td>
+      <td class="TableC_chev">${caret()}</td></tr>`;
+    const detail = !open ? "" : `<tr class="TableC_detailRow" id="detail-${id}"><td colspan="6"><div class="TableC_detail">
+        <div><div class="Drawer_title">Advanced options</div>${deviceAdvanced(p, `adv-${id}`)}</div>
+        <div><div class="Drawer_title">Activity</div><div class="SettingsCard_card">${activityList(id)}</div></div></div></td></tr>`;
+    return row + detail;
+  }).join("");
+  return `<div class="SettingsCard_card TableC_wrap"><table class="TableC_table"><thead><tr><th>Device</th><th>May … mads on this ${h}</th><th class="TableC_letsCol">Lets this ${h} …</th><th>Show sessions</th><th class="TableC_statusHead">Status</th><th><span class="sr-only">Details</span></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function emptyState() {
+  return `<div class="SettingsCard_card"><div class="SettingRow_row SettingRow_stacked"><div class="SettingRow_text"><span class="SettingRow_label">No paired devices</span><div class="SettingRow_help">Pair a device to use mads here from it, or to show its sessions here.</div></div></div></div>`;
+}
+
+/* Activity */
+const TYPE_CHIP = { paired: ["ok", "Paired"], level: ["neutral", "Level"], introduced: ["info", "Introduced"], removed: ["neutral", "Removed"], refused: ["bad", "Refused"], code: ["neutral", "Code"] };
+function activityList(dev) {
+  const items = H().log.filter((e) => dev === "all" || e.dev === dev);
+  if (!items.length) return `<p class="Activity_empty" style="padding-top:var(--space-3)">Nothing yet.</p>`;
+  return `<ul class="Activity_list">${items.slice(0, 14).map((e) => `<li class="Activity_item">${chip(...TYPE_CHIP[e.type])}<span>${e.dev ? `<b>${esc(nm(e.dev))}</b> ` : ""}${e.text}</span><time>${e.t}</time></li>`).join("")}</ul>`;
+}
+function activityCard() {
+  const devs = [...new Set(H().log.map((e) => e.dev).filter(Boolean))];
+  const opts = [{ value: "all", label: "All devices" }, ...devs.map((d) => ({ value: d, label: nm(d) }))];
+  return `<div class="SettingsCard_card"><div class="Activity_head"><h3 class="SettingsCard_title" id="act-l">Device activity</h3>${listbox("act-filter", { value: U().filter, ariaLabel: "Show activity from", options: opts, onPick: (v) => { U().filter = v; } })}</div>${activityList(U().filter)}</div>`;
+}
+
+function renderSettings() {
+  const h = H();
+  const nav = `<nav class="ScrollSpyNav_nav" aria-label="Settings sections">${NAV.map((g, i) => (i ? `<div class="ScrollSpyNav_separator" role="separator"></div>` : "") + g.map((id) => `<button type="button" class="ScrollSpyNav_item" ${id === "devices" ? `aria-current="page"` : `data-inert title="Not part of this mockup"`}>${NAV_LABEL[id]}</button>`).join("")).join("")}</nav>`;
+  const list = deviceTable();
+  const adv = `<div class="SettingsCard_card">${disclosure("section", "Advanced options", settingRow({ label: "Only accept devices on my tailnet", htmlFor: "tailnet-only", tagHtml: h.tailnetOnly ? "" : tag("warn", "Less safe"),
+      help: h.tailnetOnly ? "A paired device must also be signed in to your tailnet as you." : "Any device with a paired key can connect, from any network this one listens on.",
+      control: sw("tailnet-only", h.tailnetOnly, (v) => { h.tailnetOnly = v; render(); }) }), false)}</div>`;
+  return `<div class="SettingsSurface_surface">${nav}<div class="SettingsSurface_main"><div class="SettingsSurface_body" id="settings-body"><div class="ContentColumn_column ContentColumn_wide">
+    <section id="devices" class="SettingsSurface_section"><h2 class="SettingsSurface_heading">Paired devices</h2>
+      <p class="SettingsSurface_lede">What other devices may do with mads on this ${esc(hw())}, and whose sessions show here. Each device sets this for itself. ${tag("info", "Live")}</p>
+      <div class="PairedDevices_panel">${thisDeviceBar()}${list}${activityCard()}${adv}</div>
+    </section></div></div></div></div>`;
+}
+
+/* ======================================================= conversation == */
+function seedConvo() {
+  return [
+    { role: "user", text: "Review the arctic tiling PR and list anything risky before I land it.", by: "pop-os", t: "14:02" },
+    { role: "agent", text: "<p>Three things stood out:</p><p>1. <code>tiles/merge.go</code> drops the bounds check when the seam is empty.<br>2. The migration has no down step.<br>3. Two tests are skipped on CI with no issue linked.</p><p>The first is the only one I’d block on.</p>", t: "14:03" },
+    { role: "user", text: "Also check the migration rollback path before you sign off.", t: "14:09", pending: true },
+  ];
+}
+function sendState(sender) {
+  const rec = findPeer("pop", sender);
+  if (!rec || rec.level === "none") return "none";
+  if (rec.level === "view") return "view";
+  if (rec.level === "chat" && rec.chat === "refused") return "c1";
+  return null;
+}
+function resolvePending() {
+  for (let i = 0; i < S.convo.length; i++) {
+    const m = S.convo[i];
+    if (m.role === "user" && m.pending) {
+      m.pending = false; m.sender = S.sender; m.refused = sendState(m.sender);
+      if (!m.refused) S.convo.splice(i + 1, 0, { role: "agent", text: "<p>On it. Checking the down migration against the 0035 schema now.</p>", t: "14:10" });
+    }
+  }
+}
+function refusedBlock(m, i) {
+  S.why = S.why || {};
+  const sn = esc(nm(m.sender)), open = !!S.why[i], rec = findPeer("pop", m.sender);
+  const line = { c1: "This device can’t message Full access sessions on pop-os.", view: "This device may only view mads on pop-os.", none: "pop-os doesn’t let this device use mads there." }[m.refused];
+  const why = m.refused === "c1"
+    ? `<h4>Why</h4><ul><li>This session runs at <b>Full access</b> on pop-os.</li><li>${sn} may <b>chat with</b> mads there, and pop-os refuses its messages to Full access sessions.</li><li>Set on <b>pop-os</b>: <span class="RefusedSend_where">Settings → Paired devices → ${sn}</span></li></ul>
+       <h4>To send it</h4><ul><li>On pop-os, allow ${sn}’s messages to Full access sessions, or</li><li>lower this session’s trust from a device that may control mads there, or</li><li>let ${sn} control mads on pop-os.</li></ul>`
+    : `<h4>Why</h4><ul><li>${sn} may <b>${VERB[rec ? rec.level : "none"]}</b> mads on pop-os. Sending needs chat with.</li><li>Set on <b>pop-os</b>: <span class="RefusedSend_where">Settings → Paired devices → ${sn}</span></li></ul>`;
+  return `<div class="SendDelivery_delivery"><div class="SendDelivery_failed RefusedSend_line" role="status"><span class="RefusedSend_reason"><span class="SendDelivery_failedLabel">Not sent</span> ${line}</span><span class="RefusedSend_actions">
+    <button type="button" class="SendDelivery_attempts" aria-expanded="${open}" id="why-${i}" data-h="${on(() => { S.why[i] = !open; render(); })}">${open ? "Hide" : "Why?"}</button>
+    ${btn("Retry", () => { m.pending = true; S.sender = m.sender; resolvePending(); render(); }, { variant: "ghost", id: `retry-${i}` })}</span></div>${open ? `<div class="RefusedSend_detail">${why}</div>` : ""}</div>`;
+}
+function renderConversation() {
+  resolvePending();
+  const phone = S.sender === "iphone";
+  const stream = S.convo.map((m, i) => {
+    if (m.role === "agent") return `<div class="ChatRenderer_agent"><div class="ChatRenderer_prose">${m.text}</div><span class="ChatRenderer_stamp">${m.t}</span></div>`;
+    const bubble = `<div class="ChatRenderer_prose">${esc(m.text)}</div>`;
+    if (m.refused) return `<div class="ChatRenderer_user" data-undelivered><span class="ChatRenderer_stamp">${m.t}</span><div class="ChatRenderer_sent">${bubble}${refusedBlock(m, i)}</div></div>`;
+    return `<div class="ChatRenderer_user"><span class="ChatRenderer_stamp">${m.t}</span><div class="ChatRenderer_sent">${m.by ? `<span class="ChatRenderer_attribution">from ${esc(m.by)}</span>` : ""}${bubble}</div></div>`;
+  }).join("");
+  const send = () => { const ta = document.getElementById("composer"); const t = (ta?.value || "").trim(); if (!t) return; S.convo.push({ role: "user", text: t, t: "14:12", pending: true }); S.draft = ""; render(); };
+  const kh = onKey((e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
+  const pane = `<div class="SessionWorkspace_workspace"><div class="SessionWorkspace_bar"><div class="SessionWorkspace_name">meta arctic review <span class="SessionRail_hostChip" title="Runs on pop-os">pop-os</span></div>
+      <div class="SessionWorkspace_tabs" role="tablist"><button type="button" class="SessionWorkspace_tab" role="tab" aria-selected="true">Chat</button><button type="button" class="SessionWorkspace_tab" role="tab" aria-selected="false">Changes</button><button type="button" class="SessionWorkspace_tab" role="tab" aria-selected="false">Terminal</button></div></div>
+    <div class="ConversationTab_stream"><div class="ChatRenderer_stream">${stream}</div></div>
+    <div class="SessionDock_dock"><div class="Composer_inputRow"><button type="button" class="Composer_plus" aria-label="Add">+</button><textarea id="composer" class="Composer_textarea" rows="1" placeholder="Message meta arctic review" data-k="${kh}" aria-label="Message">${esc(S.draft || "")}</textarea><button type="button" class="Composer_send" data-h="${on(send)}">Send</button></div>
+      <div class="StatusLine_status"><span class="StatusLine_seg">claude · opus</span><span class="StatusLine_seg StatusLine_trust">Full access</span><span class="StatusLine_spacer"></span><span class="StatusLine_seg">on pop-os</span>${phone ? "" : `<span class="StatusLine_seg">sending as ${esc(nm(S.sender))}</span>`}</div></div></div>`;
+  if (phone) return `<div class="App_shell"><div class="App_main"><div class="App_surface" style="flex-direction:column"><div class="Phone_frame">${pane}</div>`;
+  return `<div class="App_shell">${iconRail("sessions")}<div class="App_main"><div class="App_surface">${pane}`;
+}
+
+/* ============================================================= render == */
+function mockBar() {
+  const b = (label, pressed, fn, title) => `<button type="button" class="Mock_btn" aria-pressed="${pressed}" ${title ? `title="${esc(title)}"` : ""} data-h="${on(fn)}">${label}</button>`;
+  const conv = S.view === "conversation";
+  const set = (k, v) => () => { S[k] = v; S.menu = null; S.fp = null; render(); };
+  return `<div class="Mock_bar" role="toolbar" aria-label="Mockup controls (not part of the app)"><span class="Mock_tag">MOCKUP</span>
+    <div class="Mock_group"><span>Theme</span>${b("Dark", S.theme === "dark", set("theme", "dark"))}${b("Light", S.theme === "light", set("theme", "light"))}</div><span class="Mock_sep"></span>
+    <div class="Mock_group"><span>Screen</span>${b("Settings", !conv, set("view", "settings"))}${b("Refused msg", conv, set("view", "conversation"))}</div><span class="Mock_sep"></span>
+    ${conv ? `<div class="Mock_group"><span>Sender</span>${b("Drew’s iPhone", S.sender === "iphone", () => { S.sender = "iphone"; S.convo = seedConvo(); S.why = {}; render(); })}${b("Alexs-MacBook-Air", S.sender === "mac", () => { S.sender = "mac"; S.convo = seedConvo(); S.why = {}; render(); })}</div><span class="Mock_note">Reads pop-os’s live settings for the sender.</span>`
+    : `<div class="Mock_group"><span>I am</span>${b("MacBook-Air", S.me === "mac", set("me", "mac"))}${b("pop-os", S.me === "pop", set("me", "pop"))}</div><span class="Mock_sep"></span>
+      <div class="Mock_group">${b("pop-os offline", S.popOffline, () => { S.popOffline = !S.popOffline; render(); })}${b("Reset", false, () => { const t = S.theme; S = seed(); S.theme = t; render(); })}</div>`}</div>`;
+}
+function render() {
+  HANDLERS = {}; KEYS = {}; hc = 0; tipN = 0;
+  const focusId = document.activeElement?.id;
+  const scroll = document.getElementById("settings-body")?.scrollTop;
+  const dscroll = document.querySelector(".SideSheet_body")?.scrollTop;
+  document.documentElement.dataset.theme = S.theme;
+  document.getElementById("mockbar").innerHTML = mockBar();
+  const t = S.toast;
+  const toastHtml = t && t.dev === S.me ? `<div class="Toast_viewport"><div class="Toast_toast Toast_${t.tone}" role="status" ${Date.now() - t.at > 250 ? `style="animation:none"` : ""}><div class="Toast_title">${esc(t.title)}</div>${t.desc ? `<div class="Toast_description">${esc(t.desc)}</div>` : ""}<button type="button" class="Toast_x" aria-label="Dismiss" data-h="${on(() => { S.toast = null; render(); })}">✕</button></div></div>` : "";
+  const body = S.view === "settings"
+    ? `<div class="App_shell">${iconRail("settings")}<div class="App_main"><div class="App_surface">${renderSettings()}${toastHtml}</div></div></div>`
+    : renderConversation() + `${toastHtml}</div></div></div>`;
+  document.getElementById("app").innerHTML = body + (S.view === "settings" ? renderDialog() : "");
+  if (scroll) { const sb = document.getElementById("settings-body"); if (sb) sb.scrollTop = scroll; }
+  if (dscroll) { const sb = document.querySelector(".SideSheet_body"); if (sb) sb.scrollTop = dscroll; }
+  if (focusId) document.getElementById(focusId)?.focus({ preventScroll: true });
+}
+
+/* ============================================================= events == */
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-h]");
+  if (el && el.hasAttribute("data-backdrop") && e.target.closest("[data-stop]")) { closeMenus(e); return; }
+  if (el && !el.disabled) { if (!el.closest("[data-hover]")) closeMenus(e, true); HANDLERS[el.dataset.h]?.(el, e); return; }
+  closeMenus(e);
+});
+function closeMenus(e, quiet) {
+  let changed = false;
+  if (S.menu && !e.target.closest(".Select_root, .LevelPicker_root, .VerbPicker_root")) { S.menu = null; changed = true; }
+  if (S.fp && !e.target.closest(".Popover_root")) { S.fp = null; changed = true; }
+  if (changed && !quiet) render();
+}
+document.addEventListener("toggle", (e) => { const k = e.target.dataset?.adv; if (k) U().open[k] = e.target.open; }, true);
+document.addEventListener("mouseover", (e) => {
+  const li = e.target.closest("[data-hover]"); if (!li || !S.menu) return;
+  const [id, i] = li.dataset.hover.split(":"); if (S.menu.id !== id || S.menu.hi === +i) return;
+  S.menu.hi = +i;
+  li.parentElement.querySelectorAll("[data-hover]").forEach((x) => x.classList.toggle(x.classList.contains("Select_option") ? "Select_optionHighlighted" : "LevelPicker_optionHighlighted", x === li));
+});
+document.addEventListener("keydown", (e) => {
+  const k = e.target.closest?.("[data-k]");
+  if (k) { KEYS[k.dataset.k]?.(e); if (e.defaultPrevented) return; }
+  if (e.key === "Escape") {
+    if (S.menu) { S.menu = null; render(); return; }
+    if (S.fp) { const id = S.fp; S.fp = null; render(); document.getElementById(id)?.focus(); return; }
+    const d = curDialog();
+    if (d) { document.querySelector(".Dialog_backdrop")?.click(); return; }
+    if (U().row) { const id = U().row; U().row = null; render(); document.getElementById(`row-${id}`)?.focus(); return; }
+  }
+  if (e.key === "Tab" && curDialog()) {
+    const f = [...document.querySelectorAll(".Dialog_dialog button:not([disabled]), .Dialog_dialog input:not([disabled]), .Dialog_dialog textarea")].filter((x) => x.tabIndex !== -1);
+    if (!f.length) return;
+    const i = f.indexOf(document.activeElement);
+    if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+    else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
+  }
+  const r = e.target.closest?.('[role="radio"]');
+  if (r && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+    const all = [...r.parentElement.children], i = all.indexOf(r), d = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : -1;
+    const next = all[(i + d + all.length) % all.length]; e.preventDefault(); HANDLERS[next.dataset.h]?.(next); document.getElementById(next.id)?.focus();
+  }
+});
+document.addEventListener("input", (e) => {
+  if (e.target.id === "composer") { S.draft = e.target.value; return; }
+  const f = e.target.dataset?.input, d = U().dialog;
+  if (f && d) { d[f] = e.target.value; const pos = e.target.selectionStart; render(); const el = document.getElementById(e.target.id); if (el) { el.focus(); el.setSelectionRange(pos, pos); } }
+});
+setInterval(() => {
+  for (const h of Object.keys(S.codes)) { const c = S.codes[h]; if (c.left > 0) c.left--; }
+  const c = S.codes[me()], d = U().dialog;
+  if (d?.type === "copy" && c) {
+    if (c.left === 0 && !c.ended) { c.ended = true; render(); return; }
+    const t = document.getElementById("code-left"); if (t) t.textContent = `Works once · expires in ${mm(c.left)}`;
+  }
+}, 1000);
+render();
+</script>
+</body>
+</html>

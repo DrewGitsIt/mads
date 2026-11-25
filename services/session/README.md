@@ -14,9 +14,17 @@ never talks to other sessions.
 ## Run it alone
 
 ```sh
-go run . -session-id <id> -data-url http://localhost:17374   # -addr to pin the port
-curl localhost:<logged port>/health
+go run . -session-id <id> -data-url http://localhost:17374 -socket /tmp/ses.sock
+mads api --session <id> GET /health      # finds the socket under $MADS_HOME/run
+mads ps                                  # every live child: id, pid, socket, state, uptime
 ```
+
+The Router always spawns this with `-socket $MADS_HOME/run/<id>.sock`
+(docs/LOCAL-FRONT-DOOR-DESIGN.md D9): a Unix socket, 0600 in a 0700 directory, with a
+same-user check on every connection — never a TCP port. By hand, `-addr localhost:PORT`
+(the default when `-socket` is absent) still serves over TCP, with a loud warning, since
+any local user can reach a TCP port; `curl localhost:PORT` works there. `/health` reports
+`id` and `pid` too, so `mads ps` can name a socket nobody tracks.
 
 `-fast-model` names the registered provider backing the synthesis engine's Fast
 Model calls (default `fake`; real model selection is a later settings-service
@@ -25,6 +33,21 @@ concern, spec §10).
 `-mads-home` (env `MADS_HOME`, default `~/.mads`) roots the local credential store
 (`credentials.json`) and the system-wide MCP server registry (`mcp/*.pid`) — see
 "Capability runtime" below.
+
+**Tokens (docs/LOCAL-FRONT-DOOR-DESIGN.md D4, H4).** The install token is never handed
+to this process: the Router passes only its path (`-token-file`, default
+`<mads-home>/local.token`), and the Data Service client reads the file itself, re-reading
+it when it changes, so a running session survives `mads token rotate`. The Router does
+put `MADS_ROUTER_TOKEN` (a token scoped to this session's orchestrate routes) in the
+env — the orchestrate MCP server's config needs it; the accepted risk is that the same
+user can see it with `ps eww`. `main` takes it (and any stray `MADS_LOCAL_TOKEN`) out of
+its own environment before anything else (`localauth.TakeChildEnv`), so the agent, git,
+capability MCP servers and every other process it starts inherit neither; `pkg/agentenv`
+strips both again in every mode as a backstop. `MADS_ROUTER_TOKEN` goes only into the
+orchestrate MCP server's own env (its entry in the provider's MCP config, a 0600 file or
+an RPC — never argv; goose's terminal transport launches it through an owner-only
+wrapper script). `TestAgentEnvHoldsNeitherToken` (inherit and isolated) and
+`TestNoProviderPutsATokenInArgv` (every harness, both transports) pin this.
 
 `-session-id` is required and fails fast if empty — the Router always supplies it
 (`services/router/internal/supervisor.SpawnSession`). The session must already exist in the
@@ -59,6 +82,10 @@ One process, one session — no `:id` in any path.
 - `DELETE /queue/{id}` — drop one before it's delivered; 204, or 404 if it isn't queued
   (it may have just gone out).
 - `POST /interrupt` — stops the in-flight turn, if any. 503 if not ready.
+- `POST /worktree/refresh` — recounts the header's Commit/Land counts through the runner's
+  coalesced turn-end recount, answering 204 once a recount started after the ask has
+  published (503 while shutting down). The Router routes `POST /sessions/{id}/worktree/refresh`
+  here while the child is live, and recounts itself otherwise.
 - `GET /worktree`, `POST /commit`, `POST /commit/undo`, `POST /land` — the session's
   Commit and Land while it is live (docs/SESSION-WORKTREES-DESIGN.md D3, D5, D6), forwarded
   by the Router, which adds `?pipeline=1` when a pipeline run is active. Bodies are the

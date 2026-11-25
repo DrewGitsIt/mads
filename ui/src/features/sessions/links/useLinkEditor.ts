@@ -3,8 +3,10 @@ import type { RouterClient } from "../../../router/client";
 import type { Link, LinkCadence, Session } from "../../../router/types";
 import type { RailLinkEditor } from "../rail/SessionRail";
 import {
+  DIFFERENT_DEVICE,
   EMPTY_DRAFT,
   addFromRail,
+  deviceOf,
   applyLinkDraft,
   effectiveEdges,
   firstDoubleLeader,
@@ -21,6 +23,7 @@ import {
   type LinkDraft,
   type LinkRole,
   type PairChange,
+  type PlanOp,
 } from "./linkDraft";
 
 /** The last save's failure, as the footer and the failed line show it. */
@@ -152,6 +155,32 @@ export function useLinkEditor({
       close();
       return;
     }
+    // Never half-apply: a line between devices (which the rail refuses to
+    // draw, but a draft could still carry) is refused before anything is
+    // sent, rather than failing mid-save on a host that doesn't know one end.
+    const crossing = ops.find((op) => {
+      const e = opEndpoints(op);
+      return deviceOf(sessionsById.get(e.granting)) !== deviceOf(sessionsById.get(e.subject));
+    });
+    if (crossing) {
+      const e = opEndpoints(crossing);
+      setState(
+        (cur) =>
+          cur && {
+            ...cur,
+            pick: crossing.key,
+            saveErr: {
+              appliedCount: 0,
+              total: ops.length,
+              key: crossing.key,
+              label: `${nameOf(e.granting)} → ${nameOf(e.subject)}`,
+              message: DIFFERENT_DEVICE,
+              refused: true,
+            },
+          },
+      );
+      return;
+    }
     setState((cur) => cur && { ...cur, saving: true, pick: undefined });
     const result = await applyLinkDraft(client, ops);
     if (!result.failed) {
@@ -159,7 +188,7 @@ export function useLinkEditor({
       return;
     }
     const { op, message, refused } = result.failed;
-    const edge = op.kind === "create" ? op.edge : { granting: op.link.granting_session_id, subject: op.link.subject_session_id };
+    const edge = opEndpoints(op);
     setState((cur) =>
       cur && {
         ...cur,
@@ -178,7 +207,7 @@ export function useLinkEditor({
         fresh: result.fresh ? { base: linksRef.current, ...result.fresh } : cur.fresh,
       },
     );
-  }, [state, client, close, nameOf]);
+  }, [state, client, close, nameOf, sessionsById]);
 
   const requestClose = useCallback(() => {
     if (!state || state.saving) return;
@@ -249,4 +278,9 @@ export function useRailLinkEditor(editor: LinkEditor): RailLinkEditor | undefine
     }
     return { focusId: focus, linkedIds, blockedReason, onPick: (id) => railClickRef.current(id) };
   }, [isOpen, focus, edges, blockedReason]);
+}
+
+/** The pair a planned write serves. */
+function opEndpoints(op: PlanOp): { granting: string; subject: string } {
+  return op.kind === "create" ? op.edge : { granting: op.link.granting_session_id, subject: op.link.subject_session_id };
 }

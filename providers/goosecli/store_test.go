@@ -244,6 +244,34 @@ func TestStoreSchemaMismatchFallsBackToExport(t *testing.T) {
 	}
 }
 
+// A session neither sessions.db nor goose's export holds is
+// provider.ErrTranscriptMissing; a store that can't be read, or an export
+// that fails for another reason, is an error that isn't.
+func TestTranscriptMissing(t *testing.T) {
+	f := newStoreFixture(t, "20261020_1", "MADS_FAKE_EXPORT_DIR="+t.TempDir())
+	if _, err := f.p.Transcript(context.Background(), "20990101_1"); !errors.Is(err, provider.ErrTranscriptMissing) {
+		t.Fatalf("Transcript(not stored) = %v, want ErrTranscriptMissing", err)
+	}
+
+	root := t.TempDir()
+	path := filepath.Join(root, "data", "sessions", "sessions.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("not a sqlite database, not at all"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := testProvider(t, "GOOSE_PATH_ROOT="+root, "MADS_FAKE_EXPORT_DIR="+t.TempDir())
+	if _, err := p.Transcript(context.Background(), "20261020_1"); err == nil || errors.Is(err, provider.ErrTranscriptMissing) {
+		t.Fatalf("Transcript(unreadable store) = %v, want an error that isn't ErrTranscriptMissing", err)
+	}
+
+	// No store, and an export that fails without goose's not-found.
+	if _, err := testProvider(t).Transcript(context.Background(), "20261020_1"); err == nil || errors.Is(err, provider.ErrTranscriptMissing) {
+		t.Fatalf("Transcript(export failed) = %v, want an error that isn't ErrTranscriptMissing", err)
+	}
+}
+
 // Where the spawned goose keeps sessions.db (paths.rs Paths::data_dir).
 func TestStorePath(t *testing.T) {
 	for _, tc := range []struct {

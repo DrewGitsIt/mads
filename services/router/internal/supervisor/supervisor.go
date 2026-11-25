@@ -11,21 +11,30 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/services/router/internal/child"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 )
 
 // terminateGrace is how long Terminate waits after SIGTERM before SIGKILL.
 const terminateGrace = 5 * time.Second
+
+// ErrShuttingDown is what a spawn returns once Shutdown has begun: the
+// children Shutdown is stopping must not be joined by new ones it never saw.
+var ErrShuttingDown = errors.New("supervisor: shutting down")
 
 type pipelineEntry struct {
 	proc      *child.Process
@@ -40,11 +49,17 @@ type Supervisor struct {
 	jobs         *job.Runner            // nil in tests that don't exercise summary generation
 	creds        *credstore.Store       // nil disables credential injection entirely (SetCreds)
 	onStart      func(sessionID string) // see SetOnSessionStart
+	tokenFile    string                 // see SetTokenFile
+	scoped       *localauth.Registry    // see SetScopedTokens
+	sockHome     string                 // see SetMadsHome; lazily a temp dir when unset
+	sockHomeOnce sync.Once
+	sockHomeTemp bool // sockHome is a temp dir this Supervisor made (removed on Shutdown)
 
 	mu        sync.Mutex
 	sessions  map[string]*child.Process
 	pipelines map[string]*pipelineEntry
 	deleting  map[string]int // sessions with a delete in flight — see TerminateSessionForDelete
+	closed    bool           // Shutdown has begun; spawns are refused
 }
 
 // New builds a Supervisor. data must be a dataclient.Client using the
@@ -83,6 +98,51 @@ func (s *Supervisor) SetCreds(creds *credstore.Store) {
 // pushes replay (job.FlushDeferred). Optional; nil does nothing.
 func (s *Supervisor) SetOnSessionStart(fn func(sessionID string)) {
 	s.onStart = fn
+}
+
+// SetTokenFile names the install token's file ($MADS_HOME/local.token).
+// Each child is spawned with -token-file <path> and reads the token itself,
+// re-reading it on change (docs/LOCAL-FRONT-DOOR-DESIGN.md H4): the token
+// is never in a child's env, argv or a pipe, and a running child follows a
+// rotation. Empty (the default) passes nothing; the child then uses
+// $MADS_HOME/local.token.
+func (s *Supervisor) SetTokenFile(path string) {
+	s.tokenFile = path
+}
+
+// tokenArgs is the -token-file argument a child is spawned with.
+func (s *Supervisor) tokenArgs() []string {
+	if s.tokenFile == "" {
+		return nil
+	}
+	return []string{"-token-file", s.tokenFile}
+}
+
+// SetScopedTokens wires the registry each Session Service child's
+// session-scoped Router token (MADS_ROUTER_TOKEN, D4) is minted in. A
+// spawn mints a fresh one; the child's exit — the session ending, or being
+// deleted — revokes it. nil (the default) mints none.
+func (s *Supervisor) SetScopedTokens(scoped *localauth.Registry) {
+	s.scoped = scoped
+}
+
+// SetMadsHome names the $MADS_HOME whose run/ directory holds the children's
+// Unix sockets (docs/LOCAL-FRONT-DOOR-DESIGN.md D9; pkg/childsock). Unset —
+// tests — the Supervisor uses a private temp dir.
+func (s *Supervisor) SetMadsHome(home string) {
+	s.sockHome = home
+}
+
+// socketPath is where child id listens.
+func (s *Supervisor) socketPath(id string) (string, error) {
+	s.sockHomeOnce.Do(func() {
+		if s.sockHome == "" {
+			if dir, err := os.MkdirTemp("", "mads-sup"); err == nil {
+				s.sockHome, s.sockHomeTemp = dir, true
+			}
+		}
+	})
+	return childsock.Path(s.sockHome, id)
 }
 
 // credentialEnv resolves the env vars a newly spawned child should receive:
@@ -130,15 +190,42 @@ func (s *Supervisor) credentialEnv(ctx context.Context) []string {
 // holder identity IS the session ID — matches spec: "when a session or
 // pipeline stage claims a task").
 func (s *Supervisor) SpawnSession(ctx context.Context, sessionID string) (string, error) {
-	argv := append(append([]string{}, s.sessionArgv...), "-session-id", sessionID)
+	if s.isClosed() {
+		return "", ErrShuttingDown
+	}
+	argv := append(append(append([]string{}, s.sessionArgv...), "-session-id", sessionID), s.tokenArgs()...)
 	env := s.credentialEnv(ctx)
-	p, err := child.Spawn(ctx, sessionID, argv, env, func(_ *child.Process, expected bool, exitErr error) {
+	var scopedTok string
+	if s.scoped != nil {
+		tok, err := s.scoped.Mint(sessionID)
+		if err != nil {
+			return "", fmt.Errorf("mint session-scoped token: %w", err)
+		}
+		scopedTok = tok
+		env = append(env, localauth.EnvRouterToken+"="+tok)
+	}
+	sock, err := s.socketPath(sessionID)
+	if err != nil {
+		s.scoped.Revoke(scopedTok)
+		return "", err
+	}
+	p, err := child.Spawn(ctx, sessionID, sock, argv, env, func(_ *child.Process, expected bool, exitErr error) {
+		// This spawn's token dies with it; a respawn has its own.
+		s.scoped.Revoke(scopedTok)
 		s.onSessionExit(sessionID, expected, exitErr)
 	})
 	if err != nil {
+		s.scoped.Revoke(scopedTok)
 		return "", err
 	}
 	s.mu.Lock()
+	if s.closed {
+		// Shutdown began while this child was starting, after it took its
+		// snapshot: stop it here, since nothing else will.
+		s.mu.Unlock()
+		_ = p.Terminate(context.Background(), terminateGrace)
+		return "", ErrShuttingDown
+	}
 	s.sessions[sessionID] = p
 	hasPipeline := s.hasPipelineForSessionLocked(sessionID)
 	s.mu.Unlock()
@@ -166,19 +253,32 @@ func (s *Supervisor) SpawnSession(ctx context.Context, sessionID string) (string
 // re-resolved once by the caller. excludeTaskIDs, when non-empty, rides
 // -exclude-task-ids (comma-joined): tasks the run must never launch.
 func (s *Supervisor) SpawnPipeline(ctx context.Context, runID, sessionID, templateID string, excludeTaskIDs []string) (string, error) {
+	if s.isClosed() {
+		return "", ErrShuttingDown
+	}
 	argv := append(append([]string{}, s.pipelineArgv...),
 		"-run-id", runID, "-session-id", sessionID, "-template", templateID)
 	if len(excludeTaskIDs) > 0 {
 		argv = append(argv, "-exclude-task-ids", strings.Join(excludeTaskIDs, ","))
 	}
+	argv = append(argv, s.tokenArgs()...)
 	env := s.credentialEnv(ctx)
-	p, err := child.Spawn(ctx, runID, argv, env, func(_ *child.Process, expected bool, exitErr error) {
+	sock, err := s.socketPath(runID)
+	if err != nil {
+		return "", err
+	}
+	p, err := child.Spawn(ctx, runID, sock, argv, env, func(_ *child.Process, expected bool, exitErr error) {
 		s.onPipelineExit(runID, sessionID, expected, exitErr)
 	})
 	if err != nil {
 		return "", err
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = p.Terminate(context.Background(), terminateGrace)
+		return "", ErrShuttingDown
+	}
 	s.pipelines[runID] = &pipelineEntry{proc: p, sessionID: sessionID}
 	s.mu.Unlock()
 	// Edge A (docs/LINKED-SESSIONS-DESIGN.md decision 6): grant the implicit
@@ -306,6 +406,9 @@ func (s *Supervisor) reconcileInactiveSession(ctx context.Context, sessionID str
 // a tracked child is running, so without this a session could be stuck
 // inactive, dead-ending its lifecycle controls, for as long as that child
 // stays up.
+//
+// Last, it concludes the delegates a dead harness process left recorded
+// running, in every session without a live child (concludeAllStrandedDelegates).
 func (s *Supervisor) ReconcileOrphanedSessions(ctx context.Context) {
 	sessions, err := s.data.Sessions(ctx, string(contracts.SessionActive))
 	if err != nil {
@@ -346,6 +449,7 @@ func (s *Supervisor) ReconcileOrphanedSessions(ctx context.Context) {
 			log.Printf("supervisor: boot sweep: heal stale-inactive session %s: %v", id, err)
 		}
 	}
+	s.concludeAllStrandedDelegates(ctx)
 }
 
 // reconcileActiveSession is reconcileInactiveSession's mirror: sessionID is
@@ -436,6 +540,47 @@ func (s *Supervisor) SessionAddr(sessionID string) (string, bool) {
 	return p.Addr, true
 }
 
+// SessionAddrs returns every running session child's address, by session ID.
+func (s *Supervisor) SessionAddrs() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]string, len(s.sessions))
+	for id, p := range s.sessions {
+		out[id] = p.Addr
+	}
+	return out
+}
+
+// ChildInfo describes one live child, for `mads ps` (GET /children).
+type ChildInfo struct {
+	ID        string    `json:"id"`
+	Kind      string    `json:"kind"` // "session" or "pipeline"
+	SessionID string    `json:"session_id"`
+	PID       int       `json:"pid"`
+	Socket    string    `json:"socket"`
+	StartedAt time.Time `json:"started_at"`
+}
+
+// Children lists every tracked child, sessions first, each sorted by id.
+func (s *Supervisor) Children() []ChildInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]ChildInfo, 0, len(s.sessions)+len(s.pipelines))
+	for id, p := range s.sessions {
+		out = append(out, ChildInfo{ID: id, Kind: "session", SessionID: id, PID: p.Cmd.Process.Pid, Socket: p.Addr, StartedAt: p.StartedAt})
+	}
+	for id, e := range s.pipelines {
+		out = append(out, ChildInfo{ID: id, Kind: "pipeline", SessionID: e.sessionID, PID: e.proc.Cmd.Process.Pid, Socket: e.proc.Addr, StartedAt: e.proc.StartedAt})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind > out[j].Kind // "session" before "pipeline"
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
 // PipelineAddr returns the running pipeline child's address, if any.
 func (s *Supervisor) PipelineAddr(runID string) (string, bool) {
 	s.mu.Lock()
@@ -447,10 +592,21 @@ func (s *Supervisor) PipelineAddr(runID string) (string, bool) {
 	return e.proc.Addr, true
 }
 
-// Shutdown terminates every tracked child. Used on Router SIGINT/SIGTERM so
-// a clean shutdown doesn't orphan "go run" child processes.
+// isClosed reports whether Shutdown has begun.
+func (s *Supervisor) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+// Shutdown terminates every tracked child and refuses spawns from then on.
+// Used on Router SIGINT/SIGTERM so a clean shutdown doesn't orphan child
+// processes. Each child gets its full terminateGrace whatever ctx's
+// deadline: an expired ctx used to SIGKILL every child at once, skipping
+// their own shutdown (marking the session inactive, releasing leases).
 func (s *Supervisor) Shutdown(ctx context.Context) {
 	s.mu.Lock()
+	s.closed = true
 	procs := make([]*child.Process, 0, len(s.sessions)+len(s.pipelines))
 	for _, p := range s.sessions {
 		procs = append(procs, p)
@@ -465,10 +621,16 @@ func (s *Supervisor) Shutdown(ctx context.Context) {
 		wg.Add(1)
 		go func(p *child.Process) {
 			defer wg.Done()
-			_ = p.Terminate(ctx, terminateGrace)
+			_ = p.Terminate(context.WithoutCancel(ctx), terminateGrace)
 		}(p)
 	}
 	wg.Wait()
+	if s.sockHomeTemp {
+		for _, d := range childsock.Dirs(s.sockHome) {
+			_ = os.RemoveAll(d)
+		}
+		_ = os.RemoveAll(s.sockHome)
+	}
 }
 
 // The onExit callback passed down to child.Spawn is where the
@@ -483,6 +645,9 @@ func (s *Supervisor) onSessionExit(sessionID string, expected bool, exitErr erro
 		log.Printf("supervisor: release leases for session %s: %v", sessionID, err)
 	}
 	s.forgetSession(sessionID)
+	// Its delegates ran inside the harness process; any the runner didn't
+	// get to conclude on the way out are concluded here.
+	s.concludeStrandedDelegates(ctx, sessionID)
 	if !expected {
 		// Terminate/Bounce already emits its own event and the Session
 		// Service child sets Activity = Inactive itself before exiting

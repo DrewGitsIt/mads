@@ -34,7 +34,6 @@ import (
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
-	"github.com/drewkidwell/mads/services/session/internal/shellwatch"
 	"github.com/drewkidwell/mads/services/session/internal/synth"
 	"github.com/drewkidwell/mads/services/session/shadow"
 )
@@ -111,6 +110,14 @@ type Runner struct {
 	// credstore-only behavior exactly as before this field existed.
 	VaultResolver *vault.Resolver
 
+	// TokenFile is the install token's path ($MADS_HOME/local.token),
+	// stamped into the commit hook's config (mads.tokenFile) so the hook can
+	// authenticate to the Data Service. Empty leaves it unset.
+	TokenFile string
+	// RouterToken is this child's session-scoped Router token
+	// (MADS_ROUTER_TOKEN, docs/LOCAL-FRONT-DOOR-DESIGN.md D4), handed only
+	// to the orchestrate MCP server's own environment — never the agent's.
+	RouterToken string
 	// RouterURL is the Router's own base URL, passed as MADS_ROUTER_URL to
 	// the orchestrate capability's MCP server process (docs/
 	// LINKED-SESSIONS-DESIGN.md, setupOrchestrate) — the one thing the
@@ -153,6 +160,12 @@ type Runner struct {
 	countsAgain   bool
 	countsClosed  bool
 	countsWG      sync.WaitGroup
+	// countsWaiters are RecountWorktree callers waiting on the next recount
+	// to start; each run takes the ones queued before it and answers them.
+	countsWaiters []chan error
+	// countsBeforeExitCheck, when set (tests), runs in the recount loop
+	// between a recount and its exit check.
+	countsBeforeExitCheck func()
 
 	// shadowStore is this session's shadow git store, built in Start when
 	// ShadowRoot is set (nil otherwise). Every shadow.Store method is
@@ -160,10 +173,11 @@ type Runner struct {
 	// inside is best-effort and can never block or fail the agent's turn.
 	shadowStore *shadow.Store
 
-	// shell finds the files the session's shell commands write, for a
-	// session working in place (shellfiles.go); nil otherwise. Set in Start
-	// before the pump runs and never after.
-	shell *shellwatch.Tracker
+	// shell finds the files the session's shell commands write
+	// (shellfiles.go): in its folder's repo when it works in place there,
+	// and in any other repo its commands name. Set in Start before the pump
+	// runs and never after.
+	shell *shellSet
 
 	synthEngine *synth.Engine // built in Start from sess.SynthesisMode; nil-safe no-op if off
 
@@ -337,6 +351,9 @@ type Runner struct {
 	// (rerootMissingDir), "" once claimed by the first turn sent. Guarded by
 	// mu. Session.RerootNotePending is its durable twin.
 	rerootNote string
+	// notes are the other notes owed to the agent's next turn
+	// (Session.PendingNotes, AddNote), claimed with rerootNote. Guarded by mu.
+	notes []string
 
 	// prov and baseOpts are captured once at the end of Start and reused by
 	// SwitchTransport, which only overrides Mode/Resume — switching
@@ -395,6 +412,10 @@ type pendingInjection struct {
 	// preWire is a multi-part injection's wire, wrapped part by part when it
 	// was queued (InjectParts); drainNextLocked delivers it as is.
 	preWire string
+	// attached are the held link updates riding with a queued user message
+	// (docs/HELD-UPDATES-DESIGN.md): delivered ahead of its text, in the
+	// same turn (linkwrap.Attach).
+	attached []contracts.InjectPart
 	// userID is set for the user's own message queued by SendOrQueue, empty
 	// for a linked-session injection. A user entry delivers as an ordinary
 	// user turn (no Attribution) and is the only kind the queue API cancels.
@@ -623,7 +644,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		log.Printf("runner: append session.activity_changed: %v", err)
 	}
 
-	r.synthEngine = synth.New(sess.SynthesisMode, r.sessionID, dataclient.New(r.data.BaseURL(), "synthesizer"), r.FastModel)
+	r.synthEngine = synth.New(sess.SynthesisMode, r.sessionID, r.data.As("synthesizer"), r.FastModel)
 
 	// Decided before the session is installed so the pass is in flight
 	// from the moment anything can reach the session (beginCompactLocked).
@@ -644,6 +665,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	if sess.RerootNotePending {
 		r.rerootNote = rerootNote(sess.RerootedFrom, cwd)
 	}
+	r.notes = slices.Clone(sess.PendingNotes)
 	r.spawnedAt = spawnedAt
 	r.providerCwd = cwd
 	if resumeCompact != nil {
@@ -666,6 +688,8 @@ func (r *Runner) Start(ctx context.Context) error {
 
 	r.startShellWatch()
 	go r.pump(provSess)
+	// Stored delegates from before nesting was tracked learn their parent.
+	go r.backfillDelegateParents()
 	if resumeCompact != nil {
 		r.requestResumeCompact(ctx, resumeCompact)
 	}
@@ -735,6 +759,7 @@ func (r *Runner) installHook(ctx context.Context, dir string) bool {
 	if err := githook.SetWorktreeConfig(ctx, dir, githook.Config{
 		SessionID: r.sessionID,
 		DataURL:   r.data.BaseURL(),
+		TokenFile: r.TokenFile,
 	}); err != nil {
 		log.Printf("runner: configure commit hook: %v", err)
 	}
@@ -873,31 +898,16 @@ func (r *Runner) appendWorktreeEvent(ctx context.Context, payload map[string]any
 // call it directly once they exist. A no-op for a session with nowhere to
 // count.
 func (r *Runner) RefreshWorktreeCounts(ctx context.Context) error {
-	r.mu.Lock()
-	wt := r.wt
-	r.mu.Unlock()
-	if wt.dir == "" {
+	sum, repos, err := sessionwt.Ops{Store: r.data}.CountAll(ctx, r.sessionID)
+	if errors.Is(err, sessionwt.ErrNoFolder) {
 		return nil
 	}
-	top, err := sessionwt.Toplevel(ctx, wt.dir)
-	if err != nil {
-		return err
-	}
-	rows, err := r.data.FileChanges(ctx, r.sessionID)
-	if err != nil {
-		return fmt.Errorf("load session files: %w", err)
-	}
-	c, err := sessionwt.Count(ctx, sessionwt.CountTarget{
-		Dir: top, Files: sessionwt.SessionFiles(top, rows), Branch: wt.branch, Base: wt.base,
-	})
 	if err != nil {
 		return err
 	}
 	r.recordMu.Lock()
 	defer r.recordMu.Unlock()
-	return r.data.SetSessionWorktree(ctx, r.sessionID, contracts.SessionWorktreePatch{
-		UncommittedCount: &c.Uncommitted, UnlandedCount: &c.Unlanded, OutsideCount: &c.Outside,
-	})
+	return r.data.SetSessionWorktree(ctx, r.sessionID, sessionwt.CountsPatch(sum, repos))
 }
 
 // refreshCountsAsync runs RefreshWorktreeCounts off the caller's goroutine
@@ -906,18 +916,31 @@ func (r *Runner) RefreshWorktreeCounts(ctx context.Context) error {
 // sees everything they would have.
 func (r *Runner) refreshCountsAsync() {
 	r.countsMu.Lock()
+	r.startCountsLocked(nil)
+	r.countsMu.Unlock()
+}
+
+// startCountsLocked asks for a recount, with countsMu held, and queues
+// waiter (if any) for the next recount to start. Queueing and asking
+// under one lock hold is what keeps a waiter from landing between a
+// running loop's last recount and its exit check, which would leave it
+// queued with no run coming.
+func (r *Runner) startCountsLocked(waiter chan error) {
 	if r.countsClosed {
-		r.countsMu.Unlock()
+		if waiter != nil {
+			waiter <- ErrCountsClosed
+		}
 		return
+	}
+	if waiter != nil {
+		r.countsWaiters = append(r.countsWaiters, waiter)
 	}
 	if r.countsRunning {
 		r.countsAgain = true
-		r.countsMu.Unlock()
 		return
 	}
 	r.countsRunning = true
 	r.countsWG.Add(1)
-	r.countsMu.Unlock()
 	go func() {
 		defer r.countsWG.Done()
 		// Shutdown cancels a recount mid-flight rather than waiting out a
@@ -932,12 +955,29 @@ func (r *Runner) refreshCountsAsync() {
 			}
 		}()
 		for {
-			if err := r.RefreshWorktreeCounts(ctx); err != nil && ctx.Err() == nil {
+			r.countsMu.Lock()
+			waiters := r.countsWaiters
+			r.countsWaiters = nil
+			r.countsMu.Unlock()
+			err := r.RefreshWorktreeCounts(ctx)
+			if err != nil && ctx.Err() == nil {
 				log.Printf("runner: refresh worktree counts: %v", err)
+			}
+			for _, w := range waiters {
+				w <- err
+			}
+			if r.countsBeforeExitCheck != nil {
+				r.countsBeforeExitCheck()
 			}
 			r.countsMu.Lock()
 			if !r.countsAgain || ctx.Err() != nil {
 				r.countsRunning = false
+				// Only a shutdown leaves waiters here: any other ask set
+				// countsAgain with its waiter, and so got the rerun.
+				for _, w := range r.countsWaiters {
+					w <- context.Canceled
+				}
+				r.countsWaiters = nil
 				r.countsMu.Unlock()
 				return
 			}
@@ -945,6 +985,28 @@ func (r *Runner) refreshCountsAsync() {
 			r.countsMu.Unlock()
 		}
 	}()
+}
+
+// ErrCountsClosed is RecountWorktree after Shutdown began.
+var ErrCountsClosed = errors.New("runner: shutting down, worktree counts closed")
+
+// RecountWorktree is POST /worktree/refresh: a recount through the same
+// coalesced path as the turn-end one (refreshCountsAsync), answered once a
+// recount that started after this call has finished. One asked for while a
+// recount runs joins the rerun queued behind it instead of starting a
+// second git status beside it. ctx ending returns early with its error;
+// the recount itself, shared with the turn end, carries on.
+func (r *Runner) RecountWorktree(ctx context.Context) error {
+	done := make(chan error, 1)
+	r.countsMu.Lock()
+	r.startCountsLocked(done)
+	r.countsMu.Unlock()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // deliverLocked marks a turn as in-flight. Must be called with r.mu held;
@@ -971,7 +1033,7 @@ func (r *Runner) terminalLocked() bool {
 // would ever clear busy, and every later message would queue behind it for
 // good while SwitchTransport and SetModel refused. note is the re-root note
 // claimed into wire, owed again if the typing fails.
-func (r *Runner) typeInto(ctx context.Context, sess provider.Session, wire, note string) error {
+func (r *Runner) typeInto(ctx context.Context, sess provider.Session, wire string, note owedNotes) error {
 	r.typeMu.Lock()
 	err := sess.Send(ctx, wire)
 	r.typeMu.Unlock()
@@ -979,8 +1041,8 @@ func (r *Runner) typeInto(ctx context.Context, sess provider.Session, wire, note
 		r.restoreRerootNote(note)
 		return err
 	}
-	if note != "" {
-		r.noteDelivered(ctx)
+	if !note.empty() {
+		r.noteDelivered(ctx, note)
 	}
 	return nil
 }
@@ -988,7 +1050,14 @@ func (r *Runner) typeInto(ctx context.Context, sess provider.Session, wire, note
 // Send relays one user turn. Returns ErrTurnInFlight (surfaced as HTTP 409)
 // if a turn is already in flight. In terminal mode it types the message
 // instead (typeInto) and starts no turn the runner tracks.
-func (r *Runner) Send(ctx context.Context, text string) error {
+//
+// attached are held link updates riding with the message (the Router
+// attaches them to a send that wakes the session, docs/HELD-UPDATES-
+// DESIGN.md): each is wrapped flagged attached, ahead of the user's text, in
+// the same turn (linkwrap.Attach). Only the user's own text reaches the
+// synthesis engine and the digest; each update gets its injection audit
+// once the turn is accepted.
+func (r *Runner) Send(ctx context.Context, text string, attached ...contracts.InjectPart) error {
 	r.mu.Lock()
 	if r.sess == nil {
 		r.mu.Unlock()
@@ -1023,8 +1092,9 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 	sess := r.sess
 	// The user's own words go to the synthesis engine and digest; the
 	// provider (and the locator, which matches the transcript's first
-	// message) gets them with any owed re-root note in front.
-	wire, note := r.claimRerootNoteLocked(text)
+	// message) gets them after any attached updates, with any owed re-root
+	// note in front of everything.
+	wire, note := r.claimRerootNoteLocked(linkwrap.Attach(attached, text))
 	r.mu.Unlock()
 
 	if armed {
@@ -1035,7 +1105,11 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 	r.digest.recordUser(text, false)
 
 	if terminal {
-		return r.typeInto(ctx, sess, wire, note)
+		if err := r.typeInto(ctx, sess, wire, note); err != nil {
+			return err
+		}
+		r.auditAttached(ctx, attached)
+		return nil
 	}
 	r.markAgentWorking(text)
 	if err := r.sendTurn(ctx, sess, wire, newMessageID(), false); err != nil {
@@ -1051,10 +1125,19 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 		}
 		return err
 	}
-	if note != "" {
-		r.noteDelivered(ctx)
+	r.auditAttached(ctx, attached)
+	if !note.empty() {
+		r.noteDelivered(ctx, note)
 	}
 	return nil
+}
+
+// auditAttached records each attached update's injection audit
+// (recordInjectionAudit), as InjectParts does for its parts.
+func (r *Runner) auditAttached(ctx context.Context, attached []contracts.InjectPart) {
+	for _, p := range attached {
+		r.recordInjectionAudit(ctx, p.Attribution, p.Text)
+	}
 }
 
 // Inject delivers a message from a linked session into this session's
@@ -1143,8 +1226,8 @@ func (r *Runner) InjectParts(ctx context.Context, parts []contracts.InjectPart) 
 		r.markAgentIdle()
 		return err
 	}
-	if note != "" {
-		r.noteDelivered(ctx)
+	if !note.empty() {
+		r.noteDelivered(ctx, note)
 	}
 	return nil
 }
@@ -1160,7 +1243,7 @@ func (r *Runner) recordInjectionAudit(ctx context.Context, attribution contracts
 	if attribution.LinkID == "" {
 		actor = "router" // a notice from the Router itself, not over a link
 	}
-	client := dataclient.New(r.data.BaseURL(), actor)
+	client := r.data.As(actor)
 	env := contracts.Envelope{
 		Type:      contracts.LinkMessageInjected,
 		SessionID: r.sessionID,
@@ -1309,8 +1392,8 @@ func (r *Runner) deliverNextLocked() {
 		if delivered != nil {
 			r.publishQueue(contracts.QueueChanged{Queued: r.QueuedMessages(), Failed: delivered, Error: err.Error()})
 		}
-	} else if note != "" {
-		r.noteDelivered(context.Background())
+	} else if !note.empty() {
+		r.noteDelivered(context.Background(), note)
 	}
 	// orchestrateRefreshPending and pendingModel, if set, are left
 	// untouched here — both are only drained once the queue is truly
@@ -1340,7 +1423,7 @@ func (r *Runner) drainNextLocked() pendingInjection {
 	}
 	if head.userID != "" {
 		r.pending = r.pending[1:]
-		head.wire = head.text
+		head.wire = linkwrap.Attach(head.attached, head.text)
 		return head
 	}
 	if !head.attribution.DigestAttributed {

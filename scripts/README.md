@@ -1,24 +1,46 @@
 # Installer & uninstall
 
-`install.sh` is the curl-to-shell installer (spec §14.7): it detects the platform
-(linux/darwin, amd64/arm64), picks an install prefix (`~/.local/bin`, or
-`/usr/local/bin` when run as root), and places a `mads` binary there.
+`install.sh` sets mads up from a source checkout. There's no hosted
+`curl | sh` install yet: no release has been cut, and the script's header
+marks that as a later goal (spec §14.7).
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/drewkidwell/mads/main/scripts/install.sh | sh
+sh scripts/install.sh
 ```
 
-No release has been cut yet, so the download path is wired but untested — for
-local builds and CI, point it at a binary you already built instead:
+From the checkout, it:
+
+1. **Preflights** `node`, `npm`, `go` and `make`, and stops if any is missing.
+2. **Builds** everything with `make build` (which runs `npm ci`).
+3. **Installs the Electron binary** via `scripts/ensure-electron.sh`.
+   Electron downloads it lazily, so this fetches it up front. It then
+   checks for a working renderer sandbox. Where the OS blocks unprivileged
+   user namespaces (e.g. Ubuntu 24.04's AppArmor restriction), it tries the
+   setuid `chrome-sandbox` fix with sudo, and otherwise falls back to
+   `ELECTRON_DISABLE_SANDBOX=1` with a warning. If `bash` isn't on `PATH`,
+   this step is skipped.
+4. **Writes a launcher** at `bin/mads-app` that runs `scripts/app.sh`
+   (exporting `ELECTRON_DISABLE_SANDBOX=1` when step 3 needed it). Note that
+   `bin/mads` is the Go CLI; `bin/mads-app` is the desktop app.
+5. **Smoke-tests** the Electron binary with `--version`.
+
+Every step checks for its result before doing work, so re-running is cheap
+and safe. When it finishes, launch the app with `bin/mads-app`.
+
+### Binary-only install (CI and smoke tests)
+
+Setting `MADS_INSTALL_SOURCE` skips all of the above and just places a
+prebuilt `mads` CLI binary. It builds nothing, installs no Electron, and
+writes nothing outside the prefix:
 
 ```sh
 make build
 MADS_INSTALL_SOURCE=./bin sh scripts/install.sh   # bin/ contains "mads"
 ```
 
-Env overrides: `MADS_INSTALL_SOURCE` (local binary or directory, skips the
-download), `MADS_INSTALL_PREFIX` (install directory), `MADS_VERSION` (release
-tag, only used without `MADS_INSTALL_SOURCE`).
+`MADS_INSTALL_SOURCE` is a binary or a directory containing one.
+`MADS_INSTALL_PREFIX` sets the install directory (default `~/.local/bin`,
+or `/usr/local/bin` as root). `scripts/smoketest` drives this path.
 
 ## First run
 
@@ -38,9 +60,12 @@ mads uninstall --keep-data   # binary only, no prompt
 mads uninstall --yes         # scripted/CI use — answers the prompt yes
 ```
 
-The binary is always removed. The data directory is only removed after
-explicit confirmation (an interactive `y`, or `--yes`); declining, or passing
-`--keep-data`, leaves it untouched. It always prints the exact paths it's
+The binary is always removed. The data directory (`~/.mads`) and the
+shadow-store root (`$XDG_DATA_HOME/mads/shadow`, default
+`~/.local/share/mads/shadow`: per-session diff history, usually the largest
+thing mads writes) are only removed after explicit confirmation (an
+interactive `y`, or `--yes`); declining, or passing `--keep-data`, leaves both
+untouched. It always prints the exact paths it's
 about to delete before deleting anything.
 
 ## Update
@@ -51,7 +76,8 @@ mads update apply -yes                     # download, verify, swap, restart, he
 ```
 
 Both subcommands talk to a running Router (`-router http://localhost:17373` by
-default). `check` proxies `POST /update/check` (`pkg/update.Check`, spec
+default), sending the install token from `$MADS_HOME/local.token` like every
+`mads` subcommand (docs/LOCAL-FRONT-DOOR-DESIGN.md). `check` proxies `POST /update/check` (`pkg/update.Check`, spec
 §14.3): it never fires on its own — no polling, no phone-home — only in
 response to this explicit command, hitting `Config.UpdateFeedURL` (empty by
 default; no release feed exists yet). `apply` fetches the manifest itself,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { router } from "../../../router/client";
-import { subscribeToEvents } from "../../../router/events";
+import { eventsReadyWithin, subscribeToEvents } from "../../../router/events";
 import { RETRO_GENERATION_EVENT_TYPES } from "../events";
 import type { Envelope } from "../../../router/types";
 
@@ -64,17 +64,31 @@ export function useRetroGeneration(): UseRetroGeneration {
   const start = useCallback(
     async (sessionIds: string[], userObservations: string) => {
       setError(null);
+      // Subscribed before the POST, and the POST sent only once the bus is
+      // ready (router/events.ts eventsReady): the bus never replays, so the
+      // job's first events could otherwise land before this hears anything.
+      // Until the POST says which retro is ours, events wait here; then the
+      // retro_id filter (handleEvent) picks ours out.
+      unsubscribeRef.current?.();
+      retroIdRef.current = null;
+      const early: Envelope[] = [];
+      let known = false;
+      unsubscribeRef.current = subscribeToEvents({ types: RETRO_GENERATION_EVENT_TYPES }, (envelope) => {
+        if (known) handleEvent(envelope);
+        else early.push(envelope);
+      });
       try {
+        await eventsReadyWithin();
         const result = await router.startRetro(sessionIds, userObservations || undefined);
         jobIdRef.current = result.job_id;
         retroIdRef.current = result.retro_id;
         setRetroId(result.retro_id);
         setPhase("starting");
-        unsubscribeRef.current = subscribeToEvents(
-          { types: RETRO_GENERATION_EVENT_TYPES },
-          handleEvent,
-        );
+        known = true;
+        for (const envelope of early.splice(0)) handleEvent(envelope);
       } catch (err) {
+        unsubscribeRef.current?.();
+        unsubscribeRef.current = null;
         setPhase("failed");
         setError(err instanceof Error ? err.message : String(err));
       }

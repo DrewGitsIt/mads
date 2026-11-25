@@ -239,3 +239,20 @@ func TestDelegateTranscriptDeclarationMustMatchStrategy(t *testing.T) {
 	}
 	t.Fatal("no delegate_transcript result")
 }
+
+// background_output is checked the same way: an unsupported declaration
+// over a provider that carries the BackgroundOutputReader strategy is a
+// mismatch.
+func TestBackgroundOutputDeclarationMustMatchStrategy(t *testing.T) {
+	p := newStub(map[provider.Behavior]provider.Support{provider.BehaviorBackgroundOutput: provider.Unsupported}, lies{})
+	for _, res := range Check(context.Background(), p, stubScript()) {
+		if res.Behavior != provider.BehaviorBackgroundOutput {
+			continue
+		}
+		if res.Err == nil {
+			t.Fatal("an unsupported declaration over an implemented strategy must fail")
+		}
+		return
+	}
+	t.Fatal("no background_output result")
+}

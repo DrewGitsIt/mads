@@ -71,6 +71,38 @@ func subscribeRetry(ctx context.Context, name string, initialBackoff, maxBackoff
 	}
 }
 
+// consumeForever subscribes, hands every envelope to handle, and — when the
+// stream ends while ctx is still live (the Data Service restarted, or a
+// token rotation ended every open stream, docs/LOCAL-FRONT-DOOR-DESIGN.md
+// round 2) — subscribes again from the last seq it saw, so the watcher
+// never silently stops. Returns once ctx is done.
+func consumeForever(ctx context.Context, name string, initialBackoff, maxBackoff time.Duration, subscribe func(since int64) (<-chan contracts.Envelope, error), handle func(contracts.Envelope)) {
+	var since int64
+	for {
+		ch := subscribeRetry(ctx, name, initialBackoff, maxBackoff, func() (<-chan contracts.Envelope, error) {
+			return subscribe(since)
+		})
+		if ch == nil {
+			return
+		}
+		for env := range ch {
+			if env.Seq > since {
+				since = env.Seq
+			}
+			handle(env)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		log.Printf("%s: %s stream ended; resubscribing from seq %d", "digestwatch", name, since)
+		select {
+		case <-time.After(initialBackoff):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 // digestSessionBuffer accumulates one subject session's turn deltas across a
 // debounce burst, and holds the pending timer that collapses the burst into
 // one GenerateDigest job — mirroring synthwatch.sessionBuffer exactly.
@@ -100,20 +132,16 @@ func NewWatcher(data *dataclient.Client, jobs *job.Runner) *Watcher {
 // subscribe with backoff on failure; returns only once ctx is done. Callers
 // run it on its own goroutine for the life of the process.
 func (w *Watcher) Run(ctx context.Context) {
-	ch := subscribeRetry(ctx, "session.turn_ended", digestwatchInitialBackoff, digestwatchMaxBackoff, func() (<-chan contracts.Envelope, error) {
-		return w.data.Stream(ctx, 0, "", []string{string(contracts.TurnEnded)})
-	})
-	if ch == nil {
-		return
-	}
-	for env := range ch {
+	consumeForever(ctx, "session.turn_ended", digestwatchInitialBackoff, digestwatchMaxBackoff, func(since int64) (<-chan contracts.Envelope, error) {
+		return w.data.Stream(ctx, since, "", []string{string(contracts.TurnEnded)})
+	}, func(env contracts.Envelope) {
 		var payload struct {
 			Delta      string `json:"delta"`
 			DigestOnly bool   `json:"digest_only"`
 		}
 		if err := json.Unmarshal(env.Payload, &payload); err != nil {
 			log.Printf("digestwatch: decode turn_ended payload for %s: %v", env.SessionID, err)
-			continue
+			return
 		}
 		if !payload.DigestOnly {
 			w.bufferDigest(ctx, env.SessionID, payload.Delta)
@@ -121,7 +149,7 @@ func (w *Watcher) Run(ctx context.Context) {
 		if _, err := w.jobs.Spawn(ctx, job.SessionTitleKind, env.SessionID, job.GenerateSessionTitle(env.SessionID, payload.Delta)); err != nil {
 			log.Printf("digestwatch: spawn session title job for %s: %v", env.SessionID, err)
 		}
-	}
+	})
 }
 
 // bufferDigest appends delta to sessionID's debounce buffer, (re)arming the
@@ -186,25 +214,21 @@ func NewSignalWatcher(data *dataclient.Client, jobs *job.Runner) *SignalWatcher 
 // on failure; returns only once ctx is done. Callers run it on its own
 // goroutine for the life of the process.
 func (w *SignalWatcher) Run(ctx context.Context) {
-	ch := subscribeRetry(ctx, "attention signals", digestwatchInitialBackoff, digestwatchMaxBackoff, func() (<-chan contracts.Envelope, error) {
-		return w.data.Stream(ctx, 0, "", []string{
+	consumeForever(ctx, "attention signals", digestwatchInitialBackoff, digestwatchMaxBackoff, func(since int64) (<-chan contracts.Envelope, error) {
+		return w.data.Stream(ctx, since, "", []string{
 			string(contracts.SessionPermissionRequested),
 			string(contracts.SessionCrashed),
 			string(contracts.TaskStatusChanged),
 		})
-	})
-	if ch == nil {
-		return
-	}
-	for env := range ch {
+	}, func(env contracts.Envelope) {
 		sig, ok := signalFor(env)
 		if !ok {
-			continue
+			return
 		}
 		if _, err := w.jobs.Spawn(ctx, job.SignalKind, env.SessionID, job.DeliverSignal(env.SessionID, sig)); err != nil {
 			log.Printf("digestwatch: spawn signal job for %s: %v", env.SessionID, err)
 		}
-	}
+	})
 }
 
 // signalFor normalizes one subscribed envelope into a job.Signal. ok=false

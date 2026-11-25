@@ -25,6 +25,7 @@ type worktrees struct {
 	repo      string // the user's own checkout, where repo-wide setup (hook, merge driver) is written; == primary unless merging into a session folder
 	root      string // where task worktrees live
 	dataURL   string
+	tokenFile string // the install token's path, for the commit hook (mads.tokenFile)
 	sessionID string
 	data      *dataclient.Client // task lookups for conflict diagnostics
 
@@ -191,6 +192,7 @@ func (w *worktrees) create(ctx context.Context, task contracts.Task) (dir, branc
 		TaskID:    task.ID,
 		SessionID: w.sessionID,
 		DataURL:   w.dataURL,
+		TokenFile: w.tokenFile,
 	}); err != nil {
 		return "", "", err
 	}
@@ -238,6 +240,7 @@ func (w *worktrees) reopen(ctx context.Context, task contracts.Task) (dir, branc
 		TaskID:    task.ID,
 		SessionID: w.sessionID,
 		DataURL:   w.dataURL,
+		TokenFile: w.tokenFile,
 	}); err != nil {
 		return "", "", err
 	}

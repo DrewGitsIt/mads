@@ -226,7 +226,7 @@ Seahorse. Make that text platform-neutral, or give each platform its own variant
 - The CI Playwright cache key is already keyed on `runner.os`. The path needs the
   same fix.
 - Prerequisites for the Mac: Xcode Command Line Tools (git, and the compiler for
-  node-pty), Go 1.26, Node per `.nvmrc`, plus `claude` and optionally `goose`.
+  node-pty), Go per `go.mod`'s toolchain line (go1.27.1, fetched automatically by an older Go), Node per `.nvmrc`, plus `claude` and optionally `goose`.
   Document these in the README.
 
 ### F9. Paths: keep XDG-style, not `~/Library`. **Decision, no work.**

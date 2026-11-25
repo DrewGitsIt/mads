@@ -141,3 +141,48 @@ func TestTranscriptPaging(t *testing.T) {
 		t.Errorf("bad limit = %d %s, want 400 %s", status, b, contracts.TranscriptErrBadParam)
 	}
 }
+
+// POST /messages's "attached" parts reach the provider ahead of the text,
+// and the transcript reads them back as attached rows, then the human's
+// own (docs/HELD-UPDATES-DESIGN.md).
+func TestSendWithAttachedReadsBackSegmented(t *testing.T) {
+	srv, r := transcriptServer(t, nil, nil)
+	body, _ := json.Marshal(map[string]any{
+		"text": "what now?",
+		"attached": []contracts.InjectPart{
+			{Text: "did a", Attribution: contracts.Attribution{LinkID: "lnk_a", SourceName: "Alpha", Kind: "digest", DigestAttributed: true}},
+		},
+	})
+	resp, err := http.Post(srv.URL+"/messages", "application/json", bytes.NewReader(body)) //nolint:gosec,noctx // local httptest server
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST /messages = %d", resp.StatusCode)
+	}
+	ctx := context.Background()
+	deadline := time.Now().Add(5 * time.Second)
+	var rows []contracts.TranscriptMessage
+	for {
+		rows = nil
+		for _, m := range r.Transcript(ctx) {
+			if m.Role == "user" {
+				rows = append(rows, m)
+			}
+		}
+		if len(rows) >= 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("user rows = %+v, want the update and the human's text", rows)
+	}
+	if a := rows[0].Attribution; a == nil || !a.Attached || a.SourceName != "Alpha" || rows[0].Text != "did a" {
+		t.Errorf("attached row = %+v / %+v", rows[0], a)
+	}
+	if rows[1].Attribution != nil || rows[1].Text != "what now?" {
+		t.Errorf("human row = %+v", rows[1])
+	}
+}

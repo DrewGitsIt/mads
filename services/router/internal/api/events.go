@@ -32,10 +32,67 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	if meshHidesRegistry(r) {
+		kept := events[:0]
+		for _, env := range events {
+			if !registryEvent(env.Type) {
+				kept = append(kept, redactDevice(env))
+			}
+		}
+		events = kept
+	}
 	if events == nil {
 		events = []contracts.Envelope{}
 	}
 	writeJSON(w, http.StatusOK, events)
+}
+
+// meshHidesRegistry reports whether r was relayed by this node's Mesh
+// Service for a device below admin. Such a device doesn't see this host's
+// device registry in the event log: peer.* carry its devices' names, and
+// device.* each paired device's fingerprint and grant (and refusals), which
+// would let a viewing device rebuild who may reach this host and how
+// (docs/MESH-AUTH-DESIGN.md, A5: /peers itself is never forwarded). The
+// Mesh Service stamps the device's level (contracts.MeshLevelHeader) and
+// overwrites any the caller sent; without the relay mark the header means
+// nothing.
+func meshHidesRegistry(r *http.Request) bool {
+	if _, relayed := r.Header[contracts.MeshRelayHeader]; !relayed {
+		return false
+	}
+	return contracts.GrantLevel(r.Header.Get(contracts.MeshLevelHeader)) != contracts.GrantAdmin
+}
+
+// registryEvent is an event of the device registry: peer.* and device.*,
+// and mesh.* (this host's Mesh Service: its address, its settings).
+func registryEvent(t contracts.EventType) bool {
+	d := t.Domain()
+	return d == "peer" || d == "device" || d == "mesh"
+}
+
+// redactDevice hides which paired device did something from a device
+// below admin: an actor "device:<name>/<short fingerprint>" (the Mesh
+// Service's, D8) reads as just "device". The name is this host's label for
+// another device, and the fingerprint identifies it: the registry such a
+// device doesn't see.
+func redactDevice(env contracts.Envelope) contracts.Envelope {
+	if strings.HasPrefix(env.Actor, "device:") {
+		env.Actor = "device"
+	}
+	return env
+}
+
+// handleEventsHead proxies the Data Service's GET /events/head: {"seq": N},
+// the log's current max seq. The UI's event bus reads it before its first
+// connect and streams with ?since=N, so the stream carries only what happens
+// from then on (ui/src/router/events.ts).
+func (s *server) handleEventsHead(w http.ResponseWriter, r *http.Request) {
+	head, err := s.data.EventsHead(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"seq": head})
 }
 
 // handleStreamEvents is the UI's single control-plane subscription point
@@ -72,7 +129,14 @@ func (s *server) handleStreamEvents(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
+	hide := meshHidesRegistry(r)
 	for env := range ch {
+		if hide && registryEvent(env.Type) {
+			continue
+		}
+		if hide {
+			env = redactDevice(env)
+		}
 		data, err := json.Marshal(env)
 		if err != nil {
 			return

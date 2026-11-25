@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
-import { router } from "./client";
+import type { RouterClient } from "./client";
+import { useHostClient, useHostScope } from "./hostScope";
+import { hostKey } from "./mesh";
 import type { Model, ModelCatalog } from "./types";
 
 /**
@@ -25,19 +27,21 @@ const RETRY_MS = 2_000;
 
 type Catalogs = Record<string, ModelCatalog>;
 
-let inFlight: Promise<Catalogs> | null = null;
+// Per host ("" for this device): a remote session's models are its host's
+// (docs/MESH-MODE-DESIGN.md D3b).
+const inFlight = new Map<string, Promise<Catalogs>>();
 
 /** Test seam: drops any in-flight request so each case starts cold. */
 export function resetProviderModelCache(): void {
-  inFlight = null;
+  inFlight.clear();
 }
 
-async function fetchCatalogs(): Promise<Catalogs> {
-  const providers = await router.listProviderNames();
+async function fetchCatalogs(client: RouterClient): Promise<Catalogs> {
+  const providers = await client.listProviderNames();
   const entries = await Promise.all(
     providers.map(async (name) => {
       try {
-        return [name, await router.listModelCatalog(name)] as const;
+        return [name, await client.listModelCatalog(name)] as const;
       } catch {
         // One provider's failure must not blank the whole picker — the
         // others are still selectable.
@@ -48,12 +52,13 @@ async function fetchCatalogs(): Promise<Catalogs> {
   return Object.fromEntries(entries);
 }
 
-function loadCatalogs(): Promise<Catalogs> {
-  if (inFlight) return inFlight;
-  const p = fetchCatalogs().finally(() => {
-    if (inFlight === p) inFlight = null;
+function loadCatalogs(client: RouterClient, key: string): Promise<Catalogs> {
+  const pending = inFlight.get(key);
+  if (pending) return pending;
+  const p = fetchCatalogs(client).finally(() => {
+    if (inFlight.get(key) === p) inFlight.delete(key);
   });
-  inFlight = p;
+  inFlight.set(key, p);
   return p;
 }
 
@@ -63,6 +68,8 @@ function loadCatalogs(): Promise<Catalogs> {
  */
 export function useProviderCatalogs(): Catalogs {
   const [catalogs, setCatalogs] = useState<Catalogs>({});
+  const client = useHostClient();
+  const key = hostKey(useHostScope());
 
   useEffect(() => {
     let cancelled = false;
@@ -77,7 +84,7 @@ export function useProviderCatalogs(): Catalogs {
       );
       if (pending && retry === undefined) {
         retry = setTimeout(() => {
-          loadCatalogs()
+          loadCatalogs(client, key)
             .then((again) => {
               if (!cancelled) setCatalogs(again);
             })
@@ -86,7 +93,7 @@ export function useProviderCatalogs(): Catalogs {
       }
     };
 
-    loadCatalogs()
+    loadCatalogs(client, key)
       .then(apply)
       .catch(() => {
         if (!cancelled) setCatalogs({});
@@ -96,7 +103,7 @@ export function useProviderCatalogs(): Catalogs {
       cancelled = true;
       if (retry !== undefined) clearTimeout(retry);
     };
-  }, []);
+  }, [client, key]);
 
   return catalogs;
 }

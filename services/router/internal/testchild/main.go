@@ -11,14 +11,16 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 )
 
@@ -38,23 +40,56 @@ var (
 	// not just the session record.
 	modelMu   sync.Mutex
 	lastModel string
+
+	// permModeMu/permMode steer GET /permission-requests for the Router's
+	// window-wide aggregation tests: "" answers two canned pending
+	// requests, "fail" a 500, "garbage" an unreadable body, and "slow"
+	// nothing until the caller gives up.
+	permModeMu sync.Mutex
+	permMode   string
+
+	// worktreeRefreshes counts POST /worktree/refresh (read back over GET
+	// /test/worktree-refreshes) — the Router routes a session's refresh to
+	// its live child. worktreeRefreshMissing makes the route answer 404, as
+	// a child started before it had the route would.
+	worktreeRefreshMu      sync.Mutex
+	worktreeRefreshes      int
+	worktreeRefreshMissing bool
 )
 
 func main() {
-	addr := flag.String("addr", "localhost:0", "listen address")
+	addr := flag.String("addr", "localhost:0", "TCP listen address, for running by hand (ignored with -socket)")
+	socket := flag.String("socket", "", "Unix socket to listen on — what the Router's Supervisor passes")
 	_ = flag.String("session-id", "", "ignored — matches the real session service's argv shape")
 	_ = flag.String("router-url", "", "ignored — matches the real session service's argv shape")
 	_ = flag.String("data-url", "", "ignored — matches the real session/pipeline service's argv shape")
 	_ = flag.String("run-id", "", "ignored — matches the real pipeline service's argv shape")
 	_ = flag.String("template", "", "ignored — matches the real pipeline service's argv shape")
+	_ = flag.String("token-file", "", "ignored — matches the real services' argv shape")
 	_ = flag.String("exclude-task-ids", "", "ignored — matches the real pipeline service's argv shape")
 	flag.Parse()
 
-	ln, err := net.Listen("tcp", *addr)
+	ln, err := childsock.ListenChild("testchild", *socket, *addr)
 	if err != nil {
 		log.Fatalf("testchild: listen %s: %v", *addr, err)
 	}
 	log.Printf("testchild: listening on %s", ln.Addr())
+
+	// TESTCHILD_TERM_DELAY makes SIGTERM a graceful stop that takes that
+	// long, then writes TESTCHILD_TERM_MARKER (if set) and exits 0 — the
+	// shape of a real child's own shutdown, for tests that it gets its grace.
+	if d, err := time.ParseDuration(os.Getenv("TESTCHILD_TERM_DELAY")); err == nil {
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, syscall.SIGTERM)
+		go func() {
+			<-sigs
+			time.Sleep(d)
+			if marker := os.Getenv("TESTCHILD_TERM_MARKER"); marker != "" {
+				_ = os.WriteFile(marker, []byte("stopped"), 0o600)
+			}
+			os.Exit(0)
+		}()
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /output", func(w http.ResponseWriter, r *http.Request) {
@@ -81,13 +116,23 @@ func main() {
 	// service's POST /messages "accepted" contract closely enough for
 	// router-level proxy tests (TestSessionMessagesForwarding) without
 	// needing the real runner/provider stack.
+	// X-Testchild-Status makes it answer that status instead, for tests of
+	// a refused send (the Router re-queues held updates it attached).
 	mux.HandleFunc("POST /messages", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		w.WriteHeader(http.StatusAccepted)
+		status := http.StatusAccepted
+		if v, err := strconv.Atoi(r.Header.Get("X-Testchild-Status")); err == nil {
+			status = v
+		}
+		// What reached the child of the mesh's stamps, for the Router's
+		// actor tests.
+		w.Header().Set("X-Testchild-Actor", r.Header.Get("X-Mads-Actor"))
+		w.Header().Set("X-Testchild-Relay", strconv.Quote(r.Header.Get("X-Mads-Mesh-Peer")+r.Header.Get("X-Mads-Mesh-Device")))
+		w.WriteHeader(status)
 		_, _ = w.Write(body)
 	})
 	mux.HandleFunc("POST /interrupt", func(w http.ResponseWriter, r *http.Request) {
@@ -229,6 +274,32 @@ func main() {
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = fmt.Fprint(w, `{"status":"accepted"}`)
 	})
+	mux.HandleFunc("POST /worktree/refresh", func(w http.ResponseWriter, r *http.Request) {
+		worktreeRefreshMu.Lock()
+		missing := worktreeRefreshMissing
+		if !missing {
+			worktreeRefreshes++
+		}
+		worktreeRefreshMu.Unlock()
+		if missing {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /test/worktree-refreshes", func(w http.ResponseWriter, r *http.Request) {
+		worktreeRefreshMu.Lock()
+		n := worktreeRefreshes
+		worktreeRefreshMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, "%d\n", n)
+	})
+	mux.HandleFunc("POST /test/worktree-refresh-missing", func(w http.ResponseWriter, r *http.Request) {
+		worktreeRefreshMu.Lock()
+		worktreeRefreshMissing = true
+		worktreeRefreshMu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
 	// Test-only read-back: the real Session Service has no equivalent, but
 	// boot_test.go runs testchild as a separate OS process and can't share
 	// in-memory state, so it polls this over HTTP instead.
@@ -254,6 +325,33 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, `{"present":%t}`, present)
+	})
+	mux.HandleFunc("POST /test/permission-mode", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		permModeMu.Lock()
+		permMode = string(body)
+		permModeMu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /permission-requests", func(w http.ResponseWriter, r *http.Request) {
+		permModeMu.Lock()
+		mode := permMode
+		permModeMu.Unlock()
+		switch mode {
+		case "fail":
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		case "slow":
+			<-r.Context().Done()
+			return
+		case "garbage":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"not":"a list"`)
+			return
+		}
+		// Out of id order, so the Router's own sort is what the test sees.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `[{"id":"req-2","tool":"Edit","status":"pending","input":{"file_path":"a.go"}},{"id":"req-1","tool":"Bash","status":"pending","input":{"command":"ls"}}]`)
 	})
 	log.Fatal(http.Serve(ln, mux))
 }

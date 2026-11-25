@@ -12,6 +12,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/linkwrap"
+	"github.com/drewkidwell/mads/services/router/internal/safeserve"
 )
 
 // get_session_turns reads the subject's transcript, not its
@@ -103,6 +104,12 @@ func renderTurn(n int, msgs []contracts.TranscriptMessage) string {
 	// its own; the turn is named for the message it rode in on.
 	if opener >= 0 && opener+1 < len(msgs) && msgs[opener].Attribution != nil &&
 		msgs[opener].Attribution.Kind == linkwrap.KindNotice && linkwrap.SameSend(msgs[opener], msgs[opener+1]) {
+		opener++
+	}
+	// Updates attached to the user's message (docs/HELD-UPDATES-DESIGN.md)
+	// rode in on it: the turn is the user's.
+	for opener >= 0 && opener+1 < len(msgs) && msgs[opener].Attribution != nil &&
+		msgs[opener].Attribution.Attached && linkwrap.SameSend(msgs[opener], msgs[opener+1]) {
 		opener++
 	}
 	if opener >= 0 {
@@ -381,6 +388,7 @@ func (s *server) handleOrchestrateGetTurns(w http.ResponseWriter, r *http.Reques
 		status = http.StatusBadRequest
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	safeserve.Apply(w.Header(), status) // a transcript's text, never a page
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(text))
 }

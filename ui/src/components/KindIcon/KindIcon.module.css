@@ -1,0 +1,14 @@
+.kind {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  background: var(--bg3);
+  color: var(--text2);
+}
+.kind svg {
+  width: 16px;
+  height: 16px;
+}

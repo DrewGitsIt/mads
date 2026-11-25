@@ -149,6 +149,23 @@ func linkRoutes(mux *http.ServeMux, log *store.Log) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 	})
 
+	// GET /links?session_ids=a,b,c is the bulk form of GET
+	// /sessions/{id}/links: every link with any listed session on either
+	// side, each once. Same id rules as the Router's handleListLinks.
+	mux.HandleFunc("GET /links", func(w http.ResponseWriter, r *http.Request) {
+		ids, verr := contracts.ParseLinkSessionIDs(r.URL.Query().Get("session_ids"))
+		if verr != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, verr)
+			return
+		}
+		list, err := links.ForSessions(r.Context(), ids)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
+	})
+
 	mux.HandleFunc("GET /sessions/{id}/links", func(w http.ResponseWriter, r *http.Request) {
 		list, err := links.ForSession(r.Context(), r.PathValue("id"))
 		if err != nil {
@@ -202,6 +219,40 @@ func linkRoutes(mux *http.ServeMux, log *store.Log) {
 		}
 		writeJSON(w, http.StatusOK, counts)
 	})
+
+	// Held link updates (docs/HELD-UPDATES-DESIGN.md): the deferred pushes
+	// waiting for a sleeping session, listed for its conversation, and the
+	// user's discard / Undo on them. Discard is a soft delete; both emit the
+	// waiting-count session.updated and an audit event.
+	mux.HandleFunc("GET /sessions/{id}/held-updates", func(w http.ResponseWriter, r *http.Request) {
+		held, err := links.HeldUpdates(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, held)
+	})
+
+	setDiscarded := func(discard bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			var body contracts.LinkDigestIDs
+			if !decode(w, r, &body) {
+				return
+			}
+			set := links.RestoreDigests
+			if discard {
+				set = links.DiscardDigests
+			}
+			n, err := set(r.Context(), body.IDs, actor(r))
+			if err != nil {
+				writeStoreError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, contracts.LinkDigestsChanged{Changed: n})
+		}
+	}
+	mux.HandleFunc("POST /link-digests/discard", setDiscarded(true))
+	mux.HandleFunc("POST /link-digests/restore", setDiscarded(false))
 
 	// Both hand-raiser routes are meant to be called by the Router's
 	// Supervisor only (docs/LINKED-SESSIONS-DESIGN.md decision 6) — there's

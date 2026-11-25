@@ -2,8 +2,9 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionAgentState } from "./useSessionAgentState";
 import { router } from "../../../router/client";
+import { holdEventsHead } from "../../../router/testEventsBarrier";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
-import type { AgentState, Delegate, DelegateState, Session } from "../../../router/types";
+import type { AgentState, Delegate, DelegateState, Session, SessionPermissionRequest } from "../../../router/types";
 
 let seq = 0;
 
@@ -75,14 +76,21 @@ const MID_TURN: AgentState = {
 
 describe("useSessionAgentState", () => {
   beforeEach(() => {
+    // The fixtures' envelopes are stamped 2026-09-28T10:00Z and after: mount
+    // the hook before them, so they read as news (a sticky notice is staged
+    // only for what happened since the window subscribed). Only Date is
+    // faked; timers run as usual.
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-09-28T09:00:00Z") });
     seq = 0;
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
     vi.spyOn(router, "listDelegates").mockResolvedValue([]);
     vi.spyOn(router, "listDelegatesEndedAfter").mockResolvedValue([]);
+    vi.spyOn(router, "listPermissionRequests").mockResolvedValue([]);
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -169,6 +177,140 @@ describe("useSessionAgentState", () => {
     // the turn's, not the park's.
     await waitFor(() => expect(result.current.s1?.awaitingSince).toBeUndefined());
     expect(result.current.s1?.workingSince).toBe("2026-09-28T09:59:00Z");
+  });
+
+  describe("the approvals seed (the bus never replays parks)", () => {
+    const pending = (id: string, sessionId: string, tool: string): SessionPermissionRequest => ({
+      id,
+      tool,
+      status: "pending",
+      session_id: sessionId,
+    });
+
+    it("seeds open parks from one window-wide read", async () => {
+      vi.mocked(router.listPermissionRequests).mockResolvedValue([pending("r1", "s1", "Bash"), pending("r2", "s2", "Edit")]);
+      const { result } = renderHook(() => useSessionAgentState());
+      await waitFor(() => expect(result.current.s1?.awaitingTool).toBe("Bash"));
+      expect(result.current.s2?.awaitingTool).toBe("Edit");
+      expect(router.listPermissionRequests).toHaveBeenCalledTimes(1);
+    });
+
+    it("never re-opens a park the stream resolved before the seed answered (live wins)", async () => {
+      let answer!: (v: SessionPermissionRequest[]) => void;
+      vi.mocked(router.listPermissionRequests).mockReturnValue(new Promise((r) => (answer = r)));
+      const { result } = renderHook(() => useSessionAgentState());
+      emit("session.permission_resolved", "s1", { request_id: "r1", status: "allowed" });
+      await act(async () => answer([pending("r1", "s1", "Bash")]));
+      expect(result.current.s1?.awaitingSince).toBeUndefined();
+    });
+
+    it("adds nothing to a session whose parks the stream cleared before the seed answered", async () => {
+      let answer!: (v: SessionPermissionRequest[]) => void;
+      vi.mocked(router.listPermissionRequests).mockReturnValue(new Promise((r) => (answer = r)));
+      const { result } = renderHook(() => useSessionAgentState());
+      idle("s1");
+      emit("session.activity_changed", "s2", { activity: "inactive" });
+      await act(async () => answer([pending("r1", "s1", "Bash"), pending("r2", "s2", "Edit"), pending("r3", "s3", "Read")]));
+      expect(result.current.s1?.awaitingSince).toBeUndefined();
+      expect(result.current.s2?.awaitingSince).toBeUndefined();
+      expect(result.current.s3?.awaitingTool).toBe("Read");
+    });
+
+    it("keeps a park the stream raised, whatever the seed says", async () => {
+      let answer!: (v: SessionPermissionRequest[]) => void;
+      vi.mocked(router.listPermissionRequests).mockReturnValue(new Promise((r) => (answer = r)));
+      const { result } = renderHook(() => useSessionAgentState());
+      emit("session.permission_requested", "s1", { request_id: "r2", tool: "Edit" }, "2026-09-28T10:00:00Z");
+      await act(async () => answer([]));
+      expect(result.current.s1?.awaitingTool).toBe("Edit");
+      expect(result.current.s1?.awaitingSince).toBe("2026-09-28T10:00:00Z");
+    });
+
+    // The ready barrier: the seed is read only once the bus knows its cursor,
+    // so an event committed after the snapshot can't fall below the cursor
+    // and be lost, and one heard before the snapshot answers wins over it.
+    it("reads the seed only after the head, and an event between subscribe and snapshot is neither lost nor overridden", async () => {
+      const head = holdEventsHead();
+      let answer!: (v: SessionPermissionRequest[]) => void;
+      vi.mocked(router.listPermissionRequests).mockReturnValue(new Promise((r) => (answer = r)));
+      let answerDelegates!: (v: Delegate[]) => void;
+      vi.mocked(router.listDelegatesEndedAfter).mockReset().mockReturnValue(new Promise((r) => (answerDelegates = r)));
+      const { result } = renderHook(() => useSessionAgentState());
+      await act(async () => {});
+      expect(router.listPermissionRequests).not.toHaveBeenCalled();
+      expect(router.listDelegatesEndedAfter).not.toHaveBeenCalled();
+      expect(FakeEventSource.instances).toHaveLength(0);
+
+      seq = 10;
+      await head.release(10);
+      await waitFor(() => expect(router.listPermissionRequests).toHaveBeenCalledTimes(1));
+      expect(router.listDelegatesEndedAfter).toHaveBeenCalledTimes(1);
+      expect(new URL(FakeEventSource.instances[0].url).searchParams.get("since")).toBe("10");
+
+      // The cold read, likewise: a delegate that finished after it was read
+      // stays finished.
+      delegate("s1", "d1", "completed", { ended_at: "2026-09-28T10:00:00Z" });
+      await act(async () => answerDelegates([record("s1", "d1")]));
+      expect(result.current.s1?.subagents).toBe(0);
+
+      // Both after the cursor, both before the snapshot answers: r1 resolved
+      // (the snapshot, read earlier, still has it) and r2 newly parked (the
+      // snapshot doesn't have it yet).
+      emit("session.permission_resolved", "s1", { request_id: "r1", status: "allowed" });
+      emit("session.permission_requested", "s1", { request_id: "r2", tool: "Edit" }, "2026-09-28T10:05:00Z");
+      await act(async () => answer([pending("r1", "s1", "Bash")]));
+      expect(result.current.s1?.awaitingTool).toBe("Edit");
+      expect(result.current.s1?.awaitingSince).toBe("2026-09-28T10:05:00Z");
+    });
+  });
+
+  // An envelope older than the window's notice epoch (the first rail mount:
+  // a cursor that trails the head can still carry one) folds into state but
+  // stages no sticky notice: it isn't news to this window.
+  it("folds a turn's end or a crash from before the window's first mount, without staging 'Done' or 'Crashed'", async () => {
+    const { result } = renderHook(() => useSessionAgentState());
+    working("s1", "Working…", "2026-09-28T08:00:00Z");
+    idle("s1", "2026-09-28T08:30:00Z"); // before the 09:00 mount
+    emit("session.crashed", "s2", { reason: "exit status 1" }, "2026-09-28T08:40:00Z");
+    emit("session.permission_requested", "s2", { request_id: "r9", tool: "Bash" }, "2026-09-28T08:35:00Z");
+    await act(async () => {});
+    expect(result.current.s1?.done).toBeUndefined();
+    expect(result.current.s1?.workingSince).toBeUndefined(); // the state still folded: idle
+    expect(result.current.s2?.crashed).toBeUndefined();
+
+    // Then news: the same transitions after the mount do stage them.
+    idle("s1", "2026-09-28T09:30:00Z");
+    emit("session.crashed", "s2", { reason: "exit status 1" }, "2026-09-28T09:31:00Z");
+    await waitFor(() => expect(result.current.s1?.done).toBe(true));
+    expect(result.current.s2?.crashed).toBe(true);
+  });
+
+  // The cursor outlives teardown, so coming back to the rail (Sessions →
+  // Retro → Sessions) resumes from where it left off and delivers what
+  // happened meanwhile. That is news: the epoch is the window's first
+  // mount, not this one, so only a reload loses it.
+  it("stages 'Done' and 'Crashed' for what finished during a tab trip", async () => {
+    const first = renderHook(() => useSessionAgentState());
+    working("s1", "Working…", "2026-09-28T09:10:00Z");
+    working("s2", "Working…", "2026-09-28T09:10:00Z");
+    first.unmount(); // off to Retro: the bus tears down, the cursor stays
+
+    vi.setSystemTime(new Date("2026-09-28T10:00:00Z"));
+    const { result } = renderHook(() => useSessionAgentState());
+    idle("s1", "2026-09-28T09:30:00Z"); // finished while the rail was gone
+    emit("session.crashed", "s2", { reason: "exit status 1" }, "2026-09-28T09:40:00Z");
+    await waitFor(() => expect(result.current.s1?.done).toBe(true));
+    expect(result.current.s2?.crashed).toBe(true);
+  });
+
+  it("never lets an old crash clear a newer one", async () => {
+    const { result } = renderHook(() => useSessionAgentState());
+    emit("session.crashed", "s1", { reason: "exit status 1" }, "2026-09-28T10:00:00Z");
+    await waitFor(() => expect(result.current.s1?.crashed).toBe(true));
+    // A crash stamped before the notice epoch, delivered after the news one.
+    emit("session.crashed", "s1", { reason: "exit status 1" }, "2026-09-28T08:00:00Z");
+    await act(async () => {});
+    expect(result.current.s1?.crashed).toBe(true);
   });
 
   it("names the oldest park when two are outstanding", async () => {
@@ -274,7 +416,7 @@ describe("useSessionAgentState", () => {
   });
 
   it("seeds running delegates from one cold read, under anything the stream already said", async () => {
-    vi.mocked(router.listDelegates).mockResolvedValue([
+    vi.mocked(router.listDelegatesEndedAfter).mockResolvedValue([
       record("s1", "early", { backgrounded: true }),
       record("s2", "x"),
       // The stream retires this one before the (older) snapshot lands.
@@ -282,15 +424,20 @@ describe("useSessionAgentState", () => {
     ]);
     let resolveLate: () => void = () => {};
     const gate = new Promise<void>((r) => (resolveLate = r));
-    const listed = vi.mocked(router.listDelegates).getMockImplementation();
-    vi.mocked(router.listDelegates).mockImplementation(async (state) => {
+    const listed = vi.mocked(router.listDelegatesEndedAfter).getMockImplementation();
+    vi.mocked(router.listDelegatesEndedAfter).mockImplementation(async (after) => {
       await gate;
-      return listed!(state);
+      return listed!(after);
     });
 
-    // "0 min": only running delegates are worth a cold read.
+    // "0 min": only live delegates are worth a cold read — what ended after
+    // now is nothing, while the store serves every live one, waiting too.
     const { result } = renderHook(() => useSessionAgentState([], undefined, 0));
-    expect(router.listDelegates).toHaveBeenCalledWith("running");
+    // Read behind the bus's ready barrier: a tick after mount, not during it.
+    await waitFor(() => expect(router.listDelegatesEndedAfter).toHaveBeenCalled());
+    expect(router.listDelegates).not.toHaveBeenCalled();
+    const cutoff = Date.parse(vi.mocked(router.listDelegatesEndedAfter).mock.calls[0][0]);
+    expect(Math.abs(Date.now() - cutoff)).toBeLessThan(5_000);
     delegate("s2", "done-already", "completed");
     resolveLate();
 
@@ -298,6 +445,61 @@ describe("useSessionAgentState", () => {
     expect(result.current.s1?.blockingSubagents).toBe(0);
     expect(result.current.s1?.subagentsSince).toBe("2026-09-28T09:30:00Z");
     expect(result.current.s2?.subagents).toBe(1);
+  });
+
+  it("holds a waiting delegate as live — counted apart from running, never faded", async () => {
+    // "0 min": a finished record would be gone at once; a waiting one isn't finished.
+    const { result } = renderHook(() => useSessionAgentState([], undefined, 0));
+    // Mounted at 09:00 (beforeEach); the fade check reads the clock, which
+    // must be past every ended_at here.
+    vi.setSystemTime(new Date("2026-09-28T11:00:00Z"));
+    delegate("s1", "m", "running");
+    delegate("s1", "kid", "running", { parent_harness_id: "m" });
+    await waitFor(() => expect(result.current.s1?.subagents).toBe(2));
+    expect(result.current.s1?.waitingSubagents).toBeUndefined();
+
+    // Its turn ends while its subagent still runs: waiting, not done.
+    delegate("s1", "m", "completed", { ended_at: "2026-09-28T10:02:00Z", waiting_on: { subagents: 1 } });
+    await waitFor(() => expect(result.current.s1?.waitingSubagents).toBe(1));
+    expect(result.current.s1?.subagents).toBe(1);
+    expect(result.current.s1?.delegates?.map((d) => d.harness_id)).toEqual(["m", "kid"]);
+
+    // Its subagent finishes and it finishes too: both leave, under "0 min".
+    delegate("s1", "kid", "completed", { parent_harness_id: "m", ended_at: "2026-09-28T10:03:00Z" });
+    delegate("s1", "m", "completed", { ended_at: "2026-09-28T10:04:00Z" });
+    await waitFor(() => expect(result.current.s1).toBeUndefined());
+  });
+
+  it("dates a delegate that stops waiting from its ended_at, for the fade window", async () => {
+    const { result } = renderHook(() => useSessionAgentState([], undefined, Infinity));
+    delegate("s1", "m", "completed", { waiting_on: { processes: 1 } });
+    await waitFor(() => expect(result.current.s1?.waitingSubagents).toBe(1));
+    expect(result.current.s1?.subagents).toBe(0);
+    expect(result.current.s1?.subagentsSince).toBeUndefined();
+
+    delegate("s1", "m", "completed", { ended_at: "2026-09-28T10:09:00Z" });
+    await waitFor(() => expect(result.current.s1?.waitingSubagents).toBeUndefined());
+    expect(result.current.s1?.delegates?.map((d) => [d.harness_id, d.ended_at])).toEqual([["m", "2026-09-28T10:09:00Z"]]);
+  });
+
+  it("cold-reads a waiting delegate as live, whatever the window", async () => {
+    vi.mocked(router.listDelegatesEndedAfter).mockResolvedValue([
+      { ...record("s1", "w"), state: "completed", ended_at: "2026-09-28T09:40:00Z", waiting_on: { subagents: 2 } },
+    ]);
+    const { result } = renderHook(() => useSessionAgentState([], undefined, 0));
+    await waitFor(() => expect(result.current.s1?.waitingSubagents).toBe(1));
+    expect(result.current.s1?.delegates?.map((d) => d.harness_id)).toEqual(["w"]);
+  });
+
+  it("counts a nested foreground subagent as blocking only when its parent blocks", async () => {
+    const { result } = renderHook(() => useSessionAgentState());
+    working("s1", "Delegating", "2026-09-28T10:00:00Z");
+    delegate("s1", "fg", "running");
+    delegate("s1", "fg-kid", "running", { parent_harness_id: "fg" });
+    delegate("s1", "bg", "running", { backgrounded: true });
+    delegate("s1", "bg-kid", "running", { parent_harness_id: "bg" });
+    await waitFor(() => expect(result.current.s1?.subagents).toBe(4));
+    expect(result.current.s1?.blockingSubagents).toBe(2);
   });
 
   it("reports the turn in flight from agent_state alone — an in-turn signal is not a turn", async () => {
@@ -483,6 +685,7 @@ describe("useSessionAgentState — the fade window (Settings' 'Fade out subagent
     vi.stubGlobal("EventSource", FakeEventSource);
     vi.spyOn(router, "listDelegates").mockResolvedValue([]);
     vi.spyOn(router, "listDelegatesEndedAfter").mockResolvedValue([]);
+    vi.spyOn(router, "listPermissionRequests").mockResolvedValue([]);
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -538,6 +741,57 @@ describe("useSessionAgentState — the fade window (Settings' 'Fade out subagent
 
     rerender({ fade: Infinity });
     await waitFor(() => expect(result.current.s1?.delegates?.map((d) => d.harness_id)).toEqual(["old"]));
+  });
+
+  it("keeps a finished parent past the window while a subagent under it is live, then lets it fade", async () => {
+    const { result } = renderHook(() => useSessionAgentState([], undefined, 60_000));
+    emit("session.delegate_changed", "s1", record("s1", "kid", { parent_harness_id: "m" }));
+    emit("session.delegate_changed", "s1", record("s1", "grandkid", { parent_harness_id: "kid" }));
+    emit("session.delegate_changed", "s1", {
+      ...record("s1", "m", { parent_harness_id: "g" }),
+      state: "completed",
+      ended_at: ago(120_000),
+    });
+    emit("session.delegate_changed", "s1", { ...record("s1", "g"), state: "completed", ended_at: ago(300_000) });
+    // Another ending prunes: m and g stay — kid and grandkid nest under them.
+    emit("session.delegate_changed", "s1", { ...record("s1", "x"), state: "completed", ended_at: ago(1_000) });
+    await waitFor(() =>
+      expect(result.current.s1?.delegates?.map((d) => d.harness_id).sort()).toEqual(["g", "grandkid", "kid", "m", "x"]),
+    );
+
+    // Everything under them finishes: they fade from their own ended_at — at once.
+    emit("session.delegate_changed", "s1", { ...record("s1", "grandkid", { parent_harness_id: "kid" }), state: "completed", ended_at: ago(500) });
+    emit("session.delegate_changed", "s1", { ...record("s1", "kid", { parent_harness_id: "m" }), state: "completed", ended_at: ago(500) });
+    await waitFor(() =>
+      expect(result.current.s1?.delegates?.map((d) => d.harness_id).sort()).toEqual(["grandkid", "kid", "x"]),
+    );
+  });
+
+  it("fills in a live subagent's parents the cold read didn't carry, with one read per session", async () => {
+    vi.mocked(router.listDelegatesEndedAfter).mockResolvedValue([
+      record("s1", "kid", { parent_harness_id: "m" }),
+      record("s1", "kid2", { parent_harness_id: "m" }),
+    ]);
+    const sessionList = vi.spyOn(router, "getSessionDelegates").mockResolvedValue([
+      { ...record("s1", "g"), state: "completed", ended_at: ago(3_600_000) },
+      { ...record("s1", "m", { parent_harness_id: "g" }), state: "completed", ended_at: ago(3_000_000) },
+      { ...record("s1", "unrelated"), state: "completed", ended_at: ago(3_000_000) },
+      record("s1", "kid", { parent_harness_id: "m" }),
+    ]);
+    const { result } = renderHook(() => useSessionAgentState([], undefined, 60_000));
+    await waitFor(() =>
+      expect(result.current.s1?.delegates?.map((d) => d.harness_id).sort()).toEqual(["g", "kid", "kid2", "m"]),
+    );
+    expect(sessionList).toHaveBeenCalledTimes(1);
+    expect(sessionList).toHaveBeenCalledWith("s1");
+  });
+
+  it("reads no session's list when the cold read already holds every parent", async () => {
+    vi.mocked(router.listDelegatesEndedAfter).mockResolvedValue([record("s1", "m"), record("s1", "kid", { parent_harness_id: "m" })]);
+    const sessionList = vi.spyOn(router, "getSessionDelegates").mockResolvedValue([]);
+    const { result } = renderHook(() => useSessionAgentState([], undefined, 60_000));
+    await waitFor(() => expect(result.current.s1?.subagents).toBe(2));
+    expect(sessionList).not.toHaveBeenCalled();
   });
 
   it("drops a finished delegate the window has passed", async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ActivityEntry } from "../activity/conversationItems";
-import { findAll, findPattern, searchEntries, snippet, type SearchCache } from "./findText";
+import { findAll, findPattern, groupMatchAt, searchGroup, snippet, type SearchCache } from "./findText";
 
 const tool = (id: string, input: unknown, output?: string): ActivityEntry => ({
   type: "tool",
@@ -33,7 +33,7 @@ describe("findPattern / findAll", () => {
   });
 });
 
-describe("searchEntries", () => {
+describe("searchGroup", () => {
   const entries: ActivityEntry[] = [
     tool("t1", { command: "./scripts/setup.sh" }, "error: ENOENT: no such file, open '.env.local'"),
     { type: "thinking", text: "The setup script wants an .env.local" },
@@ -41,7 +41,8 @@ describe("searchEntries", () => {
   ];
 
   it("searches a call's input values and output, and thinking, in row order", () => {
-    const found = searchEntries(entries, findPattern({ query: ".env", matchCase: false })!, false);
+    const g = searchGroup(entries, findPattern({ query: ".env", matchCase: false })!, false)!;
+    const found = Array.from({ length: g.count }, (_, n) => groupMatchAt(g, n));
     expect(found.map((m) => [m.entryKey, m.part])).toEqual([
       ["t1", "output"],
       ["th1", "thinking"],
@@ -50,22 +51,22 @@ describe("searchEntries", () => {
   });
 
   it("leaves the input's keys out — they're the tool's schema, not anything said", () => {
-    expect(searchEntries(entries, findPattern({ query: "file_path", matchCase: false })!, false)).toEqual([]);
+    expect(searchGroup(entries, findPattern({ query: "file_path", matchCase: false })!, false)).toBeUndefined();
   });
 
   it("skips tool calls and output when asked, but keeps thinking", () => {
-    const found = searchEntries(entries, findPattern({ query: ".env", matchCase: false })!, true);
-    expect(found.map((m) => m.part)).toEqual(["thinking"]);
+    const g = searchGroup(entries, findPattern({ query: ".env", matchCase: false })!, true)!;
+    expect(g.parts.map((p) => p.part)).toEqual(["thinking"]);
   });
 
   it("reuses matches already found for the same text", () => {
     const cache: SearchCache = new Map();
     const p = findPattern({ query: "enoent", matchCase: false })!;
-    searchEntries(entries, p, false, cache);
+    searchGroup(entries, p, false, cache);
     const output = "error: ENOENT: no such file, open '.env.local'";
-    expect(cache.get(output)).toEqual([{ start: 7, length: 6 }]);
+    expect(cache.get(output)).toEqual([7, 6]);
     cache.set(output, []);
-    expect(searchEntries(entries, p, false, cache)).toEqual([]);
+    expect(searchGroup(entries, p, false, cache)).toBeUndefined();
   });
 });
 

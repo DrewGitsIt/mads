@@ -58,7 +58,7 @@ func routerPost(ctx context.Context, routerURL, path string, v any) error {
 }
 
 func routerDo(req *http.Request, v any) error {
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := routerClient().Do(req)
 	if err != nil {
 		return err
 	}

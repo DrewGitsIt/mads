@@ -4,7 +4,8 @@ import { Popover } from "../../../components/Popover/Popover";
 import { PathField } from "../../../components/PathField/PathField";
 import { Switch } from "../../../components/Switch/Switch";
 import { FLAGS } from "../../../featureFlags";
-import { router } from "../../../router/client";
+import { useHostClient, useHostScope, useIsRemoteHost } from "../../../router/hostScope";
+import { RemoteFolderBrowser } from "./RemoteFolderBrowser";
 import type {
   DirStatus,
   ResolvedSessionField,
@@ -123,13 +124,18 @@ export function FolderPill({
   const [draft, setDraft] = useState("");
   const switchId = useId();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  // Mesh mode: starting on another device lists that device's workspaces
+  // and browses its folders (docs/MESH-MODE-DESIGN.md D6).
+  const client = useHostClient();
+  const host = useHostScope();
+  const remote = useIsRemoteHost();
 
   useEffect(() => {
-    router
+    client
       .listWorkspaces()
       .then(setWorkspaces)
       .catch(() => setWorkspaces([]));
-  }, []);
+  }, [client]);
 
   function pick(path: string) {
     const trimmed = path.trim();
@@ -211,6 +217,7 @@ export function FolderPill({
           value={draft}
           onChange={setDraft}
           onPick={pick}
+          noNativePicker={remote}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
@@ -218,6 +225,7 @@ export function FolderPill({
             }
           }}
         />
+        {remote && host && <RemoteFolderBrowser peer={host.name} onPick={pick} />}
         {recentShown.length > 0 && (
           <>
             <div className={pillStyles.groupLabel}>Recent</div>

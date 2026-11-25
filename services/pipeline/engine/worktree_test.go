@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/template"
 	"github.com/drewkidwell/mads/providers/fake"
 )
@@ -938,7 +939,13 @@ func TestPostCommitHookReportsCommit(t *testing.T) {
 	}
 	h := newHarness(t)
 	seeded := h.seed(contracts.Task{Title: "hooked"})
-	w := &worktrees{primary: h.cwd, root: t.TempDir(), dataURL: h.base, sessionID: h.sess.ID}
+	// Hook v2 reads the install token from the file mads.tokenFile names
+	// (docs/LOCAL-FRONT-DOOR-DESIGN.md D6); without one it stays silent.
+	home := t.TempDir()
+	if _, err := localauth.LoadOrCreate(home); err != nil {
+		t.Fatal(err)
+	}
+	w := &worktrees{primary: h.cwd, root: t.TempDir(), dataURL: h.base, tokenFile: localauth.Path(home), sessionID: h.sess.ID}
 	dir, _, err := w.create(context.Background(), seeded[0])
 	if err != nil {
 		t.Fatal(err)

@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { RailVisibleOrder } from "../state/selectionFollowsList";
 import type { CSSProperties } from "react";
 import { formatShortcut } from "../../../platform/shortcut";
 import { useLiveShells } from "../../../conversation/ShellDock/useLiveShells";
 import { useShellDockState } from "../../../conversation/ShellDock/dockState";
 import type { ShellInfo } from "../../../conversation/TerminalRenderer/ptyBridge";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
+import { DeviceScopeBar } from "./DeviceScopeBar";
 import { HarnessMark } from "./HarnessMark";
 import { LinkConnector } from "./LinkConnector";
+import { linkBlockedTag } from "../links/linkDraft";
 import { StatusMark } from "./StatusMark";
 import { DelegateRows } from "./DelegateRows";
 import {
@@ -63,6 +66,7 @@ import { router, type RouterClient } from "../../../router/client";
 import type { Agent, Delegate, Link, OrchestrateStatus, Session, Workspace } from "../../../router/types";
 import { Fold, usePresence } from "../../../components/Motion";
 import type { DoneMark, DoneMotion } from "./useDoneMotion";
+import { requestHeldReveal } from "../../../conversation/HeldUpdates/heldRevealSignal";
 import styles from "./SessionRail.module.css";
 
 export interface SessionRailProps {
@@ -73,19 +77,20 @@ export interface SessionRailProps {
   selectedId?: string;
   onSelect?: (id: string) => void;
   /**
-   * Put a session to sleep: free the agent process. Takes the whole session
-   * because the decision isn't the rail's to make — useSessionSleep reads the
-   * record to know whether to ask about unlanded commits first, and asks the
-   * same question for the workspace kebab.
-   *
-   * The rail deliberately has no counterpart — waking is not a step the user
-   * has to take, since the first send wakes a sleeping session transparently.
-   * An explicit pre-warm lived here as a ▶ button and only ever bought a few
-   * seconds of latency, at the price of a control that looked like a
-   * lifecycle state. The workspace kebab still offers it for a deliberate
-   * warm-up.
+   * The cards as drawn, after every filter and search: where "the next card"
+   * is when the open session goes away (SessionsSurface,
+   * selectionFollowsList.ts).
    */
-  onSleep?: (session: Session) => void;
+  onVisibleOrder?: (order: RailVisibleOrder) => void;
+  /*
+   * The rail has no sleep or wake control of its own. ✓ (Done) puts a
+   * session to sleep, and the workspace kebab keeps "Sleep now" (also the
+   * recovery when the activity record drifts from the real child). A ⏸ on
+   * every card made a sleeping card look pausable, i.e. running
+   * (docs/HELD-UPDATES-DESIGN.md). Waking needs no step at all: the first
+   * send wakes a sleeping session transparently, and the kebab's "Wake now"
+   * covers a deliberate warm-up.
+   */
   onDelete?: (id: string) => void;
   /**
    * The ✓: check a session off into Done (which also puts its agent to
@@ -136,8 +141,13 @@ export interface SessionRailProps {
   showDelegates?: boolean;
   /** Settings' "Fade out subagent cards after inactivity", in ms (delegateFadeMs). */
   delegateFadeMs?: number;
-  /** The delegate open in the main pane, if any — its row reads selected. */
-  selectedDelegate?: { sessionId: string; harnessId: string };
+  /**
+   * The delegate open in the main pane, if any — its row reads selected.
+   * `records`: it, its ancestors and its direct subagents as read for that
+   * session (useOpenDelegateRecords), laid under the live rows, so they show
+   * whatever the fade window has let go of.
+   */
+  selectedDelegate?: SelectedDelegate;
   /** Opens a delegate in the main pane. */
   onOpenDelegate?: (d: Delegate) => void;
   /**
@@ -165,7 +175,7 @@ export interface RailLinkEditor {
   onPick: (sessionId: string) => boolean;
 }
 
-/** How many Done rows show before "Show N more". */
+/** How many Done rows show before "Show all N completed". */
 const DONE_PREVIEW = 5;
 
 /** localStorage key: whether the Done list is open ("0" = collapsed). A view preference, so local. */
@@ -220,7 +230,7 @@ export function SessionRail({
   agentStates = {},
   selectedId,
   onSelect,
-  onSleep,
+  onVisibleOrder,
   onDelete,
   onSetDone,
   doneMotion,
@@ -387,6 +397,14 @@ export function SessionRail({
   const listRows = searching ? visible : active;
   const doneRows = searching ? [] : doneOrder(done, (row) => row.session);
   const shownDone = doneShowAll ? doneRows : doneRows.slice(0, DONE_PREVIEW);
+  const visibleActiveIds = listRows.flatMap((row) => [row.session.id, ...railDescendants(row).map((s) => s.id)]);
+  const visibleDoneIds = doneOpen ? shownDone.flatMap((row) => [row.session.id, ...railDescendants(row).map((s) => s.id)]) : [];
+  const visibleKey = `${visibleActiveIds.join(",")}|${visibleDoneIds.join(",")}`;
+  useEffect(() => {
+    onVisibleOrder?.({ active: visibleActiveIds, done: visibleDoneIds });
+    // visibleKey stands for both lists' contents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleKey, onVisibleOrder]);
 
   // Reordering is a gesture on the whole active list, so it is only offered
   // while the whole list is what's showing: a drop between two of a filter's
@@ -535,7 +553,6 @@ export function SessionRail({
     isUnseen,
     onSeen: markSeen,
     onSelect,
-    onSleep,
     onSetDone,
     bucketOf,
     onDeleteRequest: setConfirmDeleteId,
@@ -625,6 +642,7 @@ export function SessionRail({
           </button>
         ))}
       </div>
+      <DeviceScopeBar />
       <div className={styles.list} data-rail-list="active">
         {listRows.map((row) =>
           canReorder ? (
@@ -696,7 +714,7 @@ export function SessionRail({
               className={styles.sectionCount}
               data-bump={(doneArriving && !doneOpen) || undefined}
             >
-              · {doneRows.length - doneLeaving}
+              {doneRows.length - doneLeaving}
             </span>
           </button>
           {doneOpen &&
@@ -707,9 +725,11 @@ export function SessionRail({
             <button
               type="button"
               className={styles.showMore}
+              aria-expanded={doneShowAll}
               onClick={() => setDoneShowAll(!doneShowAll)}
             >
-              {doneShowAll ? "Show fewer" : `Show ${doneRows.length - DONE_PREVIEW} more`}
+              {doneShowAll ? "Show fewer" : `Show all ${doneRows.length - doneLeaving} completed`}
+              <span aria-hidden="true">{doneShowAll ? "▴" : "▾"}</span>
             </button>
           )}
         </div>
@@ -747,7 +767,6 @@ interface RailRowContext {
   isUnseen: (id: string) => boolean;
   onSeen: (id: string) => void;
   onSelect?: (id: string) => void;
-  onSleep?: (session: Session) => void;
   onSetDone?: (session: Session, done: boolean, working: boolean) => void;
   /** The rail's group-aware bucket, which the ✓ reads to know whether a turn is running. */
   bucketOf: (session: Session) => RailFilterBucket;
@@ -763,14 +782,27 @@ interface RailRowContext {
   routerClient: RouterClient;
   showDelegates: boolean;
   delegateFadeMs?: number;
-  selectedDelegate?: { sessionId: string; harnessId: string };
+  selectedDelegate?: SelectedDelegate;
   onOpenDelegate?: (d: Delegate) => void;
+}
+
+/** SessionRailProps.selectedDelegate. */
+export interface SelectedDelegate {
+  sessionId: string;
+  harnessId: string;
+  records?: Delegate[];
 }
 
 /** A session's delegates nest right under its own card — before any linked subjects, which are other sessions. */
 function delegatesOf(ctx: RailRowContext, sessionId: string, linkTrunk = false) {
-  const list = ctx.showDelegates ? ctx.agentStates[sessionId]?.delegates : undefined;
-  if (!list || list.length === 0) return null;
+  if (!ctx.showDelegates) return null;
+  const live = ctx.agentStates[sessionId]?.delegates ?? [];
+  const open = ctx.selectedDelegate?.sessionId === sessionId ? ctx.selectedDelegate.records : undefined;
+  // What the live fold holds wins: it is newer than the open delegate's read.
+  const list = open?.length
+    ? [...live, ...open.filter((d) => !live.some((l) => l.harness_id === d.harness_id))]
+    : live;
+  if (list.length === 0) return null;
   return (
     <DelegateRows
       delegates={list}
@@ -857,7 +889,6 @@ function RailRowGroup({
         unseen={ctx.isUnseen(row.session.id)}
         onSeen={ctx.onSeen}
         onSelect={ctx.onSelect}
-        onSleep={ctx.onSleep}
         onSetDone={ctx.onSetDone}
         working={ctx.bucketOf(row.session) === "working"}
         doneMark={mark}
@@ -929,7 +960,6 @@ function NestedSessionRow({ row, ctx }: { row: RailRow; ctx: RailRowContext }) {
       unseen={ctx.isUnseen(sub.id)}
       onSeen={ctx.onSeen}
       onSelect={ctx.onSelect}
-      onSleep={ctx.onSleep}
       onDeleteRequest={ctx.onDeleteRequest}
       linkBadge={link.badge}
       orchestrateStatus={link.orchestrateStatus}
@@ -1028,7 +1058,6 @@ function SessionRow({
   unseen,
   onSeen,
   onSelect,
-  onSleep,
   onSetDone,
   working = false,
   doneMark,
@@ -1057,7 +1086,6 @@ function SessionRow({
   unseen: boolean;
   onSeen: (id: string) => void;
   onSelect?: (id: string) => void;
-  onSleep?: (session: Session) => void;
   onSetDone?: (session: Session, done: boolean, working: boolean) => void;
   /** Mid-turn, as the rail reads it: the ✓ asks before stopping a running turn. */
   working?: boolean;
@@ -1088,10 +1116,17 @@ function SessionRow({
   const now = useRelativeNow();
   const status = statusOf(session, agentState, openTaskBreakdown, now);
   const name = session.name || "Untitled session";
-  // The work marker (mockup docs/mockups/session-worktrees.html §1): hollow
-  // for uncommitted files, filled for commits waiting to land. Quiet — read
-  // off the record's counts, the same ones the dock's Commit/Land control uses.
-  const work = workState(session);
+  // The work note (mockup docs/mockups/session-worktrees.html §1): what's
+  // waiting — uncommitted changes, commits to land — in words on the status
+  // line. Read off the record's counts, the same ones the dock's Commit/Land
+  // control uses. Push isn't noted: commits ahead of the remote are the
+  // checkout's, shared by every session working in it, so it would show on
+  // all of them. (There was a dot by the name too; it said the same thing,
+  // less precisely, and was dropped.)
+  // workState without repo state never offers Push, so the rail needn't
+  // load any; the filter keeps the type honest.
+  const next = workState(session);
+  const work = next?.kind === "push" ? null : next;
   // last_turn_at, not updated_at: the stamp says "last reply", and only a turn
   // end writes this field (store.Sessions.RecordTurnEnd), so it cannot be a
   // rename or a summary write wearing a reply's clothes.
@@ -1254,10 +1289,11 @@ function SessionRow({
       title={linkEdit?.blocked ?? (tooltip || undefined)}
       data-rail-card=""
       data-rail-id={session.id}
+      aria-current={selected || undefined}
       data-unseen={unseen ? "" : undefined}
-      // Awake or asleep isn't drawn any more (both read "Idle" — see
-      // RailStatusKind), but the e2e journeys still need to see which one the
-      // rail's list believes.
+      // Awake or asleep is drawn by the status line (Idle vs Sleeping, see
+      // RailStatusKind); the attribute lets the e2e journeys read which one
+      // the rail's list believes without parsing that text.
       data-activity={session.activity}
       data-done-mark={doneMark}
       data-shell-motion={shellMotion || undefined}
@@ -1272,6 +1308,7 @@ function SessionRow({
         linkEdit?.linked ? styles.linkPicked : "",
         linkEdit?.blocked ? styles.linkBlocked : "",
         grip?.dragging ? styles.dragging : "",
+        session.host && !session.host.reachable ? styles.hostUnreachable : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -1363,18 +1400,22 @@ function SessionRow({
         <span className={styles.name}>
           <span className={styles.nameText}>{name}</span>
         </span>
-        {linkEdit?.blocked && <span className={styles.linkBlockedTag}>separate worktree</span>}
+        {linkEdit?.blocked && <span className={styles.linkBlockedTag}>{linkBlockedTag(linkEdit.blocked)}</span>}
         {/* The tint is colour alone; this is the same fact for a screen reader. */}
         {unseen && <span className={styles.srOnly}>New session</span>}
-        {work && (
+        {/* Mesh mode: where a session from another device lives. */}
+        {session.host && !session.host.self && (
           <span
-            className={[styles.workMark, work.kind === "land" ? "" : styles.workMarkHollow]
-              .filter(Boolean)
-              .join(" ")}
-            title={workNote(work)}
-            aria-label={workNote(work)}
-            data-work-mark={work.kind}
-          />
+            className={[styles.hostChip, session.host.reachable ? "" : styles.hostStale].filter(Boolean).join(" ")}
+            title={
+              session.host.reachable
+                ? `Runs on ${session.host.name}`
+                : `${session.host.name} isn't answering — this is its last-known state`
+            }
+            data-rail-host={session.host.name}
+          >
+            {session.host.name}
+          </span>
         )}
         <HarnessMark provider={session.provider} />
         <span className={styles.when} title={stampTitle}>
@@ -1388,7 +1429,11 @@ function SessionRow({
         <span className={styles.statusLabel}>{status.label}</span>
         {status.since && <StatusElapsed since={status.since} />}
         {/* Only while resting: a live state's clause is the thing to read. */}
-        {work && RESTING.has(status.kind) && <span className={styles.workNote}>· {workNote(work)}</span>}
+        {work && RESTING.has(status.kind) && (
+          <span className={styles.workNote} data-work-note={work.kind}>
+            · {workNote(work)}
+          </span>
+        )}
       </div>
       {/* One reason, never an inventory: workspace beats branch beats dir. */}
       {reason && (
@@ -1417,12 +1462,21 @@ function SessionRow({
                   <span className={styles.bucketBlocked}>{openTaskBreakdown.blocked} blocked</span>
                 )}
                 {waitingUpdates > 0 && (
-                  <span
-                    className={styles.bucketWaiting}
-                    title="Link updates held while this session slept; they arrive when it wakes"
+                  // Opens the session at its held list (the end of its
+                  // conversation), where they can be read, discarded or sent.
+                  <button
+                    type="button"
+                    className={`${styles.bucketWaiting} ${styles.waitingLink}`}
+                    title="Held while this session slept; they go with your next message"
+                    onClick={(e) => {
+                      if (linkEdit) return; // the card's own click picks it for the link
+                      e.stopPropagation();
+                      onSelect?.(session.id);
+                      requestHeldReveal(session.id);
+                    }}
                   >
                     {waitingUpdates} {waitingUpdates === 1 ? "update" : "updates"} waiting
-                  </span>
+                  </button>
                 )}
               </span>
             </div>
@@ -1436,27 +1490,10 @@ function SessionRow({
         role="group"
         aria-label={`${name} actions`}
       >
-        {onSleep && (
-          // Always offered, regardless of the activity record: it's the
-          // Supervisor's TerminateSession underneath, which is safe to call
-          // in every state (kills a live child if one exists, or reconciles
-          // an already-inactive record as a no-op) — the record can drift
-          // from the real child state, so it must never be the thing that
-          // hides the one control that recovers from that drift.
-          <button
-            type="button"
-            className={styles.actionButton}
-            title="Sleep now — frees the agent process; it wakes on your next message"
-            aria-label={`Sleep ${name}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onSleep(session);
-            }}
-          >
-            ⏸
-          </button>
-        )}
-        {linkedSessionsEnabled && (
+        {/* No link button on another device's session: link writes stay
+            on their own host (cross-host links are a v1 non-goal, and the
+            host's Mesh Service refuses them). Its links still show. */}
+        {linkedSessionsEnabled && !(session.host && !session.host.self) && (
           <LinkTrigger
             name={name}
             linkCount={linkCount}
@@ -1622,10 +1659,10 @@ function replayAnimation(el: HTMLElement, cls: string) {
 }
 
 /** Status kinds with nothing live to say — the work note may share the line. */
-const RESTING = new Set(["done", "idle"]);
+const RESTING = new Set(["done", "idle", "sleeping"]);
 
-/** The work marker's words: what the dock's Commit/Land control would offer next. */
-function workNote(work: NonNullable<WorkState>): string {
+/** The work note: what the dock's Commit/Land control would offer next. */
+function workNote(work: Exclude<WorkState, null | { kind: "push" }>): string {
   if (work.kind === "commit") return "uncommitted changes";
   if (work.kind === "outside") return "changes outside this session";
   return `${plural(work.commits, "commit")} to land`;

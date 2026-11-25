@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { useMeshLive } from "./router/mesh";
 import { Banner } from "./components/Banner/Banner";
 import { ErrorBoundary } from "./components/ErrorBoundary/ErrorBoundary";
 import { ToastViewport } from "./components/Toast/Toast";
@@ -11,11 +12,13 @@ import { useCommandPaletteData } from "./features/command-palette/state/useComma
 import { RetroSurface } from "./features/retro/RetroSurface";
 import { SessionsSurface } from "./features/sessions/SessionsSurface";
 import { SettingsSurface } from "./features/settings/SettingsSurface";
+import { PairRequestWatcher } from "./features/settings/sections/paired/pairing/PairRequestWatcher";
 import { applyTheme } from "./features/settings/theme/applyTheme";
 import { applyMotion } from "./features/settings/theme/applyMotion";
 import { FirstRunWizard } from "./onboarding/FirstRunWizard";
 import { setFlags } from "./featureFlags";
-import { router } from "./router/client";
+import { router, RouterUnauthorizedError } from "./router/client";
+import { EVENTS_INCOMPATIBLE_MESSAGE } from "./router/events";
 import { useBusHealth } from "./router/useBusHealth";
 import type { Config } from "./router/types";
 import { LibrarySurface } from "./library/LibrarySurface";
@@ -23,7 +26,7 @@ import { DashboardTab } from "./dashboard/DashboardTab";
 import { pipelineClient } from "./pipeline/client/pipelineClient";
 import type { WorkspaceTabId } from "./features/sessions/workspace/tabRegistry";
 import { useEndDeletedSessionShells } from "./conversation/ShellDock/useEndDeletedSessionShells";
-import { requestShellToggle } from "./conversation/shellToggleSignal";
+import { isShellToggleKey, requestShellToggle } from "./conversation/shellToggleSignal";
 import {
   guardLeave,
   OPEN_LIBRARY_EVENT,
@@ -76,7 +79,7 @@ export function App() {
     else guardLeave(go);
   }, []);
   const [config, setConfig] = useState<Config | null>(null);
-  const [configError, setConfigError] = useState(false);
+  const [configError, setConfigError] = useState<false | "unreachable" | "unauthorized">(false);
 
   const loadConfig = useCallback(() => {
     setConfigError(false);
@@ -93,7 +96,9 @@ export function App() {
         });
         setConfig(c);
       })
-      .catch(() => setConfigError(true));
+      .catch((err: unknown) =>
+        setConfigError(err instanceof RouterUnauthorizedError ? "unauthorized" : "unreachable"),
+      );
   }, []);
 
   useEffect(() => {
@@ -111,6 +116,9 @@ export function App() {
   const { sessions, tasks, openTaskCounts } = useCommandPaletteData();
 
   useAttentionBadge(sessions, openTaskCounts);
+  // Mesh mode: the devices this window views, kept live for the rail's
+  // toggle and Settings → Paired devices (docs/MESH-MODE-DESIGN.md D3).
+  useMeshLive();
 
   // Every surface is only as fresh as the window's live-event stream: when it
   // can't connect, the rail, task counts and pipeline state keep showing
@@ -126,7 +134,7 @@ export function App() {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
-      } else if (e.ctrlKey && e.key === "`") {
+      } else if (isShellToggleKey(e)) {
         e.preventDefault();
         requestShellToggle();
       }
@@ -164,7 +172,7 @@ export function App() {
 
   const commands = useMemo(() => buildCommands(sessions, tasks), [sessions, tasks]);
 
-  if (configError) return <ConfigGateFailure onRetry={loadConfig} />;
+  if (configError) return <ConfigGateFailure onRetry={loadConfig} unauthorized={configError === "unauthorized"} />;
 
   // The shell renders without waiting on Config: the rail's only config-shaped
   // inputs (theme, feature flags) have safe defaults and are applied the
@@ -220,6 +228,13 @@ export function App() {
           action={{ label: "Reload", onClick: () => window.location.reload() }}
           resolvedTitle="Live updates resumed"
         />
+        <Banner
+          active={busHealth.state === "incompatible"}
+          tone="bad"
+          title="Restart mads"
+          description={EVENTS_INCOMPATIBLE_MESSAGE}
+          action={{ label: "Reload", onClick: () => window.location.reload() }}
+        />
         <div className={styles.surface}>
           <ToastViewport>
             <ErrorBoundary key={activeId}>
@@ -251,6 +266,8 @@ export function App() {
                 );
               })()}
             </ErrorBoundary>
+            {/* A device asking to pair waits on this one's user, whichever surface shows. */}
+            <PairRequestWatcher />
           </ToastViewport>
         </div>
       </div>

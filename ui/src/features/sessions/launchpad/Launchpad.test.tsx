@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { clearLaunchpadDraft, setLaunchpadDraft } from "./launchpadDraft";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Launchpad, deriveSessionName } from "./Launchpad";
 import { FLAGS } from "../../../featureFlags";
@@ -60,7 +61,7 @@ describe("Launchpad", () => {
 
   it("disables Start session until the composer has text", () => {
     render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
-    const button = screen.getByText("Start session").closest("button");
+    const button = screen.getByRole("button", { name: "Start session" }).closest("button");
     expect(button?.disabled).toBe(true);
 
     fireEvent.change(screen.getByLabelText("Describe your goal"), {
@@ -78,7 +79,7 @@ describe("Launchpad", () => {
     fireEvent.change(screen.getByLabelText("Describe your goal"), {
       target: { value: "Fix the deploy script" },
     });
-    fireEvent.click(screen.getByText("Start session"));
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
 
     await waitFor(() =>
       expect(createSession).toHaveBeenCalledWith(
@@ -161,7 +162,7 @@ describe("Launchpad", () => {
     );
     expect(screen.getByText("Full access")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Describe your goal"), { target: { value: "Tidy the README" } });
-    fireEvent.click(screen.getByText("Start session"));
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
     await waitFor(() => expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ trust: "full" })));
   });
 
@@ -177,7 +178,7 @@ describe("Launchpad", () => {
     fireEvent.change(screen.getByLabelText("Describe your goal"), {
       target: { value: "Investigate the flaky login test" },
     });
-    fireEvent.click(screen.getByText("Start session"));
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
 
     await waitFor(() =>
       expect(createSession).toHaveBeenCalledWith(
@@ -224,7 +225,7 @@ describe("Launchpad", () => {
     fireEvent.change(screen.getByLabelText("Describe your goal"), {
       target: { value: "Fix the deploy script" },
     });
-    fireEvent.click(screen.getByText("Start session"));
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
 
     // Redesign §1: Session.Agent is a persona *id* — the UI now stages the
     // id (the record's id "ag1"), not the display name ("backend-architect").
@@ -245,7 +246,7 @@ describe("Launchpad", () => {
     fireEvent.change(screen.getByLabelText("Describe your goal"), {
       target: { value: longLine },
     });
-    fireEvent.click(screen.getByText("Start session"));
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
 
     await waitFor(() =>
       expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ name: longLine })),
@@ -268,6 +269,28 @@ describe("Launchpad", () => {
     expect(createSession).toHaveBeenCalled();
   });
 
+  it("notes the keys under the goal only while it's being written, outside the field", () => {
+    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+    const textarea = screen.getByLabelText("Describe your goal") as HTMLTextAreaElement;
+    const hint = () => screen.queryByTestId("launchpad-key-hint");
+
+    fireEvent.focus(textarea);
+    expect(hint()).toBeNull(); // the placeholder says it while empty
+    fireEvent.change(textarea, { target: { value: "Fix the thing" } });
+    expect(hint()?.textContent).toBe("↵ to start, ⇧↵ for a new line");
+    expect(hint()?.dataset.shown).toBeDefined();
+    expect(textarea.value).toBe("Fix the thing");
+    // Blurred, it fades but keeps its line: the box doesn't move.
+    fireEvent.blur(textarea);
+    expect(hint()).not.toBeNull();
+    expect(hint()?.dataset.shown).toBeUndefined();
+  });
+
+  it("labels the button Start, named Start session for assistive tech", () => {
+    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Start session" }).textContent).toBe("Start");
+  });
+
   it("shows an error toast when session creation fails", async () => {
     const createSession = vi.fn().mockRejectedValue(new Error("boom"));
     render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
@@ -275,7 +298,7 @@ describe("Launchpad", () => {
     fireEvent.change(screen.getByLabelText("Describe your goal"), {
       target: { value: "Fix the deploy script" },
     });
-    fireEvent.click(screen.getByText("Start session"));
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
 
     await waitFor(() => expect(screen.getByText("boom")).toBeTruthy());
   });
@@ -406,7 +429,7 @@ describe("Launchpad", () => {
       fireEvent.change(screen.getByLabelText("Describe your goal"), {
         target: { value: "Fix the deploy script" },
       });
-      fireEvent.click(screen.getByText("Start session"));
+      fireEvent.click(screen.getByRole("button", { name: "Start session" }));
 
       await waitFor(() =>
         expect(onSessionCreated).toHaveBeenCalledWith(session, "Fix the deploy script"),
@@ -431,7 +454,7 @@ describe("Launchpad", () => {
       fireEvent.change(screen.getByLabelText("Describe your goal"), {
         target: { value: "Fix the deploy script" },
       });
-      fireEvent.click(screen.getByText("Start session"));
+      fireEvent.click(screen.getByRole("button", { name: "Start session" }));
 
       await waitFor(() =>
         expect(onSessionCreated).toHaveBeenCalledWith(session, "Fix the deploy script"),
@@ -453,7 +476,7 @@ describe("Launchpad", () => {
       fireEvent.change(screen.getByLabelText("Describe your goal"), { target: { value: "go" } });
       attachFile(new File(["hello"], "notes.txt"));
 
-      const start = screen.getByText("Start session").closest("button")!;
+      const start = screen.getByRole("button", { name: "Start session" }).closest("button")!;
       await waitFor(() => expect(start.disabled).toBe(true));
       land();
       await waitFor(() => expect(start.disabled).toBe(false));
@@ -464,6 +487,7 @@ describe("Launchpad", () => {
     // FLAGS is module-global — reset it or a leak fails unrelated tests.
     afterEach(() => {
       FLAGS.linkedSessions = false;
+      clearLaunchpadDraft();
     });
 
     const pool = [
@@ -487,7 +511,7 @@ describe("Launchpad", () => {
         />,
       );
       expect(screen.queryByLabelText("More start options")).toBeNull();
-      expect(screen.getByText("Start session")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Start session" })).toBeTruthy();
     });
 
     it("stages links via the split button's dialog, rendering a chip and relabeling to Start & link", () => {
@@ -503,7 +527,7 @@ describe("Launchpad", () => {
 
       expect(screen.getByText("Leader of payments refactor")).toBeTruthy();
       expect(screen.getByText("Start & link")).toBeTruthy();
-      expect(screen.queryByText("Start session")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Start session" })).toBeNull();
     });
 
     it("threads staged links into the create payload and clears the chips on success", async () => {
@@ -537,7 +561,7 @@ describe("Launchpad", () => {
         ),
       );
       await waitFor(() => expect(screen.queryByText("Leader of payments refactor")).toBeNull());
-      expect(screen.getByText("Start session")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Start session" })).toBeTruthy();
     });
 
     it("removing every staged chip reverts the button and drops links from the payload", async () => {
@@ -553,14 +577,38 @@ describe("Launchpad", () => {
       stageLinkTo("payments refactor");
       fireEvent.click(screen.getByLabelText("Remove link to payments refactor"));
 
-      expect(screen.getByText("Start session")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Start session" })).toBeTruthy();
       fireEvent.change(screen.getByLabelText("Describe your goal"), {
         target: { value: "Coordinate the refactor" },
       });
-      fireEvent.click(screen.getByText("Start session"));
+      fireEvent.click(screen.getByRole("button", { name: "Start session" }));
 
       await waitFor(() => expect(createSession).toHaveBeenCalled());
       expect(createSession.mock.calls[0][0].links).toBeUndefined();
+    });
+
+    it("never sends a staged link to a session on another device", async () => {
+      FLAGS.linkedSessions = true;
+      // A draft staged before the list placed "remote one" on its device.
+      setLaunchpadDraft({
+        text: "Coordinate the refactor",
+        staged: {},
+        stagedLinks: [
+          { granting_session_id: "$new", subject_session_id: "s1", preset: "monitor", cadence: "on_signal" },
+          { granting_session_id: "$new", subject_session_id: "r1", preset: "monitor", cadence: "on_signal" },
+        ],
+      });
+      const createSession = vi.fn().mockResolvedValue(makeSession({ id: "s9" }));
+      render(
+        <Launchpad
+          createSession={createSession}
+          onSessionCreated={vi.fn()}
+          sessions={[...pool, makeSession({ id: "r1", name: "remote one", host: { name: "pop-os", self: false, reachable: true } })]}
+        />,
+      );
+      fireEvent.click(screen.getByText("Start & link"));
+      await waitFor(() => expect(createSession).toHaveBeenCalled());
+      expect(createSession.mock.calls[0][0].links.map((l: { subject_session_id: string }) => l.subject_session_id)).toEqual(["s1"]);
     });
 
     it("Enter-to-submit includes the staged links (keyboard path shares submit)", async () => {

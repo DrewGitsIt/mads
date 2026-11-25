@@ -46,9 +46,26 @@ func (p *Provider) transcriptPath(ref string) (string, error) {
 		return "", err
 	}
 	if len(matches) == 0 {
-		return "", fmt.Errorf("no transcript for session %s under %s", ref, p.cfg.TranscriptDir)
+		return "", fmt.Errorf("no transcript for session %s under %s: %w", ref, p.cfg.TranscriptDir, provider.ErrTranscriptMissing)
 	}
 	return matches[0], nil
+}
+
+// claudeCleanupDefaultDays is claude-code's cleanupPeriodDays when unset.
+const claudeCleanupDefaultDays = 30
+
+// TranscriptRetention implements provider.TranscriptRetainer: claude deletes
+// transcripts older than cleanupPeriodDays at startup. The setting lives in
+// the settings.json of the config dir the transcripts are read from.
+func (p *Provider) TranscriptRetention() *provider.Retention {
+	if p.cfg.TranscriptDir == "" {
+		return nil
+	}
+	return &provider.Retention{
+		File:        filepath.Join(filepath.Dir(p.cfg.TranscriptDir), "settings.json"),
+		Setting:     "cleanupPeriodDays",
+		DefaultDays: claudeCleanupDefaultDays,
+	}
 }
 
 // transcriptCursor is TranscriptSince's position in a session's JSONL: the
@@ -227,8 +244,13 @@ type transcriptLine struct {
 	// Kind "peer" is a cross-session message from another claude process
 	// that arrived while the session was idle (isMeta, content the CLI's
 	// wrapper; the origin carries the sender and the bare body).
+	// Kind "coordinator", in a subagent's own file, is a message its parent
+	// relayed to it (SendMessage) — isMeta, wrapped (relayedText).
 	Origin  *wireOrigin  `json:"origin"`
 	Message *wireMessage `json:"message"`
+	// ToolUseResult is a tool_result line's structured result; only a
+	// background call's task id is read (background_output.go).
+	ToolUseResult json.RawMessage `json:"toolUseResult"`
 	// Attachment is an "attachment" line's payload. Only the queued_command
 	// kind is read: a peer message that arrived mid-turn is recorded as one
 	// (peerAttachment), and so are the human's own mid-turn send
@@ -690,6 +712,10 @@ func (st *transcriptState) add(line []byte, msgs []provider.Message) []provider.
 	if l.Type == "user" && (l.Origin != nil && l.Origin.Kind == "task-notification") {
 		return st.notice(messageText(l.Message), l.UUID, ts, msgs)
 	}
+	// In a subagent's own file, a message its parent relayed to it is
+	// harness-injected (isMeta) but is the input that started its next run:
+	// it stays, unwrapped, as the run's opening message.
+	relayed := st.sidechain && l.IsMeta && l.Origin != nil && l.Origin.Kind == "coordinator"
 	switch l.Type {
 	case "user":
 		var texts []string
@@ -701,14 +727,16 @@ func (st *transcriptState) add(line []byte, msgs []provider.Message) []provider.
 				// <local-command-stdout>) are not something the human
 				// typed — rendering them as user bubbles misattributes
 				// them. Tool results on such lines still flow below.
-				if b.Text != "" && !l.IsMeta && !isCommandMarkup(b.Text) {
+				if relayed && b.Text != "" {
+					texts = append(texts, relayedText(b.Text))
+				} else if b.Text != "" && !l.IsMeta && !isCommandMarkup(b.Text) {
 					texts = append(texts, b.Text)
 				}
 			case "tool_result":
 				msgs = append(msgs, provider.Message{
 					Role:      "tool_result",
 					Text:      toolResultText(b.Content),
-					Tool:      &provider.ToolUse{ID: b.ToolUseID},
+					Tool:      &provider.ToolUse{ID: b.ToolUseID, Background: backgroundOf(l.ToolUseResult, toolResultBlocks(l.Message))},
 					Timestamp: ts,
 					IsError:   b.IsError,
 					Key:       b.ToolUseID,
@@ -873,4 +901,17 @@ func probeCwd(path string) (string, bool) {
 // path: claude names each file <ref>.jsonl.
 func refFromPath(path string) string {
 	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
+}
+
+// The wrapper claude-code puts around a message a parent relays to its
+// subagent (SendMessage), whatever the subagent was doing (2.1.285).
+const (
+	relayPrefix = "The coordinator sent a message while you were working:\n"
+	relaySuffix = "\n\nAddress this before completing your current task."
+)
+
+// relayedText is a relayed message as the parent wrote it, without the
+// wrapper; text in any other shape is kept whole.
+func relayedText(s string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(s, relayPrefix), relaySuffix)
 }

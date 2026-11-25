@@ -3,10 +3,16 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { useState, type ReactNode } from "react";
 import { ChangesTab, LIST_HIDDEN_KEY } from "./ChangesTab";
 import { FullWidthContext } from "../features/sessions/fullWidth";
-import { FakeRouterClient } from "../router/fixtures";
+import {
+  FakeRouterClient,
+  fixtureIsolatedSession,
+  fixtureLandPreview,
+  fixtureRepoWorktree,
+  fixtureSessions,
+} from "../router/fixtures";
 import { FetchRouterClient } from "../router/client";
 import { FakeEventSource } from "../router/testFakeEventSource";
-import type { ChangeSet } from "../router/types";
+import type { ChangeSet, Session } from "../router/types";
 import { file } from "./testChangeFile";
 import { seenKey } from "./seenState";
 
@@ -388,11 +394,12 @@ describe("ChangesTab", () => {
     expect(within(sourceHeader).queryByLabelText("new since you looked")).toBeTruthy();
   });
 
-  it("refetches (debounced) on live events and says when the selected file left the set", async () => {
+  it("refetches when the Router announces a changed set (not on the file write itself) and says when the selected file left the set", async () => {
     const client = new FakeRouterClient();
     render(<ChangesTab sessionId={SID} routerClient={client} />);
     fireEvent.click(await (await inList()).findByText("ingest.go"));
     await screen.findByTestId("fake-diff-editor");
+    await waitFor(() => expect(client.sessionReposCalls.length).toBeGreaterThan(0));
 
     const cs = client.changeSets.get(SID)!;
     cs.files = cs.files.filter((f) => f.path !== "services/data/internal/ingest.go");
@@ -402,11 +409,13 @@ describe("ChangesTab", () => {
       for (const s of FakeEventSource.instances)
         s.emit("file.changed", JSON.stringify({ seq: 9001, type: "file.changed", session_id: SID }));
     });
-    expect(client.changeSetCalls.length).toBe(before);
     await act(async () => {
       vi.advanceTimersByTime(1600);
     });
     vi.useRealTimers();
+    // The Router recomputes on file.changed (docs/GIT-STATE-DESIGN.md); the read waits for its word.
+    expect(client.changeSetCalls.length).toBe(before);
+    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["changeset"]));
     await waitFor(() => expect(client.changeSetCalls.length).toBe(before + 1));
     expect(await screen.findByText(/no longer differs from the baseline/)).toBeTruthy();
     expect(list().queryByText("ingest.go")).toBeNull();
@@ -582,5 +591,280 @@ describe("ChangesTab", () => {
     expect(Object.keys(import.meta.glob("./ChangeList/**"))).toEqual([]);
     expect("mergeSession" in new FakeRouterClient()).toBe(false);
     expect("mergeSession" in FetchRouterClient.prototype).toBe(false);
+  });
+});
+
+describe("ChangesTab status chip (COMMIT-LAND-PUSH D3, G3)", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // In place, in git: the fixture change set says git.
+  const inPlace: Session = { ...fixtureSessions["session-active"], id: SID };
+  const isolated: Session = { ...fixtureIsolatedSession, id: SID };
+
+  async function renderChip(session: Session | undefined, client = new FakeRouterClient()) {
+    render(<ChangesTab sessionId={SID} routerClient={client} session={session} />);
+    await (await inList()).findByText("Source");
+    return client;
+  }
+
+  const chip = () => screen.queryByTestId("changes-workchip");
+  const stateText = () => screen.getByTestId("changes-work-state").textContent;
+
+  it("keeps the plain totals without a session record", async () => {
+    await renderChip(undefined);
+    expect(chip()).toBeNull();
+    expect(screen.getByTestId("changes-totals").textContent).toMatch(/^5 files/);
+  });
+
+  it("keeps the plain totals for a session with no git at all", async () => {
+    const client = new FakeRouterClient();
+    client.changeSets.set("s-nogit", changeSet({ git: false, files: [file("a.go")] }));
+    render(
+      <ChangesTab
+        sessionId="s-nogit"
+        routerClient={client}
+        session={{ ...fixtureSessions["session-active"], id: "s-nogit" }}
+      />,
+    );
+    await (await inList()).findByText("a.go");
+    expect(chip()).toBeNull();
+  });
+
+  it("says how much is uncommitted next to the totals, and Commit opens the dialog over everything", async () => {
+    const client = new FakeRouterClient();
+    const getChangeSet = vi.spyOn(client, "getChangeSet");
+    await renderChip({ ...inPlace, uncommitted_count: 4 }, client);
+    expect(chip()!.getAttribute("data-state")).toBe("commit");
+    expect(within(chip()!).getByTestId("changes-totals").textContent).toMatch(/^5 files · /);
+    expect(stateText()).toBe("4 uncommitted");
+
+    fireEvent.click(within(chip()!).getByRole("button", { name: "Commit" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Commit this session's changes" });
+    expect(await within(dialog).findByText("scripts/deploy.sh")).toBeTruthy();
+    expect(client.commitPlanCalls).toEqual([SID]);
+
+    const before = getChangeSet.mock.calls.length;
+    fireEvent.change(within(dialog).getByLabelText("Commit message"), { target: { value: "Fix deploy" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Commit 4 files" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(client.commitCalls).toHaveLength(1);
+    // The change set is read again after the commit.
+    await waitFor(() => expect(getChangeSet.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  it("counts the repos when the uncommitted files span several", async () => {
+    await renderChip({
+      ...inPlace,
+      uncommitted_count: 11,
+      repos: [
+        { root: "/home/user/repo/mads", uncommitted_count: 9 },
+        { root: "/home/user/repo/learnanywhere", uncommitted_count: 2 },
+      ],
+    });
+    expect(stateText()).toBe("11 uncommitted in 2 repos");
+  });
+
+  it("keeps the totals' filtered wording inside the chip", async () => {
+    await renderChip({ ...inPlace, uncommitted_count: 4 });
+    fireEvent.click(screen.getByRole("button", { name: "Turn 2, 3 files" }));
+    expect(within(chip()!).getByTestId("changes-totals").textContent).toMatch(/^3 of 5 files/);
+    // The state comes from the record, not the filter.
+    expect(stateText()).toBe("4 uncommitted");
+  });
+
+  /** The chip's Land opens the confirmation (D12); write a message and land. */
+  async function landFromChip(message = "deploy: Ubuntu runners") {
+    fireEvent.click(within(chip()!).getByRole("button", { name: "Land" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Land mads/session/session-isolated into main?" });
+    fireEvent.change(within(dialog).getByLabelText("Landing message"), { target: { value: message } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Land into main" }));
+    return dialog;
+  }
+
+  it("offers Land for an isolated session's commits, through its confirmation, and says when it landed", async () => {
+    const client = new FakeRouterClient();
+    await renderChip({ ...isolated, uncommitted_count: 0 }, client);
+    expect(chip()!.getAttribute("data-state")).toBe("land");
+    expect(stateText()).toBe("3 commits to land");
+    await landFromChip();
+    expect(await screen.findByText("Landed into main")).toBeTruthy();
+    expect(client.landRequests).toEqual([{ sessionId: SID, req: { message: "deploy: Ubuntu runners" } }]);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("keeps a Land that failed without an outcome in its confirmation", async () => {
+    const client = new FakeRouterClient();
+    client.landOutcome = () => Promise.reject(new Error("router unreachable"));
+    await renderChip({ ...isolated, uncommitted_count: 0 }, client);
+    const dialog = await landFromChip();
+    expect(await within(dialog).findByText("router unreachable")).toBeTruthy();
+    expect(within(dialog).getByText("Land didn't run. Nothing changed.")).toBeTruthy();
+  });
+
+  it("says committed with no next step, and ▾ shows where the work goes", async () => {
+    await renderChip(inPlace);
+    expect(chip()!.getAttribute("data-state")).toBe("done");
+    expect(stateText()).toBe("committed");
+    expect(within(chip()!).getAllByRole("button")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Where this session's work goes" }));
+    const path = screen.getByTestId("work-path");
+    expect(within(path).getByTestId("work-step-commit").textContent).toContain("all committed");
+    expect(within(path).queryByTestId("work-step-land")).toBeNull();
+  });
+
+  /** The session's checkout, `ahead` of origin by that many (repo state, D10). */
+  function ahead(client: FakeRouterClient, n: number) {
+    client.sessionRepos[SID] = [{ root: "/r/mads", primary: true, worktree: fixtureRepoWorktree({ path: "/r/mads", main: true, ahead: n }) }];
+  }
+
+  it("says committed · N to push, and Push confirms then says committed and pushed", async () => {
+    const client = new FakeRouterClient();
+    ahead(client, 2);
+    render(<ChangesTab sessionId={SID} routerClient={client} session={inPlace} />);
+    await (await inList()).findByText("Source");
+    await waitFor(() => expect(chip()!.getAttribute("data-state")).toBe("push"));
+    expect(stateText()).toBe("committed · 2 to push");
+    fireEvent.click(within(chip()!).getByRole("button", { name: "Push" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Push mads/session/session-isolated to origin?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Push" }));
+    expect(await screen.findByText("Pushed 2 commits to origin/mads/session/session-isolated")).toBeTruthy();
+    expect(client.pushCalls[0].req.target).toBe("branch");
+    // The repo state catches up: nothing left to push, and this chip saw it go.
+    await waitFor(() => expect(stateText()).toBe("committed and pushed"));
+  });
+
+  it("says just committed when it can't tell whether anything was pushed", async () => {
+    await renderChip(inPlace);
+    expect(stateText()).toBe("committed");
+  });
+
+  it("shows N uncommitted · M to push with both buttons when both apply (D11)", async () => {
+    const client = new FakeRouterClient();
+    ahead(client, 3);
+    await renderChip({ ...inPlace, uncommitted_count: 4 }, client);
+    await waitFor(() => expect(stateText()).toBe("4 uncommitted · 3 to push"));
+    expect(chip()!.getAttribute("data-state")).toBe("commit");
+    const buttons = within(chip()!).getAllByRole("button").map((b) => b.textContent);
+    expect(buttons).toEqual(["Commit", "Push", "▾"]);
+    fireEvent.click(within(chip()!).getByRole("button", { name: "Push" }));
+    expect(await screen.findByRole("alertdialog", { name: "Push mads/session/session-isolated to origin?" })).toBeTruthy();
+  });
+
+  it("against an older Router, refetches its files when one of the session's repos changed, through the same debounce (D10)", async () => {
+    const client = new FakeRouterClient();
+    ahead(client, 0);
+    client.sessionReposLegacy.add(SID);
+    const getChangeSet = vi.spyOn(client, "getChangeSet");
+    await renderChip(inPlace, client);
+    await waitFor(() => expect(client.sessionReposCalls.length).toBeGreaterThan(0));
+    const before = getChangeSet.mock.calls.length;
+    act(() => {
+      FakeRouterClient.emitRepoChanged("/r/other/.git");
+      FakeRouterClient.emitRepoChanged("/r/mads/.git");
+      FakeRouterClient.emitRepoChanged("/r/mads/.git");
+    });
+    expect(getChangeSet.mock.calls.length).toBe(before);
+    await waitFor(() => expect(getChangeSet.mock.calls.length).toBe(before + 1), { timeout: 3000 });
+  });
+
+  it("reads its files again once the Router says a repo change changed them (D10)", async () => {
+    const client = new FakeRouterClient();
+    ahead(client, 0);
+    const getChangeSet = vi.spyOn(client, "getChangeSet");
+    await renderChip(inPlace, client);
+    await waitFor(() => expect(client.sessionReposCalls.length).toBeGreaterThan(0));
+    const before = getChangeSet.mock.calls.length;
+    act(() => FakeRouterClient.emitRepoChanged("/r/mads/.git"));
+    await new Promise((r) => setTimeout(r, 1700));
+    expect(getChangeSet.mock.calls.length).toBe(before);
+    act(() => FakeRouterClient.emitGitStateUpdated(SID, ["changeset"]));
+    await waitFor(() => expect(getChangeSet.mock.calls.length).toBe(before + 1));
+  });
+
+  it("lands from the ▾ path through the same confirmation", async () => {
+    const client = new FakeRouterClient();
+    await renderChip({ ...isolated, uncommitted_count: 0 }, client);
+    fireEvent.click(screen.getByRole("button", { name: "Where this session's work goes" }));
+    fireEvent.click(within(screen.getByTestId("work-step-land")).getByRole("button", { name: "Land" }));
+    expect(await screen.findByRole("alertdialog", { name: "Land mads/session/session-isolated into main?" })).toBeTruthy();
+    expect(client.landCalls).toEqual([]);
+  });
+
+  it("offers Commit them… when Land is refused over uncommitted files (D6)", async () => {
+    const client = new FakeRouterClient();
+    client.landOutcome = { outcome: "refused", reason: "dirty", base: "main", files: ["scratch.txt"], outside: ["scratch.txt"] };
+    await renderChip({ ...isolated, uncommitted_count: 0 }, client);
+    const dialog = await landFromChip();
+    fireEvent.click(await within(dialog).findByRole("button", { name: "Commit them…" }));
+    expect(await screen.findByRole("alertdialog", { name: "Commit this session's changes" })).toBeTruthy();
+    expect(client.commitPlanCalls).toEqual([SID]);
+  });
+
+  it("offers no Commit them… for any other Land refusal, and stays open", async () => {
+    const client = new FakeRouterClient();
+    client.landOutcome = { outcome: "refused", reason: "busy", base: "main" };
+    await renderChip({ ...isolated, uncommitted_count: 0 }, client);
+    const dialog = await landFromChip();
+    expect(await within(dialog).findByText(/^Can't land while the agent is working\./)).toBeTruthy();
+    expect(within(dialog).queryByRole("button", { name: "Commit them…" })).toBeNull();
+  });
+
+  it("lands a linked worktree an agent made, from the repo state (D12)", async () => {
+    const client = new FakeRouterClient();
+    client.sessionRepos[SID] = [
+      { root: "/r/mads", primary: true, worktree: fixtureRepoWorktree({ path: "/r/mads", main: true }) },
+      {
+        root: "/r/mads-nested",
+        worktree: fixtureRepoWorktree({
+          path: "/r/mads-nested",
+          git_dir: "/r/mads/.git",
+          branch: "nested-delegates",
+          base: "main",
+          base_source: "recorded",
+          to_land: 1,
+        }),
+      },
+    ];
+    client.landPreview = {
+      ...fixtureLandPreview,
+      repo: "/r/mads-nested",
+      branch: "nested-delegates",
+      base_source: "recorded",
+      to_land: 1,
+    };
+    await renderChip(inPlace, client);
+    await waitFor(() => expect(chip()!.getAttribute("data-state")).toBe("land"));
+    expect(stateText()).toBe("1 commit to land");
+    fireEvent.click(within(chip()!).getByRole("button", { name: "Land" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Land nested-delegates into main?" });
+    expect(within(dialog).getByTestId("land-base").textContent).toContain("from the git worktree add this session ran");
+    await waitFor(() => expect(client.landPreviewCalls.at(-1)).toEqual({ sessionId: SID, repo: "/r/mads-nested", base: undefined }));
+  });
+
+  it("offers Commit… for files changed outside the session", async () => {
+    await renderChip({ ...isolated, uncommitted_count: 0, outside_count: 2 });
+    expect(chip()!.getAttribute("data-state")).toBe("outside");
+    expect(stateText()).toBe("2 files changed outside");
+    fireEvent.click(within(chip()!).getByRole("button", { name: "Commit…" }));
+    expect(await screen.findByRole("alertdialog", { name: "Commit this session's changes" })).toBeTruthy();
+  });
+
+  it("opens the Commit dialog from the path popover too", async () => {
+    await renderChip({ ...isolated, uncommitted_count: 4 });
+    fireEvent.click(screen.getByRole("button", { name: "Where this session's work goes" }));
+    const step = screen.getByTestId("work-step-commit");
+    expect(step.textContent).toContain("4 uncommitted");
+    fireEvent.click(within(step).getByRole("button", { name: "Commit…" }));
+    expect(await screen.findByRole("alertdialog", { name: "Commit this session's changes" })).toBeTruthy();
+    expect(screen.queryByTestId("work-path")).toBeNull();
   });
 });

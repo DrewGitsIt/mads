@@ -9,21 +9,23 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/providers/fastmodel"
+	"github.com/drewkidwell/mads/services/router/internal/gitstate"
 )
 
 // The session's Commit and Land actions (docs/SESSION-WORKTREES-DESIGN.md
 // D3, D5, D6):
 //
 //	GET  /sessions/{id}/worktree      status: files, counts, Land's blocker
-//	POST /sessions/{id}/worktree/refresh  recount the header's counts
+//	POST /sessions/{id}/worktree/refresh  recompute git state (counts, repos, change set)
 //	POST /sessions/{id}/commit        commit session files
 //	POST /sessions/{id}/commit/undo   take the last Commit back
 //	POST /sessions/{id}/commit/draft  Fast Model commit message
@@ -50,7 +52,7 @@ const routerLockWait = 5 * time.Second
 // worktreeOps is sessionwt.Ops over the Router's own Data Service client:
 // the inactive-session path.
 func (s *server) worktreeOps() sessionwt.Ops {
-	return sessionwt.Ops{Store: s.data, LockWait: routerLockWait}
+	return sessionwt.Ops{Store: s.data, LockWait: routerLockWait, Home: s.home}
 }
 
 // worktreeRoute runs a worktree route against the live child when there is
@@ -66,14 +68,13 @@ func (s *server) worktreeRoute(w http.ResponseWriter, r *http.Request, live func
 		live(addr)
 		return
 	}
-	mu, _ := s.wakeLocks.LoadOrStore(id, &sync.Mutex{})
-	mu.(*sync.Mutex).Lock()
+	unlock := s.lockWake(id)
 	if addr, ok := s.sup.SessionAddr(id); ok {
-		mu.(*sync.Mutex).Unlock()
+		unlock()
 		live(addr)
 		return
 	}
-	defer mu.(*sync.Mutex).Unlock()
+	defer unlock()
 	direct()
 }
 
@@ -83,6 +84,19 @@ func (s *server) childPath(id, path string) string {
 		return path + "?pipeline=1"
 	}
 	return path
+}
+
+// withRepo adds a repo query parameter to a child path (childPath's or a
+// bare one), when there is one.
+func withRepo(path, repo string) string {
+	if repo == "" {
+		return path
+	}
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return path + sep + "repo=" + url.QueryEscape(repo)
 }
 
 // handleSessionWorktree is the session's worktree status, plus what only
@@ -98,8 +112,9 @@ func (s *server) handleSessionWorktree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err) // 404 before anything else
 		return
 	}
+	repo := r.URL.Query().Get("repo")
 	if addr, ok := s.sup.SessionAddr(id); ok {
-		status, raw, err := callChild(r.Context(), addr, http.MethodGet, s.childPath(id, "/worktree"), nil)
+		status, raw, err := callChild(r.Context(), addr, http.MethodGet, withRepo(s.childPath(id, "/worktree"), repo), nil)
 		if err != nil {
 			writeErrMsg(w, http.StatusBadGateway, "session child: ", err)
 			return
@@ -110,7 +125,11 @@ func (s *server) handleSessionWorktree(w http.ResponseWriter, r *http.Request) {
 		writeRaw(w, status, raw)
 		return
 	}
-	st, err := s.worktreeOps().Status(r.Context(), id, sessionwt.Gates{Pipeline: s.sup.HasPipeline(id)})
+	st, err := s.worktreeOps().Status(r.Context(), id, repo, sessionwt.Gates{Pipeline: s.sup.HasPipeline(id)})
+	if errors.Is(err, sessionwt.ErrUnknownRepo) {
+		writeErrMsg(w, http.StatusNotFound, "worktree status: ", err)
+		return
+	}
 	if err != nil {
 		writeErrMsg(w, http.StatusInternalServerError, "worktree status: ", err)
 		return
@@ -123,22 +142,95 @@ func (s *server) handleSessionWorktree(w http.ResponseWriter, r *http.Request) {
 	writeRaw(w, http.StatusOK, s.withFolderKeepers(r.Context(), id, raw))
 }
 
-// handleSessionWorktreeRefresh recounts the session's header counts (D4)
-// and publishes them, for a commit or merge made outside mads that no turn
-// end has counted yet. The Router runs it itself even with a live child:
-// it gates on nothing the child knows, and it is the same recount either
-// would run, read off the same record. No wake lock, like status.
+// handleSessionWorktreeRefresh asks for some of the session's git state
+// to be recomputed (docs/GIT-STATE-DESIGN.md): 202 at once, the end
+// announced as session.git_state_updated (and new counts arriving as
+// session.updated). Without a body — a window opening the session or
+// regaining focus, for a commit, merge or edit made outside mads — it is
+// the header counts (D4) and repo facts, and the change set against
+// session start when the kept one is older than 30 s. With one,
+// refreshRequest says which parts (a window's first read of a change set;
+// its Retry). The recount runs in the gitstate service, routed by recount.
 func (s *server) handleSessionWorktreeRefresh(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+	if err != nil {
+		writeErrMsg(w, http.StatusBadRequest, "worktree refresh: ", err)
+		return
+	}
+	var req refreshRequest
+	if len(bytes.TrimSpace(raw)) > 0 {
+		if err := json.Unmarshal(raw, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+			return
+		}
+	}
+	ask, err := req.ask()
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	if _, err := s.data.Session(r.Context(), id); err != nil {
 		writeError(w, err)
 		return
 	}
-	if err := s.worktreeOps().Recount(r.Context(), id); err != nil {
-		writeErrMsg(w, http.StatusInternalServerError, "worktree refresh: ", err)
-		return
+	if len(ask.Parts) == 0 {
+		s.gitState.Refresh(id)
+	} else {
+		s.gitState.Revalidate(id, ask)
 	}
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// refreshRequest is POST /worktree/refresh's optional body: the parts to
+// recompute ("repos", "changeset", "counts"), the change set's baseline
+// (vs, as GET /changeset's; empty: session start), and max_age_ms, a kept
+// answer computed within which is left as is (0 or absent: recompute).
+// No parts: the bodiless refresh.
+type refreshRequest struct {
+	Parts    []string `json:"parts"`
+	VS       string   `json:"vs"`
+	MaxAgeMS int64    `json:"max_age_ms"`
+}
+
+func (q refreshRequest) ask() (gitstate.Ask, error) {
+	for _, p := range q.Parts {
+		switch p {
+		case contracts.GitPartRepos, contracts.GitPartChangeSet, contracts.GitPartCounts:
+		default:
+			return gitstate.Ask{}, fmt.Errorf("unknown part %q (want repos, changeset or counts)", p)
+		}
+	}
+	vs, ok := normalizeBaseline(q.VS)
+	if !ok {
+		return gitstate.Ask{}, fmt.Errorf("unknown baseline %q", q.VS)
+	}
+	if q.MaxAgeMS < 0 {
+		return gitstate.Ask{}, errors.New("max_age_ms must not be negative")
+	}
+	return gitstate.Ask{Parts: q.Parts, Baseline: vs, MaxAge: time.Duration(q.MaxAgeMS) * time.Millisecond}, nil
+}
+
+// recount recounts the session's header counts and publishes them. With a
+// live child it asks the child, whose recount is the coalesced one turn
+// ends use: a recount beside a turn-end recount joins it instead of
+// running a second git status over the same repos. The Router recounts
+// itself when there is no child, or when the child can't (one started
+// before it had the route, or shutting down). No wake lock, like status.
+func (s *server) recount(ctx context.Context, id string) error {
+	if addr, ok := s.sup.SessionAddr(id); ok {
+		status, _, err := callChild(ctx, addr, http.MethodPost, "/worktree/refresh", nil)
+		if err == nil && status >= 200 && status < 300 {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil || status != http.StatusNotFound && status != http.StatusMethodNotAllowed && status != http.StatusServiceUnavailable {
+			log.Printf("worktree refresh: session %s child: status %d, %v; recounting in the Router", id, status, err)
+		}
+	}
+	return s.worktreeOps().Recount(ctx, id)
 }
 
 // inPlaceOwnerDetail replaces the not_isolated refusal's "your checkout"
@@ -258,7 +350,7 @@ func (s *server) handleSessionCommit(w http.ResponseWriter, r *http.Request) {
 			}})
 			return
 		}
-		msg, _, err := s.draftCommitMessage(r.Context(), id, req.Paths)
+		msg, _, err := s.draftCommitMessage(r.Context(), id, req.Repo, req.Paths)
 		if err != nil {
 			writeCommitRefusal(w, err)
 			return
@@ -301,7 +393,7 @@ func (s *server) handleSessionUndoCommit(w http.ResponseWriter, r *http.Request)
 	s.worktreeRoute(w, r, func(addr string) {
 		s.forwardToChild(w, r, addr, http.MethodPost, "/commit/undo", req)
 	}, func() {
-		res, err := s.worktreeOps().Undo(context.WithoutCancel(r.Context()), id, req.Hash)
+		res, err := s.worktreeOps().Undo(context.WithoutCancel(r.Context()), id, req.Repo, req.Hash)
 		if err != nil {
 			writeErrMsg(w, http.StatusInternalServerError, "undo commit: ", err)
 			return
@@ -315,10 +407,26 @@ func (s *server) handleSessionUndoCommit(w http.ResponseWriter, r *http.Request)
 // runs to the end even if the request goes away.
 func (s *server) handleSessionLand(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	var req contracts.LandRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	sess, err := s.data.Session(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	// A Land rewrites a worktree, which another session's agent may be
+	// working in: only the Router sees across sessions (D12).
+	if g := s.pushGates(r.Context(), sess); g.Busy {
+		writeJSON(w, http.StatusOK, contracts.LandResult{Outcome: contracts.LandRefused, Reason: contracts.LandBusy,
+			Detail: "An agent is working in this session's repos. Land when it finishes its turn."})
+		return
+	}
 	s.worktreeRoute(w, r, func(addr string) {
-		s.forwardToChild(w, r, addr, http.MethodPost, s.childPath(id, "/land"), struct{}{})
+		s.forwardToChild(w, r, addr, http.MethodPost, s.childPath(id, "/land"), req)
 	}, func() {
-		res, err := s.worktreeOps().Land(context.WithoutCancel(r.Context()), id, sessionwt.Gates{Pipeline: s.sup.HasPipeline(id)})
+		res, err := s.worktreeOps().Land(context.WithoutCancel(r.Context()), id, req, sessionwt.Gates{Pipeline: s.sup.HasPipeline(id)})
 		if err != nil {
 			writeErrMsg(w, http.StatusInternalServerError, "land: ", err)
 			return
@@ -339,7 +447,7 @@ func (s *server) handleSessionCommitDraft(w http.ResponseWriter, r *http.Request
 		writeError(w, err)
 		return
 	}
-	msg, truncated, err := s.draftCommitMessage(r.Context(), id, req.Paths)
+	msg, truncated, err := s.draftCommitMessage(r.Context(), id, req.Repo, req.Paths)
 	if err != nil {
 		writeCommitRefusal(w, err)
 		return
@@ -355,8 +463,8 @@ const commitDraftSystem = `You write git commit messages. Reply with the message
 // prompt says when it was cut. Failures are *sessionwt.CommitRefusal:
 // no_fast_model when none is configured, draft_failed when it answered
 // unusably.
-func (s *server) draftCommitMessage(ctx context.Context, id string, paths []string) (msg string, truncated bool, err error) {
-	folder, files, err := s.worktreeOps().SelectForDraft(ctx, id, paths)
+func (s *server) draftCommitMessage(ctx context.Context, id, repo string, paths []string) (msg string, truncated bool, err error) {
+	folder, files, err := s.worktreeOps().SelectForDraft(ctx, id, repo, paths)
 	if err != nil {
 		return "", false, err
 	}
@@ -440,14 +548,14 @@ func callChild(ctx context.Context, addr, method, path string, body any) (int, [
 		rd = bytes.NewReader(raw)
 		ctx = context.WithoutCancel(ctx)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, "http://"+addr+path, rd)
+	req, err := http.NewRequestWithContext(ctx, method, childsock.URL(addr, path), rd)
 	if err != nil {
 		return 0, nil, err
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := childsock.Client.Do(req)
 	if err != nil {
 		return 0, nil, err
 	}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { subscribeToEvents } from "../../router/events";
+import { eventsReady, subscribeToEvents } from "../../router/events";
 import { WORKSPACE_SESSION_EVENT_TYPES } from "../../router/sessionEventTypes";
 import type { Envelope, PipelineRun, Task } from "../../router/types";
 import type { PipelineClient } from "../client/pipelineClient";
@@ -405,7 +405,6 @@ export function useResumingRunFold(
 ): { state: RunFoldState; resuming: boolean } {
   const [state, dispatch] = useReducer(runReducer, initialRunFoldState);
   const [resuming, setResuming] = useState(true);
-  const mounted = useRef(true);
   const clientRef = useRef(client);
   clientRef.current = client;
   const pickRunRef = useRef(pickRun);
@@ -416,7 +415,10 @@ export function useResumingRunFold(
   useEffect(() => {
     const client = clientRef.current;
     if (!client) return;
-    mounted.current = true;
+    // Per run of this effect, not a shared ref: a ref the next session's
+    // run sets back to true would let this (older) session's catch-up seed
+    // the new session's fold.
+    let alive = true;
     let unsubscribe: (() => void) | undefined;
 
     function handleEnvelope(env: Envelope) {
@@ -442,11 +444,16 @@ export function useResumingRunFold(
 
       let caughtUpSeq = 0;
       try {
+        // The bus never replays history, so the REST catch-up waits for its
+        // ready barrier (router/events.ts eventsReady): read any earlier and
+        // an event landing before the bus fixes its cursor is in neither.
+        await eventsReady(sessionId);
+        if (!alive) return;
         const runs = await client!.listRuns(sessionId);
         const target = pickRunRef.current(runs);
         if (target) {
           const events = await client!.getRunEvents(sessionId, target.run_seq - 1);
-          if (!mounted.current) return;
+          if (!alive) return;
           let seeded = events.reduce(foldReducer, initialRunFoldState);
           // The run history pairs runs by id, so it can know the id even when
           // the fetched prefix didn't start at pipeline.started.
@@ -459,7 +466,7 @@ export function useResumingRunFold(
       } catch {
         // Best-effort: fall through to a live-only tail, same as today's behavior.
       }
-      if (!mounted.current) return;
+      if (!alive) return;
       setResuming(false);
       live = true;
       // Flush what arrived live during catch-up, deduping the overlap edge
@@ -471,7 +478,7 @@ export function useResumingRunFold(
 
     void resumeAndSubscribe();
     return () => {
-      mounted.current = false;
+      alive = false;
       unsubscribe?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -501,13 +508,22 @@ export function usePipelineRun(sessionId: string, client: PipelineClient): UsePi
     }
   }, [client, sessionId]);
 
+  // The mount read waits for the bus's ready barrier (router/events.ts
+  // eventsReady): onEvent's refetches keep it live, and the bus never
+  // replays, so a read served before it fixes its cursor could miss an
+  // event landing in between. The subscription (useResumingRunFold) is
+  // registered in the same commit, before the barrier lets this start.
   useEffect(() => {
     mounted.current = true;
-    void refetchTasks();
+    let live = true;
+    void eventsReady(sessionId).then(() => {
+      if (live) void refetchTasks();
+    });
     return () => {
+      live = false;
       mounted.current = false;
     };
-  }, [refetchTasks]);
+  }, [refetchTasks, sessionId]);
 
   const onEnvelope = useCallback(
     (env: Envelope) => {

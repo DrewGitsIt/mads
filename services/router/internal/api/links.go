@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/linkwrap"
 	"github.com/drewkidwell/mads/pkg/madsbin"
@@ -40,12 +41,12 @@ func (s *server) notifyOrchestrateRefresh(sessionID string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), orchestrateRefreshTimeout)
 		defer cancel()
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/orchestrate/refresh", nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, childsock.URL(addr, "/orchestrate/refresh"), nil)
 		if err != nil {
 			log.Printf("router: build orchestrate refresh request for %s: %v", sessionID, err)
 			return
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := childsock.Client.Do(req)
 		if err != nil {
 			log.Printf("router: notify orchestrate refresh for %s: %v", sessionID, err)
 			return
@@ -133,12 +134,12 @@ func postInject(ctx context.Context, addr string, req contracts.InjectRequest) e
 	if err != nil {
 		return err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/inject", bytes.NewReader(raw))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, childsock.URL(addr, "/inject"), bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := childsock.Client.Do(httpReq)
 	if err != nil {
 		return err
 	}
@@ -269,6 +270,28 @@ func (s *server) handleDeleteLink(w http.ResponseWriter, r *http.Request) {
 		s.notifyOrchestrateRefresh(old.GrantingSessionID)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// handleListLinks is the bulk links read: GET /links?session_ids=a,b,c
+// returns every link with any listed session on either side, each once,
+// ordered by creation. Ids are comma-separated, trimmed and deduped; none,
+// or more than contracts.MaxLinkSessionIDs, is a 400. The UI's rail uses it
+// in place of one GET /sessions/{id}/links per visible session.
+func (s *server) handleListLinks(w http.ResponseWriter, r *http.Request) {
+	ids, verr := contracts.ParseLinkSessionIDs(r.URL.Query().Get("session_ids"))
+	if verr != nil {
+		writeJSON(w, http.StatusBadRequest, verr)
+		return
+	}
+	list, err := s.data.LinksForSessions(r.Context(), ids)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if list == nil {
+		list = []contracts.Link{}
+	}
+	writeJSON(w, http.StatusOK, list)
 }
 
 func (s *server) handleListSessionLinks(w http.ResponseWriter, r *http.Request) {

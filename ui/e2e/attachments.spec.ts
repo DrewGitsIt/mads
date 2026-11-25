@@ -1,37 +1,6 @@
 import { test, expect } from "./fixtures";
-import type { Locator, Page } from "@playwright/test";
 import { createSession } from "./lib/seed";
-
-// Builds a real PNG in the page (a canvas) and pastes it — the same
-// ClipboardEvent a ⌘V of a screenshot produces, clipboard name and all.
-async function pasteScreenshot(target: Locator) {
-  await target.evaluate(async (el) => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 800;
-    canvas.height = 500;
-    const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = "#c0392b";
-    ctx.fillRect(0, 0, 800, 500);
-    ctx.fillStyle = "#fff";
-    ctx.font = "48px sans-serif";
-    ctx.fillText("screenshot", 250, 260);
-    const blob = await new Promise<Blob>((r) => canvas.toBlob((b) => r(b!), "image/png"));
-    const dt = new DataTransfer();
-    dt.items.add(new File([blob], "image.png", { type: "image/png" }));
-    el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
-  });
-}
-
-async function dropTextFile(page: Page, target: Locator, name: string) {
-  const dt = await page.evaluateHandle((n) => {
-    const dt = new DataTransfer();
-    dt.items.add(new File(["line one\nline two\n"], n, { type: "text/plain" }));
-    return dt;
-  }, name);
-  await target.dispatchEvent("dragenter", { dataTransfer: dt });
-  await target.dispatchEvent("dragover", { dataTransfer: dt });
-  await target.dispatchEvent("drop", { dataTransfer: dt });
-}
+import { dropTextFile, pasteScreenshot } from "./lib/attachments";
 
 test("attachments journey: pasted and dropped files reach the agent as paths and show as thumbnails", async ({
   page,
@@ -102,4 +71,46 @@ test("attachments journey: an unsent hero goal and its files survive visiting an
 
   await expect(page.getByLabel("Describe your goal")).toHaveValue("half-written goal");
   await expect(page.getByLabel(/^Remove screenshot-.*\.png$/)).toBeVisible();
+});
+
+// An attachment's bytes are whoever attached them (a paired device at chat
+// level can), and its tile opens them on this Router's origin, where the
+// app's credentials are: an HTML (or SVG) file downloads instead of
+// rendering, so its script never runs here. Text still opens as text.
+test("attachments journey: an attached HTML file downloads, it never renders as a page", async ({ page, routerURL }) => {
+  await page.goto(routerURL);
+  const goalBox = page.getByLabel("Describe your goal");
+  const token = `${Date.now()}`;
+  await goalBox.fill(`echo page ${token}`);
+  await page.getByRole("button", { name: "Start session" }).click();
+  const composer = page.getByPlaceholder("Message the agent — @ to mention, / for commands");
+  await expect(composer).toBeVisible();
+  const panel = page.locator("#workspace-panel-conversation");
+  await expect(panel.getByText(new RegExp(`you said page ${token}`))).toBeVisible();
+
+  await dropTextFile(page, composer, "evil.html", `<html><title>ran</title><script>document.title = "script ran"</script></html>`, "text/html");
+  await dropTextFile(page, composer, "notes.txt", "plain words\n");
+  await expect(page.getByLabel("Remove evil.html")).toBeVisible();
+  await expect(page.getByLabel("Remove notes.txt")).toBeVisible();
+  const send = page.getByRole("button", { name: /^(Send|Queue)$/ });
+  await expect(send).toBeEnabled();
+  await send.click();
+  const htmlTile = panel.getByRole("link", { name: /evil\.html/ });
+  const textTile = panel.getByRole("link", { name: /notes\.txt/ });
+  await expect(htmlTile).toBeVisible();
+  await expect(textTile).toBeVisible();
+  const htmlURL = new URL((await htmlTile.getAttribute("href"))!, routerURL).toString();
+  const textURL = new URL((await textTile.getAttribute("href"))!, routerURL).toString();
+
+  // Opened, the HTML file is a download: no page, no script.
+  const viewer = await page.context().newPage();
+  const [download] = await Promise.all([viewer.waitForEvent("download"), viewer.goto(htmlURL).catch(() => null)]);
+  expect(download.suggestedFilename()).toBe("evil.html");
+  expect(await viewer.title()).not.toBe("script ran");
+  // The text file still opens inline, as text.
+  const res = await viewer.goto(textURL);
+  expect(res?.headers()["content-type"]).toMatch(/^text\/plain/);
+  expect(res?.headers()["content-security-policy"]).toContain("sandbox");
+  await expect(viewer.locator("body")).toContainText("plain words");
+  await viewer.close();
 });

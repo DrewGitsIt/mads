@@ -1,0 +1,52 @@
+/* SendDelivery's mesh-refusal variant: the plain reason (sans, not the
+   harness's mono error) and its Why panel. */
+.line {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 0;
+}
+.reason {
+  min-width: 0;
+  color: var(--text2);
+  text-align: right;
+}
+.actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.detail {
+  width: min(520px, 100%);
+  padding: var(--space-3);
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--bad);
+  border-radius: var(--r-sm);
+  background: var(--bg1);
+  color: var(--text2);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  text-align: left;
+}
+.detail h4 {
+  margin: 0 0 4px;
+  font: 600 var(--fs-chip) var(--sans);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+.detail ul {
+  margin: 0 0 var(--space-2);
+  padding-left: 18px;
+}
+.detail li + li {
+  margin-top: 2px;
+}
+.detail b {
+  color: var(--text);
+  font-weight: 600;
+}
+.where {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text2);
+}

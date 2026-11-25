@@ -153,6 +153,11 @@ declare global {
         describe(hrefs: string[], baseDir?: string): Promise<string[]>;
       };
       shell?: ShellHostBridge;
+      /**
+       * Where main reads the install token and why it couldn't, for the
+       * 401 screen (docs/LOCAL-FRONT-DOOR-DESIGN.md H7) — never the token.
+       */
+      auth?: { tokenPath(): Promise<{ path: string; problem?: string }> };
     };
   }
 }

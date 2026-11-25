@@ -59,10 +59,11 @@ type Server struct {
 // Runner at spawn time) — every tool call is scoped to this one session.
 // readOnly (env MADS_ORCHESTRATE_READONLY) excludes message_session from
 // tools/list and rejects it if called anyway — set for a session that holds
-// only the read grant, not the orchestrate grant (item 1).
-func New(routerURL, sessionID string, readOnly bool, in io.Reader, out io.Writer) *Server {
+// only the read grant, not the orchestrate grant (item 1). token is the
+// session-scoped Router token (env MADS_ROUTER_TOKEN), sent as a bearer.
+func New(routerURL, sessionID, token string, readOnly bool, in io.Reader, out io.Writer) *Server {
 	return &Server{
-		client:   newClient(routerURL, sessionID),
+		client:   newClient(routerURL, sessionID, token),
 		readOnly: readOnly,
 		in:       bufio.NewReader(in),
 		out:      out,

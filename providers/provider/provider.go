@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 )
@@ -414,6 +415,32 @@ type KeyedTranscriptReader interface {
 // ErrCursorStale is IncrementalTranscriptReader's "start over" answer.
 var ErrCursorStale = errors.New("provider: transcript cursor stale")
 
+// ErrTranscriptMissing is a TranscriptReader's answer for a ref its agent's
+// store doesn't hold (any more): the store was read and the conversation
+// isn't in it — the agent pruned it, or someone deleted it. A store that
+// couldn't be read at all (locked, the CLI missing) is some other error, so
+// a caller never tells the user a transcript is gone when it's unreadable.
+// Adapters wrap it (errors.Is).
+var ErrTranscriptMissing = errors.New("provider: transcript not in the agent's store")
+
+// Retention is where an agent's own setting for deleting old transcripts
+// lives, for the "no longer on disk" notice to point at.
+type Retention struct {
+	// File is the absolute path of the config file holding the setting.
+	File string
+	// Setting names it as the user would find it in File
+	// ("cleanupPeriodDays", "sessions.retention_days").
+	Setting string
+	// DefaultDays is the agent's default when the setting is unset.
+	DefaultDays int
+}
+
+// TranscriptRetainer is the optional strategy of an adapter whose agent
+// deletes old transcripts on its own. Nil means it has no such setting.
+type TranscriptRetainer interface {
+	TranscriptRetention() *Retention
+}
+
 // KeyedSender is the optional strategy for a send whose user message the
 // agent stores under a caller-supplied id (claude-code's stdin uuid,
 // codex's clientUserMessageId): id is minted by mads (a UUID), and the
@@ -442,6 +469,39 @@ type DelegateInspector interface {
 	// ended — for a conversation mads never watched run (an import). None is
 	// an empty list, not an error.
 	DelegateHistory(ctx context.Context, ref string) ([]DelegateRecord, error)
+}
+
+// ErrNoBackgroundOutput: the call isn't one whose background output the
+// adapter can vouch for — not a background call of that session, or one
+// whose output file failed the adapter's checks (logged by the adapter, not
+// explained to the caller).
+var ErrNoBackgroundOutput = errors.New("provider: no background output for that call")
+
+// ErrBackgroundOutputGone: the call did run in the background, but its
+// output file has since been removed (the harness's scratch directory was
+// cleaned).
+var ErrBackgroundOutputGone = errors.New("provider: background output removed")
+
+// BackgroundOutputReader is the optional strategy for
+// BehaviorBackgroundOutput: the output of a tool call that kept running as a
+// background process, in the session whose provider-native ref is ref, found
+// by the call's own id — never by a path, which the adapter works out from
+// what it trusts. Errors are ErrNoBackgroundOutput, ErrBackgroundOutputGone,
+// or a failure reading the harness's store.
+type BackgroundOutputReader interface {
+	OpenBackgroundOutput(ctx context.Context, ref, toolUseID string) (*BackgroundOutput, error)
+}
+
+// BackgroundOutput is one background process's output file, open and
+// checked. The caller owns File and tails it from the descriptor, so the
+// file it reads is the one the adapter checked.
+type BackgroundOutput struct {
+	File *os.File
+	// Ended reports whether tail — the file's last bytes, up to 256 — shows
+	// the process has finished writing, so a reader can stop following it.
+	// False says nothing: a harness that ends without a marker leaves the
+	// reader following until it stops on its own.
+	Ended func(tail []byte) bool
 }
 
 // DelegateRecord is one delegate as a harness's history records it, start to
@@ -481,6 +541,9 @@ type DelegateInfo struct {
 	Type string
 	// Depth is its nesting depth (1 = spawned by the main agent).
 	Depth int
+	// ParentHarnessID is the delegate that spawned it, by harness id; empty
+	// when the session's own agent did.
+	ParentHarnessID string
 	// WorktreePath is the separate worktree it runs in, when it has one.
 	WorktreePath string
 	// Background reports the harness ran it in the background.

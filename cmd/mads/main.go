@@ -10,6 +10,12 @@
 //	mads uninstall   [-keep-data] [-yes]
 //	mads update      check | apply [-feed-url URL] [-router URL] [-yes]
 //	mads orchestrate subjects | summary | send [-session ID] [-router URL]
+//	mads api [--data] METHOD PATH [-d BODY]
+//	mads token rotate | ensure
+//	mads hooks refresh [-data URL]
+//	mads ps [-router URL]
+//	mads device [--json]
+//	mads pair --accept FINGERPRINT [--name NAME] [--grant LEVEL] | --list | --revoke FINGERPRINT|NAME
 //	mads --version
 package main
 
@@ -49,6 +55,24 @@ func main() {
 		err = cmdUpdate(os.Args[2:], os.Stdin, os.Stdout)
 	case "orchestrate":
 		err = cmdOrchestrate(os.Args[2:], os.Stdout)
+	case "api":
+		err = cmdAPI(os.Args[2:], os.Stdin, os.Stdout)
+	case "token":
+		err = cmdToken(os.Args[2:], os.Stdout)
+	case "ps":
+		err = cmdPs(os.Args[2:], os.Stdout)
+	case "hooks":
+		err = cmdHooks(os.Args[2:], os.Stdout)
+	case "device":
+		err = cmdDevice(os.Args[2:], os.Stdout)
+	case "mesh":
+		err = cmdMesh(os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
+	case "pair":
+		if len(os.Args) > 2 && isPairSubcommand(os.Args[2]) {
+			err = cmdPairSub(os.Args[2:], os.Stdin, os.Stdout)
+		} else {
+			err = cmdPair(os.Args[2:], os.Stdout)
+		}
 	case "internal":
 		err = cmdInternal(os.Args[2:])
 	case "-v", "--version", "version":
@@ -85,9 +109,22 @@ func usage() {
   mads orchestrate subjects [-session ID] [-router URL]
   mads orchestrate summary  -subject ID [-session ID] [-router URL]
   mads orchestrate send     -subject ID -text TEXT [-wait 30s] [-session ID] [-router URL]
+  mads api [--data] [-router URL] [-data-url URL] METHOD PATH [-d BODY|@FILE|@-]
+      call the Router (or, with --data, the Data Service) with the install token
+  mads api --session ID METHOD PATH [-d BODY]      # a session or pipeline child's own API, over its socket
+  mads ps [-router URL]                            # live children: id, pid, socket, state, uptime
+  mads token rotate | ensure                       # the install token, $MADS_HOME/local.token
+  mads hooks refresh [-data URL]                   # re-install the commit hook in every known repo
+  mads device [--json]                             # this device's name and fingerprint (its device ID)
+  mads pair --accept FINGERPRINT [--name NAME] [--grant view|chat|control|admin|none] [--view [--mesh-url URL]]
+  mads pair --list [--json] | --revoke FINGERPRINT|NAME   # the devices paired with this host
+  mads pair code | join [CODE] [--wait] | requests | approve ID --grant LEVEL | decline ID
+  mads pair remove NAME|FINGERPRINT [--everywhere]        # pairing by code (D6), through the Router
+  mads mesh setup | status | add | approve | code | join | set | remove | address add   # mads mesh --help
   mads --version
 
-The Data Service must be running (make -C services/data run).
+The Data Service must be running (make -C services/data run). Every command
+sends the install token from $MADS_HOME/local.token (default ~/.mads).
 
 -concurrency caps how many tasks run their agent stages at once (default 5).
 Template dependencies express prerequisites, not anti-collision: two tasks

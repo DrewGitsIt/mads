@@ -1,0 +1,66 @@
+/* The Land confirmation (docs/COMMIT-LAND-PUSH-DESIGN.md D12). The dialog
+   shell is CommitDialog's; the commit list and loading line PushDialog's. */
+
+.dialog {
+  width: 540px;
+}
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 600 var(--fs-sm) var(--mono);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.choice input {
+  accent-color: var(--accent);
+}
+
+.into,
+.count {
+  font: var(--fs-chip) var(--mono);
+  color: var(--text3);
+}
+
+.baseRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.baseLabel {
+  color: var(--text3);
+}
+
+.select {
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg2);
+  color: var(--text);
+  font: var(--fs-sm) var(--mono);
+}
+
+.listHead {
+  margin-bottom: 4px;
+  font: 600 var(--fs-sm) var(--sans);
+  color: var(--text2);
+}
+
+.blocked {
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--warn-fg);
+}

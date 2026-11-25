@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PermissionRequest, ToolDiff, ToolStatus, ToolUse } from "../../router/types";
+import type { SessionEventSource } from "../../router/client";
+import type { BackgroundTask, Delegate, PermissionRequest, ToolDiff, ToolStatus, ToolUse } from "../../router/types";
 import { ActivityGroup } from "./ActivityGroup";
+import { BackgroundElapsed } from "./Background";
+import { BackgroundOutputView } from "./BackgroundOutputView";
 import type { ActivityEntry, SubStreamItem, TaskModel } from "./conversationItems";
 import { DiffView } from "./DiffView";
 import { Markdown } from "../ChatRenderer/markdown";
 import { formatMessageTime, parseMessageTime } from "../ChatRenderer/messageTime";
 import { KindIcon, McpBadge, Spinner, StatusGlyph } from "./primitives";
-import { TaskCounters, TaskStatusGlyph } from "./TaskCard";
+import { DelegateCallCard, TaskCounters, TaskStatusGlyph } from "./TaskCard";
 import {
   commandInput,
   diffHunks,
@@ -30,14 +33,29 @@ export type DockView =
       subtype?: string;
       items: SubStreamItem[];
       task?: TaskModel;
+      /**
+       * Its last report, for a stream that can't hold it: the live rows,
+       * which carry no notification. A file or a log read-back has every
+       * run's report in place already.
+       */
+      summary?: string;
     };
 
 export interface ActivityDockProps {
   view: DockView;
   sessionId: string;
-  /** Only the tool-diff read is needed — narrow so tests can stub a two-line object. */
-  client: { getToolDiff(sessionId: string, toolUseId: string): Promise<ToolDiff | null> };
+  /**
+   * Only the tool-diff read and the background output stream are needed —
+   * narrow so tests can stub a two-line object. Without streamToolOutput a
+   * background call shows its result text, as any other call does.
+   */
+  client: {
+    getToolDiff(sessionId: string, toolUseId: string): Promise<ToolDiff | null>;
+    streamToolOutput?(sessionId: string, toolUseId: string): SessionEventSource;
+  };
   statuses?: ReadonlyMap<string, ToolStatus>;
+  /** Calls still running as background processes, by tool_use id. */
+  background?: ReadonlyMap<string, BackgroundTask>;
   /** Permission requests by tool_use id — a subagent call's card renders under its row in the stream view. */
   permissions?: ReadonlyMap<string, PermissionRequest[]>;
   onResolvePermission?: (id: string, decision: "allow" | "deny") => Promise<void>;
@@ -60,6 +78,7 @@ export function ActivityDock({
   sessionId,
   client,
   statuses,
+  background,
   permissions,
   onResolvePermission,
   onClose,
@@ -99,6 +118,7 @@ export function ActivityDock({
           sessionId={sessionId}
           client={client}
           statuses={statuses}
+          background={view.tool.id ? background?.get(view.tool.id) : undefined}
           onClose={onClose}
         />
       ) : (
@@ -126,6 +146,7 @@ function ToolDetail({
   sessionId,
   client,
   statuses,
+  background,
   onClose,
 }: {
   tool: ToolUse;
@@ -133,6 +154,8 @@ function ToolDetail({
   sessionId: string;
   client: ActivityDockProps["client"];
   statuses?: ReadonlyMap<string, ToolStatus>;
+  /** Set while the call runs on as a background process. */
+  background?: BackgroundTask;
   onClose: () => void;
 }) {
   const kind = kindOf(tool);
@@ -176,8 +199,18 @@ function ToolDetail({
         <span className={styles.title}>{toolTitle(tool)}</span>
         {server && <McpBadge server={server} />}
         <span className={styles.meta}>
-          {duration && <span>{duration}</span>}
-          {status === "in_progress" ? <Spinner /> : <StatusGlyph status={status} />}
+          {/* A call still running in the background reads as its row does. */}
+          {background ? (
+            <>
+              <BackgroundElapsed since={background.started_at} />
+              <Spinner />
+            </>
+          ) : (
+            <>
+              {duration && <span>{duration}</span>}
+              {status === "in_progress" ? <Spinner /> : <StatusGlyph status={status} />}
+            </>
+          )}
         </span>
         <button type="button" className={styles.close} aria-label="Close detail" onClick={onClose}>
           ✕
@@ -205,11 +238,22 @@ function ToolDetail({
             </>
           )
         )}
-        {result && (
-          <div className={result.is_error ? styles.error : undefined}>
-            <div className={styles.lbl}>{resultLabel(result, status)}</div>
-            <pre className={styles.pre}>{result.text ?? ""}</pre>
-          </div>
+        {result?.background && tool.id && client.streamToolOutput ? (
+          <BackgroundOutputView
+            key={tool.id}
+            sessionId={sessionId}
+            toolUseId={tool.id}
+            result={result}
+            running={background !== undefined}
+            open={client.streamToolOutput.bind(client)}
+          />
+        ) : (
+          result && (
+            <div className={result.is_error ? styles.error : undefined}>
+              <div className={styles.lbl}>{resultLabel(result, status)}</div>
+              <pre className={styles.pre}>{result.text ?? ""}</pre>
+            </div>
+          )
         )}
         {!result && status === "interrupted" && (
           <>
@@ -323,7 +367,7 @@ function SubagentDetail({
         <SubagentStream
           items={view.items}
           running={running}
-          summary={view.task?.summary}
+          summary={view.summary}
           statuses={statuses}
           permissions={permissions}
           onResolvePermission={onResolvePermission}
@@ -348,9 +392,17 @@ export function SubagentStream({
   onResolvePermission,
   selectedToolId,
   onOpenTool,
+  delegatesByToolUse,
+  onOpenDelegate,
 }: {
   items: SubStreamItem[];
   running: boolean;
+  /**
+   * Its last report, after the stream — only for a stream that doesn't
+   * hold its reports itself. Hidden while it runs: a revived subagent's
+   * report is the run before, and pinned under the new run's work it read
+   * as though nothing had happened since.
+   */
   summary?: string;
   statuses?: ReadonlyMap<string, ToolStatus>;
   permissions?: ReadonlyMap<string, PermissionRequest[]>;
@@ -359,6 +411,15 @@ export function SubagentStream({
   selectedToolId?: string;
   /** Opens one call's full detail; absent leaves the rows to their peek. */
   onOpenTool?: (tool: ToolUse) => void;
+  /**
+   * The session's delegates by their spawning call (Delegate.tool_use_id).
+   * An Agent (or legacy Task) call found here is a subagent this one
+   * spawned, and renders as a DelegateCallCard between the groups rather
+   * than as a row inside one; an unmatched call stays a plain row.
+   */
+  delegatesByToolUse?: ReadonlyMap<string, Delegate>;
+  /** Opens a spawned subagent's card in the main pane. */
+  onOpenDelegate?: (d: Delegate) => void;
 }) {
   // Same grouping components as the main stream: fold contiguous
   // tool/thinking items into groups between text paragraphs. While the
@@ -370,10 +431,19 @@ export function SubagentStream({
       | { type: "text"; text: string; timestamp?: string }
       | { type: "message"; text: string; timestamp?: string }
       | { type: "group"; entries: ActivityEntry[]; inFlight: boolean }
+      | { type: "delegate"; delegate: Delegate }
     )[] = [];
     for (const item of items) {
       if (item.type === "text" || item.type === "message") {
         out.push(item);
+        continue;
+      }
+      const spawned =
+        item.type === "tool" && item.tool.id && kindOf(item.tool) === "agent"
+          ? delegatesByToolUse?.get(item.tool.id)
+          : undefined;
+      if (spawned) {
+        out.push({ type: "delegate", delegate: spawned });
         continue;
       }
       const inFlight = running && item.type === "tool" && !item.tool.result;
@@ -385,7 +455,7 @@ export function SubagentStream({
       } else out.push({ type: "group", entries: [entry], inFlight });
     }
     return out;
-  }, [items, running]);
+  }, [items, running, delegatesByToolUse]);
 
   return (
     <>
@@ -398,6 +468,10 @@ export function SubagentStream({
               <SubStamp timestamp={b.timestamp} />
             </div>
             {b.text}
+          </div>
+        ) : b.type === "delegate" ? (
+          <div key={i} className={styles.subGroup}>
+            <DelegateCallCard delegate={b.delegate} onOpen={onOpenDelegate} />
           </div>
         ) : b.type === "text" ? (
           <div key={i} className={styles.subText}>
@@ -419,7 +493,7 @@ export function SubagentStream({
           </div>
         ),
       )}
-      {summary && (
+      {summary && !running && (
         <div className={styles.subText}>
           <Markdown className={styles.subProse} text={summary} breaks />
         </div>

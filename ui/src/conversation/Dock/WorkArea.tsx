@@ -1,24 +1,13 @@
 import { useEffect, useState } from "react";
 import { requestOpenSession } from "../../appNavigation";
 import { Popover } from "../../components/Popover/Popover";
-import type { Session, WorktreeTenant } from "../../router/types";
+import type { PushTarget, Session, WorktreeTenant } from "../../router/types";
 import { sessionLocation } from "../../router/sessionLocation";
 import { useElectronClipboardBridge } from "../TerminalRenderer/ptyBridge";
-import type { LandCardModel } from "../Worktree/worktreeCards";
-import {
-  autoResolvedCopy,
-  checkResolutionsPrompt,
-  nameFiles,
-  outsideControlTitle,
-  plural,
-  refusalCopy,
-  refusalDetailIsGit,
-  resolveConflictPrompt,
-  shortHash,
-  tidyOutsidePrompt,
-} from "../Worktree/worktreeCopy";
-import { isIsolated, workState, type WorkState } from "../Worktree/workState";
-import { landOutcomeKey, shortBranch } from "./dockLabels";
+import { outsideControlTitle, plural, tidyOutsidePrompt } from "../Worktree/worktreeCopy";
+import { WorkPath } from "../Worktree/WorkPath";
+import { isIsolated, workState, type LandRepo, type PushNext, type WorkState } from "../Worktree/workState";
+import { shortBranch } from "./dockLabels";
 import { UPWARD_RIGHT, cx } from "./Pickers";
 import type { DockWork } from "./SessionDock";
 import line from "./StatusLine.module.css";
@@ -29,15 +18,14 @@ export interface WorkAreaProps {
   workspaceName?: string;
   checkoutBranch?: string;
   work?: DockWork;
-  landOutcome?: LandCardModel;
   open: boolean;
   onOpen: () => void;
   onClose: () => void;
 }
 
-/** outsideControlTitle ends by telling the old header button's click; the dock's click opens the popover. */
+/** outsideControlTitle without its last sentence, the click: the popover's explainer says why, its buttons what to do. */
 function outsideWhy(files: number): string {
-  return outsideControlTitle(files).replace(/\s*Click to ask the agent to tidy up\.$/, "");
+  return outsideControlTitle(files).replace(/\s*Click to choose what to commit\.$/, "");
 }
 
 /** Why an in-place session has no Land, from its worktree status. */
@@ -50,30 +38,25 @@ interface NoLandNote {
 /**
  * The status line's right end: the `⎇ {workspace} / {branch} → {base}`
  * segment, then the Commit/Land control, sharing one upward popover that
- * says where the session works and offers Commit… and Land. A Land click
- * opens the popover and its outcome (landed, conflicted, refused — with the
- * refusal's own fix, e.g. "Ask the agent" for changes outside the session)
- * renders there, at the button, as well as in the transcript.
+ * says where the session works and where its work goes (WorkPath: Commit,
+ * then Land, then Push, each with its button). Land opens its confirmation
+ * (COMMIT-LAND-PUSH D12, LandDialog), where its refusals show; what it
+ * did is a card in the transcript.
  */
 export function WorkArea({
   session,
   workspaceName,
   checkoutBranch,
   work,
-  landOutcome,
   open,
   onOpen,
   onClose,
 }: WorkAreaProps) {
-  // Set by a Land click: the outcome key at that moment. Any other key that
-  // shows up afterwards is this click's answer.
-  const [awaiting, setAwaiting] = useState<{ before?: string } | null>(null);
-
   const where = sessionLocation(session, workspaceName);
   const isolated = isIsolated(session);
   const branch = isolated ? session.worktree_branch : session.worktree_branch || checkoutBranch;
   const base = isolated ? session.worktree_base : undefined;
-  const state = workState(session);
+  const state = workState(session, { push: work?.push, land: work?.land });
   const landing = Boolean(work?.landing);
 
   // An in-place session never offers Land; on opening, the popover asks the
@@ -113,29 +96,26 @@ export function WorkArea({
   if (!locText && !showControl) return null;
 
   function close() {
-    setAwaiting(null);
     onClose();
   }
   function toggleFresh() {
-    if (open) {
-      close();
-    } else {
-      setAwaiting(null);
-      onOpen();
-    }
+    if (open) close();
+    else onOpen();
   }
-  function land() {
+  // Land always asks (D12): its confirmation opens, on that branch or the first landable one.
+  function land(repo?: LandRepo) {
     if (!work || landing) return;
-    setAwaiting({ before: landOutcomeKey(landOutcome) });
-    onOpen();
-    work.onLand();
+    close();
+    work.onLand(repo);
   }
   function ask(text: string) {
     work?.onAskAgent?.(text);
     close();
   }
-
-  const fresh = awaiting && landOutcomeKey(landOutcome) !== awaiting.before ? landOutcome : undefined;
+  function commitDialog() {
+    close();
+    work?.onCommitDialog?.();
+  }
 
   const anchor = (
     <>
@@ -168,21 +148,24 @@ export function WorkArea({
           landing={landing}
           committing={work.committing}
           onCommit={work.onCommit}
-          onLand={land}
-          onOutside={toggleFresh}
+          onLand={() => land()}
+          onOutside={work.onCommitDialog ?? toggleFresh}
+          outsideOpensCommit={Boolean(work.onCommitDialog)}
+          onPush={work.onPush}
         />
       )}
     </>
   );
 
-  const uncommitted = session.uncommitted_count ?? 0;
-  const unlanded = isolated ? (session.unlanded_count ?? 0) : 0;
-  const outside = isolated ? (session.outside_count ?? 0) : 0;
-  const status = [
-    unlanded > 0 && `${plural(unlanded, "commit")} to land`,
-    uncommitted > 0 && `${plural(uncommitted, "file")} uncommitted`,
-    outside > 0 && `${plural(outside, "file")} changed outside this session`,
-  ].filter(Boolean);
+  // The path needs git: an isolated session, a branch, or counts the
+  // record has for some repo (a session started in a non-repo folder).
+  const inGit =
+    isolated ||
+    Boolean(branch) ||
+    (session.uncommitted_count ?? 0) > 0 ||
+    (session.repos?.length ?? 0) > 0 ||
+    (work?.push?.repos.length ?? 0) > 0 ||
+    (work?.land?.length ?? 0) > 0;
 
   // Where the agent actually runs: an isolated session's own worktree, else
   // the folder it works in place.
@@ -212,36 +195,31 @@ export function WorkArea({
                 <dd title={branchText}>{branchText}</dd>
               </>
             )}
-            <dt>Status</dt>
-            <dd className={status.length > 0 ? styles.warn : styles.plain} data-testid="work-status">
-              {status.length > 0 ? status.join(" · ") : "Nothing to commit or land"}
-            </dd>
           </dl>
-          {work && (
-            <div className={styles.acts}>
-              <button
-                type="button"
-                className={line.btn}
-                disabled={uncommitted === 0 || work.committing}
-                onClick={() => {
+          {inGit && (
+            <WorkPath
+              session={session}
+              committing={work?.committing}
+              landing={landing}
+              onCommit={
+                work &&
+                (() => {
                   close();
                   work.onCommit();
-                }}
-              >
-                {work.committing ? "Committing…" : "Commit…"}
-              </button>
-              {isolated && (
-                <button
-                  type="button"
-                  className={cx(line.btn, line.btnPrimary)}
-                  disabled={landing || state?.kind !== "land"}
-                  title={state?.kind === "land" ? undefined : landHeldTitle(state)}
-                  onClick={land}
-                >
-                  {landing ? "Landing…" : `Land into ${base}`}
-                </button>
-              )}
-            </div>
+                })
+              }
+              onLand={work && land}
+              land={work?.land}
+              onPush={
+                work?.onPush &&
+                ((target) => {
+                  close();
+                  work.onPush?.(target);
+                })
+              }
+              pushed={work?.pushed}
+              push={work?.push}
+            />
           )}
           {note && (note.detail || owner) && (
             <div className={cx(styles.outcome, styles.tone_quiet)} data-testid="no-land-note">
@@ -262,34 +240,28 @@ export function WorkArea({
               )}
             </div>
           )}
-          {state?.kind === "outside" && !fresh && (
+          {state?.kind === "outside" && (
             <div className={cx(styles.outcome, styles.tone_warn)} data-testid="outside-explainer">
               <b>Changes outside this session are holding Land back.</b> {outsideWhy(state.files)}
-              {work?.onAskAgent && (
+              {(work?.onCommitDialog || work?.onAskAgent) && (
                 <div className={styles.outcomeActs}>
-                  <button
-                    type="button"
-                    className={cx(line.btn, line.btnPrimary)}
-                    onClick={() => ask(tidyOutsidePrompt())}
-                  >
-                    Ask the agent
-                  </button>
+                  {work.onCommitDialog && (
+                    <button type="button" className={cx(line.btn, line.btnPrimary)} onClick={commitDialog}>
+                      Commit them…
+                    </button>
+                  )}
+                  {work.onAskAgent && (
+                    <button
+                      type="button"
+                      className={cx(line.btn, !work.onCommitDialog && line.btnPrimary)}
+                      onClick={() => ask(tidyOutsidePrompt())}
+                    >
+                      Ask the agent
+                    </button>
+                  )}
                 </div>
               )}
             </div>
-          )}
-          {awaiting && !fresh && landing && (
-            <div className={cx(styles.outcome, styles.tone_quiet)} data-testid="land-outcome" data-kind="landing">
-              Landing into {base}…
-            </div>
-          )}
-          {fresh && (
-            <LandOutcome
-              card={fresh}
-              landing={landing}
-              onAskAgent={work?.onAskAgent ? ask : undefined}
-              onLandAgain={work ? land : undefined}
-            />
           )}
         </div>
       </Popover>
@@ -347,25 +319,15 @@ function PathRow({ path, what, workDir }: { path: string; what: "folder" | "work
   );
 }
 
-function landHeldTitle(state: WorkState): string {
-  switch (state?.kind) {
-    case "commit":
-      return "Commit this session's changes first. Land only moves committed work.";
-    case "outside":
-      return "Files changed outside this session's change list hold Land back.";
-    default:
-      return "Nothing to land.";
-  }
-}
-
 /**
- * The status-line Commit/Land control (docs/SESSION-WORKTREES-DESIGN.md D4),
- * driven by workState(): Commit… while files are uncommitted, Land once the
- * folder is clean with commits ahead, a warn-styled "Changes outside · N"
- * when files off the change list hold Land back, hidden otherwise. It never
- * collapses in a narrow dock; only its counts and long words drop.
- * `data-work-state` ("commit" | "land" | "landing" | "outside") is what the
- * e2e suite reads.
+ * The status-line Commit/Land/Push control (docs/SESSION-WORKTREES-DESIGN.md
+ * D4, COMMIT-LAND-PUSH D5), driven by workState(): Commit… while files are
+ * uncommitted, Land once the folder is clean with commits ahead, a
+ * warn-styled "Changes outside · N" when files off the change list hold Land
+ * back, Push ↑N once everything is committed (and landed) with commits the
+ * remote lacks, hidden otherwise. It never collapses in a narrow dock; only
+ * its counts and long words drop. `data-work-state` ("commit" | "land" |
+ * "landing" | "outside" | "push") is what the e2e suite reads.
  */
 function WorkButton({
   state,
@@ -374,13 +336,19 @@ function WorkButton({
   onCommit,
   onLand,
   onOutside,
+  outsideOpensCommit,
+  onPush,
 }: {
   state: WorkState;
   landing: boolean;
   committing?: boolean;
   onCommit: () => void;
   onLand: () => void;
+  /** Opens the Commit dialog when the caller can, else the popover. */
   onOutside: () => void;
+  /** onOutside opens the Commit dialog: the title says so. */
+  outsideOpensCommit?: boolean;
+  onPush?: (target: PushTarget) => void;
 }) {
   if (landing) {
     return (
@@ -397,12 +365,30 @@ function WorkButton({
         className={cx(styles.work, styles.outside)}
         onClick={onOutside}
         aria-label={`Changes outside this session · ${plural(state.files, "file")}`}
-        title={`${outsideWhy(state.files)} Click for what to do.`}
+        title={
+          outsideOpensCommit ? outsideControlTitle(state.files) : `${outsideWhy(state.files)} Click for what to do.`
+        }
         data-work-state="outside"
       >
         <span className={line.vFull}>Changes outside</span>
         <span className={cx(line.vMid, line.vMidKeep)}>Outside</span>
         <span className={styles.count}> · {state.files}</span>
+      </button>
+    );
+  }
+  const pushTitle = (p: PushNext) => `Push ${plural(p.commits, "commit")}${p.repos > 1 ? ` in ${p.repos} repos` : ""}`;
+  if (state.kind === "push") {
+    if (!onPush) return null;
+    return (
+      <button
+        type="button"
+        className={styles.work}
+        onClick={() => onPush(state.target)}
+        title={pushTitle(state)}
+        data-work-state="push"
+      >
+        Push
+        <span className={cx(styles.count, line.lblFull)}> ↑{state.commits}</span>
       </button>
     );
   }
@@ -412,15 +398,36 @@ function WorkButton({
         type="button"
         className={styles.work}
         onClick={onLand}
-        title={`Land ${plural(state.commits, "commit")} into ${state.base}`}
+        title={
+          `Land ${plural(state.commits, "commit")}` +
+          (state.repos > 1 ? ` from ${state.repos} branches` : "") +
+          (state.base ? ` into ${state.base}` : "")
+        }
         data-work-state="land"
       >
-        Land<span className={line.vFull}> into {state.base}</span>
+        Land{state.base && <span className={line.vFull}> into {state.base}</span>}
         <span className={cx(styles.count, line.lblFull)}> ↑{state.commits}</span>
       </button>
     );
   }
-  return (
+  // Commits to push beside the files to commit (D11): "Commit… 4" then
+  // "Push ↑3". Push's word drops first as the dock narrows, leaving "↑3";
+  // its count never does — it's all that says what the button would send.
+  const push = state.push;
+  const alongside = push && onPush && (
+    <button
+      type="button"
+      className={styles.work}
+      onClick={() => onPush(push.target)}
+      title={pushTitle(push)}
+      aria-label={pushTitle(push)}
+      data-work-state="push"
+    >
+      <span className={line.vFull}>Push </span>
+      <span className={styles.count}>↑{push.commits}</span>
+    </button>
+  );
+  const commit = (
     <button
       type="button"
       className={styles.work}
@@ -428,123 +435,25 @@ function WorkButton({
       onClick={onCommit}
       title={
         `Commit ${plural(state.files, "file")}` +
+        (state.repos > 1 ? ` in ${state.repos} repos` : "") +
         (state.thenLand > 0 ? `, then land ${plural(state.thenLand, "commit")}` : "")
       }
       data-work-state="commit"
     >
       {committing ? "Committing…" : "Commit…"}
-      <span className={cx(styles.count, line.lblFull)}> {state.files}</span>
+      <span className={cx(styles.count, line.lblFull)}>
+        {" "}
+        {state.files}
+        {state.repos > 1 && ` · ${state.repos} repos`}
+      </span>
     </button>
   );
-}
-
-/** One Land outcome, in worktreeCopy's words, with the fix it offers. */
-function LandOutcome({
-  card,
-  landing,
-  onAskAgent,
-  onLandAgain,
-}: {
-  card: LandCardModel;
-  landing: boolean;
-  onAskAgent?: (text: string) => void;
-  onLandAgain?: () => void;
-}) {
-  const again = onLandAgain && (
-    <button type="button" className={line.btn} disabled={landing} onClick={onLandAgain}>
-      {landing ? "Landing…" : "Land again"}
-    </button>
+  return alongside ? (
+    <>
+      {commit}
+      {alongside}
+    </>
+  ) : (
+    commit
   );
-  switch (card.kind) {
-    case "landed":
-      return (
-        <div className={cx(styles.outcome, styles.tone_ok)} data-testid="land-outcome" data-kind="landed">
-          <b>Landed into {card.base ?? "its base"}.</b>
-          {card.mergeCommit && (
-            <>
-              {" "}
-              Merge commit <code>{shortHash(card.mergeCommit)}</code>.
-            </>
-          )}
-          {card.fastForwarded && " This session keeps going on top of it."}
-        </div>
-      );
-    case "conflicted": {
-      const base = card.base ?? "The base branch";
-      return (
-        <div className={cx(styles.outcome, styles.tone_warn)} data-testid="land-outcome" data-kind="conflicted">
-          <b>
-            {base} moved on: {plural(card.files.length, "file")} conflict{card.files.length === 1 ? "s" : ""}.
-          </b>{" "}
-          {card.files.length > 0 && (
-            <>
-              <code>{nameFiles(card.files, 4)}</code> changed on {base} too.{" "}
-            </>
-          )}
-          Nothing was merged, and your checkout is untouched.
-          {onAskAgent && (
-            <div className={styles.outcomeActs}>
-              <button
-                type="button"
-                className={cx(line.btn, line.btnPrimary)}
-                onClick={() => onAskAgent(resolveConflictPrompt(card.base, card.files))}
-              >
-                Ask the agent to resolve
-              </button>
-            </div>
-          )}
-        </div>
-      );
-    }
-    case "autoResolved": {
-      const copy = autoResolvedCopy(card.base, card.files);
-      return (
-        <div className={cx(styles.outcome, styles.tone_warn)} data-testid="land-outcome" data-kind="autoResolved">
-          <b>{copy.title}.</b> {copy.body}
-          <div className={styles.outcomeActs}>
-            {onAskAgent && (
-              <button
-                type="button"
-                className={cx(line.btn, line.btnPrimary)}
-                onClick={() => onAskAgent(checkResolutionsPrompt(card.base, card.files))}
-              >
-                Ask the agent to check
-              </button>
-            )}
-            {again}
-          </div>
-        </div>
-      );
-    }
-    case "refused": {
-      const copy = refusalCopy(card.reason, card.base, card.files, card.outside);
-      const showDetail = Boolean(card.detail) && (refusalDetailIsGit(card.reason) || copy.title === "Land didn't run");
-      const tidy = card.reason === "dirty" && card.outside?.length ? card.outside : undefined;
-      return (
-        <div
-          className={cx(styles.outcome, styles[`tone_${copy.tone}`])}
-          data-testid="land-outcome"
-          data-kind="refused"
-          data-reason={card.reason}
-        >
-          <b>{copy.title}.</b> {copy.body}
-          {showDetail && <pre className={styles.detail}>{card.detail}</pre>}
-          {((tidy && onAskAgent) || (copy.retry && again)) && (
-            <div className={styles.outcomeActs}>
-              {tidy && onAskAgent && (
-                <button
-                  type="button"
-                  className={cx(line.btn, line.btnPrimary)}
-                  onClick={() => onAskAgent(tidyOutsidePrompt(tidy))}
-                >
-                  Ask the agent
-                </button>
-              )}
-              {copy.retry && again}
-            </div>
-          )}
-        </div>
-      );
-    }
-  }
 }

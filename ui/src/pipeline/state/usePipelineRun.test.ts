@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { foldReducer, initialRunFoldState, usePipelineRun } from "./usePipelineRun";
+import { foldReducer, initialRunFoldState, usePipelineRun, useResumingRunFold } from "./usePipelineRun";
 import type { Envelope } from "../../router/types";
 import { FakeEventSource } from "../../router/testFakeEventSource";
 import { FakePipelineClient } from "../client/fixtures";
@@ -32,6 +32,51 @@ describe("usePipelineRun", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  // A shared "mounted" ref was set back to true by the next session's run,
+  // so the previous session's catch-up, landing late, seeded the new
+  // session's fold.
+  it("never lets an old session's late catch-up seed the new session's fold", async () => {
+    const client = newClient();
+    const run = (session_id: string) => ({
+      session_id,
+      run_seq: 10,
+      run_id: `run-${session_id}`,
+      started_at: "2026-10-19T10:00:00Z",
+      outcome: "running" as const,
+      tasks_done: 0,
+      tasks_blocked: 0,
+      tasks_skipped: 0,
+      cost_usd: 0,
+    });
+    vi.spyOn(client, "listRuns").mockImplementation(async (id) => (id === "old" ? [run("old")] : []));
+    let answerOld!: (v: Envelope[]) => void;
+    vi.spyOn(client, "getRunEvents").mockImplementation((id) =>
+      id === "old" ? new Promise<Envelope[]>((r) => (answerOld = r)) : Promise.resolve([]),
+    );
+    const pick = (runs: Parameters<Parameters<typeof useResumingRunFold>[2]>[0]) => runs[0];
+    const { result, rerender } = renderHook(({ id }) => useResumingRunFold(id, client, pick), {
+      initialProps: { id: "old" },
+    });
+    await waitFor(() => expect(client.getRunEvents).toHaveBeenCalledWith("old", 9));
+    rerender({ id: "new" });
+    await waitFor(() => expect(result.current.resuming).toBe(false));
+
+    await act(async () =>
+      answerOld([
+        {
+          seq: 10,
+          timestamp: "2026-10-19T10:00:00Z",
+          type: "pipeline.started",
+          actor: "pipeline",
+          session_id: "old",
+          payload: { run_id: "run-old" },
+        },
+      ]),
+    );
+    expect(result.current.state.runId).toBeUndefined();
+    expect(result.current.state.phase).toBe("idle");
   });
 
   it("seeds the task list on mount", async () => {

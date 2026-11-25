@@ -79,6 +79,29 @@ the details.
 `VITE_DEV_SERVER_URL` (set by `npm run dev`'s tooling) still takes priority when present,
 for the Vite dev-server loop.
 
+**The install token (the local front door, docs/LOCAL-FRONT-DOOR-DESIGN.md H7).** Every
+Router API call carries `Authorization: Bearer <token>`, the token in
+`$MADS_HOME/local.token`. The page never holds it and there is no cookie:
+
+- **Electron:** `electron/main.ts` reads the token file (refusing one other users can
+  read, or another user owns), caches it, re-reads it when the file changes
+  (`mads token rotate`), and adds the header to the window's requests — fetch,
+  `EventSource`, `<img>`, downloads — through `session.webRequest.onBeforeSendHeaders`
+  with a URL filter for the Router's origin only (`electron/localToken.ts`
+  `bearerInjector`, which checks the origin again and replaces any Authorization the
+  page set). Page code can't read a header added there. `linkOpener.ts`'s own
+  `GET /config` sends the bearer. Measured cost: none visible — a median 0.5 ms per
+  request through the hook and without it (`e2e/electron.spec.ts`).
+- **No plain browser:** a Chrome tab gets `401` on every call.
+- **`npm run dev`:** run the dev page inside Electron (`VITE_DEV_SERVER_URL`) with
+  `VITE_ROUTER_URL` set to the Router, and start the Router with
+  `-allowed-origins http://localhost:5173`: the page calls the Router directly, and main
+  adds the bearer for the Router's origin. The Vite proxy (`vite-router-proxy.ts`) still
+  forwards Router paths same-origin but **adds no credential** (H3).
+- A `401` shows "mads can't reach its token" (`ConfigGateFailure`), naming the token file
+  main reads (`window.mads.auth.tokenPath()` — the path and what was wrong with it,
+  never the token) and saying to restart the app.
+
 The app shell renders an icon rail plus whichever surface `App.tsx`'s
 `SURFACES` map resolves for the active rail item — Sessions, Retro, and
 Settings today, a teaching empty state for any rail item without a
@@ -554,7 +577,15 @@ This package has two, deliberately separate test layers:
   no mocks. It exists because the component layer above tests against fakes
   and can't catch the UI calling an endpoint the Router never implemented.
   Chromium only. Run via `make ui-smoke` from the repo root (not
-  `npm run test`, and not part of `make check`).
+  `npm run test`, and not part of `make check`). Each topology's scratch
+  `MADS_HOME` holds its own install token: the fixtures give every context
+  `extraHTTPHeaders` with the topology's bearer (what Electron's main adds below
+  the page; `test.use({ withToken: false })` for a context without it), and
+  Node-side calls go through `e2e/lib/auth.ts`'s `apiFetch`. `front-door.spec.ts`
+  covers the header on `EventSource` and the 401 screen; `electron.spec.ts` runs the
+  real Electron app (when its binary is installed) and pins the webRequest injection,
+  that page code can't observe the token, the Vite dev page inside Electron, and the
+  hook's latency.
 
 ## Router client (`src/router/`)
 
@@ -574,6 +605,16 @@ sanctioned idiom for live SSE updates alongside the `RouterClient` singleton
 for request/response calls. The server always names the
 SSE `event:` field after the envelope's own type (never a generic `message`
 event), so callers must pass the explicit `types` they want to receive.
+The bus is live-only: it reads `GET /events/head`, connects with
+`since=<head>` and resumes from its own cursor after that, so it never
+replays history (a `/events/head` 404/405 means the Router or Data Service
+predates the UI: the "Restart mads" banner). History comes from REST. A
+consumer that reads state on mount does it in four steps: (1) subscribe,
+(2) `await eventsReady()`, (3) read over REST, (4) merge the read with
+whatever events arrived meanwhile (live wins, or dedupe by seq). Why
+that order loses nothing is written as THE CONTRACT at the top of
+`events.ts`; `eventsReadyGuard.test.ts` fails any subscriber that skips the
+barrier unless it's on its live-only allowlist.
 `src/router/types.ts` hand-mirrors the `pkg/contracts` wire shapes actually
 consumed by the UI (snake_case fields, matching the JSON on the wire — no
 camelCase translation layer). Like the component kit and `tokens.css`, this

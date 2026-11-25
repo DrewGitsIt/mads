@@ -1,4 +1,5 @@
 import { RouterValidationError, type RouterClient } from "../../../router/client";
+import { fetchAllLinksFor } from "../../../router/fetchLinks";
 import { PRESET_GRANTS, type Link, type LinkCadence, type Session } from "../../../router/types";
 
 /**
@@ -263,10 +264,31 @@ export function worktreeConflict(a: Session | undefined, b: Session | undefined)
   return a.worktree_dir !== b.worktree_dir;
 }
 
+/**
+ * The device a session lives on, as mesh.ts's hostKey has it: "" for this
+ * one, including a session with no host (the list wasn't All devices).
+ */
+export function deviceOf(s: Session | undefined): string {
+  return !s?.host || s.host.self ? "" : s.host.name;
+}
+
+/**
+ * Why two sessions on different devices can't be linked: each host's Data
+ * Service owns its links, and a host's Mesh Service refuses link writes
+ * (cross-host links are a v1 non-goal).
+ */
+export const DIFFERENT_DEVICE = "Different device. Only sessions on the same device can be linked.";
+
+/** The rail card's short tag for a blocked reason. */
+export function linkBlockedTag(reason: string): string {
+  return reason === DIFFERENT_DEVICE ? "different device" : "separate worktree";
+}
+
 /** Why `other` can't be linked to `focus` at all, or undefined. */
 export function linkBlockedReason(focus: Session | undefined, other: Session | undefined): string | undefined {
   if (!focus || !other) return undefined;
   if (focus.id === other.id) return "A session can't link to itself.";
+  if (deviceOf(focus) !== deviceOf(other)) return DIFFERENT_DEVICE;
   if (worktreeConflict(focus, other)) {
     return "Each has its own isolated copy of the repo. Linked sessions must share one.";
   }
@@ -458,8 +480,7 @@ export async function applyLinkDraft(client: RouterClient, ops: PlanOp[]): Promi
       const result: ApplyResult = { appliedCount: i, total: ops.length, failed: failureOf(ops[i], err) };
       const sessionIds = [...new Set(ops.flatMap(opSessions))];
       try {
-        const lists = await Promise.all(sessionIds.map((id) => client.getSessionLinks(id)));
-        result.fresh = { sessionIds, links: lists.flat() };
+        result.fresh = { sessionIds, links: await fetchAllLinksFor(client, sessionIds) };
       } catch {
         // The live link feed will catch up; the next plan just starts from it.
       }

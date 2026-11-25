@@ -196,7 +196,7 @@ func TestLandStopsOnAutoResolved(t *testing.T) {
 	primaryBefore := cleanTree(t, s.primary)
 	repoBefore := repoState(t, s.primary)
 
-	res, err := s.ops.Land(context.Background(), "ses_test", Gates{})
+	res, err := s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestLandStopsOnAutoResolved(t *testing.T) {
 	}
 
 	// The second click finds the base already merged and lands.
-	res, err = s.ops.Land(context.Background(), "ses_test", Gates{})
+	res, err = s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestLandPlainCleanMergeWithDriverIsOneClick(t *testing.T) {
 	s.commit(t, contracts.CommitRequest{Message: "Feature"})
 	commitFile(t, s.primary, "elsewhere.txt", "base moved on\n")
 
-	res, err := s.ops.Land(context.Background(), "ses_test", Gates{})
+	res, err := s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestLandConflictWithDriverStillConflicts(t *testing.T) {
 	s := newIsolated(t)
 	conflictingWork(t, s)
 
-	res, err := s.ops.Land(context.Background(), "ses_test", Gates{})
+	res, err := s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestLandCleansDanglingLegacyDriver(t *testing.T) {
 	s.commit(t, contracts.CommitRequest{Message: "Session edit"})
 	commitFile(t, s.primary, "shared.txt", "a\nb\nc\nd\ne\nF\n")
 
-	res, err := s.ops.Land(context.Background(), "ses_test", Gates{})
+	res, err := s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +336,7 @@ func TestLandStopsOnUserRegisteredDriver(t *testing.T) {
 		t.Fatal(err)
 	}
 	conflictingWork(t, s)
-	res, err := s.ops.Land(context.Background(), "ses_test", Gates{})
+	res, err := s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +368,7 @@ func TestLandAutoResolvedWithRealMergiraf(t *testing.T) {
 	commitFile(t, s.primary, "sample.go", adjacentGoBase)
 	primaryBefore := cleanTree(t, s.primary)
 
-	res, err := s.ops.Land(context.Background(), "ses_test", Gates{})
+	res, err := s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,7 @@ func TestLandAutoResolvedWithRealMergiraf(t *testing.T) {
 		t.Error("an auto-resolved Land touched the user's checkout")
 	}
 
-	res, err = s.ops.Land(context.Background(), "ses_test", Gates{})
+	res, err = s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +405,7 @@ func TestLandOverlappingEditsConflictWithRealMergiraf(t *testing.T) {
 	s.commit(t, contracts.CommitRequest{Message: "Session edit"})
 	commitFile(t, s.primary, "sample.go", strings.Replace(adjacentGo, "x := 1", "x := 9", 1))
 
-	res, err := s.ops.Land(context.Background(), "ses_test", Gates{})
+	res, err := s.ops.Land(context.Background(), "ses_test", contracts.LandRequest{Message: "Land fix the thing"}, Gates{})
 	if err != nil {
 		t.Fatal(err)
 	}

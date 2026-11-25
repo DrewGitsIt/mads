@@ -5,6 +5,7 @@ import { test, expect } from "./fixtures";
 import { bootTopology, type Topology } from "./lib/topology";
 import { startFastModelFixture, type FastModelFixture } from "./lib/fastModelFixture";
 import { setupWorkspace } from "./lib/seed";
+import { apiFetch } from "./lib/auth";
 
 test.describe.configure({ mode: "serial" });
 
@@ -49,6 +50,8 @@ test("first run wizard onboards a fresh install", async ({ page }) => {
   writeClaudeConversation(topology.homeDir, "-e2e-live", "22222222-2222-4222-8222-222222222222", workspaceDir, "add pagination to the audit log");
   writeClaudeConversation(topology.homeDir, "-e2e-gone", "33333333-3333-4333-8333-333333333333", "/e2e/no/such/folder", "sketch the billing export");
 
+  // This spec's own topology has its own token.
+  await page.setExtraHTTPHeaders({ Authorization: `Bearer ${topology.token}` });
   await page.goto(topology.routerURL);
 
   await page.getByRole("button", { name: "Get started" }).click();
@@ -76,7 +79,7 @@ test("first run wizard onboards a fresh install", async ({ page }) => {
 
   await expect(page.getByLabel("Describe your goal")).toBeVisible();
 
-  const cfg = (await (await fetch(`${topology.routerURL}/config`)).json()) as {
+  const cfg = (await (await apiFetch(`${topology.routerURL}/config`)).json()) as {
     onboarding_complete: boolean;
     default_workspace?: string;
     default_provider?: string;
@@ -86,7 +89,7 @@ test("first run wizard onboards a fresh install", async ({ page }) => {
   expect(cfg.default_provider).toBe("fake");
 
   // The import created one dormant session per conversation, and only those.
-  const sessions = (await (await fetch(`${topology.routerURL}/sessions`)).json()) as { name: string; imported_from?: string }[];
+  const sessions = (await (await apiFetch(`${topology.routerURL}/sessions`)).json()) as { name: string; imported_from?: string }[];
   const imported = sessions.filter((s) => s.imported_from).map((s) => s.imported_from);
   expect(imported.sort()).toEqual([
     "11111111-1111-4111-8111-111111111111",

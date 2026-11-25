@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { isGoneError } from "../state/selectionFollowsList";
+import { refreshSessions } from "../../../router/sessionsStore";
+import { useIsRemoteHost } from "../../../router/hostScope";
+import { useSessionLive } from "../../../router/mesh";
 import { Button } from "../../../components/Button/Button";
 import { Toast } from "../../../components/Toast/Toast";
 import type { PipelineClient } from "../../../pipeline/client/pipelineClient";
 import type { RouterClient } from "../../../router/client";
-import { subscribeToEvents } from "../../../router/events";
+import { coalesce, type Coalescer } from "../../../router/coalesce";
+import { eventsReady, subscribeToEvents } from "../../../router/events";
 import {
   SESSION_SHELL_REFETCH_EVENT_TYPES,
   WORKSPACE_SESSION_EVENT_TYPES,
@@ -22,6 +27,7 @@ import { useLiveShells } from "../../../conversation/ShellDock/useLiveShells";
 import { requestShellToggle } from "../../../conversation/shellToggleSignal";
 import { requestStreamReattach } from "../../../conversation/streamReattachSignal";
 import type { ChangesFocus } from "../../../files/changesModel";
+import { GitUpdatingIndicator } from "./GitUpdatingIndicator";
 import { toWorkspaceTabId, WORKSPACE_TABS, type WorkspaceTabId } from "./tabRegistry";
 import { RUN_EVENT_TYPES } from "./usePipelineRunning";
 import { useLiveRunTaskCount } from "./useLiveRunTaskCount";
@@ -46,8 +52,8 @@ export interface SessionWorkspaceProps {
   /**
    * Sleep and wake this session. Not done here: both go through the one
    * controller the surface owns (useSessionSleep), which is what makes the
-   * kebab's "Sleep now" ask about unlanded commits exactly as the rail
-   * card's ⏸ does. Before that, this shell called terminate itself and the
+   * kebab's "Sleep now" ask about unlanded commits exactly as the rail's ✓
+   * (Done + sleep) does. Before that, this shell called terminate itself and the
    * question went unasked from the one place you were most likely to have
    * commits waiting.
    */
@@ -55,6 +61,18 @@ export interface SessionWorkspaceProps {
   onWake: (session: Session) => void;
   /** Leave this session's workspace for the Launchpad — not a lifecycle action. */
   onClose: () => void;
+  /**
+   * This session is gone (deleted from its menu, or found missing): move to
+   * its neighbour in the rail (SessionsSurface's selection-follows-list).
+   * Falls back to onClose when not given.
+   */
+  onLeave?: () => void;
+  /**
+   * Delete this session, owned by the surface so the pane moves to the
+   * neighbour before the request goes out. Without it, the workspace deletes
+   * and then leaves (or closes) itself.
+   */
+  onDelete?: () => void;
   /** Set for a session just created from the Launchpad — forwarded into the Conversation tab's context only. */
   provisioning?: boolean;
   onProvisioningDone?: () => void;
@@ -83,6 +101,8 @@ export function SessionWorkspace({
   onSleep,
   onWake,
   onClose,
+  onLeave,
+  onDelete,
   provisioning,
   onProvisioningDone,
   pendingFirstMessage,
@@ -98,6 +118,11 @@ export function SessionWorkspace({
   const [menuOpen, setMenuOpen] = useState(false);
   // The shell menu item reads "Open"/"Show"/"Hide" from these two: the host knows whether a shell lives, the dock store whether it is showing.
   const shellDock = useShellDockState(sessionId);
+  const leaveRef = useRef(onLeave);
+  leaveRef.current = onLeave;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const remoteHost = useIsRemoteHost();
   const liveShells = useLiveShells();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [actionError, setActionError] = useState<string>();
@@ -113,31 +138,78 @@ export function SessionWorkspace({
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
   const runTaskCount = useLiveRunTaskCount(sessionId, pipelineClient, running);
 
+  // The open session's record. Event-driven refetches are coalesced (a
+  // reconnect can bring a burst, everything since the bus's cursor, and one
+  // per event was a storm of GET /sessions/:id) and single-flight, so an older response can never be
+  // the last word. A user action's refetch (after a bounce, a failed rename)
+  // goes through now(): immediate, but still in turn with any fetch in flight.
+  const sessionFetch = useRef<Coalescer | null>(null);
   const refetchSession = useCallback(() => {
-    void routerClient.getSession(sessionId).then(setSession);
-  }, [routerClient, sessionId]);
+    sessionFetch.current?.now();
+  }, []);
 
   // One session-scoped subscription for everything this shell and its
   // Conversation tab need (session lifecycle, linked-session inject,
   // pipeline run status) instead of three — see
   // WORKSPACE_SESSION_EVENT_TYPES's own comment for why.
   useEffect(() => {
-    refetchSession();
+    let cancelled = false;
+    const fetcher = coalesce(() =>
+      routerClient.getSession(sessionId).then(
+        (s) => {
+          // A response for a session this shell no longer shows (sessionId
+          // changed, or unmounted) is dropped.
+          if (!cancelled) setSession(s);
+        },
+        (err: unknown) => {
+          // Gone (deleted elsewhere, on another device, by the CLI): stop
+          // reading it and move on. Anything else is a blip; the next
+          // event retries.
+          if (!cancelled && isGoneError(err)) (leaveRef.current ?? onCloseRef.current)();
+        },
+      ),
+    );
+    sessionFetch.current = fetcher;
     setRunning(false);
-    return subscribeToEvents(
+    // Set once a run event is heard: it outranks the run seed below.
+    let heardRun = false;
+    const unsubscribe = subscribeToEvents(
       { sessionId, types: WORKSPACE_SESSION_EVENT_TYPES },
       (envelope) => {
         if ((RUN_EVENT_TYPES as string[]).includes(envelope.type)) {
+          heardRun = true;
           setRunning(envelope.type === "pipeline.started");
         } else if ((SESSION_SHELL_REFETCH_EVENT_TYPES as string[]).includes(envelope.type)) {
-          refetchSession();
+          fetcher.request();
         }
         // Anything else in WORKSPACE_SESSION_EVENT_TYPES (task.*/stage.*/
         // file.changed/note.created) is there only for usePipelineRun's
         // shared subscription — this shell has nothing to do with it.
       },
     );
-  }, [refetchSession, sessionId]);
+    // Both mount reads wait for the bus's ready barrier (router/events.ts
+    // eventsReady), subscribed first: the bus never replays, so a read served
+    // before it fixes its cursor could miss an event landing in between.
+    // The record's read is the fetcher's; the run history seeds the
+    // run-in-flight flag (pipeline.started is never replayed either), and
+    // any run event heard first outranks it.
+    const ready = eventsReady(sessionId);
+    void ready.then(() => {
+      if (!cancelled) fetcher.now();
+    });
+    void ready
+      .then(() => (cancelled ? [] : routerClient.metricsPipelineRuns(sessionId)))
+      .then((runs) => {
+        if (!cancelled && !heardRun) setRunning(runs.some((r) => r.outcome === "running"));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      fetcher.cancel();
+      if (sessionFetch.current === fetcher) sessionFetch.current = null;
+      unsubscribe();
+    };
+  }, [routerClient, sessionId]);
 
   // BounceSession (supervisor.go) returns early with no respawn if
   // terminate fails (e.g. the child is busy past terminateGrace) — a
@@ -163,9 +235,16 @@ export function SessionWorkspace({
 
   async function confirmDelete() {
     setConfirmingDelete(false);
+    if (onDelete) {
+      onDelete();
+      return;
+    }
     try {
       await routerClient.deleteSession(sessionId);
-      onClose();
+      // Mesh mode: a peer's session.deleted doesn't reach this window's bus.
+      refreshSessions();
+      // To its neighbour, not the Launchpad: starting a new session is a choice.
+      (onLeave ?? onClose)();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     }
@@ -234,6 +313,7 @@ export function SessionWorkspace({
 
   return (
     <div className={styles.workspace}>
+      <LiveUpdatesNote sessionId={sessionId} />
       <div className={styles.bar}>
         <span className={styles.name}>
           {editingName && session ? (
@@ -313,6 +393,8 @@ export function SessionWorkspace({
             </button>
           ))}
         </nav>
+        {/* Right after the last tab, Changes: in view whichever tab is open. */}
+        <GitUpdatingIndicator routerClient={routerClient} sessionId={sessionId} />
         <span className={styles.spacer} />
 
         <div className={styles.kebabWrap}>
@@ -330,13 +412,18 @@ export function SessionWorkspace({
               sessionId={sessionId}
               activity={session.activity}
               shellState={shellMenuState(shellDock.open, liveShells.some((s) => s.sessionId === sessionId))}
-              onToggleShell={() => {
-                setMenuOpen(false);
-                // Shell lives in the (possibly hidden) Conversation tab — surface
-                // it first, then toggle the dock via the cross-tree signal.
-                selectTab("conversation");
-                requestShellToggle();
-              }}
+              // No shell for a session on another device (mesh mode, D7).
+              onToggleShell={
+                remoteHost
+                  ? undefined
+                  : () => {
+                      setMenuOpen(false);
+                      // Shell lives in the (possibly hidden) Conversation tab — surface
+                      // it first, then toggle the dock via the cross-tree signal.
+                      selectTab("conversation");
+                      requestShellToggle();
+                    }
+              }
               onRestartAgent={restartAgent}
               restartingAgent={restarting}
               onSleep={() => {
@@ -385,6 +472,7 @@ export function SessionWorkspace({
             active={tab.id === activeTab}
             routerClient={routerClient}
             pipelineClient={pipelineClient}
+            session={session ?? undefined}
             provisioning={provisioning}
             onProvisioningDone={onProvisioningDone}
             pendingFirstMessage={pendingFirstMessage}
@@ -415,4 +503,20 @@ export function openTasksTitle(b: OpenTaskBreakdown): string {
     b.blocked > 0 && `${b.blocked} blocked`,
   ].filter(Boolean);
   return `${total} open ${total === 1 ? "task" : "tasks"}: ${parts.join(", ")}`;
+}
+
+/**
+ * A remote session whose host's live updates don't reach this window
+ * (router/events.ts SessionLive): what's shown is what was last read.
+ */
+function LiveUpdatesNote({ sessionId }: { sessionId: string }) {
+  const live = useSessionLive(sessionId);
+  if (live.state === "live" || !live.peer) return null;
+  return (
+    <div className={styles.liveNote} role="status" data-live-updates={live.state}>
+      {live.state === "unavailable"
+        ? `Live updates unavailable from ${live.peer}: its mads is older than this one. What's shown is as of when it was opened.`
+        : `Live updates paused: ${live.peer} doesn't let this device view. They resume when it does.`}
+    </div>
+  );
 }

@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import { createSession, setConfig } from "./lib/seed";
+import { apiFetch } from "./lib/auth";
 
 const COMPOSER = "Message the agent — @ to mention, / for commands";
 
@@ -84,7 +85,7 @@ test.describe("session commands: /new and /new-follower", () => {
     await expect(header).toHaveText(goal);
     await expect(page.getByText(`you said new follower`)).toBeVisible();
 
-    const links = (await (await fetch(`${routerURL}/sessions/${thisId}/links`)).json()) as {
+    const links = (await (await apiFetch(`${routerURL}/sessions/${thisId}/links`)).json()) as {
       granting_session_id: string;
       subject_session_id: string;
       grants: string[];

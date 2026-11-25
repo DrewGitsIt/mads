@@ -16,6 +16,7 @@ import { makeFakeShellHost } from "./ShellDock/fakeShellHost";
 import { resetShellDockCache } from "./ShellDock/dockState";
 import type { Link } from "../router/types";
 import { setPlatform } from "../platform/shortcut";
+import { WORKTREE_REFRESH_FOCUS_SKIP_MS } from "./Worktree/worktreeRefresh";
 
 // Same fake-Monaco precedent as Composer.test.tsx — drives the real onMount
 // callback (addCommand for the send-from-editor chord) so the terminal-mode
@@ -837,7 +838,9 @@ describe("ConversationTab", () => {
     };
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(new Response(JSON.stringify([link]), { status: 200 })),
+      // A fresh Response per call: a body reads once, and more than one GET
+      // goes out through fetch on mount.
+      vi.fn().mockImplementation(async () => new Response(JSON.stringify([link]), { status: 200 })),
     );
     const client = new FakeRouterClient();
     vi.spyOn(client, "getTranscriptPage").mockResolvedValue(page([]));
@@ -1237,10 +1240,24 @@ describe("ConversationTab", () => {
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
     await waitFor(() => expect(client.refreshWorktreeCountsCalls).toEqual(["session-active"]));
 
+    // A focus right after that recount finished has nothing newer to see.
+    await act(async () => {});
     act(() => {
       window.dispatchEvent(new Event("focus"));
     });
-    await waitFor(() => expect(client.refreshWorktreeCountsCalls).toEqual(["session-active", "session-active"]));
+    expect(client.refreshWorktreeCountsCalls).toEqual(["session-active"]);
+
+    // Once the skip window has passed, a focus recounts.
+    const later = Date.now() + WORKTREE_REFRESH_FOCUS_SKIP_MS + 1;
+    const now = vi.spyOn(Date, "now").mockReturnValue(later);
+    try {
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      await waitFor(() => expect(client.refreshWorktreeCountsCalls).toEqual(["session-active", "session-active"]));
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("seeds the context meter from session.last_usage on mount, before any turn_end", async () => {

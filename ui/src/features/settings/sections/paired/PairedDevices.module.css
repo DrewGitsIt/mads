@@ -1,0 +1,402 @@
+/* Settings → Paired devices (docs/mockups/paired-devices-v3.html): the panel,
+   This device bar, the table with inline details, and the activity log. */
+
+/* The Settings column (SettingsCard's 760px), as every other section. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 760px;
+}
+.error {
+  color: var(--bad-fg);
+  font-size: var(--fs-sm);
+}
+.muted {
+  color: var(--text3);
+}
+
+/* A pairing just answered here, under the bar (not a toast over it). */
+.outcome {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  background: var(--bg1);
+  color: var(--text2);
+  font-size: var(--fs-body);
+}
+.outcome b {
+  color: var(--text);
+  font-weight: 600;
+}
+.outcomeMark {
+  color: var(--ok-fg);
+  font-weight: 700;
+}
+.outcomeText {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ThisDeviceBar */
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  background: var(--bg1);
+}
+.who {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.whoLabel {
+  white-space: nowrap;
+  color: var(--text3);
+  font: 400 var(--fs-sm) var(--sans);
+}
+.whoName {
+  min-width: 0;
+  font: 650 var(--fs-ui) var(--sans);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.barActions {
+  display: flex;
+  gap: var(--space-2);
+  flex: none;
+  margin-left: auto;
+}
+
+/* DeviceTable */
+.wrap {
+  container-type: inline-size;
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-body);
+}
+/* Sentence-case headers, as SettingRow labels read (no uppercase caps). */
+.table th {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  color: var(--text3);
+  font: 500 var(--fs-sm) var(--sans);
+  border-bottom: 1px solid var(--line-soft);
+  white-space: nowrap;
+}
+.table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.table th:first-child,
+.table td:first-child {
+  padding-left: var(--space-4);
+}
+.row {
+  cursor: pointer;
+}
+.row:hover td {
+  background: color-mix(in srgb, var(--bg2) 55%, transparent);
+}
+.row[aria-expanded="true"] td {
+  background: var(--bg2);
+  border-bottom-color: transparent;
+}
+.row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text);
+  font: 600 var(--fs-body) var(--sans);
+}
+.row:hover .nameText {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--text3);
+}
+.lets {
+  color: var(--text);
+  font-weight: 500;
+}
+.lets[data-level="none"],
+.lets[data-level="na"] {
+  color: var(--text3);
+  font-weight: 400;
+}
+.lets[data-stale] {
+  color: var(--text2);
+  font-style: italic;
+}
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+.chev {
+  width: 36px;
+  text-align: center;
+  color: var(--text3);
+}
+.chevCaret {
+  display: inline-block;
+  transform: rotate(-45deg);
+  transition: transform var(--dur) var(--ease-io);
+}
+/* A connection problem: the status reads in the bad colour (U3). */
+.row[data-problem] .statusText {
+  color: var(--bad-fg);
+}
+.row[aria-expanded="true"] .chevCaret {
+  transform: translateY(-0.1em) rotate(45deg);
+}
+.notPaired {
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text3);
+}
+.dot[data-dot="ok"] {
+  background: var(--ok-fg);
+}
+.dot[data-dot="warn"] {
+  background: var(--warn-fg);
+}
+.dot[data-dot="bad"] {
+  background: var(--bad-fg);
+}
+.dot[data-dot="off"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--text3);
+}
+.detailRow > td {
+  padding: 0 !important;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--line-soft);
+  white-space: normal;
+  cursor: default;
+}
+.detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: 0 var(--space-4) var(--space-4);
+  animation: detailIn var(--dur) var(--ease-out);
+}
+@keyframes detailIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+.detailTitle {
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--text2);
+  margin: var(--space-2) 0 6px;
+}
+.detailCard {
+  background: var(--bg1);
+}
+.optRow {
+  display: grid;
+  grid-template-columns: 1fr minmax(180px, 220px);
+  gap: var(--space-4);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+}
+.optStacked {
+  grid-template-columns: 1fr;
+}
+.optStacked .optHelp {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+.optRow + .optRow {
+  border-top: 1px solid var(--line-soft);
+}
+.optLabelLine {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.optLabel {
+  font: 500 var(--fs-ui) var(--sans);
+  color: var(--text);
+}
+.optHelp {
+  margin-top: 2px;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.optControl {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+.optControl > div {
+  width: 100%;
+}
+.optControl [role="radiogroup"] {
+  width: auto;
+}
+.detailFoot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--line-soft);
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+.spacer {
+  flex: 1;
+}
+.fpHelp b {
+  color: var(--text2);
+  font-weight: 600;
+}
+/* In the 760px column: tighter cells, details stacked; narrower, the
+   status wraps under its dot rather than going (Q4), and the read-only
+   "It lets" column goes first. */
+@container (max-width: 760px) {
+  .table th,
+  .table td {
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+  }
+  .detail {
+    grid-template-columns: 1fr;
+  }
+}
+@container (max-width: 640px) {
+  .letsCol {
+    display: none;
+  }
+  .table td:has(.status) {
+    white-space: normal;
+  }
+  .status {
+    align-items: baseline;
+    white-space: normal;
+    max-width: 11em;
+  }
+}
+
+/* DeviceActivity */
+.activityHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-2);
+}
+.activityTitle {
+  flex: 1;
+}
+.activityHead .activityTitle {
+  padding: 0;
+}
+.activityFilter {
+  width: 200px;
+}
+.activityFilter button {
+  padding: 5px 10px;
+  background: var(--bg0);
+  border-color: var(--line);
+  font-size: var(--fs-sm);
+}
+.activityList {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--space-4) var(--space-2);
+}
+.activityItem {
+  display: grid;
+  grid-template-columns: 104px 1fr auto;
+  gap: var(--space-3);
+  align-items: baseline;
+  padding: 6px 0;
+  border-top: 1px solid var(--line-soft);
+  font-size: var(--fs-sm);
+  color: var(--text2);
+}
+.activityItem:first-child {
+  border-top: 0;
+}
+.activityItem b {
+  color: var(--text);
+  font-weight: 600;
+}
+.activityItem time {
+  color: var(--text3);
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.activityItem > :first-child {
+  justify-self: start;
+}
+.compact {
+  padding: 0 var(--space-3) var(--space-2);
+}
+.compact .activityItem {
+  grid-template-columns: 1fr auto;
+}
+.compact .activityItem > :first-child {
+  display: none;
+}
+.activityEmpty {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+
+/* Show sessions */
+.switchCell {
+  display: inline-flex;
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+/* Re-pair, after a "No longer paired on …" status (F6 R4). */
+.repair {
+  margin-left: var(--space-2);
+}

@@ -2,6 +2,7 @@ import type {
   CompactStatus,
   Delegate,
   DelegateState,
+  DelegateWaiting,
   Envelope,
   PermissionRequest,
   SubagentEvent,
@@ -197,6 +198,8 @@ export function anchorPermissions(
   items: ConversationItem[],
   requests: PermissionRequest[],
 ): { anchored: Map<string, PermissionRequest[]>; unanchored: PermissionRequest[] } {
+  // No cards (most commits): nothing to anchor, so no walk of every call.
+  if (requests.length === 0) return { anchored: new Map(), unanchored: [] };
   const rendered = new Set<string>();
   for (const item of items) {
     if (item.type === "task" && item.tool.id) rendered.add(item.tool.id);
@@ -222,16 +225,90 @@ export function anchorPermissions(
  * and `live` when the row is the current turn's own.
  */
 export function rowsToEntries(rows: KeyedRow[]): SourceEntry[] {
-  return rows.map((row): SourceEntry => {
-    const live = row.current || undefined;
-    if (row.role === "tool" && row.tool) {
-      return { type: "tool", tool: row.tool, timestamp: row.timestamp, live, key: row.key };
-    }
-    if (row.role === "thinking") {
-      return { type: "thinking", text: row.text ?? "", timestamp: row.timestamp, live, key: row.key };
-    }
-    return { type: "message", message: row, live, key: row.key };
+  return rows.map(entryOf);
+}
+
+/** Each row's entry, made once: rows are immutable, so a row that didn't change keeps its entry. */
+const entryCache = new WeakMap<KeyedRow, SourceEntry>();
+
+function entryOf(row: KeyedRow): SourceEntry {
+  const hit = entryCache.get(row);
+  if (hit) return hit;
+  const live = row.current || undefined;
+  const entry: SourceEntry =
+    row.role === "tool" && row.tool
+      ? { type: "tool", tool: row.tool, timestamp: row.timestamp, live, key: row.key }
+      : row.role === "thinking"
+        ? { type: "thinking", text: row.text ?? "", timestamp: row.timestamp, live, key: row.key }
+        : { type: "message", message: row, live, key: row.key };
+  entryCache.set(row, entry);
+  return entry;
+}
+
+/**
+ * The previous render's items, reused where nothing in them changed: an
+ * item is the same object as last time when it holds the same entries (by
+ * identity — rowsToEntries keeps a row's), so a memoized component skips it
+ * (docs/CHAT-STREAM-PER-BATCH-COST.md). `prev` is the last call's result;
+ * keys that are gone drop out.
+ */
+export function reuseItems(
+  prev: ReadonlyMap<string, ConversationItem>,
+  items: ConversationItem[],
+): { items: ConversationItem[]; byKey: Map<string, ConversationItem> } {
+  const byKey = new Map<string, ConversationItem>();
+  const out = items.map((item) => {
+    const old = prev.get(item.key);
+    const kept = old && sameItem(old, item) ? old : item;
+    byKey.set(item.key, kept);
+    return kept;
   });
+  return { items: out, byKey };
+}
+
+function sameItem(a: ConversationItem, b: ConversationItem): boolean {
+  if (a === b) return true;
+  switch (b.type) {
+    case "message":
+      return a.type === "message" && a.message === b.message && a.live === b.live;
+    case "activity":
+      return a.type === "activity" && a.live === b.live && sameList(a.entries, b.entries);
+    case "plan":
+      return (
+        a.type === "plan" &&
+        a.live === b.live &&
+        a.todos.length === b.todos.length &&
+        a.todos.every((t, i) => t.content === b.todos[i].content && t.status === b.todos[i].status)
+      );
+    case "task":
+      return a.type === "task" && a.tool === b.tool && a.timestamp === b.timestamp && a.live === b.live;
+    case "card":
+      return a.type === "card" && a.id === b.id;
+  }
+}
+
+/** Same length, same elements by identity. */
+export function sameList<T>(a: readonly T[], b: readonly T[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+/**
+ * anchorPermissions' lists, reused per anchor while they hold the same
+ * requests — so a card arriving for one call leaves every other call's list,
+ * and the item rendering it, as it was; and the whole map while every list is.
+ */
+export function reuseAnchored(
+  prev: ReadonlyMap<string, PermissionRequest[]>,
+  anchored: Map<string, PermissionRequest[]>,
+): ReadonlyMap<string, PermissionRequest[]> {
+  let all = anchored.size === prev.size;
+  for (const [id, list] of anchored) {
+    const old = prev.get(id);
+    if (old && sameList(old, list)) anchored.set(id, old);
+    else all = false;
+  }
+  // Nothing changed (the usual case: no cards at all): the map itself is last render's.
+  return all ? prev : anchored;
 }
 
 /**
@@ -306,6 +383,12 @@ export interface TaskModel {
   state?: DelegateState;
   /** Whether mads concluded `state` rather than the harness reporting it. */
   inferred?: boolean;
+  /**
+   * The record's waiting_on: its run completed but work it owns still runs,
+   * so it isn't finished — it picks up again when that reports back. Only
+   * ever set alongside state "completed".
+   */
+  waitingOn?: DelegateWaiting;
 }
 
 /** Folds one task lifecycle event into the map (immutably — safe as a state update). */
@@ -428,6 +511,7 @@ export function mergeDelegates(
       startedAt: d.started_at,
       state: d.state,
       inferred: d.inferred,
+      waitingOn: d.waiting_on,
       running: d.state === "running",
       completed: d.state === "completed",
       status: d.reason ?? prev.status,
@@ -454,10 +538,27 @@ function withPrior(prior: number | undefined, live: number | undefined): number 
   return prior === undefined && live === undefined ? undefined : (prior ?? 0) + (live ?? 0);
 }
 
-export function tasksByToolUse(tasks: ReadonlyMap<string, TaskModel>): Map<string, TaskModel> {
+export function tasksByToolUse(
+  tasks: ReadonlyMap<string, TaskModel>,
+  prev?: ReadonlyMap<string, TaskModel>,
+): Map<string, TaskModel> {
   const byTool = new Map<string, TaskModel>();
-  for (const t of tasks.values()) if (t.toolUseId) byTool.set(t.toolUseId, t);
+  for (const t of tasks.values()) {
+    if (!t.toolUseId) continue;
+    // mergeDelegates remakes every model on any change: keep the last
+    // one that reads the same, so only the changed task's card re-renders.
+    const old = prev?.get(t.toolUseId);
+    byTool.set(t.toolUseId, old && sameFields(old, t) ? old : t);
+  }
   return byTool;
+}
+
+/** Shallow equality: the same keys, each the same value. */
+function sameFields<T extends object>(a: T, b: T): boolean {
+  if (a === b) return true;
+  const ka = Object.keys(a) as (keyof T)[];
+  if (ka.length !== Object.keys(b).length) return false;
+  return ka.every((k) => k in b && Object.is(a[k], b[k]));
 }
 
 // ---------------------------------------------------------------------------
@@ -469,8 +570,9 @@ export type SubStreamItem =
    * line, or the first delta's arrival/persistence time). */
   | { type: "text"; text: string; timestamp?: string }
   /** Input the subagent was given — its prompt, or a message relayed through
-   * its parent. Only the subagent's own transcript has these: the live
-   * stream never carries them. */
+   * its parent. From its own transcript, or read back from the log's
+   * lifecycle lines (a run's "started" carries it); the live stream never
+   * carries them. */
   | { type: "message"; text: string; timestamp?: string }
   | ActivityEntry;
 
@@ -519,7 +621,12 @@ export function appendSubagentItem(
             ...owner.tool,
             // Preserve any enriched status/kind the result frame carries.
             ...(event.tool?.status ? { status: event.tool.status } : {}),
-            result: { text: event.text, is_error: event.is_error, timestamp: event.timestamp },
+            result: {
+              text: event.text,
+              is_error: event.is_error,
+              timestamp: event.timestamp,
+              background: event.tool?.background,
+            },
           },
         };
       }
@@ -531,6 +638,15 @@ export function appendSubagentItem(
   }
   next.set(parentToolUseId, items);
   return next;
+}
+
+/** Appends a whole item (a prompt or report) to one subagent's stream. */
+function pushSubagentItem(
+  streams: ReadonlyMap<string, SubStreamItem[]>,
+  parentToolUseId: string,
+  item: SubStreamItem,
+): Map<string, SubStreamItem[]> {
+  return new Map(streams).set(parentToolUseId, [...(streams.get(parentToolUseId) ?? []), item]);
 }
 
 // ---------------------------------------------------------------------------
@@ -552,8 +668,12 @@ export const CONVERSATION_EVENT_TYPES = [
   "session.compact",
 ];
 
-/** The subagents' own streams, read back only for a dock with no file to read. */
-export const SUBAGENT_STREAM_EVENT_TYPES = ["session.subagent_event"];
+/**
+ * The subagents' own streams, read back only for a dock with no file to
+ * read — with their lifecycle lines, which hold what the stream doesn't:
+ * each run's input and its final report.
+ */
+export const SUBAGENT_STREAM_EVENT_TYPES = ["session.subagent_event", "session.subagent_task"];
 
 export interface ConversationHistory {
   statuses: Map<string, ToolStatus>;
@@ -579,7 +699,27 @@ export function foldHistoryEvents(envelopes: Envelope[]): ConversationHistory {
       }
       case "session.subagent_task": {
         const p = env.payload as SubagentTask | undefined;
-        if (p?.task_id) tasks = applyTaskEvent(tasks, p, false, env.timestamp);
+        if (!p?.task_id) break;
+        tasks = applyTaskEvent(tasks, p, false, env.timestamp);
+        // The stream has the calls but none of the subagent's words: each
+        // run's input (a "started" line's prompt — the spawn's, or a
+        // message relayed through the parent) and its report (a
+        // notification's summary) go in where they happened, so a revived
+        // subagent reads as its turns, not one report pinned to the end.
+        const anchor = tasks.get(p.task_id)?.toolUseId;
+        if (anchor && p.phase === "started" && p.prompt) {
+          subagentStreams = pushSubagentItem(subagentStreams, anchor, {
+            type: "message",
+            text: p.prompt,
+            timestamp: env.timestamp,
+          });
+        } else if (anchor && p.phase === "notification" && p.summary) {
+          subagentStreams = pushSubagentItem(subagentStreams, anchor, {
+            type: "text",
+            text: p.summary,
+            timestamp: env.timestamp,
+          });
+        }
         break;
       }
       case "session.subagent_event": {

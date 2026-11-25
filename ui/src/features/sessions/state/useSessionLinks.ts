@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { router } from "../../../router/client";
-import { subscribeToEvents } from "../../../router/events";
+import { fetchLinksFor, type LinkChunk } from "../../../router/fetchLinks";
+import { eventsReady, subscribeToEvents } from "../../../router/events";
+import { peerOfSession } from "../../../router/sessionHosts";
+import { MESH_POLL_MS } from "../../../router/sessionsStore";
 import { FLAGS, subscribeFlags } from "../../../featureFlags";
 import type { Envelope, Link } from "../../../router/types";
 
@@ -16,27 +19,85 @@ export const LINK_REFETCH_COALESCE_MS = 100;
 export const LINK_REFETCH_MAX_WAIT_MS = 500;
 
 /**
- * Keeps every link touching a visible session. No bulk `GET /links` route
- * exists (docs/linked-sessions-mockup.html / ui/src/features/sessions/HANDOFF.md
- * decision D2) — only `GET /sessions/{id}/links`, which returns links where
- * that session is on either side. So for a link event between G and S,
- * refetching G and S, dropping every cached link touching either, and
- * inserting the results is exactly a full refetch — and link events fire
- * constantly (pipeline start/stop hand-raiser links, leader tool loads), so
- * refetching all N sessions per event is not affordable.
+ * How often links of sessions on other devices (mesh mode) are re-read.
+ * Their link events stay on the peer's bus, never this window's: an
+ * unscoped peer stream would replay the peer's whole link.* history over a
+ * relayed link on every load. So, like the All devices session list
+ * (sessionsStore's MESH_POLL_MS), they're polled: one GET /links for the
+ * visible remote ids, fanned out to their hosts by the Router.
+ */
+export const LINK_PEER_POLL_MS = MESH_POLL_MS;
+
+// One peer-poll clock for every mounted hook (the rail's and each open
+// remote conversation's), paused while the window is hidden and fired at
+// once when it's shown again. Each hook still reads its own ids: the rail's
+// read would cover a conversation's id, but sharing the answers would mean
+// sharing the caches, which apply() keeps per hook on purpose.
+const peerPollers = new Set<LinkSync>();
+let peerPollTimer: ReturnType<typeof setInterval> | undefined;
+
+const pageHidden = () => typeof document !== "undefined" && document.visibilityState === "hidden";
+
+function pollPeers(): void {
+  if (pageHidden()) return;
+  for (const sync of peerPollers) sync.refreshRemote();
+}
+
+function onVisibilityChange(): void {
+  if (!pageHidden()) pollPeers();
+}
+
+function addPeerPoller(sync: LinkSync): () => void {
+  peerPollers.add(sync);
+  if (peerPollTimer === undefined) {
+    peerPollTimer = setInterval(pollPeers, LINK_PEER_POLL_MS);
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisibilityChange);
+  }
+  return () => {
+    peerPollers.delete(sync);
+    if (peerPollers.size > 0 || peerPollTimer === undefined) return;
+    clearInterval(peerPollTimer);
+    peerPollTimer = undefined;
+    if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibilityChange);
+  };
+}
+
+export interface SessionLinksOptions {
+  /**
+   * Every id lives on another device, whether or not the session list has
+   * said so (a remote conversation opened by deep link, or with This device
+   * showing): they're polled too. A dark host costs nothing: the Router
+   * answers for it from what it last read, without dialling it.
+   */
+  remote?: boolean;
+}
+
+/**
+ * Keeps every link touching a visible session, read through the bulk
+ * `GET /links?session_ids=` route: every link where any listed session is
+ * on either side, each once. One request per MAX_LINK_SESSION_IDS ids
+ * (fetchLinksFor), so a normal rail is one request at load and one per
+ * flush. For a link event between G and S, refetching G and S, dropping
+ * every cached link touching either, and inserting the results is exactly a
+ * full refetch. Links stay out of `GET /sessions` on purpose: link events
+ * fire constantly (pipeline start/stop hand-raiser links, leader tool
+ * loads), and each would refetch the whole session list.
  *
  * Strategy: events add their in-set endpoints to a pending set, flushed
- * after a trailing quiet window (capped by a max wait) as one fetch per id,
- * one merge, one setLinks. Single-flight: events during a flight wait for
- * it to land, so responses apply in request order. A generation counter
- * drops results from before unmount or a flag flip; results for ids that
- * left the set mid-flight are skipped. Full refetch only on mount, flag-on,
- * and an unreadable event payload. Fetch errors keep the cache as is.
+ * after a trailing quiet window (capped by a max wait) as one request per
+ * chunk, one merge, one setLinks. Single-flight: events during a flight
+ * wait for it to land, so responses apply in request order. A generation
+ * counter drops results from before unmount or a flag flip; results for ids
+ * that left the set mid-flight are skipped. Full refetch only on mount,
+ * flag-on, and an unreadable event payload. A failed chunk keeps the cache
+ * for its ids. Sessions on other devices are re-read every
+ * LINK_PEER_POLL_MS instead of on events (see there).
  */
-export function useSessionLinks(sessionIds: string[]): Link[] {
+export function useSessionLinks(sessionIds: string[], options: SessionLinksOptions = {}): Link[] {
   const [links, setLinks] = useState<Link[]>([]);
   const [sync] = useState(() => new LinkSync(setLinks));
   const idsKey = [...sessionIds].sort().join(",");
+  sync.allRemote = options.remote ?? false;
 
   // Declared before the lifecycle effect so start() sees the initial ids.
   useEffect(() => {
@@ -44,12 +105,22 @@ export function useSessionLinks(sessionIds: string[]): Link[] {
   }, [sync, idsKey]);
 
   useEffect(() => {
-    sync.start();
+    let live = true;
     const unsubscribeEvents = subscribeToEvents({ types: LINK_EVENT_TYPES }, (env) => sync.onEvent(env));
+    // start()'s full read waits for the bus's ready barrier (router/events.ts
+    // eventsReady), subscribed first: the bus never replays, so a read served
+    // before it fixes its cursor could miss a link event landing in between.
+    // Until then the sync is inactive, so events and flag flips wait for it.
+    void eventsReady().then(() => {
+      if (live) sync.start();
+    });
     const unsubscribeFlags = subscribeFlags(() => sync.onFlags());
+    const stopPeerPoll = addPeerPoller(sync);
     return () => {
+      live = false;
       unsubscribeEvents();
       unsubscribeFlags();
+      stopPeerPoll();
       sync.stop();
     };
   }, [sync]);
@@ -115,7 +186,7 @@ class LinkSync {
 
   // Never a full refetch: added ids are fetched, and cached links that no
   // longer touch any visible id are dropped. A link between a kept and a
-  // removed session stays — the kept session's GET returns it too.
+  // removed session stays — the kept session's read returns it too.
   setIds(next: Set<string>): void {
     const added = [...next].filter((id) => !this.ids.has(id));
     this.ids = next;
@@ -161,6 +232,19 @@ class LinkSync {
     this.schedule();
   }
 
+  /** Every id is a remote session's (SessionLinksOptions.remote). */
+  allRemote = false;
+
+  // The peer poll: queues every visible id that lives on another device.
+  // None (no mesh, or This device only) is no request.
+  refreshRemote(): void {
+    if (!this.active || !this.enabled) return;
+    const remote = [...this.ids].filter((id) => this.allRemote || peerOfSession(id) !== undefined);
+    if (remote.length === 0) return;
+    for (const id of remote) this.pendingIds.add(id);
+    this.flush();
+  }
+
   private schedule(): void {
     const now = Date.now();
     if (this.windowStart === null) this.windowStart = now;
@@ -186,28 +270,28 @@ class LinkSync {
     if (targets.length === 0) return;
     this.inFlight = true;
     const generation = this.generation;
-    void Promise.allSettled(targets.map((id) => router.getSessionLinks(id))).then((results) => {
+    void fetchLinksFor(router, targets).then((chunks) => {
       if (generation !== this.generation) return;
       this.inFlight = false;
-      this.apply(targets, results);
+      this.apply(chunks);
       if ((this.pendingFull || this.pendingIds.size > 0) && !this.timer) this.flush();
     });
   }
 
-  private apply(targets: string[], results: PromiseSettledResult<Link[]>[]): void {
+  private apply(chunks: LinkChunk[]): void {
     const fetched = new Set<string>();
     const incoming: Link[] = [];
-    targets.forEach((id, i) => {
-      const result = results[i];
-      // A failed fetch leaves that id's cached links alone; an id that left
-      // the set mid-flight was already pruned by setIds.
-      if (result.status !== "fulfilled" || !this.ids.has(id)) return;
-      fetched.add(id);
+    for (const { ids, result } of chunks) {
+      // A failed chunk leaves its ids' cached links alone.
+      if (result.status !== "fulfilled") continue;
+      // An id that left the set mid-flight was already pruned by setIds.
+      for (const id of ids) if (this.ids.has(id)) fetched.add(id);
       incoming.push(...result.value);
-    });
+    }
     if (fetched.size === 0) return;
     for (const [id, link] of this.cache) if (touches(link, fetched)) this.cache.delete(id);
-    for (const link of incoming) this.cache.set(link.id, link);
+    // Keyed by id, so a link spanning two chunks lands once.
+    for (const link of incoming) if (touches(link, fetched)) this.cache.set(link.id, link);
     this.emit();
   }
 

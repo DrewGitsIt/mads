@@ -109,6 +109,84 @@
   min-width: 0;
 }
 
+/* A user message that carried held link updates (docs/HELD-UPDATES-DESIGN.md):
+   the attached strip over the typed text, one bubble (mockup C, .uWrap). */
+.withAttached {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: var(--measure-prose);
+}
+
+.attached {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  background: var(--bg2);
+  border-radius: var(--r);
+  padding: var(--space-1) var(--space-2);
+  font: var(--fs-chip) var(--sans);
+  color: var(--text2);
+}
+
+.attachedHead,
+.attachedToggle {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.attachedHead b {
+  color: var(--warn-fg);
+  font-weight: 600;
+}
+
+.attachedLine {
+  padding-left: var(--space-3);
+  color: var(--text3);
+  min-width: 0;
+}
+
+.attachedToggle {
+  display: flex;
+  gap: var(--space-1);
+  max-width: 100%;
+}
+
+.attachedSummary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachedSummary b {
+  font-weight: 600;
+}
+
+.attachedProse {
+  font: var(--fs-sm) var(--sans);
+  color: var(--text2);
+  line-height: 1.55;
+  overflow-wrap: break-word;
+  padding: var(--space-1) 0 var(--space-1) var(--space-3);
+}
+
+.attachedHead:focus-visible,
+.attachedToggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
 .injected {
   display: flex;
   flex-direction: column;

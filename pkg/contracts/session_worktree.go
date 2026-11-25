@@ -70,10 +70,74 @@ type WorktreeTenant struct {
 	Name string `json:"name"`
 }
 
+// CommitPlan is GET /sessions/{id}/commit-plan: everything the Commit
+// dialog lists (docs/COMMIT-LAND-PUSH-DESIGN.md D2) — every uncommitted
+// file in each of the session's repos, whoever changed it, and the
+// session's changed files outside every repo, which can't be committed
+// where they are. Computed on request.
+type CommitPlan struct {
+	// Repos are the session's repos with anything uncommitted, its
+	// folder's repo first. Never null.
+	Repos []CommitPlanRepo `json:"repos"`
+	// Outside are files the session changed outside every repo, absolute.
+	// Never null.
+	Outside []CommitPlanOutside `json:"outside"`
+	// MoveTargets are the repos an Outside file can be moved into (D4):
+	// the repos above, the repos directly inside a session folder that
+	// isn't one, and its workspace's repos. Never null.
+	MoveTargets []string `json:"move_targets"`
+}
+
+// CommitPlanRepo is one repo's section of the Commit dialog.
+type CommitPlanRepo struct {
+	// Root is the top of the repo's working tree: CommitRequest.Repo.
+	Root     string `json:"root"`
+	Branch   string `json:"branch,omitempty"`
+	Isolated bool   `json:"isolated,omitempty"`
+	// Primary marks the session folder's own repo.
+	Primary bool             `json:"primary,omitempty"`
+	Files   []CommitPlanFile `json:"files"`
+}
+
+// When a file not changed by the session was changed (CommitPlanFile.Since).
+const (
+	// ChangedDuringSession: it differs from the session-start snapshot.
+	ChangedDuringSession = "session"
+	// ChangedBeforeSession: it was already uncommitted when the session
+	// started, and hasn't changed since.
+	ChangedBeforeSession = "before"
+)
+
+// CommitPlanFile is one uncommitted file in a repo.
+type CommitPlanFile struct {
+	// Path is relative to the repo's Root.
+	Path string `json:"path"`
+	Kind string `json:"kind"` // added | modified | deleted
+	// Mine: the session's own tools changed it. The dialog checks these.
+	Mine bool `json:"mine,omitempty"`
+	// For a file that isn't Mine: the other session whose tools last
+	// changed it, when the ledger says; and when it changed, when the
+	// session-start snapshot can tell (ChangedDuringSession or
+	// ChangedBeforeSession; empty when it can't).
+	By    *WorktreeTenant `json:"by,omitempty"`
+	Since string          `json:"since,omitempty"`
+}
+
+// CommitPlanOutside is a file the session changed outside every repo.
+type CommitPlanOutside struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+}
+
 // CommitRequest is POST /sessions/{id}/commit.
 type CommitRequest struct {
-	// Paths are relative to the session's folder (WorktreeFile.Path).
-	// Empty means every uncommitted session file.
+	// Repo is the top of the repo to commit in, one of the session's
+	// (docs/COMMIT-LAND-PUSH-DESIGN.md D1). Empty is its folder's repo, or
+	// its only repo when the folder isn't one. Paths are relative to it.
+	Repo string `json:"repo,omitempty"`
+	// Paths are relative to the repo's top (WorktreeFile.Path). Empty
+	// means every uncommitted session file there. A named path may be any
+	// file git reports changed in the repo, the session's or not (D2).
 	Paths []string `json:"paths,omitempty"`
 	// Message is the commit message as the user wrote it; the Session:
 	// trailer is appended server-side. Empty is refused unless
@@ -108,7 +172,7 @@ const (
 )
 
 // CommitPath is one requested path's outcome. Reason is set for rejected
-// paths: "outside_folder", "not_session_file", "pipeline_task_file".
+// paths: "outside_folder", "pipeline_task_file".
 type CommitPath struct {
 	Path   string `json:"path"`
 	Status string `json:"status"`
@@ -137,6 +201,7 @@ const (
 	CommitNoFastModel     = "no_fast_model"
 	CommitDraftFailed     = "draft_failed"
 	CommitLocked          = "locked"
+	CommitUnknownRepo     = "unknown_repo"
 )
 
 // CommitError is a refused POST /sessions/{id}/commit (or /commit/draft):
@@ -156,6 +221,7 @@ type CommitError struct {
 // CommitDraftRequest is POST /sessions/{id}/commit/draft. Empty Paths
 // means every uncommitted session file.
 type CommitDraftRequest struct {
+	Repo  string   `json:"repo,omitempty"` // as CommitRequest.Repo
 	Paths []string `json:"paths,omitempty"`
 }
 
@@ -169,6 +235,7 @@ type CommitDraft struct {
 
 // UndoCommitRequest is POST /sessions/{id}/commit/undo.
 type UndoCommitRequest struct {
+	Repo string `json:"repo,omitempty"` // as CommitRequest.Repo
 	Hash string `json:"hash"`
 }
 
@@ -218,6 +285,10 @@ const (
 	// Another operation held the session's folder or the user's checkout
 	// past the Router's short wait; try again.
 	LandLocked = "locked"
+	// No landing message: Land squashes the branch into one commit on the
+	// base, whose message the user writes (docs/COMMIT-LAND-PUSH-DESIGN.md
+	// D12).
+	LandMessageRequired = "message_required"
 )
 
 // LandRefusal is why Land won't (or didn't) run.
@@ -254,4 +325,199 @@ type LandResult struct {
 	Outside []string `json:"outside,omitempty"`
 	Reason  string   `json:"reason,omitempty"`
 	Detail  string   `json:"detail,omitempty"`
+}
+
+// MoveRequest is POST /sessions/{id}/move: move a file the session changed
+// outside every repo into one (docs/COMMIT-LAND-PUSH-DESIGN.md D4).
+type MoveRequest struct {
+	// Path is the file, absolute (CommitPlanOutside.Path).
+	Path string `json:"path"`
+	// Repo is the top of the repo to move it into.
+	Repo string `json:"repo"`
+	// Dir is the folder inside Repo, relative; empty is the repo's top.
+	Dir string `json:"dir,omitempty"`
+}
+
+// MoveResult is a successful move: where the file is now, absolute.
+type MoveResult struct {
+	Path string `json:"path"`
+}
+
+// Move refusal codes (MoveError.Code).
+const (
+	MoveMissing        = "missing"          // the file isn't there any more
+	MoveNotSessionFile = "not_session_file" // not a file this session changed
+	MoveInRepo         = "in_repo"          // already in a repo: Commit can take it
+	MoveUnknownRepo    = "unknown_repo"     // Repo isn't the top of a git repo
+	MoveOutsideRepo    = "outside_repo"     // Dir leads out of Repo
+	MoveExists         = "exists"           // something is already at the destination
+	MoveIgnored        = "ignored"          // the repo ignores the destination
+	MoveFailed         = "failed"           // the filesystem said no
+)
+
+// MoveError is a refused move, rendered in the dialog's folder picker.
+type MoveError struct {
+	Code  string `json:"code"`
+	Error string `json:"error"`
+}
+
+// MoveFolder is a folder a file could move into, relative to its repo's
+// top, with how many files of the same kind it already holds.
+type MoveFolder struct {
+	Path    string `json:"path"`
+	Matches int    `json:"matches,omitempty"`
+}
+
+// Push targets (PushRequest.Target, docs/COMMIT-LAND-PUSH-DESIGN.md D5).
+const (
+	// PushBranch is the branch the work is on: an isolated session's own
+	// branch (from its worktree, ready for a PR), else the branch checked
+	// out where it works in place.
+	PushBranch = "branch"
+	// PushBase is an isolated session's base, from the user's checkout:
+	// what Land merged into.
+	PushBase = "base"
+)
+
+// PushRequest is POST /sessions/{id}/push.
+type PushRequest struct {
+	Repo   string `json:"repo,omitempty"`   // as CommitRequest.Repo
+	Target string `json:"target,omitempty"` // PushBranch (default) or PushBase
+	// Rebase: the user chose "Rebase onto origin and push" — rebase onto
+	// the remote branch first when it has commits this one doesn't. Never
+	// done otherwise.
+	Rebase bool `json:"rebase,omitempty"`
+	// Expect is the commit the confirmation showed at the branch's tip;
+	// a push refuses if the branch has moved since, so it never publishes
+	// commits the user didn't see listed. Empty skips the check.
+	Expect string `json:"expect,omitempty"`
+}
+
+// PushCommit is one commit a push would publish, or one coming in.
+type PushCommit struct {
+	Hash    string `json:"hash"`
+	Subject string `json:"subject"`
+}
+
+// PushPreview is GET /sessions/{id}/push: what the confirmation shows,
+// after fetching the remote branch.
+type PushPreview struct {
+	Repo   string `json:"repo"`   // the repo's top (the session's folder for an isolated branch push)
+	Target string `json:"target"` // PushBranch or PushBase
+	Dir    string `json:"dir"`    // where the push runs
+	Branch string `json:"branch,omitempty"`
+	Remote string `json:"remote,omitempty"`
+	// RemoteBranch is the branch it goes to on Remote; NewBranch when the
+	// remote has none yet (the push creates it and sets the upstream).
+	RemoteBranch string `json:"remote_branch,omitempty"`
+	NewBranch    bool   `json:"new_branch,omitempty"`
+	Head         string `json:"head,omitempty"`
+	// Commits would be published, newest first (at most 50; Ahead counts
+	// all of them).
+	Commits []PushCommit `json:"commits"`
+	Ahead   int          `json:"ahead"`
+	// Behind counts the remote's commits this branch lacks; Incoming lists
+	// them, newest first (at most 20). A push then needs a rebase first.
+	Behind   int          `json:"behind"`
+	Incoming []PushCommit `json:"incoming"`
+	// FetchError is set when the fetch failed: the counts are as of the
+	// last fetch, and the push will likely fail the same way.
+	FetchError string `json:"fetch_error,omitempty"`
+	// Blocked says why Push can't run at all; RebaseBlocked why "Rebase
+	// onto origin and push" can't, when Behind > 0.
+	Blocked       *PushRefusal `json:"blocked,omitempty"`
+	RebaseBlocked *PushRefusal `json:"rebase_blocked,omitempty"`
+}
+
+// Push refusal reasons (PushRefusal.Reason, PushResult.Reason).
+const (
+	PushNoRemote      = "no_remote"
+	PushDetached      = "detached"
+	PushNothingToPush = "nothing_to_push"
+	PushNotIsolated   = "not_isolated"    // PushBase on a session working in place
+	PushBehind        = "behind"          // the remote moved on and no rebase was asked for
+	PushMoved         = "moved"           // the branch moved since the confirmation (Expect)
+	PushBusy          = "busy"            // an agent is working in that folder: no rebase under it
+	PushPipeline      = "pipeline"        // a pipeline run is active for the session
+	PushNotCheckedOut = "not_checked_out" // a rebase needs the branch checked out there
+	PushMidOperation  = "mid_operation"
+	PushOverlap       = "overlap" // uncommitted files the incoming commits change
+	PushRebaseFailed  = "rebase_failed"
+	PushFailed        = "push_failed" // git push said no: rejected, auth, protected branch
+	PushLocked        = "locked"
+)
+
+// PushRefusal is why a push, or its rebase, won't run.
+type PushRefusal struct {
+	Reason string   `json:"reason"`
+	Detail string   `json:"detail,omitempty"`
+	Files  []string `json:"files,omitempty"`
+}
+
+// Push outcomes (PushResult.Outcome).
+const (
+	PushPushed     = "pushed"
+	PushRefused    = "refused"
+	PushConflicted = "conflicted" // the rebase hit conflicts and was aborted; nothing changed
+)
+
+// PushResult is POST /sessions/{id}/push's answer: HTTP 200 for all three
+// outcomes.
+type PushResult struct {
+	Outcome      string `json:"outcome"`
+	Branch       string `json:"branch,omitempty"`
+	Remote       string `json:"remote,omitempty"`
+	RemoteBranch string `json:"remote_branch,omitempty"`
+	// Rebased: the branch was rebased onto the remote before the push.
+	Rebased bool   `json:"rebased,omitempty"`
+	Head    string `json:"head,omitempty"`
+	Pushed  int    `json:"pushed,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	// Detail is human text, or git's output verbatim.
+	Detail string   `json:"detail,omitempty"`
+	Files  []string `json:"files,omitempty"`
+}
+
+// LandRequest is POST /sessions/{id}/land (D12): squash a branch's work
+// into one commit on its base.
+type LandRequest struct {
+	// Repo is the worktree to land (SessionRepoState.Root); empty is the
+	// session's own isolated worktree.
+	Repo string `json:"repo,omitempty"`
+	// Base overrides the inferred base branch; a chosen base is kept as
+	// confirmed for the branch's next Land.
+	Base string `json:"base,omitempty"`
+	// Message is the landing commit's message, written by the user (with
+	// a draft from POST /sessions/{id}/land/draft if they like). The
+	// Session: trailer is added. Required.
+	Message string `json:"message"`
+}
+
+// LandPreview is GET /sessions/{id}/land?repo=&base=: what the Land
+// confirmation shows.
+type LandPreview struct {
+	Repo   string `json:"repo"`
+	Branch string `json:"branch,omitempty"`
+	Base   string `json:"base,omitempty"`
+	// BaseSource says how Base was worked out: recorded (mads saw the
+	// branch made), confirmed (chosen in a Land before), reflog (the
+	// branch's creation names it), default (the repo's default branch),
+	// chosen (asked for in this request), or session (an isolated
+	// session's own base).
+	BaseSource string `json:"base_source,omitempty"`
+	Fork       string `json:"fork,omitempty"`
+	// Bases are the local branches the user may land into instead.
+	Bases []string `json:"bases"`
+	// Commits are the branch's commits the base doesn't have yet, copies
+	// left out, newest first (at most 50; ToLand counts all of them).
+	Commits []PushCommit `json:"commits"`
+	ToLand  int          `json:"to_land"`
+	// Blocked says why Land would be refused right now.
+	Blocked *LandRefusal `json:"blocked,omitempty"`
+}
+
+// LandDraftRequest is POST /sessions/{id}/land/draft.
+type LandDraftRequest struct {
+	Repo string `json:"repo,omitempty"`
+	Base string `json:"base,omitempty"`
 }

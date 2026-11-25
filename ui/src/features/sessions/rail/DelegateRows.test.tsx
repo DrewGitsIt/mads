@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { DEFAULT_DELEGATE_FADE_MS, DelegateRows, delegateFadeMs, visibleDelegates } from "./DelegateRows";
+import { DEFAULT_DELEGATE_FADE_MS, DelegateRows, delegateFadeMs, delegateTree, visibleDelegates } from "./DelegateRows";
+import type { DelegateNode } from "./DelegateRows";
 import type { Delegate } from "../../../router/types";
 
 const NOW = Date.parse("2026-10-08T12:00:00Z");
@@ -41,6 +42,16 @@ describe("visibleDelegates", () => {
       "ancient",
     ]);
     expect(delegateFadeMs(undefined)).toBe(DEFAULT_DELEGATE_FADE_MS);
+  });
+
+  it("reads a waiting delegate as live: never faded, sorted with the running ones", () => {
+    const waiting = d("waiting", {
+      state: "completed",
+      ended_at: ago(DEFAULT_DELEGATE_FADE_MS * 3),
+      started_at: "2026-10-08T11:00:00Z",
+      waiting_on: { subagents: 1 },
+    });
+    expect(ids(visibleDelegates([fresh, d("a"), waiting], NOW, 0))).toEqual(["waiting", "a"]);
   });
 
   it("puts running ones first, then the most recently finished — what folds behind '+N more' is the oldest", () => {
@@ -122,5 +133,179 @@ describe("DelegateRows", () => {
       <DelegateRows delegates={[d("old", { state: "completed", ended_at: "2026-10-08T11:00:00Z" })]} />,
     );
     expect(container.innerHTML).toBe("");
+  });
+});
+
+describe("delegateTree", () => {
+  const ago = (ms: number) => new Date(NOW - ms).toISOString();
+  const done = (id: string, extra: Partial<Delegate> = {}) => d(id, { state: "completed", ended_at: ago(5_000), ...extra });
+  const stale = (id: string, extra: Partial<Delegate> = {}) =>
+    d(id, { state: "completed", ended_at: ago(DEFAULT_DELEGATE_FADE_MS + 60_000), ...extra });
+  /** The tree as nested ids; a fold line reads "N finished". */
+  const shape = (nodes: DelegateNode[]): unknown[] =>
+    nodes.map((n) => {
+      const under = [...(n.folded.length ? [`${n.folded.length} finished`] : []), ...shape(n.children)];
+      return under.length ? [n.d.harness_id, under] : n.d.harness_id;
+    });
+
+  it("nests a subagent under the one that spawned it, and a row with an unknown parent at the top", () => {
+    const list = [d("m"), d("kid", { parent_harness_id: "m" }), d("orphan", { parent_harness_id: "gone" })];
+    expect(shape(delegateTree(list, NOW).roots)).toEqual([["m", ["kid"]], "orphan"]);
+  });
+
+  it("folds a shown parent's finished subagents into one line, first, above its live ones", () => {
+    const list = [
+      d("m"),
+      d("live", { parent_harness_id: "m" }),
+      done("f1", { parent_harness_id: "m" }),
+      done("f2", { parent_harness_id: "m" }),
+    ];
+    expect(shape(delegateTree(list, NOW).roots)).toEqual([["m", ["2 finished", "live"]]]);
+    // Unfolded, they are rows of their own, after the live ones.
+    expect(shape(delegateTree(list, NOW, { unfolded: new Set(["m"]) }).roots)).toEqual([["m", ["live", "f1", "f2"]]]);
+  });
+
+  it("lists the open delegate's finished subagents in full; theirs only while live", () => {
+    const list = [
+      d("m"),
+      done("kid", { parent_harness_id: "m" }),
+      done("grandkid", { parent_harness_id: "kid" }),
+      d("live-grandkid", { parent_harness_id: "kid" }),
+    ];
+    expect(shape(delegateTree(list, NOW, { selectedHarnessId: "m" }).roots)).toEqual([
+      ["m", [["kid", ["1 finished", "live-grandkid"]]]],
+    ]);
+  });
+
+  it("shows the open delegate however long ago it finished, with its parents", () => {
+    const list = [stale("m"), stale("kid", { parent_harness_id: "m" })];
+    expect(shape(delegateTree(list, NOW).roots)).toEqual([]);
+    expect(shape(delegateTree(list, NOW, { selectedHarnessId: "kid" }).roots)).toEqual([["m", ["kid"]]]);
+  });
+
+  it("keeps a faded parent's row while a subagent of its is live, so the child has a home", () => {
+    const list = [stale("m"), d("kid", { parent_harness_id: "m" }), done("sib", { parent_harness_id: "m" })];
+    expect(shape(delegateTree(list, NOW).roots)).toEqual([["m", ["1 finished", "kid"]]]);
+  });
+
+  it("drops a faded parent and everything folded under it when nothing under it is live", () => {
+    const list = [stale("m"), done("kid", { parent_harness_id: "m" })];
+    expect(delegateTree(list, NOW).total).toBe(0);
+  });
+
+  it("counts top-level rows toward '+N more'; a row's subagents come with it", () => {
+    const list = [
+      d("a", { started_at: "2026-10-08T11:00:00Z" }),
+      ...["k1", "k2", "k3"].map((k) => d(k, { parent_harness_id: "a" })),
+      ...["b", "c", "e"].map((id) => d(id)),
+    ];
+    const tree = delegateTree(list, NOW);
+    expect(shape(tree.roots)).toEqual([["a", ["k1", "k2", "k3"]], "b", "c"]);
+    expect(tree.hidden).toBe(1);
+    // The open one's branch is kept, by its top-level row.
+    const opened = delegateTree([...list, d("deep", { parent_harness_id: "e" })], NOW, { selectedHarnessId: "deep" });
+    expect(shape(opened.roots)).toEqual([["a", ["k1", "k2", "k3"]], "b", "c", ["e", ["deep"]]]);
+    expect(opened.hidden).toBe(0);
+  });
+
+  it("treats a parent chain that loops as top-level rather than losing the rows", () => {
+    const list = [d("x", { parent_harness_id: "y" }), d("y", { parent_harness_id: "x" })];
+    expect(delegateTree(list, NOW).total).toBe(2);
+  });
+});
+
+describe("DelegateRows nesting", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("draws a waiting row with the waiting dial, no number, and what it waits on in the tooltip", () => {
+    render(
+      <DelegateRows
+        delegates={[
+          d("m", {
+            description: "Research mitigations",
+            state: "completed",
+            ended_at: new Date(NOW - 60_000).toISOString(),
+            duration_ms: 120_000,
+            waiting_on: { subagents: 2, processes: 1 },
+          }),
+          d("k1", { parent_harness_id: "m" }),
+          d("k2", { parent_harness_id: "m" }),
+        ]}
+      />,
+    );
+    const row = screen.getByText("Research mitigations").closest("button")!;
+    expect(row.getAttribute("data-state")).toBe("waiting");
+    expect(row.querySelector('[data-status="waiting"]')).toBeTruthy();
+    expect(row.textContent).toContain("waiting");
+    expect(row.textContent).not.toContain("2m 00s");
+    expect(row.title).toBe(
+      "Research mitigations (general-purpose) — turn ended, waiting on 2 subagents and a background command",
+    );
+  });
+
+  it("names one subagent and N background commands in a waiting tooltip", () => {
+    render(
+      <DelegateRows
+        delegates={[d("m", { description: "M", state: "completed", ended_at: new Date(NOW).toISOString(), waiting_on: { subagents: 1, processes: 3 } })]}
+      />,
+    );
+    expect(screen.getByText("M").closest("button")!.title).toBe(
+      "M (general-purpose) — turn ended, waiting on 1 subagent and 3 background commands",
+    );
+  });
+
+  it("nests a subagent's rows one level in, and unfolds its finished ones on a click", () => {
+    const onOpen = vi.fn();
+    const ended = new Date(NOW - 5_000).toISOString();
+    render(
+      <DelegateRows
+        delegates={[
+          d("m"),
+          d("live", { parent_harness_id: "m" }),
+          d("f1", { parent_harness_id: "m", state: "completed", ended_at: ended }),
+        ]}
+        onOpen={onOpen}
+      />,
+    );
+    const nested = screen.getByTestId("delegate-nested");
+    expect(nested.textContent).toContain("task live");
+    expect(screen.queryByText("task f1")).toBeNull();
+    const fold = screen.getByText(/^1 subagent finished/);
+    // First under the parent, above its live subagent.
+    expect(nested.firstElementChild).toBe(fold);
+    fireEvent.click(fold);
+    expect(screen.getByText("task f1")).toBeTruthy();
+    expect(screen.queryByText(/subagent finished/)).toBeNull();
+    expect(onOpen).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("task live"));
+    expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ harness_id: "live" }));
+  });
+
+  it("counts only top-level rows toward '+N more'", () => {
+    render(
+      <DelegateRows
+        delegates={[
+          d("a", { started_at: "2026-10-08T11:00:00Z" }),
+          d("k1", { parent_harness_id: "a" }),
+          d("k2", { parent_harness_id: "a" }),
+          d("b"),
+          d("c"),
+          d("e"),
+        ]}
+      />,
+    );
+    expect(screen.getAllByText(/^task /).map((el) => el.textContent)).toEqual([
+      "task a",
+      "task k1",
+      "task k2",
+      "task b",
+      "task c",
+    ]);
+    fireEvent.click(screen.getByText("+1 more"));
+    expect(screen.getByText("task e")).toBeTruthy();
   });
 });

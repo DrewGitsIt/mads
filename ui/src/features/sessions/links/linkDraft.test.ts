@@ -11,7 +11,9 @@ import {
   firstDoubleLeader,
   firstLoop,
   leaderOf,
+  DIFFERENT_DEVICE,
   linkBlockedReason,
+  linkBlockedTag,
   loopThrough,
   mergeFreshLinks,
   pairChanges,
@@ -223,6 +225,22 @@ describe("validation", () => {
     expect(linkBlockedReason(a, s("b", { workspace: "w2", worktree_dir: "/wt/b" }))).toBeUndefined();
     expect(linkBlockedReason(a, a)).toMatch(/itself/);
   });
+
+  it("refuses a link between devices; a session with no host is this device's", () => {
+    const s = (id: string, host?: Session["host"]): Session => ({ id, name: id, activity: "inactive", created_at: "", updated_at: "", host });
+    const here = s("a");
+    const hereTagged = s("b", { name: "mac", self: true, reachable: true });
+    const pop = s("p", { name: "pop-os", self: false, reachable: true });
+    const pop2 = s("q", { name: "pop-os", self: false, reachable: false });
+    const spark = s("k", { name: "spark", self: false, reachable: true });
+    expect(linkBlockedReason(here, hereTagged)).toBeUndefined();
+    expect(linkBlockedReason(pop, pop2)).toBeUndefined();
+    expect(linkBlockedReason(here, pop)).toBe(DIFFERENT_DEVICE);
+    expect(linkBlockedReason(pop, hereTagged)).toBe(DIFFERENT_DEVICE);
+    expect(linkBlockedReason(pop, spark)).toBe(DIFFERENT_DEVICE);
+    expect(linkBlockedTag(DIFFERENT_DEVICE)).toBe("different device");
+    expect(linkBlockedTag("Each has its own isolated copy of the repo.")).toBe("separate worktree");
+  });
 });
 
 describe("plan", () => {
@@ -349,7 +367,8 @@ describe("applyLinkDraft", () => {
       deleteLink: vi.fn(() => Promise.resolve()),
       updateLink: vi.fn((id: string) => Promise.resolve({ id } as Link)),
       createLink: vi.fn(() => Promise.resolve({ id: "new" } as Link)),
-      getSessionLinks: vi.fn(() => Promise.resolve([] as Link[])),
+      listLinks: vi.fn(() => Promise.resolve([] as Link[])),
+      getSessionLinks: vi.fn(() => Promise.reject(new Error("use listLinks"))),
       ...over,
     } as unknown as RouterClient;
   }
@@ -364,14 +383,14 @@ describe("applyLinkDraft", () => {
   it("runs every op in order when nothing fails", async () => {
     const client = mockClient({});
     expect(await applyLinkDraft(client, ops())).toEqual({ appliedCount: 3, total: 3 });
-    expect(client.getSessionLinks).not.toHaveBeenCalled();
+    expect(client.listLinks).not.toHaveBeenCalled();
   });
 
   it("stops at the first failure, marks it transient, and hands back fresh links", async () => {
     const fresh = [link("p", "a", "leader")];
     const client = mockClient({
       updateLink: vi.fn(() => Promise.reject(new Error("router request failed: 502 bad gateway"))),
-      getSessionLinks: vi.fn((id: string) => Promise.resolve(id === "a" ? fresh : [])),
+      listLinks: vi.fn((ids: string[]) => Promise.resolve(ids.includes("a") ? fresh : [])),
     });
     const r = await applyLinkDraft(client, ops());
     expect(r.appliedCount).toBe(1);
@@ -381,6 +400,10 @@ describe("applyLinkDraft", () => {
     expect(client.createLink).not.toHaveBeenCalled();
     expect(r.fresh!.sessionIds.sort()).toEqual(["a", "b", "m", "x"]);
     expect(r.fresh!.links).toEqual(fresh);
+    // One bulk read for every session the plan touches, never one per session.
+    expect(client.listLinks).toHaveBeenCalledTimes(1);
+    expect([...vi.mocked(client.listLinks).mock.calls[0][0]].sort()).toEqual(["a", "b", "m", "x"]);
+    expect(client.getSessionLinks).not.toHaveBeenCalled();
   });
 
   it("marks a ValidationError as refused, with the server's sentence", async () => {
@@ -405,10 +428,12 @@ describe("applyLinkDraft", () => {
   it("still reports the failure when the refetch fails too", async () => {
     const client = mockClient({
       deleteLink: vi.fn(() => Promise.reject(new Error("offline"))),
-      getSessionLinks: vi.fn(() => Promise.reject(new Error("offline"))),
+      listLinks: vi.fn(() => Promise.reject(new Error("offline"))),
     });
     const r = await applyLinkDraft(client, ops());
     expect(r.appliedCount).toBe(0);
+    expect(r.failed).toMatchObject({ message: "offline" });
+    expect(client.listLinks).toHaveBeenCalledTimes(1);
     expect(r.fresh).toBeUndefined();
   });
 });

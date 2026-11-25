@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionsList } from "./useSessionsList";
+import { resetSessionsStoreForTests } from "../../../router/sessionsStore";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import type { Session } from "../../../router/types";
 
@@ -21,6 +22,9 @@ describe("useSessionsList", () => {
   });
 
   afterEach(() => {
+    // The list is one window-wide store; the bus resets itself once the
+    // store's subscription (the last one) goes.
+    resetSessionsStoreForTests();
     vi.unstubAllGlobals();
   });
 
@@ -60,11 +64,12 @@ describe("useSessionsList", () => {
     await waitFor(() => expect(result.current.sessions.map((s) => s.id)).toEqual(["s1"]));
   });
 
-  it("an earlier refetch that resolves after a later one doesn't clobber it (out-of-order responses)", async () => {
+  it("an event during an in-flight refetch gets one follow-up, so stale data can't be the last word", async () => {
     // Deferred so the test controls exactly when each GET /sessions
-    // resolves, independent of call order — reproducing a close's
-    // session.activity_changed refetch racing an unrelated session.updated
-    // refetch that was already in flight.
+    // resolves — reproducing a close's session.activity_changed landing
+    // while an unrelated session.updated refetch is already in flight. The
+    // store never runs two fetches at once, so the in-flight (stale) answer
+    // lands first and the follow-up (fresh) one lands after it.
     function deferred<T>() {
       let resolve!: (v: T) => void;
       const promise = new Promise<T>((r) => (resolve = r));
@@ -72,14 +77,14 @@ describe("useSessionsList", () => {
     }
 
     const mountResponse = deferred<Response>();
-    const firstRefetch = deferred<Response>(); // triggered first, resolves last
-    const secondRefetch = deferred<Response>(); // triggered second, resolves first
+    const firstRefetch = deferred<Response>(); // in flight when the close lands
+    const followUp = deferred<Response>(); // issued only after firstRefetch settles
 
     const fetchMock = vi
       .fn()
       .mockReturnValueOnce(mountResponse.promise)
       .mockReturnValueOnce(firstRefetch.promise)
-      .mockReturnValueOnce(secondRefetch.promise);
+      .mockReturnValueOnce(followUp.promise);
     vi.stubGlobal("fetch", fetchMock);
 
     const { result } = renderHook(() => useSessionsList());
@@ -93,26 +98,26 @@ describe("useSessionsList", () => {
         JSON.stringify({ seq: 1, type: "session.updated", actor: "user", session_id: "s1" }),
       );
     });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     act(() => {
       source.emit(
         "session.activity_changed",
         JSON.stringify({ seq: 2, type: "session.activity_changed", actor: "user", session_id: "s1" }),
       );
     });
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(fetchMock).toHaveBeenCalledTimes(2); // single-flight: no overlapping GET
 
-    // Later-triggered request (the real close) resolves first with the
-    // correct, fresh state.
-    secondRefetch.resolve(
+    // The in-flight request lands with stale data...
+    firstRefetch.resolve(new Response(JSON.stringify([makeSession("s1")]), { status: 200 }));
+    // ...and the event that arrived meanwhile buys exactly one more fetch.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    followUp.resolve(
       new Response(JSON.stringify([{ ...makeSession("s1"), activity: "inactive" }]), { status: 200 }),
     );
     await waitFor(() => expect(result.current.sessions[0].activity).toBe("inactive"));
-
-    // Earlier-triggered request resolves last with stale data — it must not
-    // overwrite the already-correct state.
-    firstRefetch.resolve(new Response(JSON.stringify([makeSession("s1")]), { status: 200 }));
-    await new Promise((r) => setTimeout(r, 0));
-    expect(result.current.sessions[0].activity).toBe("inactive");
+    await new Promise((r) => setTimeout(r, 100));
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("createSession POSTs to /sessions and returns the created session", async () => {

@@ -166,6 +166,17 @@ type streamSession struct {
 	// on "Working…" with a climbing counter, 2026-09-30.
 	turnOpen   bool
 	unprompted bool
+	// starting is set by an init line that arrives while no turn is open:
+	// the CLI has begun a turn of its own (a background task's notification,
+	// a Monitor event, a peer message) and hasn't written an assistant line
+	// for it yet. The model can think for many seconds before that first
+	// line, and a Send landing in that gap is folded into the CLI's turn just
+	// as one landing after it is, so it must not open a turn either
+	// (ses_aec91da75bd9e1f9, 2026-11-24: sent 1.1s into a notification turn
+	// whose first assistant line came 8.6s in, the turn's only result was
+	// suppressed and the session sat on "Thinking…"). An init inside an
+	// open turn is that turn's own continuation and leaves this alone.
+	starting bool
 	// compactedTo is the post_tokens of a compaction this turn ran, held
 	// for the turn's result line: /compact's result counts no tokens, so
 	// without it the turn end would report the conversation as empty.
@@ -206,7 +217,8 @@ type streamSession struct {
 	// subagent's process from the main agent's, and the line follows the
 	// roster immediately. A subagent's calls (sideCalls: tool_use id →
 	// spawning call, dropped once a task_started claims one) say which
-	// subagent a process belongs to.
+	// subagent a process belongs to — and which subagent spawned a nested
+	// one (nestedSpawnLocked).
 	background []provider.BackgroundTask
 	bgRoster   []wireRosterTask
 	bgCalls    map[string]bgCall
@@ -337,6 +349,7 @@ func (s *streamSession) handleLine(raw []byte) {
 		// second end there would double-fire every per-turn consumer.
 		closesUnprompted = !s.turnOpen && s.unprompted
 		s.unprompted = false
+		s.starting = false
 		if closesUnprompted {
 			turnCost = s.turnCostLocked(l.TotalCostUSD)
 			// A Stop pressed during this turn belongs to it, not the next.
@@ -355,6 +368,7 @@ func (s *streamSession) handleLine(raw []byte) {
 		s.interrupted = false
 		s.turnOpen = false
 		s.unprompted = false
+		s.starting = false
 		compactedTo, s.compactedTo = s.compactedTo, 0
 	case l.isPeerReplay() && !s.turnOpen && !s.unprompted:
 		// A peer message that arrived while nothing ran: the CLI runs a
@@ -365,11 +379,16 @@ func (s *streamSession) handleLine(raw []byte) {
 		// kind. One arriving inside an unprompted turn is absorbed into it,
 		// and that turn keeps its own ending.
 		s.turnOpen = true
+		s.starting = false
 	case l.Type == "assistant" && l.ParentToolUseID == "" && !s.turnOpen:
 		s.unprompted = true
+		s.starting = false
+	case l.Type == "system" && l.Subtype == "init" && !s.turnOpen && !s.unprompted:
+		s.starting = true
 	}
 	dropTask := s.isOtherTask(&l)
 	background, bgChanged := s.noteBackground(&l, time.Now())
+	nestedParent := s.nestedSpawnLocked(&l)
 	subagentWindow := 0
 	if u := l.Message.callUsage(); l.ParentToolUseID != "" && u != nil {
 		subagentWindow = s.windows[baseModel(u.Model)]
@@ -397,6 +416,9 @@ func (s *streamSession) handleLine(raw []byte) {
 		}
 		if ev.Account != nil {
 			ev.Account.Account = s.account
+		}
+		if ev.Kind == provider.EventTask && nestedParent != "" {
+			ev.ParentToolUseID = nestedParent
 		}
 		if ev.Kind == provider.EventSubagentUsage {
 			ev.Usage.ContextWindow = subagentWindow
@@ -512,6 +534,28 @@ func (s *streamSession) noteBackground(l *wireLine, now time.Time) ([]provider.B
 	return slices.Clone(next), true
 }
 
+// nestedSpawnLocked is, for a subagent's task_started line, the spawning
+// call of the subagent that spawned it — empty when the main agent did.
+// claude-code never parent-tags system lines, but the spawning Agent call
+// arrives first on an assistant line tagged with the spawning subagent's own
+// call (sideCalls), and the child's task_started names that Agent call as its
+// tool_use_id (claude-code 2.1.285; seen in the mads event log on
+// 2026-11-08: the tool_use, then three lines later the task_started). The
+// entry is dropped once claimed, as noteBackground does for a process. A
+// re-entry's task_started names its SendMessage call, which resolves the same
+// way when a subagent sent it. Caller holds s.mu.
+func (s *streamSession) nestedSpawnLocked(l *wireLine) string {
+	if l.Type != "system" || l.Subtype != "task_started" || !l.isAgentTask() || l.ToolUseID == "" {
+		return ""
+	}
+	parent, ok := s.sideCalls[l.ToolUseID]
+	if !ok {
+		return ""
+	}
+	delete(s.sideCalls, l.ToolUseID)
+	return parent
+}
+
 // isOtherTask reports whether l is a task-lifecycle line for a background
 // task that isn't a subagent — a run_in_background Bash call, a Monitor —
 // learning the task_id's kind from its task_started line. Those lines never
@@ -618,8 +662,9 @@ func (s *streamSession) send(text, id string) error {
 	// again: ses_359adef5b1c66ed5, 2026-10-25. The same rule as a peer
 	// message landing in an unprompted turn (handleLine). Should the CLI's
 	// own turn end just ahead of the message, the message runs as an
-	// unprompted turn and its plain result still ends it.
-	if !s.unprompted {
+	// unprompted turn and its plain result still ends it. The CLI's turn
+	// counts from its init line, not its first assistant line (starting).
+	if !s.unprompted && !s.starting {
 		s.turnOpen = true
 	}
 	s.mu.Unlock()

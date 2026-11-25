@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"path/filepath"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
@@ -18,16 +19,20 @@ import (
 var landHook func()
 
 func (r *Runner) worktreeOps() sessionwt.Ops {
-	return sessionwt.Ops{Store: r.data, Refresh: r.RefreshWorktreeCounts}
+	ops := sessionwt.Ops{Store: r.data, Refresh: r.RefreshWorktreeCounts}
+	if r.WorktreeRoot != "" {
+		ops.Home = filepath.Dir(r.WorktreeRoot) // $MADS_HOME/session-worktrees
+	}
+	return ops
 }
 
 // WorktreeStatus is the header/dialog state, with the busy gate filled in
 // from this runner. pipeline is the Router's word on an active run.
-func (r *Runner) WorktreeStatus(ctx context.Context, pipeline bool) (contracts.WorktreeStatus, error) {
+func (r *Runner) WorktreeStatus(ctx context.Context, repo string, pipeline bool) (contracts.WorktreeStatus, error) {
 	r.mu.Lock()
 	busy := r.busy || r.landing
 	r.mu.Unlock()
-	return r.worktreeOps().Status(ctx, r.sessionID, sessionwt.Gates{Busy: busy, Pipeline: pipeline})
+	return r.worktreeOps().Status(ctx, r.sessionID, repo, sessionwt.Gates{Busy: busy, Pipeline: pipeline})
 }
 
 // Commit commits the selected session files (D5). It doesn't wait for the
@@ -39,8 +44,8 @@ func (r *Runner) Commit(ctx context.Context, req contracts.CommitRequest) (contr
 
 // UndoCommit takes back the session's last Commit while it is still the
 // tip (D5).
-func (r *Runner) UndoCommit(ctx context.Context, hash string) (contracts.UndoCommitResult, error) {
-	return r.worktreeOps().Undo(context.WithoutCancel(ctx), r.sessionID, hash)
+func (r *Runner) UndoCommit(ctx context.Context, repo, hash string) (contracts.UndoCommitResult, error) {
+	return r.worktreeOps().Undo(context.WithoutCancel(ctx), r.sessionID, repo, hash)
 }
 
 // Land lands the session branch into its base (D6). It is refused while a
@@ -49,16 +54,16 @@ func (r *Runner) UndoCommit(ctx context.Context, hash string) (contracts.UndoCom
 // end even if the caller goes away: stopping git half-way through a merge
 // is the one outcome worse than either result, so Shutdown waits for it
 // too.
-func (r *Runner) Land(ctx context.Context, pipeline bool) (contracts.LandResult, error) {
+func (r *Runner) Land(ctx context.Context, req contracts.LandRequest, pipeline bool) (contracts.LandResult, error) {
 	ctx = context.WithoutCancel(ctx)
 	if !r.beginLanding() {
-		return r.worktreeOps().Land(ctx, r.sessionID, sessionwt.Gates{Busy: true, Pipeline: pipeline})
+		return r.worktreeOps().Land(ctx, r.sessionID, req, sessionwt.Gates{Busy: true, Pipeline: pipeline})
 	}
 	defer r.endLanding()
 	if landHook != nil {
 		landHook()
 	}
-	return r.worktreeOps().Land(ctx, r.sessionID, sessionwt.Gates{Pipeline: pipeline})
+	return r.worktreeOps().Land(ctx, r.sessionID, req, sessionwt.Gates{Pipeline: pipeline})
 }
 
 // beginLanding sets the landing flag unless a turn is in flight (or

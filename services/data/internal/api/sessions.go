@@ -179,6 +179,18 @@ func sessionRoutes(mux *http.ServeMux, log *store.Log) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	mux.HandleFunc("PATCH /sessions/{id}/notes", func(w http.ResponseWriter, r *http.Request) {
+		var patch contracts.SessionNotesPatch
+		if !decode(w, r, &patch) {
+			return
+		}
+		if err := s.SetNotes(r.Context(), r.PathValue("id"), patch); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
 	mux.HandleFunc("DELETE /sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.Delete(r.Context(), r.PathValue("id"), actor(r)); err != nil {
 			writeStoreError(w, err)
@@ -211,6 +223,22 @@ func sessionRoutes(mux *http.ServeMux, log *store.Log) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, res)
+	})
+
+	mux.HandleFunc("POST /file-changes/touchers", func(w http.ResponseWriter, r *http.Request) {
+		var req contracts.PathTouchersRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		list, err := s.PathTouchers(r.Context(), req.Paths, req.ExcludeSession)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		if list == nil {
+			list = []contracts.PathToucher{}
+		}
+		writeJSON(w, http.StatusOK, list)
 	})
 
 	mux.HandleFunc("GET /sessions/{id}/files", func(w http.ResponseWriter, r *http.Request) {

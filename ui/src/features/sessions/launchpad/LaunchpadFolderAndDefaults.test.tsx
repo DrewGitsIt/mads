@@ -109,7 +109,7 @@ describe("Launchpad folder + defaults", () => {
     expect(screen.getByText("spike")).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText("Describe your goal"), { target: { value: "go" } });
-    fireEvent.click(screen.getByText("Start session"));
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
     await waitFor(() =>
       expect(createSession).toHaveBeenCalledWith(
         expect.objectContaining({ dir: "~/scratch/spike", workspace: undefined }),
@@ -117,7 +117,7 @@ describe("Launchpad folder + defaults", () => {
     );
   });
 
-  it("shows a plain folder as in place on the pill, not as a warning below it", async () => {
+  it("warns about a plain folder's commits whatever the isolation, and leaves the worktree to the pill", async () => {
     stubRouter(
       (dir) =>
         dir
@@ -132,11 +132,43 @@ describe("Launchpad folder + defaults", () => {
     expect(isolationShown()).toBe("⎇ worktree");
 
     typeFolder("/tmp/notes");
-    await waitFor(() => expect(isolationShown()).toBe("▭ in place"));
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toMatch(
+        /^\/tmp\/notes isn't a git repository\. You can work here, but changes can only be committed in the repos the agent touches\./,
+      ),
+    );
+    // No worktree is the pill's to say, not the warning's.
+    expect(screen.getByRole("status").textContent).not.toMatch(/no worktree/);
+    expect(isolationShown()).toBe("▭ in place");
     expect(screen.getByTestId("folder-isolation").getAttribute("title")).toMatch(
       /notes isn't a git repository/,
     );
-    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("offers a plain folder's repos as shortcuts that pick that folder", async () => {
+    stubRouter(
+      (dir) =>
+        dir === "~/repo"
+          ? defaults({ dir: { value: dir }, dir_status: "plain", dir_repos: ["/home/me/repo/alpha", "/home/me/repo/mads"] })
+          : dir
+            ? defaults({ dir: { value: dir }, dir_status: "git" })
+            : defaults(),
+      { ...DEFAULT_CONFIG },
+    );
+    const createSession = vi.fn().mockResolvedValue({ id: "ses_1" });
+    render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(/mads \(default\)/)).toBeTruthy());
+
+    typeFolder("~/repo");
+    await waitFor(() => expect(screen.getByRole("status").textContent).toMatch(/Start in one of its repos instead: alpha · mads/));
+    fireEvent.click(screen.getByRole("button", { name: "mads" }));
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+
+    fireEvent.change(screen.getByLabelText("Describe your goal"), { target: { value: "go" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
+    await waitFor(() =>
+      expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ dir: "/home/me/repo/mads" })),
+    );
   });
 
   it("warns about a folder that isn't there, and won't save it as a default", async () => {
@@ -317,7 +349,7 @@ describe("Launchpad draft", () => {
       <Launchpad createSession={createSession} onSessionCreated={vi.fn()} />,
     );
     await stageDraft();
-    fireEvent.click(screen.getByText("Start session"));
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
     await waitFor(() =>
       expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ isolation: "current_dir" })),
     );
@@ -334,7 +366,7 @@ describe("Launchpad draft", () => {
       <Launchpad createSession={createSession} onSessionCreated={vi.fn()} />,
     );
     await stageDraft();
-    fireEvent.click(screen.getByText("Start session"));
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
     await waitFor(() => expect(screen.getByText(/spawn failed/)).toBeTruthy());
     unmount();
 

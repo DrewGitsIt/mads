@@ -1,0 +1,23 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.sentence {
+  font: 400 var(--fs-ui) / 1.4 var(--sans);
+  color: var(--text2);
+}
+.sentence b {
+  color: var(--text);
+  font-weight: 650;
+}
+.verb {
+  color: var(--accent);
+  font-weight: 650;
+}
+.desc {
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  min-height: 1.45em;
+}

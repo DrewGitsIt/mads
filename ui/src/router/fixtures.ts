@@ -1,8 +1,15 @@
 import type { RouterClient, SessionEventSource } from "./client";
 import { EVENTS_BATCH_LIMIT } from "./eventPages";
-import { CommitRefusedError, RouterValidationError } from "./client";
+import { isLiveDelegate } from "./delegateLive";
+import type { GitStateRevalidate, RequestOptions, SessionReposAnswer } from "./client";
+import { abortError, checkLinkSessionIds, CommitRefusedError, MoveRefusedError, RouterValidationError } from "./client";
+import { FakeEventSource } from "./testFakeEventSource";
 import type {
+  GitStatePart,
+  GitStateUpdatedPayload,
   Attachment,
+  HeldUpdate,
+  HeldUpdates,
   Delegate,
   DelegateTranscript,
   DelegateState,
@@ -18,7 +25,20 @@ import type {
   Commit,
   CommitDraft,
   CommitError,
+  CommitPlan,
   CommitRequest,
+  MoveError,
+  MoveFolder,
+  MoveRequest,
+  MoveResult,
+  PushPreview,
+  LandPreview,
+  LandRequest,
+  RepoWorktree,
+  SessionRepoState,
+  PushRequest,
+  PushResult,
+  PushTarget,
   CommitResult,
   Config,
   CostMetrics,
@@ -44,6 +64,8 @@ import type {
   Note,
   NoteType,
   PermissionRequest,
+  QueuedMessage,
+  SessionPermissionRequest,
   PipelinePickup,
   PipelineRun,
   PreflightCheck,
@@ -79,6 +101,17 @@ import type {
 import { PRESET_GRANTS } from "./types";
 
 export const fixtureLinks: Link[] = [];
+
+/** Settles as `p`, or rejects with an AbortError once `signal` aborts — as fetch does. */
+function abortable<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return p;
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
 
 export const fixtureSessions: Record<string, Session> = {
   "session-active": {
@@ -612,6 +645,12 @@ export class FakeSessionEventSource implements SessionEventSource {
     this.listeners.get(event.kind)?.forEach((listener) => listener(data));
   }
 
+  /** Test-only: one SSE event with its data verbatim (`event: <type>`, `data: <data>`). */
+  emitRaw(type: string, data: string, id?: string): void {
+    const ev = { data, lastEventId: id ?? "" } as MessageEvent<string>;
+    this.listeners.get(type)?.forEach((listener) => listener(ev));
+  }
+
   /** Test-only: one `/output?v=2` frame (`event: <kind>`, `id:` when given). */
   emitFrame(kind: string, data: Record<string, unknown> = {}, id?: string): void {
     const ev = { data: JSON.stringify({ kind, ...data }), lastEventId: id ?? "" } as MessageEvent<string>;
@@ -922,6 +961,99 @@ export const fixtureWorktreeStatus: WorktreeStatus = {
   unlanded_count: 3,
 };
 
+/** What the fixture Router's Push would send: two commits on the isolated session's branch, nothing coming in. */
+export const fixturePushPreview: PushPreview = {
+  repo: "/home/user/.mads/session-worktrees/session-isolated",
+  target: "branch",
+  dir: "/home/user/.mads/session-worktrees/session-isolated",
+  branch: "mads/session/session-isolated",
+  remote: "origin",
+  remote_branch: "mads/session/session-isolated",
+  head: "c0ffee1234",
+  commits: [
+    { hash: "c0ffee1234", subject: "deploy: detect Ubuntu 24.04 runners by codename" },
+    { hash: "b0a7ed5678", subject: "deploy: add runner_detect.sh" },
+  ],
+  ahead: 2,
+  behind: 0,
+  incoming: [],
+};
+
+// emitRepoChanged's seqs: above any a test seeds, and rising (the bus drops a repeated seq).
+let repoChangedSeq = 1_000_000_000;
+// emitGitStateUpdated's generations: rising, as the Router's are.
+let gitStateGeneration = 1_000;
+
+/** The isolated session's Land confirmation: three commits onto main, its own base. */
+export const fixtureLandPreview: LandPreview = {
+  repo: "/home/user/.mads/session-worktrees/session-isolated",
+  branch: "mads/session/session-isolated",
+  base: "main",
+  base_source: "session",
+  bases: ["main", "release"],
+  commits: [
+    { hash: "c0ffee1234", subject: "deploy: detect Ubuntu 24.04 runners by codename" },
+    { hash: "b0a7ed5678", subject: "deploy: add runner_detect.sh" },
+    { hash: "a11ce90123", subject: "deploy: drop old_detect.sh" },
+  ],
+  to_land: 3,
+};
+
+/** A checkout's branch facts for fixtures: on main at origin, nothing to push. */
+export function fixtureRepoWorktree(over: Partial<RepoWorktree> & { path: string }): RepoWorktree {
+  return {
+    git_dir: `${over.path}/.git`,
+    branch: "main",
+    remote: "origin",
+    remote_branch: over.branch ?? "main",
+    upstream: true,
+    ahead: 0,
+    behind: 0,
+    computed_at: "2026-11-15T00:00:00Z",
+    ...over,
+  };
+}
+
+/** The isolated session's repo: its worktree on its own branch, and the user's checkout on its base. */
+export const fixtureIsolatedRepoState: SessionRepoState = {
+  root: "/home/user/.mads/session-worktrees/session-isolated",
+  primary: true,
+  isolated: true,
+  base: "main",
+  worktree: fixtureRepoWorktree({
+    path: "/home/user/.mads/session-worktrees/session-isolated",
+    git_dir: "/home/user/repo/mads/.git",
+    branch: "mads/session/session-isolated",
+    upstream: false,
+    new_branch: true,
+  }),
+  base_worktree: fixtureRepoWorktree({ path: "/home/user/repo/mads", main: true, git_dir: "/home/user/repo/mads/.git" }),
+};
+
+/** A session's repo set as the fixture Router derives it from the record (FakeRouterClient.sessionRepos unset). */
+export function fixtureReposFor(session: Session): SessionRepoState[] {
+  if (session.worktree_dir && session.worktree_branch && session.worktree_base) {
+    const main = session.dir ?? "/home/user/repo/mads";
+    return [
+      {
+        ...structuredClone(fixtureIsolatedRepoState),
+        root: session.worktree_dir,
+        base: session.worktree_base,
+        worktree: fixtureRepoWorktree({
+          path: session.worktree_dir,
+          git_dir: `${main}/.git`,
+          branch: session.worktree_branch,
+          upstream: false,
+          new_branch: true,
+        }),
+        base_worktree: fixtureRepoWorktree({ path: main, main: true, git_dir: `${main}/.git`, branch: session.worktree_base }),
+      },
+    ];
+  }
+  const dir = session.cwd ?? session.dir;
+  return dir ? [{ root: dir, primary: true, worktree: fixtureRepoWorktree({ path: dir, main: true }) }] : [];
+}
+
 /**
  * The /usage card's three cases (docs/mockups/session-commands.html,
  * section 1; the same sessions pkg/contracts/testdata/session_report_*.json
@@ -1068,6 +1200,15 @@ export class FakeRouterClient implements RouterClient {
     return source;
   }
 
+  /** Every streamToolOutput source, with the call it was opened for. */
+  readonly toolOutputSources: { source: FakeSessionEventSource; sessionId: string; toolUseId: string }[] = [];
+
+  streamToolOutput(sessionId: string, toolUseId: string): SessionEventSource {
+    const source = new FakeSessionEventSource();
+    this.toolOutputSources.push({ source, sessionId, toolUseId });
+    return source;
+  }
+
   /** Every streamSessionV2 source, with the cursor it was opened with. */
   readonly v2Sources: { source: FakeSessionEventSource; after?: string }[] = [];
 
@@ -1113,6 +1254,10 @@ export class FakeRouterClient implements RouterClient {
     return `fixture://${who}/attachments/${attachmentId}${variant ? `/${variant}` : ""}`;
   }
 
+  async getQueue(): Promise<QueuedMessage[]> {
+    return [];
+  }
+
   async cancelQueuedMessage(): Promise<void> {}
 
   async interrupt(): Promise<void> {}
@@ -1135,6 +1280,50 @@ export class FakeRouterClient implements RouterClient {
     for (const [id, auth] of this.sessionAuth) {
       if (auth.account === account) this.sessionAuth.set(id, { ...auth, signed_out: false });
     }
+  }
+
+  /**
+   * The link mailbox's held updates, by recipient session id — tests set
+   * entries directly. Discard and restore move entries between the lists
+   * (by id, across every session); deliver empties both, as a deferred
+   * drain does.
+   */
+  readonly heldUpdates = new Map<string, HeldUpdates>();
+  /** Every deliverHeldUpdates call's session id, in call order. */
+  readonly deliveredHeld: string[] = [];
+
+  async getHeldUpdates(sessionId: string): Promise<HeldUpdates> {
+    return structuredClone(this.heldUpdates.get(sessionId) ?? { held: [], discarded: [] });
+  }
+
+  private moveHeld(ids: number[], discard: boolean): number {
+    let changed = 0;
+    for (const [id, h] of this.heldUpdates) {
+      const [from, to] = discard ? [h.held, h.discarded] : [h.discarded, h.held];
+      const moved = from.filter((u) => ids.includes(u.id));
+      if (moved.length === 0) continue;
+      changed += moved.length;
+      const byAge = (a: HeldUpdate, b: HeldUpdate) => a.created_at.localeCompare(b.created_at) || a.id - b.id;
+      const rest = from.filter((u) => !ids.includes(u.id));
+      const next = [...to, ...moved].sort(byAge);
+      this.heldUpdates.set(id, discard ? { held: rest, discarded: next } : { held: next, discarded: rest });
+    }
+    return changed;
+  }
+
+  async discardHeldUpdates(ids: number[]): Promise<number> {
+    return this.moveHeld(ids, true);
+  }
+
+  async restoreHeldUpdates(ids: number[]): Promise<number> {
+    return this.moveHeld(ids, false);
+  }
+
+  async deliverHeldUpdates(sessionId: string): Promise<number> {
+    this.deliveredHeld.push(sessionId);
+    const n = this.heldUpdates.get(sessionId)?.held.length ?? 0;
+    this.heldUpdates.delete(sessionId);
+    return n;
   }
 
   /** Reports getSessionReport serves, by session id — tests set entries directly. */
@@ -1181,6 +1370,12 @@ export class FakeRouterClient implements RouterClient {
 
   async getPermissionRequests(sessionId: string): Promise<PermissionRequest[]> {
     return this.permissionRequests.get(sessionId) ?? [];
+  }
+
+  async listPermissionRequests(): Promise<SessionPermissionRequest[]> {
+    return [...this.permissionRequests].flatMap(([session_id, list]) =>
+      list.filter((p) => p.status === "pending").map((p) => ({ ...p, session_id })),
+    );
   }
 
   async resolvePermissionRequest(sessionId: string, requestId: string): Promise<void> {
@@ -1478,17 +1673,29 @@ export class FakeRouterClient implements RouterClient {
     Object.entries(fixtureChangeSets).map(([id, cs]) => [id, structuredClone(cs)]),
   );
   readonly changeSetCalls: { sessionId: string; vs?: ChangeBaselineId }[] = [];
-  /** A function lets a test fail or hold back a fetch. */
+  /** The signal each getChangeSet call carried, in call order. */
+  readonly changeSetSignals: (AbortSignal | undefined)[] = [];
+  /** A function lets a test fail or hold back a fetch. An abort rejects the call with an AbortError either way. */
   changeSetOutcome?: (sessionId: string, vs?: ChangeBaselineId) => Promise<ChangeSet>;
   readonly deleteScratchCalls: { sessionId: string; paths: string[] }[] = [];
   /** Undefined deletes every requested path that is scratch in changeSets. */
   deleteScratchOutcome?: DeleteScratchResult;
 
-  async getChangeSet(sessionId: string, vs?: ChangeBaselineId): Promise<ChangeSet> {
+  async getChangeSet(sessionId: string, vs?: ChangeBaselineId, opts: RequestOptions = {}): Promise<ChangeSet> {
     this.changeSetCalls.push({ sessionId, vs });
-    if (this.changeSetOutcome) return this.changeSetOutcome(sessionId, vs);
+    this.changeSetSignals.push(opts.signal);
+    if (this.changeSetOutcome) return abortable(this.changeSetOutcome(sessionId, vs), opts.signal);
     const cs = this.changeSets.get(sessionId);
-    return cs ? { ...structuredClone(cs), baseline: vs ?? cs.baseline } : emptyChangeSet(vs);
+    // As the Router serves it (docs/GIT-STATE-DESIGN.md): with updating,
+    // false unless the fixture says otherwise.
+    return abortable(
+      Promise.resolve(
+        cs
+          ? { updating: false, ...structuredClone(cs), baseline: vs ?? cs.baseline }
+          : { ...emptyChangeSet(vs), updating: false },
+      ),
+      opts.signal,
+    );
   }
 
   async deleteScratch(sessionId: string, paths: string[]): Promise<DeleteScratchResult> {
@@ -1513,15 +1720,26 @@ export class FakeRouterClient implements RouterClient {
 
   // --- Commit and Land: canned answers a test can swap, plus every call ---
   worktreeStatus: WorktreeStatus = structuredClone(fixtureWorktreeStatus);
-  /** A CommitError makes commitSession throw it as CommitRefusedError; undefined commits whatever was asked. */
-  commitOutcome?: CommitResult | CommitError;
+  /**
+   * The Commit dialog's plan. Unset, it is worktreeStatus as one primary
+   * repo whose files are all the session's own — the single-repo case every
+   * flow before COMMIT-LAND-PUSH D2 assumed.
+   */
+  commitPlan?: CommitPlan;
+  readonly commitPlanCalls: string[] = [];
+  /**
+   * A CommitError makes commitSession throw it as CommitRefusedError;
+   * undefined commits whatever was asked. A function answers per request
+   * (one repo committing, another refusing).
+   */
+  commitOutcome?: CommitResult | CommitError | ((req: CommitRequest) => CommitResult | CommitError | undefined);
   readonly commitCalls: { sessionId: string; req: CommitRequest }[] = [];
   undoOutcome?: UndoCommitResult;
-  readonly undoCalls: { sessionId: string; hash: string }[] = [];
+  readonly undoCalls: { sessionId: string; hash: string; repo?: string }[] = [];
   draftOutcome: CommitDraft | CommitError = { message: "deploy: detect Ubuntu 24.04 runners by codename" };
-  readonly draftCalls: { sessionId: string; paths?: string[] }[] = [];
-  /** A function lets a test hold the answer back (Landing… stays up until it resolves). */
-  landOutcome: LandResult | (() => Promise<LandResult>) = {
+  readonly draftCalls: { sessionId: string; paths?: string[]; repo?: string }[] = [];
+  /** A function answers per request, and lets a test hold the answer back (Landing… stays up until it resolves). */
+  landOutcome: LandResult | ((req: LandRequest) => LandResult | Promise<LandResult>) = {
     outcome: "landed",
     branch: "mads/session/session-isolated",
     base: "main",
@@ -1529,22 +1747,252 @@ export class FakeRouterClient implements RouterClient {
     fast_forwarded: true,
   };
   readonly landCalls: string[] = [];
+  /** Every landSession request, with its session (landCalls keeps the bare ids older tests read). */
+  readonly landRequests: { sessionId: string; req: LandRequest }[] = [];
+  /** What getLandPreview answers; a function answers per request (a changed base reloads it). */
+  landPreview: LandPreview | ((opts: { repo?: string; base?: string }) => LandPreview) = structuredClone(fixtureLandPreview);
+  readonly landPreviewCalls: { sessionId: string; repo?: string; base?: string }[] = [];
+  landDraftOutcome: CommitDraft | CommitError = { message: "deploy: detect Ubuntu runners by codename" };
+  readonly landDraftCalls: { sessionId: string; repo?: string; base?: string }[] = [];
 
-  async getWorktreeStatus(_sessionId: string): Promise<WorktreeStatus> {
+  async getWorktreeStatus(_sessionId: string, _repo?: string): Promise<WorktreeStatus> {
     return structuredClone(this.worktreeStatus);
   }
 
+  async getCommitPlan(sessionId: string, opts: RequestOptions = {}): Promise<CommitPlan> {
+    if (opts.signal?.aborted) throw abortError();
+    this.commitPlanCalls.push(sessionId);
+    const plan = structuredClone(this.commitPlan ?? this.planFromStatus());
+    // The Router lists move targets only when there's something to move;
+    // unset, a file can move into any of the plan's repos.
+    if (plan.outside.length > 0) plan.move_targets ??= plan.repos.map((r) => r.root);
+    else delete plan.move_targets;
+    return plan;
+  }
+
+  // --- Move into a repo (COMMIT-LAND-PUSH D4) ---
+  /** A MoveError makes moveFile throw it as MoveRefusedError; a function answers per request. Unset, the move happens. */
+  moveOutcome?: MoveError | ((req: MoveRequest) => MoveError | undefined);
+  readonly moveCalls: { sessionId: string; req: MoveRequest }[] = [];
+  /** What getMoveFolders answers, for any repo. */
+  moveFolders: MoveFolder[] = [
+    { path: "docs/mockups/", matches: 3 },
+    { path: "docs/" },
+    { path: "scripts/" },
+    { path: "ui/" },
+    { path: "ui/src/" },
+  ];
+  readonly moveFolderCalls: { sessionId: string; repo: string; ext?: string }[] = [];
+
+  /**
+   * Moves the file the way the Router records it: gone from the plan's
+   * outside, and in the target repo's files as the session's own (the
+   * repo joins the plan if it had nothing uncommitted).
+   */
+  async moveFile(sessionId: string, req: MoveRequest): Promise<MoveResult> {
+    this.moveCalls.push({ sessionId, req });
+    const out = typeof this.moveOutcome === "function" ? this.moveOutcome(req) : this.moveOutcome;
+    if (out) throw new MoveRefusedError(out, out.code === "failed" ? 500 : 409);
+    const plan = (this.commitPlan ??= this.planFromStatus());
+    const entry = plan.outside.find((f) => f.path === req.path);
+    if (!entry) throw new MoveRefusedError({ code: "missing", error: "That file isn't there any more." }, 404);
+    plan.outside = plan.outside.filter((f) => f !== entry);
+    const name = req.path.slice(req.path.lastIndexOf("/") + 1);
+    const rel = `${(req.dir ?? "").replace(/^\/+|\/+$/g, "")}/${name}`.replace(/^\//, "");
+    let repo = plan.repos.find((r) => r.root === req.repo);
+    if (!repo) {
+      repo = { root: req.repo, files: [] };
+      plan.repos.push(repo);
+    }
+    repo.files.push({ path: rel, kind: "added", mine: true });
+    return { path: `${req.repo}/${rel}` };
+  }
+
+  // --- Push (COMMIT-LAND-PUSH D5) ---
+  /** What getPushPreview answers; a function answers per request (a second call after "moved"). */
+  pushPreview: PushPreview | ((opts: { repo?: string; target?: PushTarget }) => PushPreview) =
+    structuredClone(fixturePushPreview);
+  readonly pushPreviewCalls: { sessionId: string; repo?: string; target?: PushTarget }[] = [];
+  /** Unset, the push goes through: every commit the preview listed, and the pushed checkout's `ahead` drops to 0. */
+  pushOutcome?: PushResult | ((req: PushRequest) => PushResult);
+  readonly pushCalls: { sessionId: string; req: PushRequest }[] = [];
+
+  async getPushPreview(
+    sessionId: string,
+    { signal, ...opts }: { repo?: string; target?: PushTarget } & RequestOptions = {},
+  ): Promise<PushPreview> {
+    if (signal?.aborted) throw abortError();
+    this.pushPreviewCalls.push({ sessionId, ...opts });
+    return structuredClone(typeof this.pushPreview === "function" ? this.pushPreview(opts) : this.pushPreview);
+  }
+
+  async pushSession(sessionId: string, req: PushRequest): Promise<PushResult> {
+    this.pushCalls.push({ sessionId, req });
+    const out = typeof this.pushOutcome === "function" ? this.pushOutcome(req) : this.pushOutcome;
+    if (out) return structuredClone(out);
+    const preview = typeof this.pushPreview === "function" ? this.pushPreview(req) : this.pushPreview;
+    const repos = this.sessionRepos[sessionId];
+    const pushed = repos?.find((r) => (req.repo ? r.root === req.repo : r.primary)) ?? repos?.[0];
+    if (pushed) {
+      const wt = req.target === "base" ? pushed.base_worktree : pushed.worktree;
+      if (wt) wt.ahead = 0;
+    }
+    return {
+      outcome: "pushed",
+      branch: preview.branch,
+      remote: preview.remote,
+      remote_branch: preview.remote_branch,
+      head: preview.head,
+      rebased: req.rebase || undefined,
+      pushed: preview.ahead,
+    };
+  }
+
+  // --- Repo state (COMMIT-LAND-PUSH D10) ---
+  /**
+   * GET /sessions/{id}/repos, by session. Unset for a session, it's derived
+   * from the record: an isolated session's worktree and its base checkout,
+   * else its folder's checkout on main — nothing to push either way.
+   */
+  sessionRepos: Record<string, SessionRepoState[]> = {};
+  readonly sessionReposCalls: string[] = [];
+  /** The signal each getSessionRepos call carried, in call order. */
+  readonly sessionReposSignals: (AbortSignal | undefined)[] = [];
+
+  async getSessionRepos(sessionId: string, opts: RequestOptions = {}): Promise<SessionRepoState[]> {
+    if (opts.signal?.aborted) throw abortError();
+    this.sessionReposCalls.push(sessionId);
+    this.sessionReposSignals.push(opts.signal);
+    const set = this.sessionRepos[sessionId];
+    if (set) return structuredClone(set);
+    const session = this.sessions.get(sessionId);
+    return session ? fixtureReposFor(session) : [];
+  }
+
+  /** Sessions whose GET /repos says X-Mads-Updating: 1. */
+  readonly sessionReposUpdating = new Set<string>();
+  /** Sessions whose GET /repos omits the git state headers (an older Router). */
+  readonly sessionReposLegacy = new Set<string>();
+
+  async getSessionReposState(sessionId: string, opts: RequestOptions = {}): Promise<SessionReposAnswer> {
+    // Through getSessionRepos, so a test's spy on it sees every read.
+    const repos = await this.getSessionRepos(sessionId, opts);
+    if (this.sessionReposLegacy.has(sessionId)) return { repos, updating: false, gitState: false };
+    return { repos, updating: this.sessionReposUpdating.has(sessionId), computedAt: new Date().toISOString(), gitState: true };
+  }
+
+  async getRepoState(path: string): Promise<RepoWorktree> {
+    for (const set of Object.values(this.sessionRepos)) {
+      for (const r of set) {
+        for (const wt of [r.worktree, r.base_worktree]) if (wt?.path === path) return structuredClone(wt);
+      }
+    }
+    throw new Error(`fixture repo state not found: ${path}`);
+  }
+
+  /**
+   * Test hook: delivers a session-less repo.changed on the stubbed event
+   * bus (tests stub EventSource with FakeEventSource), as the Router does
+   * once a repo's ref files settle.
+   */
+  static emitRepoChanged(gitDir: string, repo = gitDir.replace(/\/\.git\/?$/, ""), seq = ++repoChangedSeq): void {
+    const data = JSON.stringify({
+      seq,
+      type: "repo.changed",
+      actor: "system",
+      timestamp: new Date().toISOString(),
+      payload: { repo, git_dir: gitDir },
+    });
+    for (const source of FakeEventSource.instances) {
+      if (!source.closed && source.url.includes("repo.changed")) source.emit("repo.changed", data);
+    }
+  }
+
+  /**
+   * The Router's session.git_state_updated (docs/GIT-STATE-DESIGN.md) to
+   * every open stream subscribed to it: a recompute of `parts` finished,
+   * `changed` (default: all of them) differing from before.
+   */
+  static emitGitStateUpdated(
+    sessionId: string,
+    parts: GitStatePart[],
+    opts: { changed?: GitStatePart[]; generation?: number; seq?: number; baseline?: ChangeBaselineId } = {},
+  ): void {
+    const payload: GitStateUpdatedPayload = {
+      session_id: sessionId,
+      parts,
+      generation: opts.generation ?? ++gitStateGeneration,
+      changed: opts.changed ?? parts,
+      ...(opts.baseline ? { baseline: opts.baseline } : {}),
+    };
+    const data = JSON.stringify({
+      seq: opts.seq ?? ++repoChangedSeq,
+      type: "session.git_state_updated",
+      actor: "router",
+      session_id: sessionId,
+      timestamp: new Date().toISOString(),
+      payload,
+    });
+    for (const source of FakeEventSource.instances) {
+      if (!source.closed && source.url.includes("session.git_state_updated")) source.emit("session.git_state_updated", data);
+    }
+  }
+
+  async getMoveFolders(sessionId: string, repo: string, ext?: string): Promise<MoveFolder[]> {
+    this.moveFolderCalls.push(ext ? { sessionId, repo, ext } : { sessionId, repo });
+    return structuredClone(this.moveFolders);
+  }
+
+  private planFromStatus(): CommitPlan {
+    const st = this.worktreeStatus;
+    if (!st.folder || st.files.length === 0) return { repos: [], outside: [] };
+    return {
+      repos: [
+        {
+          root: st.folder,
+          branch: st.branch,
+          isolated: st.isolated || undefined,
+          primary: true,
+          files: st.files.map((f) => ({ ...f, mine: true })),
+        },
+      ],
+      outside: [],
+    };
+  }
+
   readonly refreshWorktreeCountsCalls: string[] = [];
-  async refreshWorktreeCounts(sessionId: string): Promise<void> {
+  /** A function lets a test hold back or fail a refresh. An abort rejects the call with an AbortError either way. */
+  refreshWorktreeCountsOutcome?: (sessionId: string) => Promise<void>;
+  async refreshWorktreeCounts(sessionId: string, opts: RequestOptions = {}): Promise<void> {
     this.refreshWorktreeCountsCalls.push(sessionId);
+    if (this.refreshWorktreeCountsOutcome) {
+      return abortable(this.refreshWorktreeCountsOutcome(sessionId), opts.signal);
+    }
+    if (opts.signal?.aborted) throw abortError();
+  }
+
+  readonly revalidateGitStateCalls: { sessionId: string; req: GitStateRevalidate }[] = [];
+  /** A function lets a test hold back a revalidate's answer (or announce before it). */
+  revalidateGitStateOutcome?: (sessionId: string, req: GitStateRevalidate) => Promise<void>;
+  async revalidateGitState(sessionId: string, req: GitStateRevalidate, opts: RequestOptions = {}): Promise<void> {
+    this.revalidateGitStateCalls.push({ sessionId, req });
+    if (this.revalidateGitStateOutcome) return abortable(this.revalidateGitStateOutcome(sessionId, req), opts.signal);
+    if (opts.signal?.aborted) throw abortError();
   }
 
   async commitSession(sessionId: string, req: CommitRequest): Promise<CommitResult> {
     this.commitCalls.push({ sessionId, req });
-    const out = this.commitOutcome;
+    const out = typeof this.commitOutcome === "function" ? this.commitOutcome(req) : this.commitOutcome;
     if (out && "code" in out) throw new CommitRefusedError(out, out.code === "git_failed" ? 422 : 400);
     if (out) return out;
-    const paths = req.paths?.length ? req.paths : this.worktreeStatus.files.map((f) => f.path);
+    const plan = this.commitPlan ?? this.planFromStatus();
+    const repo = req.repo ? plan.repos.find((r) => r.root === req.repo) : (plan.repos.find((r) => r.primary) ?? plan.repos[0]);
+    if (req.repo && !repo) {
+      throw new CommitRefusedError({ code: "unknown_repo", error: "That repo isn't one this session works in." }, 400);
+    }
+    const paths = req.paths?.length
+      ? req.paths
+      : (repo?.files.filter((f) => f.mine).map((f) => f.path) ?? this.worktreeStatus.files.map((f) => f.path));
     return {
       hash: "a41c09e5d2",
       message: req.message || "drafted",
@@ -1554,22 +2002,46 @@ export class FakeRouterClient implements RouterClient {
     };
   }
 
-  async undoCommit(sessionId: string, hash: string): Promise<UndoCommitResult> {
-    this.undoCalls.push({ sessionId, hash });
+  async undoCommit(sessionId: string, hash: string, repo?: string): Promise<UndoCommitResult> {
+    this.undoCalls.push(repo ? { sessionId, hash, repo } : { sessionId, hash });
     return this.undoOutcome ?? { undone: true, hash };
   }
 
-  async draftCommitMessage(sessionId: string, paths?: string[]): Promise<CommitDraft> {
-    this.draftCalls.push({ sessionId, paths });
+  async draftCommitMessage(sessionId: string, paths?: string[], repo?: string): Promise<CommitDraft> {
+    this.draftCalls.push(repo ? { sessionId, paths, repo } : { sessionId, paths });
     const out = this.draftOutcome;
     if ("code" in out) throw new CommitRefusedError(out, 409);
     return out;
   }
 
-  async landSession(sessionId: string): Promise<LandResult> {
+  async landSession(sessionId: string, req: LandRequest): Promise<LandResult> {
     this.landCalls.push(sessionId);
+    this.landRequests.push({ sessionId, req });
     const out = this.landOutcome;
-    return typeof out === "function" ? out() : out;
+    return typeof out === "function" ? out(req) : out;
+  }
+
+  async getLandPreview(
+    sessionId: string,
+    { signal, ...opts }: { repo?: string; base?: string } & RequestOptions = {},
+  ): Promise<LandPreview> {
+    if (signal?.aborted) throw abortError();
+    this.landPreviewCalls.push({ sessionId, ...opts });
+    const out = typeof this.landPreview === "function" ? this.landPreview(opts) : this.landPreview;
+    const preview = structuredClone(out);
+    // A base asked for is the one the preview is about, as the Router answers.
+    if (opts.base && typeof this.landPreview !== "function") {
+      preview.base = opts.base;
+      preview.base_source = "chosen";
+    }
+    return preview;
+  }
+
+  async draftLandMessage(sessionId: string, opts: { repo?: string; base?: string } = {}): Promise<CommitDraft> {
+    this.landDraftCalls.push({ sessionId, ...opts });
+    const out = this.landDraftOutcome;
+    if ("code" in out) throw new CommitRefusedError(out, 409);
+    return out;
   }
 
   /** Seeded control-plane event log — empty by default so the Conversation tab's history-merge fetch (T17) is a no-op unless a test seeds envelopes via seedEvent. */
@@ -1937,7 +2409,8 @@ export class FakeRouterClient implements RouterClient {
   async listDelegatesEndedAfter(endedAfter: string): Promise<Delegate[]> {
     const cutoff = Date.parse(endedAfter);
     return this.delegates
-      .filter((d) => d.state === "running" || (d.ended_at !== undefined && Date.parse(d.ended_at) >= cutoff))
+      // Waiting ones are live, as the store's LiveOrEndedAfter serves them.
+      .filter((d) => isLiveDelegate(d) || (d.ended_at !== undefined && Date.parse(d.ended_at) >= cutoff))
       .map((d) => structuredClone(d));
   }
 
@@ -1950,6 +2423,16 @@ export class FakeRouterClient implements RouterClient {
     return [...this.links.values()].filter(
       (l) => l.granting_session_id === sessionId || l.subject_session_id === sessionId,
     );
+  }
+
+  /** Every listLinks call's ids, in call order. */
+  readonly listLinksCalls: string[][] = [];
+
+  async listLinks(sessionIds: string[]): Promise<Link[]> {
+    this.listLinksCalls.push([...sessionIds]);
+    const ids = new Set(checkLinkSessionIds(sessionIds));
+    // Each link once, in insertion order, like getSessionLinks.
+    return [...this.links.values()].filter((l) => ids.has(l.granting_session_id) || ids.has(l.subject_session_id));
   }
 
   async createLink(req: LinkRequest): Promise<Link> {

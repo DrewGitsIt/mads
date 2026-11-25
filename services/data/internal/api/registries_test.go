@@ -172,3 +172,32 @@ func TestCapabilityHealthRouteOverHTTP(t *testing.T) {
 		t.Errorf("unknown capability: status %d, want 404", resp.StatusCode)
 	}
 }
+
+// Peers ride the generic registry routes; PUT and DELETE depend on
+// registryID knowing the type, so pin all four verbs over HTTP.
+func TestPeerRegistryOverHTTP(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	var p contracts.Peer
+	doJSON(t, srv, "POST", "/peers", contracts.Peer{Name: "pop-os", MeshURL: "http://pop-os.ts.net:17380"}, &p)
+	if p.ID == "" {
+		t.Fatal("create returned no id")
+	}
+	p.Hidden = true
+	var updated contracts.Peer
+	doJSON(t, srv, "PUT", "/peers/"+p.ID, p, &updated)
+	if !updated.Hidden || updated.ID != p.ID {
+		t.Fatalf("update = %+v", updated)
+	}
+	var byName contracts.Peer
+	doJSON(t, srv, "GET", "/peers/pop-os", nil, &byName)
+	if byName.ID != p.ID {
+		t.Fatalf("lookup by name = %+v", byName)
+	}
+	doJSON(t, srv, "DELETE", "/peers/"+p.ID, nil, nil)
+	var list []contracts.Peer
+	doJSON(t, srv, "GET", "/peers", nil, &list)
+	if len(list) != 0 {
+		t.Fatalf("after delete: %+v", list)
+	}
+}

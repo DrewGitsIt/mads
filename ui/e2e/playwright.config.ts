@@ -2,6 +2,9 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: ".",
+  // The perf harness (tools/perf/README.md) has its own config and vitest
+  // unit tests; this suite must never collect them.
+  testIgnore: ["perf/**"],
   globalSetup: "./globalSetup.ts",
   // Serial, single-worker: globalSetup boots ONE shared topology (Router,
   // Data Service, workspace) for every spec, so specs mutate each other's

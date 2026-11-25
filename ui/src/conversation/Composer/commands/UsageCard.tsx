@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { RouterClient } from "../../../router/client";
-import { subscribeToEvents } from "../../../router/events";
+import { eventsReady, subscribeToEvents } from "../../../router/events";
 import type {
   CompactStatus,
   SessionReport,
@@ -88,7 +88,7 @@ export function UsageCard({
 
   useEffect(() => {
     alive.current = true;
-    void load();
+    let live = true;
     const unsubscribe = subscribeToEvents(
       { sessionId, types: REFRESH_EVENTS },
       (envelope) => {
@@ -99,7 +99,14 @@ export function UsageCard({
         void load();
       },
     );
+    // The mount read waits for the bus's ready barrier (router/events.ts
+    // eventsReady), subscribed first: the bus never replays, so a read served
+    // before it fixes its cursor could miss an event landing in between.
+    void eventsReady(sessionId).then(() => {
+      if (live) void load();
+    });
     return () => {
+      live = false;
       alive.current = false;
       unsubscribe();
     };

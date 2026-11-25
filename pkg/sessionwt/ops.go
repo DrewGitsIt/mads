@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -43,6 +44,9 @@ type Ops struct {
 	// these holding the session's wake lock, which must not wait behind a
 	// pipeline's merge or another Land. Zero waits as long as ctx allows.
 	LockWait time.Duration
+	// Home is $MADS_HOME: mergiraf's state for a Land of a worktree mads
+	// didn't make.
+	Home string
 }
 
 // ErrLocked is a lock not had within Ops.LockWait.
@@ -101,8 +105,15 @@ func (o Ops) load(ctx context.Context, sessionID string) (contracts.Session, Tar
 // header's: work committed or merged outside mads otherwise left the header
 // offering a Commit or Land the dialog then found nothing for. No git work
 // beyond what Status already did.
-func (o Ops) Status(ctx context.Context, sessionID string, g Gates) (contracts.WorktreeStatus, error) {
-	sess, t, rows, err := o.load(ctx, sessionID)
+func (o Ops) Status(ctx context.Context, sessionID, repo string, g Gates) (contracts.WorktreeStatus, error) {
+	sess, primary, all, rows, err := o.targets(ctx, sessionID)
+	if err != nil {
+		return contracts.WorktreeStatus{}, err
+	}
+	t, err := pick(primary, all, repo)
+	if errors.Is(err, ErrUnknownRepo) {
+		return contracts.WorktreeStatus{}, err
+	}
 	if errors.Is(err, ErrNoFolder) {
 		return contracts.WorktreeStatus{
 			Files:       []contracts.WorktreeFile{},
@@ -116,14 +127,25 @@ func (o Ops) Status(ctx context.Context, sessionID string, g Gates) (contracts.W
 	if err != nil {
 		return st, err
 	}
-	if st.UncommittedCount != sess.UncommittedCount || st.UnlandedCount != sess.UnlandedCount {
-		if err := o.Store.SetSessionWorktree(context.WithoutCancel(ctx), sessionID, contracts.SessionWorktreePatch{
-			UncommittedCount: &st.UncommittedCount, UnlandedCount: &st.UnlandedCount,
-		}); err != nil {
-			log.Printf("sessionwt: correct counts for %s: %v", sessionID, err)
-		}
+	if recorded := recordedCounts(sess, t); st.UncommittedCount != recorded.Uncommitted || st.UnlandedCount != recorded.Unlanded {
+		o.refresh(ctx, t)
 	}
 	return st, nil
+}
+
+// recordedCounts is what the session record says about t's repo: its
+// Repos entry, or the record's sums when it has no per-repo breakdown
+// (written before there was one).
+func recordedCounts(sess contracts.Session, t Target) Counts {
+	if len(sess.Repos) == 0 {
+		return Counts{Uncommitted: sess.UncommittedCount, Unlanded: sess.UnlandedCount}
+	}
+	for _, r := range sess.Repos {
+		if samePath(r.Root, t.Folder) {
+			return Counts{Uncommitted: r.UncommittedCount, Unlanded: r.UnlandedCount}
+		}
+	}
+	return Counts{}
 }
 
 // Recount is POST /sessions/{id}/worktree/refresh: the header counts (D4)
@@ -132,27 +154,17 @@ func (o Ops) Status(ctx context.Context, sessionID string, g Gates) (contracts.W
 // since a commit or merge made outside mads reaches no other recount. A
 // session with no git folder has nothing to count.
 func (o Ops) Recount(ctx context.Context, sessionID string) error {
-	_, t, _, err := o.load(ctx, sessionID)
-	if errors.Is(err, ErrNoFolder) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
 	if o.Refresh != nil {
 		return o.Refresh(ctx)
 	}
-	return RefreshCounts(ctx, o.Store, t)
+	return RefreshCounts(ctx, o.Store, sessionID)
 }
 
 // SelectForDraft resolves a draft request's paths exactly as Commit
 // would, returning the folder and the uncommitted files among them.
-func (o Ops) SelectForDraft(ctx context.Context, sessionID string, paths []string) (folder string, files []string, err error) {
-	_, t, rows, err := o.load(ctx, sessionID)
-	if errors.Is(err, ErrNoFolder) {
-		return "", nil, refuseCommit(contracts.CommitNoFolder, "This session has no git folder to commit in.")
-	}
-	if err != nil {
+func (o Ops) SelectForDraft(ctx context.Context, sessionID, repo string, paths []string) (folder string, files []string, err error) {
+	t, rows, err := o.loadRepo(ctx, sessionID, repo)
+	if err := repoRefusal(err); err != nil {
 		return "", nil, err
 	}
 	valid, results, ok := SelectPaths(t, rows, paths)
@@ -176,14 +188,23 @@ func (o Ops) SelectForDraft(ctx context.Context, sessionID string, paths []strin
 	return t.Folder, files, nil
 }
 
+// repoRefusal turns loadRepo's "no such repo" errors into Commit
+// refusals; anything else passes through.
+func repoRefusal(err error) error {
+	switch {
+	case errors.Is(err, ErrNoFolder):
+		return refuseCommit(contracts.CommitNoFolder, "This session has no git folder to commit in.")
+	case errors.Is(err, ErrUnknownRepo):
+		return refuseCommit(contracts.CommitUnknownRepo, "That repo isn't one this session changed files in.")
+	}
+	return err
+}
+
 // Commit is POST /sessions/{id}/commit with a message already in hand (a
 // draft, if any, was written before). Refusals are *CommitRefusal.
 func (o Ops) Commit(ctx context.Context, sessionID string, req contracts.CommitRequest) (contracts.CommitResult, error) {
-	_, t, rows, err := o.load(ctx, sessionID)
-	if errors.Is(err, ErrNoFolder) {
-		return contracts.CommitResult{}, refuseCommit(contracts.CommitNoFolder, "This session has no git folder to commit in.")
-	}
-	if err != nil {
+	t, rows, err := o.loadRepo(ctx, sessionID, req.Repo)
+	if err := repoRefusal(err); err != nil {
 		return contracts.CommitResult{}, err
 	}
 	var res contracts.CommitResult
@@ -228,9 +249,18 @@ func committedCount(paths []contracts.CommitPath) int {
 
 // Undo is POST /sessions/{id}/commit/undo. An undone commit's record goes
 // too (the Data Service appends commit.undone).
-func (o Ops) Undo(ctx context.Context, sessionID, hash string) (contracts.UndoCommitResult, error) {
-	_, t, _, err := o.load(ctx, sessionID)
-	if errors.Is(err, ErrNoFolder) {
+func (o Ops) Undo(ctx context.Context, sessionID, repo, hash string) (contracts.UndoCommitResult, error) {
+	var t Target
+	_, primary, all, _, err := o.targets(ctx, sessionID)
+	if err == nil {
+		if repo == "" {
+			// A commit card names its commit, not its repo: the repo whose
+			// tip it is, if any, else the default.
+			repo = tipRepo(ctx, all, hash)
+		}
+		t, err = pick(primary, all, repo)
+	}
+	if errors.Is(err, ErrNoFolder) || errors.Is(err, ErrUnknownRepo) {
 		return contracts.UndoCommitResult{Hash: hash, Reason: "no_folder", Detail: "This session has no git folder."}, nil
 	}
 	if err != nil {
@@ -255,23 +285,195 @@ func (o Ops) Undo(ctx context.Context, sessionID, hash string) (contracts.UndoCo
 	return res, nil
 }
 
-// Land is POST /sessions/{id}/land: the gates, then LandSteps, under the
+// PushPreview is GET /sessions/{id}/push for one repo of the session's
+// set: read-only but for the fetch, so it takes no lock.
+func (o Ops) PushPreview(ctx context.Context, sessionID, repo, target string, g Gates) (contracts.PushPreview, error) {
+	t, _, err := o.loadRepo(ctx, sessionID, repo)
+	if errors.Is(err, ErrNoFolder) || errors.Is(err, ErrUnknownRepo) {
+		return contracts.PushPreview{Commits: []contracts.PushCommit{}, Incoming: []contracts.PushCommit{},
+			Blocked: &contracts.PushRefusal{Reason: contracts.PushNoRemote, Detail: "This session has no repo to push."}}, nil
+	}
+	if err != nil {
+		return contracts.PushPreview{}, err
+	}
+	return PushPreview(ctx, t, target, g)
+}
+
+// Push is POST /sessions/{id}/push: PushSteps under the session lock, then
+// the header counts. Every outcome is a PushResult.
+func (o Ops) Push(ctx context.Context, sessionID string, req contracts.PushRequest, g Gates) (contracts.PushResult, error) {
+	t, _, err := o.loadRepo(ctx, sessionID, req.Repo)
+	if errors.Is(err, ErrNoFolder) || errors.Is(err, ErrUnknownRepo) {
+		return contracts.PushResult{Outcome: contracts.PushRefused, Reason: contracts.PushNoRemote, Detail: "This session has no repo to push."}, nil
+	}
+	if err != nil {
+		return contracts.PushResult{}, err
+	}
+	var res contracts.PushResult
+	err = o.withSessionLock(ctx, t, func() error {
+		var err error
+		res, err = PushSteps(ctx, t, req, g, o.LockWait)
+		return err
+	})
+	if errors.Is(err, ErrLocked) {
+		return contracts.PushResult{Outcome: contracts.PushRefused, Reason: contracts.PushLocked, Detail: LockedDetail}, nil
+	}
+	if err != nil {
+		return contracts.PushResult{}, err
+	}
+	o.refresh(ctx, t)
+	return res, nil
+}
+
+// tipRepo is the folder of the repo in all whose checked-out commit is hash
+// (a full hash or a prefix), "" when none is.
+func tipRepo(ctx context.Context, all []Target, hash string) string {
+	if len(all) < 2 || hash == "" {
+		return ""
+	}
+	for _, t := range all {
+		out, err := Git(ctx, t.Folder, "rev-parse", "HEAD")
+		if err == nil && strings.HasPrefix(strings.TrimSpace(out), hash) {
+			return t.Folder
+		}
+	}
+	return ""
+}
+
+// landTarget resolves what a Land of repo would land, and into what (D12):
+// the session's own isolated worktree (repo empty, or naming it), or a
+// linked worktree in its repo set — its branch, landing into base when
+// given, else the inferred base. A main checkout has nothing to land.
+// source says where the base came from.
+func (o Ops) landTarget(ctx context.Context, sessionID, repo, base string) (t Target, rows []contracts.FileChange, source string, refusal *contracts.LandRefusal, err error) {
+	sess, primary, all, rows, err := o.targets(ctx, sessionID)
+	if err != nil {
+		return Target{}, nil, "", nil, err
+	}
+	refuse := func(reason, detail string) (Target, []contracts.FileChange, string, *contracts.LandRefusal, error) {
+		return Target{SessionID: sessionID}, rows, "", &contracts.LandRefusal{Reason: reason, Detail: detail}, nil
+	}
+	if repo == "" && (primary == nil || !primary.Isolated()) {
+		return refuse(contracts.LandNotIsolated, "This session works directly in your checkout, so there is nothing to land. Commit is all it needs.")
+	}
+	t, err = pick(primary, all, repo)
+	if err != nil {
+		return refuse(contracts.LandNotIsolated, "That folder isn't one of this session's repos.")
+	}
+	if t.Managed {
+		source = "session"
+		if base != "" && base != t.Base {
+			t.Base, source = base, "chosen"
+		}
+		return t, rows, source, nil, nil
+	}
+	own, err1 := Git(ctx, t.Folder, "rev-parse", "--absolute-git-dir")
+	common, err2 := commonDir(ctx, t.Folder)
+	if err1 != nil || err2 != nil || samePath(strings.TrimSpace(own), common) {
+		return refuse(contracts.LandNotIsolated, t.Folder+" is a main checkout, not a worktree: there is nothing to land. Commit is all it needs.")
+	}
+	branch, err := CurrentBranch(ctx, t.Folder)
+	if err != nil {
+		return refuse(contracts.LandOffBranch, t.Folder+" is on a detached HEAD: there's no branch to land.")
+	}
+	b := LandBase{Base: base, Source: "chosen"}
+	if base == "" {
+		var ok bool
+		if b, ok = BaseOf(ctx, t.Folder, branch); !ok {
+			return refuse(contracts.LandBaseNotCheckedOut, "No base branch to land "+branch+" into. Choose one.")
+		}
+	}
+	main, err := mainWorktree(ctx, t.Folder)
+	if err != nil {
+		return Target{}, nil, "", nil, err
+	}
+	return Target{SessionID: sessionID, Name: sess.Name, Folder: t.Folder, Primary: main, Branch: branch, Base: b.Base, Home: o.Home},
+		rows, b.Source, nil, nil
+}
+
+// maxLandCommits caps the confirmation's commit list.
+const maxLandCommits = 50
+
+// LandPreview is GET /sessions/{id}/land: what the Land confirmation
+// shows — the branch, its base and where that came from, the other
+// branches it could land into, its commits the base lacks, and why Land
+// would be refused now. Read-only and lock-free.
+func (o Ops) LandPreview(ctx context.Context, sessionID, repo, base string, g Gates) (contracts.LandPreview, error) {
+	t, rows, source, refusal, err := o.landTarget(ctx, sessionID, repo, base)
+	if err != nil {
+		return contracts.LandPreview{}, err
+	}
+	p := contracts.LandPreview{Repo: t.Folder, Branch: t.Branch, Base: t.Base, BaseSource: source,
+		Bases: []string{}, Commits: []contracts.PushCommit{}, Blocked: refusal}
+	if refusal != nil {
+		return p, nil
+	}
+	if out, err := Git(ctx, t.Primary, "for-each-ref", "--format=%(refname:short)", "refs/heads"); err == nil {
+		for _, b := range lines(out) {
+			if b != t.Branch {
+				p.Bases = append(p.Bases, b)
+			}
+		}
+	}
+	if !refExists(ctx, t.Primary, "refs/heads/"+t.Base) {
+		p.Blocked = &contracts.LandRefusal{Reason: contracts.LandBaseNotCheckedOut, Detail: "The branch " + t.Base + " doesn't exist. Choose another base."}
+		return p, nil
+	}
+	p.Fork = forkPoint(ctx, t.Primary, t.Base, t.Branch)
+	if p.ToLand, err = CountToLand(ctx, t.Primary, t.Base, t.Branch); err != nil {
+		return p, err
+	}
+	p.Commits = ToLand(ctx, t.Primary, t.Base, t.Branch, maxLandCommits)
+	p.Blocked, err = LandGate(ctx, t, g, p.ToLand, exists(t.Folder), SessionFiles(t.Folder, rows))
+	return p, err
+}
+
+// LandDraftInput is what the Fast Model drafts a landing message from:
+// the branch's diff against the base (cut at limit) and its commit
+// subjects, oldest first.
+func (o Ops) LandDraftInput(ctx context.Context, sessionID, repo, base string, limit int) (diff string, truncated bool, subjects []string, err error) {
+	t, _, _, refusal, err := o.landTarget(ctx, sessionID, repo, base)
+	if err != nil {
+		return "", false, nil, err
+	}
+	if refusal != nil {
+		return "", false, nil, refuseCommit(contracts.CommitNothingToCommit, refusal.Detail)
+	}
+	rng := "refs/heads/" + t.Base + "...refs/heads/" + t.Branch
+	diff, err = Git(ctx, t.Primary, "diff", "--no-color", "--no-ext-diff", rng)
+	if err != nil {
+		return "", false, nil, err
+	}
+	if len(diff) > limit {
+		diff, truncated = diff[:limit], true
+	}
+	commits := ToLand(ctx, t.Primary, t.Base, t.Branch, maxLandCommits)
+	for i := len(commits) - 1; i >= 0; i-- {
+		subjects = append(subjects, commits[i].Subject)
+	}
+	return diff, truncated, subjects, nil
+}
+
+// Land is POST /sessions/{id}/land (D12): the gates, then LandSteps —
+// merge the base into the branch where it's checked out, then squash the
+// result into one commit on the base, with the user's message — under the
 // session lock (LandSteps adds the repo lock for step 2). Every outcome is
 // a LandResult and a conversation event: merge.refused for a gate or a
 // refusing checkout, else merge.attempted then merge.completed,
-// merge.conflicted or merge.auto_resolved.
-func (o Ops) Land(ctx context.Context, sessionID string, g Gates) (contracts.LandResult, error) {
-	_, t, rows, err := o.load(ctx, sessionID)
-	if errors.Is(err, ErrNoFolder) {
-		t = Target{SessionID: sessionID}
-		err = nil
-	}
+// merge.conflicted or merge.auto_resolved. A linked worktree's base is
+// kept as confirmed for its next Land.
+func (o Ops) Land(ctx context.Context, sessionID string, req contracts.LandRequest, g Gates) (contracts.LandResult, error) {
+	t, rows, _, refusal, err := o.landTarget(ctx, sessionID, req.Repo, req.Base)
 	if err != nil {
 		return contracts.LandResult{}, err
 	}
-	if !t.Isolated() {
-		r, _ := LandGate(ctx, t, g, 0, false, nil)
-		return o.refused(ctx, t, r), nil
+	if refusal != nil {
+		return o.refused(ctx, t, refusal), nil
+	}
+	message := strings.TrimSpace(req.Message)
+	if message == "" {
+		return o.refused(ctx, t, &contracts.LandRefusal{Reason: contracts.LandMessageRequired,
+			Detail: "Land makes one commit on " + t.Base + ": write its message first."}), nil
 	}
 
 	var res contracts.LandResult
@@ -294,7 +496,7 @@ func (o Ops) Land(ctx context.Context, sessionID string, g Gates) (contracts.Lan
 		}
 		o.event(ctx, t, contracts.MergeAttempted, nil)
 		attempted = true
-		res, err = landSteps(ctx, t, o.LockWait)
+		res, err = landSteps(ctx, t, o.LockWait, message)
 		return err
 	})
 	if errors.Is(err, ErrLocked) {
@@ -312,10 +514,15 @@ func (o Ops) Land(ctx context.Context, sessionID string, g Gates) (contracts.Lan
 	}
 	switch res.Outcome {
 	case contracts.LandLanded:
-		o.recordAs(ctx, t, res.MergeCommit, "Land "+landName(t), provenance{source: contracts.CommitSourceLand})
+		o.recordAs(ctx, t, res.MergeCommit, message, provenance{source: contracts.CommitSourceLand})
 		o.event(ctx, t, contracts.MergeCompleted, map[string]any{
 			"merge_commit": res.MergeCommit, "fast_forwarded": res.FastForwarded,
 		})
+		if !t.Managed {
+			if err := RecordBase(ctx, t.Folder, t.Branch, LandBase{Base: t.Base, Fork: res.MergeCommit, Source: BaseConfirmed}); err != nil {
+				log.Printf("sessionwt: keep %s's base: %v", t.Branch, err)
+			}
+		}
 	case contracts.LandConflicted:
 		o.event(ctx, t, contracts.MergeConflicted, map[string]any{"files": res.Files, "step": "base"})
 	case contracts.LandAutoResolved:
@@ -377,7 +584,7 @@ func (o Ops) event(ctx context.Context, t Target, typ contracts.EventType, extra
 // touch it (D2), and says so with worktree.ensured when it had to repair
 // anything. Caller holds the session lock.
 func (o Ops) ensure(ctx context.Context, t Target) error {
-	if !t.Isolated() {
+	if !t.Isolated() || !t.Managed {
 		return nil
 	}
 	res, err := Ensure(ctx, Spec{Primary: t.Primary, Root: t.Root, SessionID: t.SessionID, Base: t.Base})
@@ -433,42 +640,25 @@ func (o Ops) refresh(ctx context.Context, t Target) {
 	if o.Refresh != nil {
 		err = o.Refresh(ctx)
 	} else {
-		err = RefreshCounts(ctx, o.Store, t)
+		err = RefreshCounts(ctx, o.Store, t.SessionID)
 	}
 	if err != nil {
 		log.Printf("sessionwt: refresh counts for %s: %v", t.SessionID, err)
 	}
 }
 
-// RefreshCounts recomputes a session's header counts (D4) from its record
-// and change list and writes them through the scoped worktree patch — the
+// RefreshCounts recomputes a session's header counts (D4) in every repo
+// of its set (D1) and writes them through the scoped worktree patch — the
 // Router's way, for a session with no live child to do it.
-func RefreshCounts(ctx context.Context, store Store, t Target) error {
-	c := Counts{}
-	if exists(t.Folder) {
-		rows, err := store.FileChanges(ctx, t.SessionID)
-		if err != nil {
-			return err
-		}
-		mine := SessionFiles(t.Folder, rows)
-		if c.Uncommitted, err = CountUncommitted(ctx, t.Folder, mine); err != nil {
-			return err
-		}
-		if t.Isolated() {
-			if c.Outside, err = CountOutside(ctx, t.Folder, mine); err != nil {
-				return err
-			}
-		}
+func RefreshCounts(ctx context.Context, store Store, sessionID string) error {
+	sum, repos, err := Ops{Store: store}.CountAll(ctx, sessionID)
+	if errors.Is(err, ErrNoFolder) {
+		return nil
 	}
-	if t.Isolated() {
-		var err error
-		if c.Unlanded, err = CountUnlanded(ctx, t.Primary, t.Base, t.Branch); err != nil {
-			return err
-		}
+	if err != nil {
+		return err
 	}
-	return store.SetSessionWorktree(ctx, t.SessionID, contracts.SessionWorktreePatch{
-		UncommittedCount: &c.Uncommitted, UnlandedCount: &c.Unlanded, OutsideCount: &c.Outside,
-	})
+	return store.SetSessionWorktree(ctx, sessionID, CountsPatch(sum, repos))
 }
 
 // Cleanup removes a deleted session's worktree and branch (D7), under the

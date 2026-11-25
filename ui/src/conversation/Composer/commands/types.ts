@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { RouterClient } from "../../../router/client";
 import type { CompactionSupport } from "../../../router/compaction";
-import type { Session } from "../../../router/types";
+import type { Session, SessionHost } from "../../../router/types";
 
 /**
  * What a command can see when deciding whether it's available and what its
@@ -19,6 +19,8 @@ export interface CommandContext {
   compaction?: CompactionSupport;
   /** This session's record — the /new card prefills its pills from it. */
   session?: Session;
+  /** The device this session lives on (its host scope); absent for this device. The /new commands start their session there. */
+  host?: SessionHost;
   /** feature_flags.linked_sessions — /new-leader, /new-follower and /new-monitor are hidden without it. */
   linkedSessions?: boolean;
   /** The session leading this one (its orchestrate holder), if any — /new-leader is unavailable then. */

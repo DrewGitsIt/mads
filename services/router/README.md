@@ -6,7 +6,9 @@ liveness signal — on child exit it releases leases and emits the failure event
 control-plane event subscriptions to the Data Service, and forwards ephemeral data-plane
 agent-output streams to the UI. It does NOT persist anything and holds no business logic
 about what sessions or pipelines do — all state access goes through `pkg/dataclient`
-against the Data Service; it never calls a sibling service peer-to-peer.
+against the Data Service; it never calls a sibling service peer-to-peer. The one state it
+holds is derived and recomputable: an in-memory cache of each session's git state
+(`internal/gitstate`, see "Git state" below), lost on restart and rebuilt from git.
 
 **Status: W4.1, W4.2, W4.6, W5.3, W5.4, W5.5, and W7.5 complete.** Child process supervision
 (`internal/child`, `internal/supervisor`), the lifecycle HTTP API, and stream fan-out
@@ -27,7 +29,8 @@ tasks.
 
 ```sh
 make run        # listens on localhost:17373 (-addr to change)
-curl localhost:17373/health
+curl localhost:17373/health        # open: service and status only
+mads api GET /sessions             # every API route needs the install token
 ```
 
 Flags: `-data-url` (default `http://localhost:17374`) points at the Data Service;
@@ -47,7 +50,7 @@ make test       # -race always
 ```
 
 `internal/child` and `internal/supervisor` spawn a real OS process — a throwaway
-`internal/testchild` binary that follows the same `-addr`/"listening on `<addr>`"
+`internal/testchild` binary that follows the same `-socket`/"listening on `<addr>`"
 readiness contract as the real services, built once in `TestMain` — and kill it directly
 (bypassing `Terminate`) to prove supervision, not just the code path a graceful shutdown
 would take. `internal/api` runs the full HTTP surface against a real Data Service via
@@ -66,11 +69,69 @@ Wire types live in `pkg/contracts`. Counterparties: the UI (HTTP, and eventually
 the Data Service (via `pkg/dataclient`); children (Session/Pipeline) are spawned processes,
 never called peer-to-peer.
 
-- `GET /health` — `{"service":"router","status":"ok","root":"/abs/checkout","ui_dist":"/abs/checkout/ui/dist","started_at":"<RFC 3339>"}`.
+### Children on Unix sockets (docs/LOCAL-FRONT-DOOR-DESIGN.md D9)
+
+The Supervisor spawns every session and pipeline child with `-socket
+$MADS_HOME/run/<id>.sock` (`run/` is 0700, the socket 0600; `pkg/childsock`). When that
+path is over the OS limit (104 bytes on macOS, 108 on Linux, less the NUL) it uses
+`/tmp/mads-<uid>-<hash of $MADS_HOME>/<id>.sock` instead (0700, refused if it's a
+symlink or another user's), and a path that still won't fit is a clear error. A child
+spawned this way opens no TCP port, and on every connection it accepts checks the peer is
+its own uid (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` — what `getpeereid(3)` reads — on
+macOS), closing anything else. The Router reaches children through
+`childsock.Transport`, which dials the socket behind `childsock.URL(addr, path)`;
+`proxyTo` (SSE and upgrades included) and `forwardToChild` use it. To poke a child by
+hand: `mads ps` lists them (id, pid, socket, state, uptime — including orphans a dead
+Router left), and `mads api --session <id> GET /status` talks to one.
+
+### The local front door (docs/LOCAL-FRONT-DOOR-DESIGN.md)
+
+Every API route needs the **install token** — the contents of `$MADS_HOME/local.token`
+(`-mads-home`, default `~/.mads`; created 0600 by whichever of the Router and Data
+Service starts first, `pkg/localauth`) — presented as `Authorization: Bearer <token>`
+(programs: `pkg/dataclient`, the `mads` CLI, `mads api`; and the app, whose Electron
+main process adds the header to the window's requests to the Router's origin with
+`webRequest`, below the page — H7). The bearer is the only way a credential is
+presented: there is no cookie, no sign-in route and no plain-browser access. Two
+credential kinds exist: the install token and session-scoped tokens. `internal/api/frontdoor.go` holds the tables;
+`localauth.Door` sits inside localguard and classifies each request with the mux's own
+pattern lookup.
+
+- **Exempt:** the static UI (`/`), `GET /health` (anonymous callers get only
+  `service`/`status`).
+- **Refusal:** `401 {"code":"unauthorized","error":"…use mads api, … local.token"}`,
+  logged with method and path, never the presented value.
+- **Session-scoped tokens (D4, H4):** each Session Service child is spawned with
+  `-token-file <path>` — it reads the install token itself and follows rotations; the
+  token is never in a child's env, argv or a pipe — and `MADS_ROUTER_TOKEN` (minted per
+  spawn, held in memory) in its env. The child removes that from its own environment
+  and hands it only to the orchestrate MCP server. A scoped
+  token reaches only `api.ScopedRoutes` — `GET/POST /sessions/{own id}/orchestrate/*` and
+  `POST /links/{id}/orchestrate/message` for a link its session granted — anything else is
+  `403 {"code":"forbidden"}`. The Router sets `X-Mads-Actor: session-<id>` from the token,
+  ignoring the caller's. Scoped tokens are revoked when the child exits (session end or
+  delete), on rotation, and by a Router restart.
+- **Rotation:** `mads token rotate` rewrites the file; the next request re-reads it, which
+  revokes every scoped token. Install-token users
+  (the services, the CLI, children through their token file) carry on; **running
+  sessions' orchestrate tools stop until each session restarts** (H6: the scoped tokens
+  aren't re-issued), and `mads token rotate` says so. The Router's background watchers
+  (digest, merge, signal, synthesis, gitstate) resubscribe to the Data Service from their last seq
+  when a rotation ends their stream (gitstate places itself at the log head first,
+  never replaying history).
+- **Open streams end with their credential:** every authenticated request is watched;
+  a rotation cancels them all at once (only those whose credential it killed), and a
+  revoked scoped token ends its streams within a second (`localauth.Door`).
+- **Children never see credentials:** `proxyTo` strips `Cookie` and `Authorization` (and
+  the browser's `Origin`/`Sec-Fetch-*`) before a request goes to a child.
+- `-insecure-no-auth` exists only for `go test` builds; a real binary refuses it.
+
+- `GET /health` — open; anonymous: `{"service":"router","status":"ok"}`. With the
+  install token: `{"service":"router","status":"ok","root":"/abs/checkout","ui_dist":"/abs/checkout/ui/dist","started_at":"<RFC 3339>"}`.
   `root` is the cwd the Router was launched from and `ui_dist` the absolute `-ui-dist` it
-  serves; `scripts/app.sh` reads them to refuse reusing a Router started from a different
-  checkout (it would serve that checkout's UI and backend). Builds before these fields
-  existed report only `service`/`status`.
+  serves; `scripts/app.sh` (sending the token) reads them to refuse reusing a Router
+  started from a different checkout (it would serve that checkout's UI and backend).
+  Builds before these fields existed report only `service`/`status`.
 - `GET /version` — `{"version": "..."}`, the linker-set build version (`-ldflags
   -X main.version=...`, `"dev"` in local builds). `cmd/mads update apply`'s health check
   after a binary swap calls the *binary* directly (`mads --version`), not this route — this
@@ -87,8 +148,13 @@ never called peer-to-peer.
   space, registered provider binaries + versions against `pkg/preflight`'s compatibility
   matrix), each with `{name, healthy, detail?, fix_hint?}` (spec §14.8-9); no request body,
   always 200 unless the checker itself errors (never does, today).
+- `GET /children` — the live session and pipeline children this Router supervises:
+  `[{"id","kind":"session"|"pipeline","session_id","pid","socket","started_at"}]`. What
+  `mads ps` reads.
 - `POST /sessions` — create a session (proxies `dataclient.CreateSession`) and spawn its
-  Session Service child; 201 with `{"session": ..., "addr": ...}`. On spawn failure, the
+  Session Service child; 201 with `{"session": ..., "addr": ...}`. `addr` (here and on
+  bounce, resume, retros and pipelines) is the child's Unix socket path — see "Children
+  on Unix sockets" below. On spawn failure, the
   session record is rolled back (best-effort delete) so a failed create doesn't leave an
   orphaned record with nothing backing it. Before either step, an empty
   provider/model/agent/isolation/trust is resolved (spec §10's inheritance chain: session
@@ -161,6 +227,15 @@ never called peer-to-peer.
   `id:`/`event:`/`data:` framing the Data Service uses, so a reconnecting client's
   `since=<last id>` resumes without gaps whether it's talking to the Data Service directly
   or through Router.
+- `GET /events/head` — proxies the Data Service's `GET /events/head`: `{"seq": N}`, the
+  log's current max seq. The UI's event bus reads it before its first connect and streams
+  with `since=N`, so it never replays history (`ui/src/router/events.ts`).
+- `GET /permission-requests` — every live session child's still-pending permission
+  requests in one response, each tagged with its `session_id` and without its tool `input`
+  (the per-session `GET /sessions/{id}/permission-requests` still carries it). The rail
+  seeds "Needs approval" from this once on mount. Children are asked concurrently, each
+  within 2 s; one that fails or times out contributes nothing, and its live events still
+  carry its next request.
 - `GET /sessions/{id}/output`, `GET /pipelines/{id}/output` — the UI's data-plane
   subscription point: a byte-transparent reverse proxy to the running child's own
   `GET /output` SSE endpoint. 404 if the session/pipeline isn't currently running.
@@ -243,9 +318,11 @@ never called peer-to-peer.
   `pkg/githook`/the watcher talking to the Data Service directly, never through the
   Router.
 - `GET /sessions/{id}` — the session record (proxies `dataclient.Session`); 404 if unknown.
-- `POST /links`, `GET/PUT/DELETE /links/{id}`, `GET /sessions/{id}/links` — thin
+- `POST /links`, `GET/PUT/DELETE /links/{id}`, `GET /sessions/{id}/links`, and the
+  bulk `GET /links?session_ids=a,b,c` (comma-separated, trimmed, deduped; none or
+  more than `contracts.MaxLinkSessionIDs` is a 400 `ValidationError`) — thin
   proxies over `pkg/dataclient`'s link methods (`docs/LINKED-SESSIONS-DESIGN.md`).
-  All five routes 404 unless `Config.FeatureFlags.LinkedSessions` is set — checked
+  All six routes 404 unless `Config.FeatureFlags.LinkedSessions` is set — checked
   per-request (`requireLinkedSessions`), not baked into the mux at startup, so
   toggling the flag takes effect without a restart.
 - `GET /sessions/{id}/transcript` — the session's conversation history. Proxied through the
@@ -263,6 +340,51 @@ never called peer-to-peer.
   `pkg/transcriptpage.Respond`, so both paths agree. Cursor rules, the `<key>#<i>`
   sub-keys of a split user row, and the 400/410 errors are `contracts.TranscriptPage`'s
   (and the session service README's `/transcript`).
+
+### Git state (docs/GIT-STATE-DESIGN.md)
+
+The Router keeps each session's git-derived state (the repos' branch facts, the change
+set, the header counts) in `internal/gitstate`, recomputes it in the background when a
+trigger arrives (`file.changed`, turn end, `commit.*`, `merge.completed`, the repo ref
+watcher, a refresh), and announces each finished batch. These reads answer from that
+cache and never run git in the request:
+
+- `GET /sessions/{id}/repos` — still a bare array of the session's repos with branch
+  facts. Headers: `X-Mads-Updating: 1|0` (1 while a recompute is queued or running) and
+  `X-Mads-Computed-At: <RFC 3339>` (absent before a first compute). Cold: `[]` with
+  `X-Mads-Updating: 1`, which readers take as "loading", not "no repos". Mesh relays both
+  headers; a missing `X-Mads-Updating` reads as not updating.
+- `GET /sessions/{id}/changeset?vs=start|base|main` — the change set plus `updating`
+  (and `computed_at`). Cold: `files`, `turns`, `commits` empty, `computed_at` `""`,
+  `updating: true`, the compute started behind it. An unknown or unavailable baseline is
+  400. `base`/`main` are computed on demand and kept 5 min.
+- `POST /sessions/{id}/worktree/refresh` — `202` at once, no body (was `204` after the
+  recount); new counts arrive on `session.updated`. Without a body (or without `parts`):
+  counts, plus repos and the `start` change set when the kept ones are older than 30 s.
+  Optional body `{"parts": ["repos"|"changeset"|"counts"…], "vs": "start"|"base"|"main",
+  "max_age_ms": n}`: recompute the named parts (`vs` picks the change set's baseline,
+  default `start`), leaving any whose kept answer is good and younger than `max_age_ms`
+  (0 or absent: recompute regardless). Invalid JSON, an unknown part or baseline, or a
+  negative age is `400`. Asks recompute a part at most once per 5 s, for every caller.
+
+`session.git_state_updated` (payload `{session_id, parts, generation, changed,
+baseline?}`) is appended when a triggered recompute batch finishes, changed or not:
+`parts` is what was recomputed, `changed` the subset that differs, `generation` monotonic
+per session. `baseline` is set only for a `base`/`main` change set, announced alone;
+absent, `changeset` means `start`. Readers refetch the cached `GET` only for parts in
+`changed`.
+
+**The "updating" indicator** (`data-testid="git-updating"`, label "Updating git state")
+shows for the open session while any part is marked: set by a `GET` saying updating, a
+trigger event for the session, or a refresh `POST`; cleared by a
+`session.git_state_updated` with a newer generation for every marked part, or a `GET`
+saying not updating; after 30 s it clears and re-reads the part.
+
+Stay fresh, computed on demand (user actions and their previews, not served from the
+cache): `GET /sessions/{id}/commit-plan`, the Push and Land previews (`GET .../push`,
+`GET .../land`), Commit, Land and Push themselves, the `GET /sessions/{id}/changes` diff
+(its "is this file changed in the session" gate computes the change set), and `POST
+/sessions/{id}/changeset/delete-scratch`.
 
 Errors: `dataclient.ErrNotFound` → 404, `dataclient.ErrConflict` → 409,
 `*contracts.ValidationError` → 400 (this is a deliberate divergence from the Data
@@ -282,7 +404,10 @@ localhost-only CORS policy — no flag/env to toggle it off:
   never a wildcard.
 - Non-localhost origins get zero CORS headers.
 - Allowed methods: `GET, POST, PUT, DELETE` (plus `OPTIONS` for preflight).
-  Allowed headers: `Content-Type`, `X-Mads-Actor`.
+  Allowed headers: `Content-Type`, `X-Mads-Actor`. A cross-origin page sends no
+  credential, so behind the front door it only ever gets `401`s: UI development
+  goes through the Vite dev server's same-origin proxy instead (`ui/vite.config.ts`),
+  which adds the bearer.
 - `OPTIONS` is answered directly by the middleware (204, no body) for every
   request, matching origin or not — the mux has no route registered for it.
 - `GET /events` (SSE) works cross-origin the same way: the middleware sets
@@ -331,6 +456,116 @@ the Router picks up a new build without a restart.
 - The Vite dev-server loop (`npm run dev`, `localhost:5173`) is unaffected — that's what
   the CORS policy above is for — and Electron's own dev fallback still points at
   `VITE_DEV_SERVER_URL` when set (`ui/electron/main.ts`).
+
+### Mesh mode (viewer side)
+
+`internal/mesh` wraps the API inside `localguard` and the front door
+([docs/MESH-MODE-DESIGN.md](../../docs/MESH-MODE-DESIGN.md) D3/D4). The stack,
+outermost first, is localguard → front door → CORS → mesh → API (`meshLayer` in
+`main.go`). Every `/peers…` path and every forwarded session path needs the
+install token, because `mesh.Claims` keeps them from being taken for the exempt
+static UI. A session-scoped token is refused. With no peer registered, mesh
+passes everything through. Peers are the Data Service's `/peers` registry;
+only the rows this node views (`contracts.Peer.IsViewed`) are listed, probed
+or routed to. A paired-only device (`mads pair`, docs/MESH-AUTH-DESIGN.md A3)
+isn't one.
+
+**Peer list:**
+- `GET /peers`: every peer plus its live `reachability`, `reason`, `rtt_ms`,
+  `mads_commit` and `access` (`contracts.PeerStatus`).
+- `POST /peers {dns_name | mesh_url, fingerprint?, name?}`: pins the device's
+  key (`fingerprint`, from `mads device` on it) and probes its `/mesh/hello`
+  over that pinned TLS connection first. Answers 422 unless it's
+  `connected`: `peer_unpaired` with no fingerprint (and no paired row of
+  that `name` to take one from), `peer_denied` if the key it proves isn't
+  the pinned one. A new row is stored pinned (`pairing.how` accept) with no
+  grant: viewing a device lets it do nothing here. `mesh_url` is stored as
+  `http://host:port` (the form the Data Service validates) and always
+  dialled with TLS.
+- `PUT /peers/{peer} {name?, hidden?}`, `DELETE /peers/{peer}`. `DELETE` stops
+  viewing the device: a device that is also paired keeps its row and pairing,
+  marked not viewed (`mads pair --revoke` unpairs). Both edit the Data
+  Service's current row with a conditional write (`If-Match`), retried once,
+  never this Router's cached copy. `POST /peers` naming a paired device that
+  isn't viewed gives that row its viewed side, when the device proves the
+  key that row pins in the TLS handshake; otherwise it's refused (another
+  key) or the usual name clash.
+- A request carrying `X-Mads-Mesh-Peer` (relayed by this node's Mesh
+  Service, present even if empty) is answered by this node alone: no
+  `/peers…` (403 `relayed`), no implicit `/sessions/{id}/…` forwarding, no
+  `scope=all` fan-out (the scope is dropped), no `/links` fan-out. So two
+  nodes that view each other never bounce a request, and a device paired
+  here never reaches this node's peers through it. It also marks the
+  request's context (`dataclient.WithMeshRelay`), so every Data Service
+  write made with that context carries the mark and is never granted
+  admin, and carries the device's authenticated `X-Mads-Actor`
+  (`dataclient.WithMeshActor`): the actor of those writes and of the events
+  appended for them. Work detached onto a fresh context doesn't carry
+  either; none of it writes peers.
+- `GET /events` for a relayed request below admin (`X-Mads-Mesh-Level`, set
+  by the Mesh Service) leaves out `peer.*` and `device.*`: the device
+  registry isn't a viewing device's to read.
+- `GET /peers/candidates`: tailnet devices from `tailscale status --json`,
+  already-added ones marked with their live state. Others aren't probed
+  (nothing is dialled before its key is pinned) and read `unpaired`.
+
+**Routing:**
+- Every connection to a peer is mutual TLS 1.3 (`internal/mesh/dial.go`):
+  this Router presents its device key (`$MADS_HOME/device.key`) as its
+  client certificate and accepts the peer only if its key is the row's
+  `fingerprint`. A row without one is never dialled (`unpaired`); there is
+  no plaintext fallback (a plain-HTTP Mesh Service reads `unreachable`).
+  One keep-alive transport per pinned key and address, HTTP/2 when offered,
+  so probes, the index, links and forwarded requests share a connection.
+  It sends only https to that peer's address, and a peer's redirect is
+  never followed.
+- Bytes the Router doesn't control — attachments (a paired chat device can
+  attach), exports, the orchestrate turns text, and every peer answer — go
+  out under `internal/safeserve`: nosniff, CSP `sandbox; default-src 'none'`,
+  and any type but JSON, an event stream, text or a raster image as an
+  `application/octet-stream` attachment, so none can run as a page on this
+  origin.
+- Every peer answer relayed to the UI (forwards, `/peers/{peer}/…`, streams,
+  downloads) is sanitized: a redirect becomes `502 peer_redirect` (never a
+  `Location` for the browser to follow on this origin); only headers that
+  describe the body survive; every answer is `nosniff` and CSP-sandboxed,
+  and any type but JSON, an event stream, text or a raster image is served
+  as an `application/octet-stream` attachment.
+- `/peers/{peer}/<path>` is forwarded to that peer's Mesh Service. Origin,
+  Referer, Cookie, `Sec-Fetch-*`, `Authorization` and `Proxy-Authorization` are
+  stripped. Streams are flushed per write. This machine's install token never
+  goes to a peer. The peer's Mesh Service identifies this node by its device
+  certificate (and, by default, tailnet identity too) and sends its own
+  node's token to its own Router.
+- `/sessions/{id}[/...]` for a session that lives on a peer goes to that
+  peer. The id comes from the session index, refreshed every 15 s, or from
+  asking connected peers on a miss. A session this node's Data Service knows
+  always stays local.
+- `GET /sessions?scope=all` merges this node's list with every non-hidden
+  peer's, adding `host` (`contracts.SessionHost`) to each row. An unreadable
+  peer contributes its last-known rows with `host.reachable: false`.
+- `GET /links?session_ids=` naming peer sessions (indexed on a peer and
+  unknown to the local Data Service: local wins, as for implicit routing;
+  the check is remembered, re-checked in the background after a minute,
+  and dropped when the session is deleted through this Router): the local
+  API answers for every id, each owning peer's part comes from its
+  last-known links, and the union comes back deduped by link id, ordered
+  by creation then id (rows with an unreadable `created_at` last). Links
+  never span hosts. Each request also asks for the peer's ids to be read
+  again: one refresh per peer at a time, later requests joining it or the
+  next one. A request waits up to 3 s for it; a dark peer is never
+  dialled. A peer that answers 404 has linked sessions off: its sessions
+  have no links. Any other failure leaves last-known standing. With no peer ids, or on a request a peer's Mesh
+  Service relayed (`X-Mads-Mesh-Peer`, even empty), the API answers alone.
+
+**Reachability:**
+- Each peer is probed every 5 s.
+- A new state must hold 10 s before it's appended as
+  `peer.reachability_changed`. The first connect, and a first `unpaired`,
+  are logged at once.
+- States: `connected`, `unreachable`, `denied` (it refused this device, or
+  proved a key other than the pinned one), `version_mismatch` (another
+  `mesh_api`), `unpaired` (no key pinned).
 
 ## Critical paths
 

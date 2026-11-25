@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { RouterClient } from "../../router/client";
 import { useCompactionSupport } from "../../router/compaction";
+import { useHostScope } from "../../router/hostScope";
 import type { Link, QueuedMessage, Session, Usage } from "../../router/types";
 import {
   commandCandidates,
@@ -42,6 +43,7 @@ import { useStagedAttachments } from "../../components/Attachments/useStagedAtta
 import { useFileDrop } from "../../components/Attachments/useFileDrop";
 import { appendAttachments } from "../attachmentRefs";
 import { QueuedMessages } from "./QueuedMessages";
+import { fromLabel, updatesNoun } from "../HeldUpdates/heldText";
 import { matches } from "../../platform/hotkeys";
 import styles from "./Composer.module.css";
 
@@ -101,7 +103,12 @@ export interface ComposerProps {
   prefill?: { text: string; nonce: number };
   /** Fires handleSend once on mount when `initialValue` is set — used to auto-send a session's opening goal. */
   autoSendInitial?: boolean;
-  onSendError?: (message: string) => void;
+  /**
+   * A send failed. `detail` carries the error and what was sent; returning
+   * true takes the message over (the conversation shows it, as a host's
+   * refusal does), and the composer clears as if it had gone.
+   */
+  onSendError?: (message: string, detail?: { error: unknown; text: string; attachments: number }) => boolean | void;
   /**
    * Fires synchronously when the auto-send effect runs, before the send
    * resolves — lets the caller stop treating `initialValue` as pending now
@@ -138,6 +145,13 @@ export interface ComposerProps {
   links?: Link[];
   /** The "/" command registry. Default COMMANDS; tests pass their own. */
   commands?: CommandDescriptor[];
+  /**
+   * Link updates held while the session slept (docs/HELD-UPDATES-DESIGN.md):
+   * they go with the next send whatever the composer does — the Router
+   * attaches them — so this only shows them, as a chip beside the staged
+   * files, whose × discards them all. Absent or empty → no chip.
+   */
+  held?: { count: number; sources: string[]; onDiscardAll: () => void };
 }
 
 /**
@@ -199,6 +213,7 @@ export function Composer({
   onCompactSession,
   session,
   links,
+  held,
   commands = COMMANDS,
   queued = EMPTY_QUEUE,
   onQueued,
@@ -260,6 +275,7 @@ export function Composer({
     ]);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the fields commands read, see above
   const commandSession = useMemo(() => session, [sessionKey]);
+  const host = useHostScope();
   const commandCtx = useMemo<CommandContext>(
     () => ({
       routerClient,
@@ -268,6 +284,7 @@ export function Composer({
       provider,
       compaction,
       session: commandSession,
+      host,
       linkedSessions,
       leader,
       pipelineRunning,
@@ -279,6 +296,7 @@ export function Composer({
       provider,
       compaction,
       commandSession,
+      host,
       linkedSessions,
       leader,
       pipelineRunning,
@@ -595,8 +613,8 @@ export function Composer({
       if (result.status === "queued") onQueued?.(result.queued);
       else onSent?.(appendAttachments(text, ready), mentions);
     } catch (err) {
-      onSendError?.(err instanceof Error ? err.message : String(err));
-      return;
+      const taken = onSendError?.(err instanceof Error ? err.message : String(err), { error: err, text, attachments: ready.length });
+      if (taken !== true) return;
     }
     setValue("");
     setCursor(0);
@@ -692,6 +710,7 @@ export function Composer({
       )}
       <QueuedMessages queued={queued} onCancel={onCancelQueued} />
       <div className={styles.chips}>
+        {held && held.count > 0 && <HeldChip {...held} />}
         <InjectedContentPreview
           items={injected}
           onRemove={(id) =>
@@ -804,6 +823,31 @@ export function Composer({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/** "⌗ 5 updates · 3 sessions ×": the held updates riding on the next send; × discards them all. */
+function HeldChip({ count, sources, onDiscardAll }: NonNullable<ComposerProps["held"]>) {
+  const label = `${updatesNoun(count)}${sources.length > 0 ? ` · ${fromLabel(sources)}` : ""}`;
+  return (
+    <div className={styles.heldStrip}>
+      <span
+        className={styles.held}
+        data-testid="held-chip"
+        title="Held while this session slept; they go with your next message"
+      >
+        <span aria-hidden="true">⌗</span> {label}
+        <button
+          type="button"
+          className={styles.heldX}
+          aria-label={`Discard all ${updatesNoun(count)}`}
+          title={`Discard all ${count}`}
+          onClick={onDiscardAll}
+        >
+          ×
+        </button>
+      </span>
     </div>
   );
 }

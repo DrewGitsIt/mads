@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
 )
@@ -382,12 +383,12 @@ func (s *server) setChildModel(ctx context.Context, addr, model string) (queued 
 	if err != nil {
 		return false, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/model", bytes.NewReader(raw))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, childsock.URL(addr, "/model"), bytes.NewReader(raw))
 	if err != nil {
 		return false, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := childsock.Client.Do(req)
 	if err != nil {
 		return false, err
 	}
@@ -492,13 +493,20 @@ func (s *server) wakeSession(ctx context.Context, id string) (string, error) {
 // wakeSession's contract (the caller has confirmed no child is tracked) only
 // holds if nobody else can spawn between the check and the spawn.
 func (s *server) ensureSession(ctx context.Context, id string) (string, error) {
-	mu, _ := s.wakeLocks.LoadOrStore(id, &sync.Mutex{})
-	mu.(*sync.Mutex).Lock()
-	defer mu.(*sync.Mutex).Unlock()
+	unlock := s.lockWake(id)
+	defer unlock()
 	if addr, ok := s.sup.SessionAddr(id); ok {
 		return addr, nil
 	}
 	return s.wakeSession(ctx, id)
+}
+
+// lockWake takes id's wake lock (wakeLocks) and returns its unlock. Anything
+// that checks for a child and then acts on its absence holds it across both.
+func (s *server) lockWake(id string) (unlock func()) {
+	mu, _ := s.wakeLocks.LoadOrStore(id, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	return mu.(*sync.Mutex).Unlock
 }
 
 // WakeSession implements job.SessionWaker, letting job bodies (a
@@ -554,6 +562,9 @@ func (s *server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		writeErrMsg(w, http.StatusBadGateway, "delete session: terminate: ", err)
 		return
 	}
+	// The child's exit revoked its own scoped token; this drops any other
+	// (docs/LOCAL-FRONT-DOOR-DESIGN.md D4).
+	s.scoped.RevokeSession(id)
 	// The child may have written its worktree only now, at its first start.
 	if cur, err := s.data.Session(r.Context(), id); err == nil {
 		sess = cur

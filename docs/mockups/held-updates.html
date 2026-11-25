@@ -1,0 +1,479 @@
+<!doctype html>
+<!--
+  mads — Held link updates: Deliver / Discard in the conversation
+  ================================================================
+
+  A leader that's asleep doesn't get its Follow digests; they're held in the
+  link mailbox (link_digests.deferred = 1) and flushed as one forced turn
+  when the session next starts (services/router/internal/job/deferred.go
+  FlushDeferred). Today the only trace is the rail's "5 updates waiting"; the
+  conversation shows nothing, and the delivered-NOOP pill above ("3 updates
+  from … · no action needed") reads like it's part of the same count.
+
+  Four alternatives for showing the held updates where you're reading, with
+  Deliver and Discard. Each shows the waiting state and what's left behind
+  after Deliver and after Discard.
+
+  Content is the real queue on SOM-DST Classifier Primer (digests #75–79).
+  Pill / digest-card geometry copied from
+  ui/src/conversation/ChatRenderer/ChatRenderer.module.css (.quiet, .digest).
+  Colors are the dark "clay" palette from the other mockups.
+-->
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — held link updates</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+    --ok:#7cb389; --ok-soft:rgba(124,179,137,.14);
+    --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13);
+    --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+    --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#a9c0d6;
+    --shadow:0 12px 28px rgba(0,0,0,.45);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+    --fs-chip:10.5px; --fs-sm:12.5px; --fs-body:13px; --fs-ui:14px;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.55 var(--sans); }
+  code { font:var(--fs-sm) var(--mono); background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:1px 5px; color:var(--text2); }
+  button { font:inherit; color:inherit; cursor:pointer; }
+
+  .page { max-width:1240px; margin:0 auto; padding:var(--space-6) var(--space-5) 120px; display:flex; flex-direction:column; gap:var(--space-6); }
+  header.intro h1 { font-size:20px; font-weight:650; letter-spacing:-.01em; }
+  header.intro p { color:var(--text2); max-width:95ch; margin-top:var(--space-2); }
+  nav.toc { display:flex; gap:var(--space-2); flex-wrap:wrap; margin-top:var(--space-3); }
+  nav.toc a { color:var(--text2); text-decoration:none; border:1px solid var(--line-soft); border-radius:999px; padding:2px 10px; font-size:var(--fs-sm); }
+  nav.toc a:hover { color:var(--text); border-color:var(--line); }
+
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); }
+  section.block > h2 { font-size:15px; font-weight:650; padding:var(--space-4) var(--space-5); border-bottom:1px solid var(--line-soft); display:flex; gap:var(--space-3); align-items:baseline; }
+  section.block > h2 .num { color:var(--accent); }
+  .why { padding:var(--space-4) var(--space-5) 0; color:var(--text2); display:flex; flex-direction:column; gap:var(--space-2); max-width:100ch; }
+  .why b { color:var(--text); font-weight:600; }
+  .why ul { padding-left:18px; display:flex; flex-direction:column; gap:2px; }
+  .pros li::marker { content:"+  "; color:var(--ok); }
+  .cons li::marker { content:"–  "; color:var(--bad-fg); }
+
+  .states { display:grid; grid-template-columns:1.25fr 1fr 1fr; gap:var(--space-4); padding:var(--space-4) var(--space-5) var(--space-5); }
+  .state > .cap { font:600 var(--fs-chip) var(--sans); letter-spacing:.06em; text-transform:uppercase; color:var(--text3); margin-bottom:var(--space-2); }
+
+  /* --- a slice of the conversation pane --- */
+  .pane { background:var(--bg0); border:1px solid var(--line-soft); border-radius:var(--r); display:flex; flex-direction:column; min-height:440px; overflow:hidden; }
+  .stream { flex:1; padding:var(--space-4); display:flex; flex-direction:column; gap:var(--space-3); }
+  .msg-a { color:var(--text2); font-size:var(--fs-sm); }
+  .msg-a b { color:var(--text); font-weight:600; }
+  .msg-u { align-self:flex-end; background:var(--bg3); border-radius:var(--r); padding:6px 10px; max-width:80%; font-size:var(--fs-sm); }
+  .fade { color:var(--text3); font-size:var(--fs-sm); font-style:italic; }
+
+  /* existing pill (.quiet + Chip neutral) */
+  .quiet { display:flex; justify-content:center; opacity:.75; }
+  .chip { display:inline-flex; gap:6px; align-items:center; border:1px solid var(--line); border-radius:999px; padding:1px 9px; font:500 var(--fs-chip) var(--sans); color:var(--text2); background:var(--bg2); }
+  .chip.warn { color:var(--warn); border-color:rgba(211,175,94,.45); background:var(--warn-soft); }
+  .chip.info { color:var(--info-fg); border-color:rgba(150,175,199,.4); background:var(--info-soft); }
+
+  /* existing digest card (.digest) */
+  .digest { border:1px solid var(--line-soft); border-left:3px solid var(--info); border-radius:var(--r); background:var(--bg2); padding:var(--space-2) var(--space-3); font-size:var(--fs-sm); color:var(--text2); }
+  .digest .hd { font:600 var(--fs-chip) var(--sans); color:var(--text3); margin-bottom:2px; display:flex; gap:6px; align-items:center; }
+  .digest .hd b { color:var(--info-fg); font-weight:600; }
+  .digest .hd .sp { flex:1; }
+  .digest p { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .digest.held { border-style:dashed; border-left:3px solid var(--warn); background:transparent; }
+  .digest.off { opacity:.4; }
+  .digest.off p { text-decoration:line-through; }
+
+  .btn { border:1px solid var(--line); background:var(--bg3); border-radius:var(--r-sm); padding:3px 10px; font-size:var(--fs-sm); font-weight:550; }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+  .btn.ghost { background:transparent; border-color:transparent; color:var(--text2); }
+  .btn.sm { padding:1px 7px; font-size:var(--fs-chip); }
+  .x { border:0; background:none; color:var(--text3); font-size:12px; padding:0 2px; }
+  .x:hover { color:var(--bad-fg); }
+
+  /* composer */
+  .composer { border-top:1px solid var(--line-soft); padding:var(--space-3); display:flex; flex-direction:column; gap:var(--space-2); background:var(--bg1); }
+  .input { border:1px solid var(--line); border-radius:var(--r); padding:8px 10px; color:var(--text3); background:var(--bg0); display:flex; align-items:center; }
+  .input .sp { flex:1; }
+  .send { width:24px; height:24px; border-radius:6px; background:var(--accent); color:var(--accent-ink); display:grid; place-items:center; font-size:12px; font-weight:700; }
+
+  /* A: in-stream held block */
+  .heldBlock { border:1px dashed rgba(211,175,94,.5); border-radius:var(--r); padding:var(--space-3); display:flex; flex-direction:column; gap:var(--space-2); background:rgba(211,175,94,.04); }
+  .heldHead { display:flex; align-items:center; gap:var(--space-2); }
+  .heldHead .t { font-weight:600; font-size:var(--fs-sm); color:var(--warn); }
+  .heldHead .s { color:var(--text3); font-size:var(--fs-chip); }
+  .heldHead .sp { flex:1; }
+  .grp { font:600 var(--fs-chip) var(--sans); color:var(--text3); margin-top:2px; }
+  .divider { display:flex; align-items:center; gap:var(--space-2); color:var(--text3); font-size:var(--fs-chip); }
+  .divider::before, .divider::after { content:""; flex:1; border-top:1px dashed var(--line); }
+
+  /* B: tray above composer */
+  .tray { border:1px solid rgba(211,175,94,.4); background:var(--bg2); border-radius:var(--r); padding:6px 10px; display:flex; align-items:center; gap:var(--space-2); font-size:var(--fs-sm); }
+  .tray .t { color:var(--warn); font-weight:600; }
+  .tray .s { color:var(--text3); font-size:var(--fs-chip); }
+  .tray .sp { flex:1; }
+  .trayOpen { border:1px solid rgba(211,175,94,.4); background:var(--bg2); border-radius:var(--r); display:flex; flex-direction:column; max-height:250px; }
+  .trayOpen .list { overflow:auto; padding:var(--space-2); display:flex; flex-direction:column; gap:6px; }
+  .trayOpen .bar { border-top:1px solid var(--line-soft); padding:6px 10px; display:flex; gap:var(--space-2); align-items:center; }
+
+  /* C: composer attachment */
+  .attach { display:flex; flex-wrap:wrap; gap:6px; }
+  .att { display:inline-flex; align-items:center; gap:6px; border:1px solid rgba(211,175,94,.45); background:var(--warn-soft); color:var(--warn); border-radius:var(--r-sm); padding:2px 8px; font-size:var(--fs-chip); font-weight:550; }
+  .popover { border:1px solid var(--line); background:var(--bg2); border-radius:var(--r); box-shadow:var(--shadow); padding:var(--space-2); display:flex; flex-direction:column; gap:6px; }
+  .hint { color:var(--text3); font-size:var(--fs-chip); }
+
+  /* D: triage rows */
+  .row { display:flex; gap:var(--space-2); align-items:flex-start; padding:6px 8px; border-radius:var(--r-sm); }
+  .row:hover { background:var(--bg2); }
+  .row input { margin-top:3px; accent-color:var(--accent); }
+  .row .body { flex:1; font-size:var(--fs-sm); color:var(--text2); }
+  .row .body b { color:var(--info-fg); font-size:var(--fs-chip); font-weight:600; }
+  .row .body p { display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden; }
+  .row .tm { color:var(--text3); font-size:var(--fs-chip); white-space:nowrap; }
+  .row.dim { opacity:.45; }
+
+  .pick { margin:0 var(--space-5) var(--space-5); padding:var(--space-3) var(--space-4); border-left:3px solid var(--accent); background:var(--accent-soft); border-radius:var(--r-sm); color:var(--text2); }
+  .pick b { color:var(--text); }
+  .qs { padding:var(--space-4) var(--space-5) var(--space-5); color:var(--text2); }
+  .qs ol { padding-left:20px; display:flex; flex-direction:column; gap:var(--space-2); }
+  .qs b { color:var(--text); }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="intro">
+  <h1>Held link updates: Deliver / Discard in the conversation</h1>
+  <p>SOM-DST Classifier Primer has been asleep since the Router restarted at 13:54. It has <b>5 updates waiting</b>: 3 from MADS Pipeline Design Study and 1 each from two other sessions. You can't see any of them in its conversation, and the pill above ("3 updates · no action needed") is <i>older, already delivered</i> updates, so the two counts look related when they aren't.</p>
+  <p>Shared across every option: the existing pill gets renamed to say it's in the past ("3 earlier updates · no action needed"); a held update looks different from a delivered one (dashed, amber edge instead of solid, info edge); Deliver wakes the session and flushes the backlog as one turn (today's <code>FlushDeferred</code>); Discard removes updates from the mailbox and leaves a faint, findable record behind so the human can still audit them.</p>
+  <nav class="toc">
+    <a href="#a">A · Held block in the stream</a>
+    <a href="#b">B · Tray above the composer</a>
+    <a href="#c">C · Goes with your next message (revised)</a>
+    <a href="#d">D · Triage list</a>
+    <a href="#qs">Open questions</a>
+  </nav>
+</header>
+
+<!-- ================================================================ A -->
+<section class="block" id="a">
+  <h2><span class="num">A</span> Held block at the end of the stream</h2>
+  <div class="why">
+    <p>The updates show up where they'd be delivered: at the end of the conversation, after a "fell asleep" divider. They're collapsed to a header by default and expand to the same cards the pill uses, grouped by session. Each card has an × to discard just that one.</p>
+    <ul class="pros"><li>Answers "where are the 5?" exactly where you're looking; the rail's "5 updates waiting" can scroll here.</li><li>After delivery the block simply becomes the normal pill, so history stays continuous.</li></ul>
+    <ul class="cons"><li>On a long conversation you only see it if you're scrolled to the bottom (the runway usually puts you there).</li><li>It's part of the stream, so ⌘F and the turn strip have to treat it as a non-turn item.</li></ul>
+  </div>
+  <div class="states">
+    <div class="state">
+      <div class="cap">Waiting (expanded)</div>
+      <div class="pane">
+        <div class="stream">
+          <div class="quiet"><span class="chip">▸ 3 earlier updates from MADS Pipeline Design Study · no action needed</span></div>
+          <div class="msg-a">NOOP</div>
+          <div class="divider">Asleep since 13:54 (Router restart)</div>
+          <div class="heldBlock">
+            <div class="heldHead">
+              <span class="t">▾ 5 updates waiting</span>
+              <span class="s">from 3 sessions · arrive when this session wakes</span>
+              <span class="sp"></span>
+              <button class="btn ghost sm">Discard all</button>
+              <button class="btn primary sm">Deliver now</button>
+            </div>
+            <div class="grp">MADS Pipeline Design Study ×3</div>
+            <div class="digest held"><div class="hd">⌗ digest · <b>MADS Pipeline Design Study</b> · 13:54<span class="sp"></span><button class="x" title="Discard">×</button></div><p>The agent moved H2 into execution with two silver arms after recording design decisions (Rubric 3b, Spark conditions)…</p></div>
+            <div class="digest held"><div class="hd">⌗ digest · <b>MADS Pipeline Design Study</b> · 14:26<span class="sp"></span><button class="x">×</button></div><p>User requested a progress update on a training run. Arm A is complete across all learning-curve points, arm U is at 50%…</p></div>
+            <div class="digest held"><div class="hd">⌗ digest · <b>MADS Pipeline Design Study</b> · 16:10<span class="sp"></span><button class="x">×</button></div><p>The user asked "done yet?" … Both model arms exceeded the 400ms latency cap on Mac CPU, failing the hard requirement.</p></div>
+            <div class="grp">Rearchitecting MADS task synthesis ×1 · mads Task Synthesis Redesign ×1</div>
+            <div class="digest held"><div class="hd">⌗ digest · <b>Rearchitecting MADS task synthesis</b> · 13:54<span class="sp"></span><button class="x">×</button></div><p>The user was reviewing and labeling pilot data for E-pointer; the agent proposed splitting the work into four single-question passes…</p></div>
+          </div>
+        </div>
+        <div class="composer"><div class="input">Message SOM-DST Classifier Primer<span class="sp"></span><span class="send">↑</span></div></div>
+      </div>
+    </div>
+    <div class="state">
+      <div class="cap">After Deliver now</div>
+      <div class="pane">
+        <div class="stream">
+          <div class="quiet"><span class="chip">▸ 3 earlier updates from MADS Pipeline Design Study · no action needed</span></div>
+          <div class="msg-a">NOOP</div>
+          <div class="divider">Asleep 13:54 – 17:12</div>
+          <div class="quiet"><span class="chip info">▸ 5 updates from 3 sessions · delivered 17:12</span></div>
+          <div class="msg-a"><b>SOM-DST Classifier Primer</b> — H2 failed the 400ms latency cap on both arms. That blocks the deploy path we agreed; I'd suggest…</div>
+          <div class="fade">(if the agent answers NOOP, the chip folds into "no action needed" like today)</div>
+        </div>
+        <div class="composer"><div class="input">Message SOM-DST Classifier Primer<span class="sp"></span><span class="send">↑</span></div></div>
+      </div>
+    </div>
+    <div class="state">
+      <div class="cap">After Discard all</div>
+      <div class="pane">
+        <div class="stream">
+          <div class="quiet"><span class="chip">▸ 3 earlier updates from MADS Pipeline Design Study · no action needed</span></div>
+          <div class="msg-a">NOOP</div>
+          <div class="divider">Asleep since 13:54</div>
+          <div class="quiet" style="opacity:.55"><span class="chip">▸ 5 updates discarded by you · 17:12</span></div>
+          <div class="fade">Session stays asleep. Expanding shows the struck-through cards (and ⌘F finds them).</div>
+        </div>
+        <div class="composer"><div class="input">Message SOM-DST Classifier Primer<span class="sp"></span><span class="send">↑</span></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ B -->
+<section class="block" id="b">
+  <h2><span class="num">B</span> Tray docked above the composer</h2>
+  <div class="why">
+    <p>A one-line tray sits just above the composer, like an "N new messages" bar, and is visible no matter how far you've scrolled. Clicking it opens a short scrolling list with the actions in a footer. The stream itself doesn't change until the updates are delivered.</p>
+    <ul class="pros"><li>Always visible, and it sits right next to the thing that also flushes the backlog (sending a message).</li><li>Doesn't touch stream rendering, the runway, ⌘F or the turn strip while the updates are waiting.</li></ul>
+    <ul class="cons"><li>Takes composer space; it competes with whatever else docks there (queued sends, the permission bar).</li><li>The updates aren't in the history until delivered, so discarded ones need a separate record (shown in the stream).</li></ul>
+  </div>
+  <div class="states">
+    <div class="state">
+      <div class="cap">Waiting (collapsed → open)</div>
+      <div class="pane">
+        <div class="stream">
+          <div class="quiet"><span class="chip">▸ 3 earlier updates from MADS Pipeline Design Study · no action needed</span></div>
+          <div class="msg-a">NOOP</div>
+          <div class="fade">…scrolled anywhere…</div>
+        </div>
+        <div class="composer">
+          <div class="tray"><span class="t">● 5 updates waiting</span><span class="s">MADS Pipeline Design Study ×3 · 2 others · asleep since 13:54</span><span class="sp"></span><span class="s">▴</span></div>
+          <div class="trayOpen">
+            <div class="list">
+              <div class="digest held"><div class="hd">⌗ <b>MADS Pipeline Design Study</b> · 16:10<span class="sp"></span><button class="x">×</button></div><p>The user asked "done yet?" … Both model arms exceeded the 400ms latency cap.</p></div>
+              <div class="digest held"><div class="hd">⌗ <b>MADS Pipeline Design Study</b> · 14:26<span class="sp"></span><button class="x">×</button></div><p>Arm A complete across all learning-curve points; arm U at 50%…</p></div>
+              <div class="digest held"><div class="hd">⌗ <b>mads Task Synthesis Redesign</b> · 13:54<span class="sp"></span><button class="x">×</button></div><p>2.9 open tasks per window on average (median 3), ~0.9 actually updated…</p></div>
+              <div class="fade">+2 more</div>
+            </div>
+            <div class="bar"><span class="hint">Sending a message also delivers these.</span><span style="flex:1"></span><button class="btn ghost sm">Discard all</button><button class="btn primary sm">Deliver now</button></div>
+          </div>
+          <div class="input">Message SOM-DST Classifier Primer<span class="sp"></span><span class="send">↑</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="state">
+      <div class="cap">After Deliver now</div>
+      <div class="pane">
+        <div class="stream">
+          <div class="msg-a">NOOP</div>
+          <div class="quiet"><span class="chip info">▸ 5 updates from 3 sessions · delivered 17:12</span></div>
+          <div class="msg-a"><b>SOM-DST Classifier Primer</b> — H2 failed the latency cap on both arms…</div>
+        </div>
+        <div class="composer"><div class="input">Message SOM-DST Classifier Primer<span class="sp"></span><span class="send">↑</span></div></div>
+      </div>
+    </div>
+    <div class="state">
+      <div class="cap">After Discard all</div>
+      <div class="pane">
+        <div class="stream">
+          <div class="msg-a">NOOP</div>
+          <div class="quiet" style="opacity:.55"><span class="chip">▸ 5 updates discarded by you · 17:12</span></div>
+        </div>
+        <div class="composer"><div class="input">Message SOM-DST Classifier Primer<span class="sp"></span><span class="send">↑</span></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ C -->
+<style>
+  .row .tag { font:600 var(--fs-chip) var(--sans); color:var(--accent); white-space:nowrap; }
+  .row.open .body p { -webkit-line-clamp:unset; display:block; }
+  .row .caret { color:var(--text3); font-size:var(--fs-chip); width:10px; margin-top:2px; }
+  .heldFoot { display:flex; gap:var(--space-2); align-items:center; border-top:1px solid var(--line-soft); padding-top:var(--space-2); }
+  .heldFoot .sp { flex:1; }
+  .suggest { display:inline-flex; align-items:center; gap:6px; border:1px dashed rgba(211,175,94,.5); color:var(--warn); border-radius:var(--r-sm); padding:2px 8px; font-size:var(--fs-chip); font-weight:550; background:transparent; }
+  .uWrap { align-self:flex-end; max-width:85%; display:flex; flex-direction:column; gap:4px; align-items:flex-end; }
+  .uAtt { border:1px solid rgba(211,175,94,.35); background:var(--bg2); border-radius:var(--r); padding:4px 8px; font-size:var(--fs-chip); color:var(--text2); width:100%; }
+  .uAtt b { color:var(--warn); font-weight:600; }
+  .uAtt .li { color:var(--text3); padding-left:12px; }
+  .tailHeld { display:flex; align-items:center; gap:var(--space-2); border:1px dashed rgba(211,175,94,.5); border-radius:var(--r); padding:6px 10px; font-size:var(--fs-sm); background:rgba(211,175,94,.04); }
+  .tailHeld .t { color:var(--warn); font-weight:600; }
+  .tailHeld .s { color:var(--text3); font-size:var(--fs-chip); }
+  .tailHeld .sp { flex:1; }
+  .states.four { grid-template-columns:repeat(2, 1fr); }
+</style>
+<section class="block" id="c">
+  <h2><span class="num">C</span> Held updates go with your next message (revised ×2)</h2>
+  <div class="why">
+    <p>The held updates are listed in the conversation like A, as D's compact rows: grouped by session, click to expand. They're <b>attached to your next message automatically</b>. There are only two outcomes: they go to the agent, or you discard them. To send them, either send a message (they ride along in the same turn) or use <b>Send updates only</b> (the old "just send these"). To stop them, discard one row with its ×, or all of them. There's no "hold them back for later".</p>
+    <ul class="pros"><li>Matches today's behavior (waking the session delivers everything), but now visible and editable before it happens.</li><li>One turn for "updates + your question", and the history shows exactly which updates the agent saw with which message.</li><li>No backlog that quietly grows: anything held is either about to go or gets discarded.</li></ul>
+    <ul class="cons"><li>Discarding is the only way to keep an update out, so it has to be cheap and reversible (undo toast), and it stays auditable.</li></ul>
+  </div>
+  <div class="states four">
+    <div class="state">
+      <div class="cap">1 · Waiting: listed in the stream, already attached in the composer</div>
+      <div class="pane">
+        <div class="stream">
+          <div class="quiet"><span class="chip">▸ 3 earlier updates from MADS Pipeline Design Study · no action needed</span></div>
+          <div class="msg-a">NOOP</div>
+          <div class="divider">Asleep since 13:54 (Router restart)</div>
+          <div class="heldBlock">
+            <div class="heldHead"><span class="t">5 updates held</span><span class="s">from 3 sessions · go with your next message</span></div>
+            <div class="grp">MADS Pipeline Design Study</div>
+            <div class="row open"><span class="caret">▾</span><div class="body"><p>The user asked "done yet?" and the agent executed 4 bash calls, then reported completion of H2 checkpoint analysis. Both model arms exceeded the 400ms latency cap on Mac CPU, failing the hard requirement. Tuning improved accuracy slightly over baseline…</p></div><span class="tm">16:10</span><button class="x" title="Discard">×</button></div>
+            <div class="row"><span class="caret">▸</span><div class="body"><p>Progress check: arm A complete, arm U at 50% (epoch 12/20)</p></div><span class="tm">14:26</span><button class="x" title="Discard">×</button></div>
+            <div class="row"><span class="caret">▸</span><div class="body"><p>H2 moved into execution with two silver arms; moved to Spark</p></div><span class="tm">13:54</span><button class="x" title="Discard">×</button></div>
+            <div class="grp">Rearchitecting MADS task synthesis</div>
+            <div class="row"><span class="caret">▸</span><div class="body"><p>E-pointer labeling split into four single-question passes</p></div><span class="tm">13:54</span><button class="x" title="Discard">×</button></div>
+            <div class="grp">mads Task Synthesis Redesign</div>
+            <div class="row"><span class="caret">▸</span><div class="body"><p>2.9 open tasks per window on average (median 3)</p></div><span class="tm">13:54</span><button class="x" title="Discard">×</button></div>
+            <div class="heldFoot"><button class="btn ghost sm">Discard all</button><span class="sp"></span><button class="btn sm">Send updates only</button></div>
+          </div>
+        </div>
+        <div class="composer">
+          <div class="attach"><span class="att">⌗ 5 updates · 3 sessions <button class="x" title="Discard all 5">×</button></span></div>
+          <div class="input">Message SOM-DST Classifier Primer<span class="sp"></span><span class="send">↑</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="state">
+      <div class="cap">2 · Trimming: × discards a row; the chip count follows</div>
+      <div class="pane">
+        <div class="stream">
+          <div class="msg-a">NOOP</div>
+          <div class="divider">Asleep since 13:54</div>
+          <div class="heldBlock">
+            <div class="heldHead"><span class="t">3 updates held</span><span class="s">go with your next message</span></div>
+            <div class="grp">MADS Pipeline Design Study</div>
+            <div class="row"><span class="caret">▸</span><div class="body"><p>"done yet?" → both arms exceeded the 400ms latency cap</p></div><span class="tm">16:10</span><button class="x">×</button></div>
+            <div class="row"><span class="caret">▸</span><div class="body"><p>Progress check: arm A complete, arm U at 50%</p></div><span class="tm">14:26</span><button class="x">×</button></div>
+            <div class="row"><span class="caret">▸</span><div class="body"><p>H2 moved into execution with two silver arms</p></div><span class="tm">13:54</span><button class="x">×</button></div>
+            <div class="grp" style="opacity:.6">2 discarded · Rearchitecting MADS task synthesis, mads Task Synthesis Redesign</div>
+            <div class="heldFoot"><button class="btn ghost sm">Discard all</button><span class="sp"></span><button class="btn sm">Send updates only</button></div>
+          </div>
+        </div>
+        <div class="composer">
+          <div class="toast" style="align-self:center; font-size:var(--fs-chip); color:var(--text2); background:var(--bg3); border:1px solid var(--line); border-radius:999px; padding:2px 10px">Discarded 2 updates · <b style="color:var(--accent)">Undo</b></div>
+          <div class="attach"><span class="att">⌗ 3 updates · MADS Pipeline Design Study <button class="x" title="Discard all 3">×</button></span></div>
+          <div class="input" style="color:var(--text)">What's the fallback if both arms miss the cap?<span class="sp"></span><span class="send">↑</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="state">
+      <div class="cap">3 · After sending: every held update rides on your message</div>
+      <div class="pane">
+        <div class="stream">
+          <div class="msg-a">NOOP</div>
+          <div class="divider">Asleep 13:54 – 17:12</div>
+          <div class="quiet" style="opacity:.55"><span class="chip">▸ 2 updates discarded by you · 17:11</span></div>
+          <div class="uWrap">
+            <div class="uAtt"><b>▾ ⌗ 3 updates attached</b> · MADS Pipeline Design Study
+              <div class="li">16:10 "done yet?" → both arms exceeded the latency cap</div>
+              <div class="li">14:26 Arm A complete; arm U at 50%</div>
+              <div class="li">13:54 H2 into execution; moved to Spark</div>
+            </div>
+            <div class="msg-u" style="max-width:100%">What's the fallback if both arms miss the cap?</div>
+          </div>
+          <div class="msg-a"><b>SOM-DST Classifier Primer</b> — Both arms missing the cap means the deploy path we agreed is out. Two fallbacks: distill to a smaller head, or…</div>
+        </div>
+        <div class="composer"><div class="input">Message SOM-DST Classifier Primer<span class="sp"></span><span class="send">↑</span></div></div>
+      </div>
+    </div>
+    <div class="state">
+      <div class="cap">4 · Send updates only, and Discard all</div>
+      <div class="pane">
+        <div class="stream">
+          <div class="msg-a">NOOP</div>
+          <div class="divider">Asleep 13:54 – 17:12</div>
+          <div class="quiet"><span class="chip info">▸ 5 updates from 3 sessions · sent by you 17:12</span></div>
+          <div class="msg-a"><b>SOM-DST Classifier Primer</b> — H2 failed the latency cap on both arms…</div>
+          <div class="fade">Send updates only = the same turn with no text of yours. A NOOP answer folds the chip into "no action needed" like today.</div>
+          <div class="divider" style="margin-top:var(--space-3)">or</div>
+          <div class="quiet" style="opacity:.55"><span class="chip">▸ 5 updates discarded by you · 17:12</span></div>
+          <div class="fade">Discard all: the session stays asleep; the held list and chip disappear.</div>
+        </div>
+        <div class="composer"><div class="input">Message SOM-DST Classifier Primer<span class="sp"></span><span class="send">↑</span></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="pick" style="margin-top:0"><b>Rules this version assumes.</b>
+    <ul style="padding-left:18px; margin-top:4px">
+      <li>Every held update is attached to the next message by default. The only way to keep one out is to discard it.</li>
+      <li>Any send delivers whatever is still held: your message, Send updates only, or the "Wake now" warm-up (it sends them as one turn, like today's flush).</li>
+      <li>× on a row discards that update; × on the composer chip discards everything still held. Both offer Undo, and both leave a "discarded by you" record you can expand and find with ⌘F.</li>
+      <li>Updates that arrive while you're drafting join the list and the chip automatically.</li>
+      <li>Signal wakes (blocked, crash, needs_review, permission) deliver everything held, with no human in the loop, exactly as today.</li>
+    </ul>
+  </div>
+</section>
+<!-- ================================================================ D -->
+<section class="block" id="d">
+  <h2><span class="num">D</span> Triage list (pick which to deliver)</h2>
+  <div class="why">
+    <p>Like A, but built for picking: compact one-line rows with checkboxes, grouped by session, and a footer that counts what you've picked ("Deliver 3 · Discard 2"). Clicking a row expands it to the full digest. This works best when backlogs get long (a leader asleep overnight under several busy subjects).</p>
+    <ul class="pros"><li>One action handles a mixed decision; scales to 20+ updates.</li><li>Rows are one line each, so the block stays short.</li></ul>
+    <ul class="cons"><li>Checkboxes in a conversation are a new pattern for mads.</li><li>Overkill for the usual 1–3 updates; it could start as A and switch to D past some count.</li></ul>
+  </div>
+  <div class="states">
+    <div class="state">
+      <div class="cap">Waiting</div>
+      <div class="pane">
+        <div class="stream">
+          <div class="msg-a">NOOP</div>
+          <div class="divider">Asleep since 13:54 (Router restart)</div>
+          <div class="heldBlock">
+            <div class="heldHead"><span class="t">5 updates waiting</span><span class="s">from 3 sessions</span><span class="sp"></span><button class="btn ghost sm">Select none</button></div>
+            <div class="grp">MADS Pipeline Design Study</div>
+            <div class="row"><input type="checkbox" checked><div class="body"><p>"done yet?" → both arms exceeded the 400ms latency cap on Mac CPU</p></div><span class="tm">16:10</span></div>
+            <div class="row"><input type="checkbox" checked><div class="body"><p>Progress check: arm A complete, arm U at 50% (epoch 12/20)</p></div><span class="tm">14:26</span></div>
+            <div class="row"><input type="checkbox" checked><div class="body"><p>H2 moved into execution with two silver arms; moved to Spark</p></div><span class="tm">13:54</span></div>
+            <div class="grp">Rearchitecting MADS task synthesis</div>
+            <div class="row dim"><input type="checkbox"><div class="body"><p>E-pointer labeling split into four single-question passes</p></div><span class="tm">13:54</span></div>
+            <div class="grp">mads Task Synthesis Redesign</div>
+            <div class="row dim"><input type="checkbox"><div class="body"><p>2.9 open tasks per window on average (median 3)</p></div><span class="tm">13:54</span></div>
+            <div style="display:flex; gap:var(--space-2); border-top:1px solid var(--line-soft); padding-top:var(--space-2)"><span class="hint">Unticked ones are discarded.</span><span style="flex:1"></span><button class="btn primary sm">Deliver 3 · Discard 2</button></div>
+          </div>
+        </div>
+        <div class="composer"><div class="input">Message SOM-DST Classifier Primer<span class="sp"></span><span class="send">↑</span></div></div>
+      </div>
+    </div>
+    <div class="state">
+      <div class="cap">After Deliver 3 · Discard 2</div>
+      <div class="pane">
+        <div class="stream">
+          <div class="msg-a">NOOP</div>
+          <div class="divider">Asleep 13:54 – 17:12</div>
+          <div class="quiet" style="opacity:.55"><span class="chip">▸ 2 updates discarded by you</span></div>
+          <div class="quiet"><span class="chip info">▸ 3 updates from MADS Pipeline Design Study · delivered 17:12</span></div>
+          <div class="msg-a"><b>SOM-DST Classifier Primer</b> — H2 failed the latency cap on both arms…</div>
+        </div>
+        <div class="composer"><div class="input">Message SOM-DST Classifier Primer<span class="sp"></span><span class="send">↑</span></div></div>
+      </div>
+    </div>
+    <div class="state">
+      <div class="cap">Small backlog (≤ 3) falls back to A</div>
+      <div class="pane">
+        <div class="stream">
+          <div class="msg-a">NOOP</div>
+          <div class="divider">Asleep since 16:30</div>
+          <div class="heldBlock">
+            <div class="heldHead"><span class="t">▸ 1 update waiting</span><span class="s">from MADS Pipeline Design Study</span><span class="sp"></span><button class="btn ghost sm">Discard</button><button class="btn primary sm">Deliver now</button></div>
+          </div>
+        </div>
+        <div class="composer"><div class="input">Message SOM-DST Classifier Primer<span class="sp"></span><span class="send">↑</span></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="pick"><b>Direction picked: revised C (above)</b>, which takes A's in-stream placement and D's rows. A, B and D stay here for reference.</div>
+</section>
+
+<section class="block" id="qs">
+  <h2><span class="num">?</span> Open questions for any option</h2>
+  <div class="qs"><ol>
+    <li><b>Ordering (settled by C):</b> held updates go in the same user turn as your message, ahead of your text, instead of a separate flush turn first.</li>
+    <li><b>Should Discard be audit-visible?</b> The mockups leave a faint "N discarded by you" chip (expandable, ⌘F-findable). The alternative is deleting them outright.</li>
+    <li><b>Rail tie-in.</b> Clicking "5 updates waiting" on the rail card opens the session and scrolls to the block (A/D) or opens the tray (B) or attachment (C).</li>
+    <li><b>Wake target.</b> Deliver now wakes the session. If it's a leader whose own subjects are mid-turn, that's fine; there's nothing extra to confirm.</li>
+  </ol></div>
+</section>
+
+</div>
+</body>
+</html>

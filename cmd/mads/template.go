@@ -44,7 +44,7 @@ func cmdTemplateValidate(args []string, out io.Writer) error {
 	_ = fs.Parse(args)
 	names := fs.Args()
 
-	client := dataclient.New(*data, "user")
+	client := dataClient(*data, "user")
 	ctx := context.Background()
 
 	var results []dataclient.TemplateValidation

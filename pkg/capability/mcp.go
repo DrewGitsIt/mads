@@ -209,3 +209,45 @@ func (r *Registry) Stop(ctx context.Context, name string) error {
 	}
 	return nil
 }
+
+// SweepStale removes pid files whose recorded process is no longer alive
+// (or which never got a PID written) and returns how many it removed. A
+// capability process that dies on its own, or a session that's deleted,
+// leaves its pid file behind; EnsureStarted already treats such a file as
+// stale and reclaims it, but only if that same capability is ever started
+// again, so per-session names (orchestrate-<session>) pile up forever.
+//
+// minAge guards the one window where a live claim looks dead: between
+// EnsureStarted's exclusive create and its PID write the file is empty.
+// Any file modified more recently than minAge is left alone. A PID that
+// has since been reused by an unrelated process reads as alive and is
+// kept, which is harmless: the next EnsureStarted for that name, if any,
+// sees a live PID and the file costs a few bytes. Never signals anything.
+func (r *Registry) SweepStale(minAge time.Duration) (int, error) {
+	entries, err := os.ReadDir(r.dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	cutoff := time.Now().Add(-minAge)
+	n := 0
+	for _, e := range entries {
+		name, ok := strings.CutSuffix(e.Name(), ".pid")
+		if !ok || !e.Type().IsRegular() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		if pid, ok := r.readPID(name); ok && alive(pid) {
+			continue
+		}
+		if err := os.Remove(r.pidPath(name)); err == nil {
+			n++
+		}
+	}
+	return n, nil
+}

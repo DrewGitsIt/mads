@@ -50,7 +50,9 @@ describe("TemplatesShelf", () => {
   it("renders a card per fetched template", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
+      // A fresh Response per call: a body reads once, and more than one GET
+      // can go out on mount.
+      vi.fn().mockImplementation(async () =>
         new Response(
           JSON.stringify([
             {

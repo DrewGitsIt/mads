@@ -1,12 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useHostClient, useHostScope, useIsRemoteHost } from "../router/hostScope";
 import { Button } from "../components/Button/Button";
 import { Card } from "../components/Card/Card";
 import { ConfirmDialog } from "../components/ConfirmDialog/ConfirmDialog";
 import { Toast } from "../components/Toast/Toast";
 import type { RouterClient, SessionEventSource } from "../router/client";
 import { CommitRefusedError, TransportSwitchError } from "../router/client";
-import { subscribeToEvents } from "../router/events";
+import { coalesce, type Coalescer } from "../router/coalesce";
+import { eventsReady, happenedSince, subscribeToEvents, windowNoticesSince } from "../router/events";
 import { getAllEvents } from "../router/eventPages";
+import { refreshSessionRepos, useSessionRepos } from "../router/repoStateStore";
 import { contextWindowForModel, countsTokens } from "../router/modelDisplay";
 import {
   SESSION_SHELL_REFETCH_EVENT_TYPES,
@@ -21,19 +24,22 @@ import type {
   QueuedMessage,
   CompactStatus,
   PermissionRequest,
+  PushTarget,
+  LandRequest,
   Session,
   SessionAuth,
   StreamEvent,
   ToolStatus,
   ToolStatusChange,
   ToolUse,
+  TranscriptMissing,
   Usage,
 } from "../router/types";
 import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
 import { leaderLink } from "./Composer/commands/useLinkCommandState";
 import { useWorkspaceForRef } from "../tasks/useSessionWorkspace";
 import { SessionTerminalBridge } from "./TerminalRenderer/sessionTerminalBridge";
-import { SessionDock, latestLandOutcome } from "./Dock";
+import { SessionDock } from "./Dock";
 import { useCheckoutBranch } from "./Dock/useCheckoutBranch";
 import { useAgentIndex } from "../router/useAgentIndex";
 import { useCompactionSupport } from "../router/compaction";
@@ -61,7 +67,7 @@ import {
   type SubStreamItem,
   type TaskModel,
 } from "./activity/conversationItems";
-import { subagentRows } from "./keyed/conversation";
+import { findTool, subagentRows } from "./keyed/conversation";
 import { useKeyedConversation } from "./keyed/useKeyedConversation";
 import { useReveal } from "./keyed/useReveal";
 import { LinkNamesProvider, useLinkNames } from "./activity/linkNames";
@@ -77,6 +83,7 @@ import { Composer } from "./Composer/Composer";
 import { ExpandedComposer } from "./Composer/ExpandedComposer";
 import { QueuedMessages } from "./Composer/QueuedMessages";
 import { matches } from "../platform/hotkeys";
+import { canOpenFiles, getLinkOpener } from "../platform/links";
 import { ProvisioningStrip } from "./ProvisioningStrip";
 import { SignInDialog } from "./SignIn/SignInDialog";
 import { useSessionAuth } from "./SignIn/useSessionAuth";
@@ -85,17 +92,41 @@ import { ShellDock } from "./ShellDock/ShellDock";
 import { ShellBridge, type ShellDockBridge } from "./ShellDock/shellBridge";
 import { getShellDockState, setShellDockState, useShellDockState } from "./ShellDock/dockState";
 import { CommitDialog } from "./Worktree/CommitDialog";
+import { LandDialog } from "./Worktree/LandDialog";
+import { PushDialog } from "./Worktree/PushDialog";
+import { pushedCopy } from "./Worktree/worktreeCopy";
 import { useCommitSettings } from "./Worktree/useCommitSettings";
+import { landRepos, pushFacts, uncommittedRepos, type LandRepo } from "./Worktree/workState";
 import { useWorktreeCards } from "./Worktree/useWorktreeCards";
 import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
 import { STREAM_REATTACH_EVENT, type StreamReattachDetail } from "./streamReattachSignal";
 import { useStickToBottom } from "./useStickToBottom";
 import { useRunway } from "./useRunway";
+import { useDoubleEnter } from "./useDoubleEnter";
+import { glideTo, useJumpKeys } from "./useJumpKeys";
 import { useOlderPages } from "./useOlderPages";
 import { FindBar, useFindBar } from "./Find/FindBar";
 import { useVisibleCards } from "./useVisibleCards";
 import { useDelegateFile } from "./activity/useDelegateFile";
+import { HeldUpdates } from "./HeldUpdates/HeldUpdates";
+import { useHeldUpdates } from "./HeldUpdates/useHeldUpdates";
+import { sourceNames, updatesNoun } from "./HeldUpdates/heldText";
+import { RefusedSend } from "./ChatRenderer/RefusedSend";
+import { refusalOf, type RefusedSend as RefusedSendState } from "./ChatRenderer/sendRefusal";
+import { selfStore } from "../router/devices";
 import styles from "./ConversationTab.module.css";
+import { useWorktreeRefresh } from "./Worktree/worktreeRefresh";
+
+/** What ChatRenderer's stable callbacks call: the latest committed render's handlers. */
+interface ChatHandlers {
+  openTool: (tool: ToolUse) => void;
+  openTask: (toolUseId: string, tool: ToolUse) => void;
+  retry: (text: string) => void;
+  signIn: () => void;
+}
+
+/** No permission cards: the terminal transport's, as one array so it's the same every render. */
+const NO_PERMISSIONS: PermissionRequest[] = [];
 
 // When the user last dismissed this session's compaction banner — lets a
 // replayed failure (see replayedCompactStatus) stay acknowledged across
@@ -197,10 +228,17 @@ export function ConversationTab({
   // sessions (which remounts this tab) don't lose it. Hide is not end: the
   // shell lives in the shell host, this only says whether it is showing.
   const { open: shellOpen, height: shellHeight } = useShellDockState(sessionId);
-  const shellHost = typeof window !== "undefined" ? window.mads?.shell : undefined;
+  // Mesh mode: a session on another device. Its shell would run on THIS
+  // machine (the dock's shell host is this window's Electron), in a folder
+  // that only exists over there, so there is no dock for it until host-side
+  // shells land (docs/MESH-MODE-DESIGN.md D7).
+  const host = useHostScope();
+  const remoteHost = useIsRemoteHost();
+  const hostClient = useHostClient();
+  const shellHost = typeof window !== "undefined" && !remoteHost ? window.mads?.shell : undefined;
   const shellBridge = useMemo(
-    () => shellBridgeProp ?? (shellHost ? new ShellBridge(shellHost, sessionId) : undefined),
-    [shellBridgeProp, shellHost, sessionId],
+    () => (remoteHost ? undefined : (shellBridgeProp ?? (shellHost ? new ShellBridge(shellHost, sessionId) : undefined))),
+    [remoteHost, shellBridgeProp, shellHost, sessionId],
   );
   // Terminal view's compose sheet (⌘E / Ctrl+Shift+E): the line-numbered
   // editor rising from the dock over the xterm, sent as a bracketed paste.
@@ -218,11 +256,19 @@ export function ConversationTab({
   // Why the latest send failed (its HTTP error, or the stream's error
   // frame) — the reason on a send the stream reported unsaved.
   const [sendFailure, setSendFailure] = useState<string>();
+  // The latest send the session's host refused for this device's grant.
+  const [refused, setRefused] = useState<RefusedSendState | null>(null);
+  const [retryingRefused, setRetryingRefused] = useState(false);
+  // This device's name, for Why: read, not subscribed (App's pairing
+  // watcher keeps it loaded).
+  const selfDevice = refused ? selfStore.get().value : undefined;
   // session.workspace is a reference (id or name), not the name the dock's
   // ⎇ segment prints — resolved here, off the session this tab already holds,
   // and kept live by the hook's workspace.* subscription.
   const sessionWorkspace = useWorkspaceForRef(routerClient, session?.workspace);
-  const agents = useAgentIndex(routerClient);
+  // A remote session's agent ids are its host's (mesh mode, D3b): look them
+  // up there. Locally the prop client stays the source, as before.
+  const agents = useAgentIndex(remoteHost ? hostClient : routerClient);
   // The session's login: while it is signed out, a send the harness refused
   // for auth offers Sign in (docs/AUTH-SIGNIN-DESIGN.md).
   const { auth, refetch: refetchAuth } = useSessionAuth(routerClient, sessionId);
@@ -277,7 +323,7 @@ export function ConversationTab({
   // re-open keyed to a real state transition.
   const [streamBroken, setStreamBroken] = useState(false);
   const [streamGeneration, setStreamGeneration] = useState(0);
-  const links = useSessionLinks([sessionId]);
+  const links = useSessionLinks([sessionId], { remote: remoteHost });
   const linkName = useLinkNames(routerClient, sessionId, links);
   // A follower started without a goal waits on its leader's first message.
   const leaderId = leaderLink(links, sessionId)?.granting_session_id;
@@ -291,10 +337,22 @@ export function ConversationTab({
   const { commitAll, land } = worktree;
   const loadWorktreeStatus = useCallback(() => routerClient.getWorktreeStatus(sessionId), [routerClient, sessionId]);
   const commitSettings = useCommitSettings(routerClient);
+  // Branch facts shared with other sessions (COMMIT-LAND-PUSH D10): what a
+  // push would send comes from the window's repo state, kept current by
+  // repo.changed, never from this session's record.
+  const sessionRepos = useSessionRepos(routerClient, sessionId);
   // The Commit dialog, optionally opened on a one-click Commit's refusal
   // (no Fast Model after all, a failing hook) so the user can see why and
   // write the message themselves.
   const [commitDialog, setCommitDialog] = useState<{ initialError?: CommitError } | null>(null);
+  // The push confirmation (COMMIT-LAND-PUSH D5), open on a target. `pushed`:
+  // a push from this tab went through, so the path can say "pushed" — the
+  // record's 0 alone can't tell that from a repo with no remote.
+  const [pushDialog, setPushDialog] = useState<{ target: PushTarget } | null>(null);
+  // The Land confirmation (COMMIT-LAND-PUSH D12), open on a branch
+  // (undefined root: the first landable). Every Land goes through it.
+  const [landDialog, setLandDialog] = useState<{ root?: string } | null>(null);
+  const [pushed, setPushed] = useState(false);
   // Stop asked while subagents or processes run — what it would end. Unset: no dialog.
   const [stopConfirm, setStopConfirm] = useState<{ subagents: number; processes: number }>();
   // "Ask the agent to resolve" drafts into the composer; it never sends.
@@ -382,6 +440,11 @@ export function ConversationTab({
   // this pane unmounting; this is only its mirror — hello's snapshot, then
   // kept current by session.queue_changed.
   const queuedMessages = conv.state.queued;
+  // Set once anything newer than the queue seed has spoken for this session:
+  // the keyed stream's hello (which carries the queue), a live
+  // session.queue_changed, or this tab's own queue/cancel. See the queue
+  // effect below.
+  const queueHeardRef = useRef(false);
   // Paced reveal of the turn's text; `final` once the turn is over, so the
   // last word shows whole.
   const reveal = useReveal(conv.rows, wordsPerMinute, !turnLive);
@@ -417,12 +480,25 @@ export function ConversationTab({
     setSendFailure(undefined);
     setCurrentActivity(undefined);
     setDockTarget(null);
+    setPushDialog(null);
+    setLandDialog(null);
+    setPushed(false);
     // Reset to the chat default up front — the mode lookup below is async,
     // so a stale mode carried over from whatever session was mounted before
     // this one must never leak into this session's initial render.
     setTransport({ status: "idle", mode: "chat" });
-    void routerClient
-      .getSession(sessionId)
+    // The record, the event history and the delegates below all merge with
+    // live bus events (the session refetch, tool_status_changed,
+    // delegate_changed), so they wait for the bus's ready barrier
+    // (router/events.ts eventsReady): the bus never replays, and a read
+    // served before its cursor is fixed could miss an event that lands in
+    // between. Those subscriptions are later effects of this same commit;
+    // React runs a commit's effects in one go, so they are all registered
+    // before even an already-resolved barrier lets these reads start.
+    const ready = eventsReady(sessionId);
+    void ready
+      // Unmounted meanwhile: never read, and never settle (no error to show).
+      .then(() => (cancelled ? new Promise<never>(() => {}) : routerClient.getSession(sessionId)))
       .then((s) => {
         if (!cancelled) {
           setSession(s);
@@ -477,7 +553,8 @@ export function ConversationTab({
     // status changes — the provider transcript omits them. Merge live-wins:
     // anything the stream delivered while this fetch was in flight is
     // fresher than the replay.
-    void getAllEvents(routerClient, { sessionId, types: CONVERSATION_EVENT_TYPES })
+    void ready
+      .then(() => (cancelled ? [] : getAllEvents(routerClient, { sessionId, types: CONVERSATION_EVENT_TYPES })))
       .then((envelopes) => {
         if (cancelled) return;
         const h = foldHistoryEvents(envelopes);
@@ -488,8 +565,8 @@ export function ConversationTab({
       .catch(() => {});
     // Live-wins, like the event replay: a delegate_changed that landed while
     // this was in flight is newer than the snapshot.
-    void routerClient
-      .getSessionDelegates(sessionId)
+    void ready
+      .then(() => (cancelled ? [] : routerClient.getSessionDelegates(sessionId)))
       .then((list) => {
         if (cancelled) return;
         setDelegates((live) => new Map([...list.map((d) => [d.harness_id, d] as const), ...live]));
@@ -535,9 +612,54 @@ export function ConversationTab({
     if (turnPhase !== "live") setAgentSince(undefined);
   }, [turnPhase]);
 
+  // Event-driven refetches of the session record are coalesced (a
+  // reconnect can bring a burst, everything since the bus's cursor: one
+  // GET /sessions/:id per event before) and single-flight, so an older
+  // response is never the last word. A user action's refetch (after a push) goes through now() —
+  // immediate, still in turn with a fetch in flight. The mount read above
+  // stays its own fetch: it also seeds usage and agent state.
+  const sessionFetch = useRef<Coalescer | null>(null);
   const refetchSession = useCallback(() => {
-    void routerClient.getSession(sessionId).then(setSession);
-  }, [routerClient, sessionId]);
+    sessionFetch.current?.now();
+  }, []);
+
+  // Link updates held while the session slept (docs/HELD-UPDATES-DESIGN.md):
+  // listed at the end of the stream, shown as a chip in the composer, and
+  // carried by the next send (the Router attaches them). Discarding offers
+  // Undo in a toast; "Send updates only" delivers them as a turn of their own.
+  const held = useHeldUpdates(routerClient, sessionId, {
+    waiting: session?.waiting_updates ?? 0,
+  });
+  const [heldToast, setHeldToast] = useState<{ tone: "neutral" | "bad"; title: string; description?: string; undo?: number[] }>();
+  const [deliveringHeld, setDeliveringHeld] = useState(false);
+  const { discard: discardHeldIds, restore: restoreHeldIds } = held;
+  const discardHeld = useCallback(
+    (ids: number[]) => {
+      if (ids.length === 0) return;
+      setHeldToast({ tone: "neutral", title: `Discarded ${updatesNoun(ids.length)}`, undo: ids });
+      discardHeldIds(ids).catch((err: unknown) =>
+        setHeldToast({
+          tone: "bad",
+          title: "Couldn't discard the updates",
+          description: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    },
+    [discardHeldIds],
+  );
+  const restoreHeld = useCallback(
+    (ids: number[]) => {
+      setHeldToast(undefined);
+      restoreHeldIds(ids).catch((err: unknown) =>
+        setHeldToast({
+          tone: "bad",
+          title: "Couldn't restore the updates",
+          description: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    },
+    [restoreHeldIds],
+  );
 
   // Persists a model change and reconfigures the running agent
   // (POST /sessions/{id}/model). Resolves the child's queued flag: true means
@@ -641,9 +763,12 @@ export function ConversationTab({
   const optimisticTurn = useRef(false);
 
   // The dock's Commit…: one click with "Write commit messages for me" on and a
-  // Fast Model to write them, else the dialog.
+  // Fast Model to write them, else the dialog. Uncommitted files in more
+  // than one repo always get the dialog: one message per repo, written or
+  // read before anything commits (COMMIT-LAND-PUSH D2).
+  const multiRepo = session ? uncommittedRepos(session) > 1 : false;
   const handleCommit = useCallback(() => {
-    if (!(commitSettings.autoCommitMessages && commitSettings.fastModel)) {
+    if (!(commitSettings.autoCommitMessages && commitSettings.fastModel) || multiRepo) {
       setCommitDialog({});
       return;
     }
@@ -658,27 +783,27 @@ export function ConversationTab({
           message: err instanceof Error ? err.message : "Couldn't commit.",
         });
     });
-  }, [commitSettings, commitAll, stick]);
+  }, [commitSettings, commitAll, stick, multiRepo]);
 
-  // The dock's Land / a card's "Land again". The outcome is a card either
-  // way (and the dock's ⎇ popover shows it at the button); only an unexpected
-  // failure (no card coming) is a toast. The user asked for this outcome, so
-  // the tail follows it into view even if they had scrolled up.
-  const handleLand = useCallback(() => {
-    stick.follow();
-    land().catch((err: unknown) => {
-      setCommandToast({
-        tone: "bad",
-        message: err instanceof Error ? err.message : "Couldn't land.",
-      });
-    });
-  }, [land, stick]);
+  // The dock's Land, a path step's, a card's "Land again": each opens the
+  // Land confirmation (D12) — nothing lands from a click. The confirmation
+  // runs `confirmLand`; its outcome is a card either way, and the user asked
+  // for it, so the tail follows it into view even if they had scrolled up.
+  // Refusals stay in the dialog (a dirty one offers Commit them…).
+  const handleLand = useCallback((repo?: LandRepo) => setLandDialog({ root: repo?.root }), []);
+  const confirmLand = useCallback(
+    (req: LandRequest) => {
+      stick.follow();
+      return land(req);
+    },
+    [land, stick],
+  );
 
   const worktreeActions = useMemo(
     () => ({
       onUndo: worktree.undo,
       onAskAgent: (text: string) => setComposerPrefill((p) => ({ text, nonce: (p?.nonce ?? 0) + 1 })),
-      onLandAgain: handleLand,
+      onLandAgain: () => handleLand(),
       landing: worktree.landing,
       onOpenCommitFile,
     }),
@@ -690,11 +815,22 @@ export function ConversationTab({
   // linked-session inject/digest needs nothing here: it reaches the
   // conversation as a user_message frame like any send.
   useEffect(() => {
-    return subscribeToEvents(
+    let cancelled = false;
+    const fetcher = coalesce(() =>
+      routerClient.getSession(sessionId).then(
+        (s) => {
+          // Dropped once this tab shows another session, or none.
+          if (!cancelled) setSession(s);
+        },
+        () => {},
+      ),
+    );
+    sessionFetch.current = fetcher;
+    const unsubscribe = subscribeToEvents(
       { sessionId, types: WORKSPACE_SESSION_EVENT_TYPES },
       (envelope) => {
         if ((SESSION_SHELL_REFETCH_EVENT_TYPES as string[]).includes(envelope.type)) {
-          refetchSession();
+          fetcher.request();
         }
         // Anything else in WORKSPACE_SESSION_EVENT_TYPES (task.*/stage.*/
         // file.changed/note.created/pipeline.*) is there only for other
@@ -702,7 +838,13 @@ export function ConversationTab({
         // nothing to do with them.
       },
     );
-  }, [refetchSession, sessionId]);
+    return () => {
+      cancelled = true;
+      fetcher.cancel();
+      if (sessionFetch.current === fetcher) sessionFetch.current = null;
+      unsubscribe();
+    };
+  }, [routerClient, sessionId]);
 
   // The terminal view's data-plane stream (services/session's legacy GET
   // /output, proxied via the Router): the channel SessionTerminalBridge
@@ -831,6 +973,9 @@ export function ConversationTab({
   // conversation itself tracks turn_end, the rest is this tab's own state.
   statusRef.current = (kind, data) => {
     if (kind === "hello") {
+      // hello carries the queue (the keyed conversation applies it) and is
+      // newer than the REST queue seed: the seed must not overwrite it.
+      if (Array.isArray(data.queued)) queueHeardRef.current = true;
       // A connection that didn't resume starts from its own snapshots (sent
       // only when there is something to say): the last one's processes are
       // gone with it.
@@ -930,6 +1075,11 @@ export function ConversationTab({
           // own next frame is, being ordered.
           if (turnPhaseRef.current === "idle") {
             convDispatch({ type: "turn", turn: { active: true, startedAt: state.since || envelope.timestamp } });
+            // Live now, not at the next render: a stale working (one whose
+            // turn the stream already ended, as a send the harness refuses at
+            // once does) arrives with that turn's turn_ended and idle, often
+            // in the same batch, and they must see this turn to end it.
+            turnPhaseRef.current = "live";
           }
           setAgentSince(state.since || envelope.timestamp);
           // The stream's own tool/thinking frames keep the ticker current;
@@ -946,11 +1096,34 @@ export function ConversationTab({
 
   // Queue changes. A queued message going out needs nothing here: it
   // reaches the conversation as a user_message frame, which opens its turn.
+  //
+  // The bus never replays, so a queue that formed before this tab subscribed
+  // is seeded from GET /sessions/{id}/queue: subscribed first, read behind
+  // the ready barrier, and dropped if anything newer has spoken by the time
+  // it answers (queueHeardRef). In chat mode the keyed stream's hello
+  // usually gets there first and the seed is dropped; it matters when
+  // hello hasn't come (terminal mode, a stream that can't connect).
+  //
+  // Like the approvals seed (useSessionAgentState), this snapshot comes from
+  // the session child's memory, which the child changes before it appends
+  // session.queue_changed, so it is never older than the log when read;
+  // each event carries the whole queue, so a later one simply replaces it.
+  // A failed append leaves it stale until the next change.
   useEffect(() => {
-    return subscribeToEvents({ sessionId, types: ["session.queue_changed"] }, (envelope) => {
+    queueHeardRef.current = false;
+    let cancelled = false;
+    // A resumed connection can bring queue changes from before this tab
+    // mounted (a surface round trip). The queue folds them; the failure
+    // banner is gated on the window's notice epoch, not this mount: a queued
+    // message that failed while the tab was gone would otherwise vanish from
+    // the queue as if it had been sent (router/events.ts windowNoticesSince).
+    const noticesSince = windowNoticesSince();
+    const unsubscribe = subscribeToEvents({ sessionId, types: ["session.queue_changed"] }, (envelope) => {
       const change = envelope.payload as Partial<QueueChanged> | undefined;
       if (!change) return;
+      queueHeardRef.current = true;
       convDispatch({ type: "queued", queued: change.queued ?? [] });
+      if (!happenedSince(envelope, noticesSince)) return;
       if (change.failed?.attribution) {
         const from = change.failed.attribution.source_name || "mads";
         setSendError(`Couldn't deliver the queued message from ${from}: ${change.error ?? "unknown error"}`);
@@ -958,7 +1131,19 @@ export function ConversationTab({
         setSendError(`Couldn't send your queued message: ${change.error ?? "unknown error"}`);
       }
     });
-  }, [sessionId, convDispatch]);
+    eventsReady(sessionId)
+      .then(() => (cancelled ? [] : routerClient.getQueue(sessionId)))
+      .then((queued) => {
+        if (cancelled || queueHeardRef.current || queued.length === 0) return;
+        convDispatch({ type: "queued", queued });
+      })
+      // Best effort: the next queue change still arrives live.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [sessionId, convDispatch, routerClient]);
 
   // Queued messages live in the session process, so a session that stops
   // has none, whatever the last event said.
@@ -968,6 +1153,7 @@ export function ConversationTab({
 
   const handleCancelQueued = useCallback(
     (queuedId: string) => {
+      queueHeardRef.current = true;
       convDispatch({ type: "queued", queued: queuedMessages.filter((m) => m.id !== queuedId) });
       routerClient.cancelQueuedMessage(sessionId, queuedId).catch((err: unknown) => {
         setSendError(err instanceof Error ? err.message : "Couldn't remove the queued message.");
@@ -1007,28 +1193,11 @@ export function ConversationTab({
     );
   }, [sessionId]);
 
-  // The dock's Commit/Land counts are only recounted at turn ends and by
-  // mads's own Commit/Land, so work committed or merged outside mads would
-  // leave them offering what the dialog then finds nothing for. Recount for
-  // this session — only the one on screen — when it opens and when the
-  // window regains focus; the new counts arrive as session.updated. One at
-  // a time: a focus while one runs has nothing newer to see.
-  useEffect(() => {
-    let running = false;
-    const recount = () => {
-      if (running) return;
-      running = true;
-      routerClient
-        .refreshWorktreeCounts(sessionId)
-        .catch(() => {}) // best-effort: the next turn end recounts anyway
-        .finally(() => {
-          running = false;
-        });
-    };
-    recount();
-    window.addEventListener("focus", recount);
-    return () => window.removeEventListener("focus", recount);
-  }, [routerClient, sessionId]);
+  // The dock's Commit/Land counts: recounted for this session — only the
+  // one on screen — when it opens and when the window regains focus
+  // (worktreeRefresh.ts: one at a time per session across remounts, a focus
+  // just after a recount skipped); the new counts arrive as session.updated.
+  useWorktreeRefresh(routerClient, sessionId);
 
   // The conversation stream's element (see the scroll lock above).
   const streamRef = stick.element;
@@ -1078,39 +1247,111 @@ export function ConversationTab({
     };
   }, [runway]);
 
+  // Enter twice on an empty composer (or nowhere in particular) does what
+  // Show all does: no aiming at a chip on a page that's moving.
+  useDoubleEnter(tabRef, reveal.behind, revealAll);
+
   // Ctrl/Cmd+↑/↓ hops between the user's own messages — anchored on the
-  // [data-user-msg] elements ChatRenderer stamps on each user bubble.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (!(e.ctrlKey || e.metaKey) || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
-      const el = streamRef.current;
-      if (!el) return;
+  // [data-user-msg] elements ChatRenderer stamps on each user bubble. A
+  // double tap goes to the very start (every older page loaded first, as one)
+  // or back to the tail.
+  const [loadingAll, setLoadingAll] = useState(false);
+  const loadAllToken = useRef<{ cancelled: boolean } | null>(null);
+  const jumpToTop = useRef(false);
+  const cancelLoadAll = useCallback(() => {
+    if (loadAllToken.current) loadAllToken.current.cancelled = true;
+    loadAllToken.current = null;
+    setLoadingAll(false);
+  }, []);
+  useJumpKeys(streamRef, {
+    hop: (dir, el) => {
       const anchors = Array.from(el.querySelectorAll<HTMLElement>("[data-user-msg]"));
-      if (anchors.length === 0) return;
-      e.preventDefault();
+      if (anchors.length === 0) return false;
+      cancelLoadAll();
       const containerTop = el.getBoundingClientRect().top;
       const offsets = anchors.map((a) => a.getBoundingClientRect().top - containerTop + el.scrollTop);
       const cur = el.scrollTop;
       const target =
-        e.key === "ArrowUp"
+        dir === "up"
           ? ([...offsets].reverse().find((o) => o < cur - 4) ?? 0)
           : (offsets.find((o) => o > cur + 4) ?? el.scrollHeight);
       // Hopping up leaves the tail — as the approval jump does, let go now
       // rather than at the smooth scroll's first event.
-      if (e.key === "ArrowUp") stick.release();
+      if (dir === "up") stick.release();
       el.scrollTo({ top: target, behavior: "smooth" });
-    }
+      return true;
+    },
+    toTop: (el) => {
+      stick.release();
+      if (!conv.state.hasMore) {
+        cancelLoadAll();
+        glideTo(el, 0);
+        return;
+      }
+      if (loadAllToken.current) return; // already on its way
+      // Far away, and as far as any distance: arrive, don't glide.
+      const token = { cancelled: false };
+      loadAllToken.current = token;
+      setLoadingAll(true);
+      conv
+        .loadAllOlder(
+          () => token.cancelled,
+          () => (jumpToTop.current = true),
+        )
+        .catch(() => {})
+        .finally(() => {
+          if (loadAllToken.current === token) cancelLoadAll();
+        });
+    },
+    toBottom: (el) => {
+      cancelLoadAll();
+      stick.follow();
+      glideTo(el, el.scrollHeight);
+    },
+  });
+  // The pages ↑↑ asked for landed: the first message, instantly.
+  useLayoutEffect(() => {
+    const el = streamRef.current;
+    if (!jumpToTop.current || !el) return;
+    jumpToTop.current = false;
+    el.scrollTop = 0;
+  }, [conv.state.cursor, streamRef]);
+  // Reading on while it loads (a scroll, a key, a click) calls it off.
+  useEffect(() => {
+    if (!loadingAll) return;
+    const el = streamRef.current;
+    const onKey = (e: KeyboardEvent) => {
+      if (["Meta", "Control", "Shift", "Alt"].includes(e.key)) return;
+      if (!((e.ctrlKey || e.metaKey) && e.key === "ArrowUp")) cancelLoadAll();
+    };
+    el?.addEventListener("wheel", cancelLoadAll, { passive: true });
+    el?.addEventListener("touchstart", cancelLoadAll, { passive: true });
+    el?.addEventListener("pointerdown", cancelLoadAll);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [stick, streamRef]);
+    return () => {
+      el?.removeEventListener("wheel", cancelLoadAll);
+      el?.removeEventListener("touchstart", cancelLoadAll);
+      el?.removeEventListener("pointerdown", cancelLoadAll);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [loadingAll, cancelLoadAll, streamRef]);
+  // Another session: whatever was loading was for the last one.
+  useEffect(() => cancelLoadAll, [sessionId, cancelLoadAll]);
 
   // The subagent dock's stream: the subagent's own transcript file, read on
   // open and again as it runs (its task id is its harness id — the file's
   // name). Live frames for it are the cue to re-read.
   const dockParent = dockTarget?.type === "subagent" ? dockTarget.parentToolUseId : undefined;
-  const dockModel = dockParent
-    ? [...mergeDelegates(tasks, delegates).values()].find((t) => t.toolUseId === dockParent)
-    : undefined;
+  // The record is authoritative wherever one exists (mergeDelegates). Made
+  // once per change, so a task card's model is the same object until it changes.
+  const effectiveTasks = useMemo(() => mergeDelegates(tasks, delegates), [tasks, delegates]);
+  const lastTasksByToolUse = useRef<ReadonlyMap<string, TaskModel>>(new Map());
+  const tasksByToolUseMap = useMemo(() => {
+    const byTool = tasksByToolUse(effectiveTasks, lastTasksByToolUse.current);
+    lastTasksByToolUse.current = byTool;
+    return byTool;
+  }, [effectiveTasks]);
+  const dockModel = dockParent ? [...effectiveTasks.values()].find((t) => t.toolUseId === dockParent) : undefined;
   const dockLive = useMemo(
     () => (dockParent ? rowsSubStream(subagentRows(conv.state, dockParent)) : undefined),
     [conv.state, dockParent],
@@ -1184,6 +1425,41 @@ export function ConversationTab({
     stick.hold(findOpen);
   }, [findOpen, stick]);
 
+  // What ChatRenderer is handed stays the same object until it changes, so
+  // its memoized items skip a render that didn't touch them
+  // (docs/CHAT-STREAM-PER-BATCH-COST.md). Its callbacks are stable and call
+  // the latest render's handlers (chatHandlers, set below).
+  const chatHandlers = useRef<ChatHandlers | null>(null);
+  // This render's handlers, made further down (after the early returns), and
+  // taken up once it commits: a render React throws away never leaves its own.
+  let renderHandlers: ChatHandlers | null = null;
+  useLayoutEffect(() => {
+    if (renderHandlers) chatHandlers.current = renderHandlers;
+  });
+  const chatCallbacks = useMemo(
+    () => ({
+      openTool: (tool: ToolUse) => chatHandlers.current?.openTool(tool),
+      openTask: (toolUseId: string, tool: ToolUse) => chatHandlers.current?.openTask(toolUseId, tool),
+      retry: (text: string) => chatHandlers.current?.retry(text),
+      signIn: () => chatHandlers.current?.signIn(),
+    }),
+    [],
+  );
+  const attachmentUrl = useCallback(
+    (id: string, variant?: "thumbnail") => routerClient.attachmentUrl({ session: sessionId }, id, variant),
+    [routerClient, sessionId],
+  );
+  const resolvePermission = useCallback(
+    (id: string, decision: "allow" | "deny") => routerClient.resolvePermissionRequest(sessionId, id, decision),
+    [routerClient, sessionId],
+  );
+  const allPermissionRequests = useMemo(() => [...permissionRequests.values()], [permissionRequests]);
+  const signInProvider = auth?.signed_out && auth.login ? providerLabel(auth.provider) : undefined;
+  const chatSignIn = useMemo(
+    () => (signInProvider ? { provider: signInProvider, onSignIn: chatCallbacks.signIn } : undefined),
+    [signInProvider, chatCallbacks],
+  );
+
   if (loadError) {
     return (
       <div className={styles.stateWrap}>
@@ -1241,14 +1517,12 @@ export function ConversationTab({
   // transport (providers/claudecode/README.md) — a switch to terminal tears
   // the chat process (and any in-flight hook subprocess) down with it, so
   // there is nothing meaningful left to show mid-turn on that transport.
-  const livePermissionRequests = activeMode === "chat" ? [...permissionRequests.values()] : [];
+  const livePermissionRequests = activeMode === "chat" ? allPermissionRequests : NO_PERMISSIONS;
   // Still-parked calls, oldest first (a Map keeps first-insertion order; a
   // status upsert doesn't move its entry). Derived, not stored, so the
   // approval jump clears itself the moment the terminal-status event
   // (allowed/denied/expired/cancelled) upserts over a pending entry.
   const pendingPermissions = livePermissionRequests.filter((r) => r.status === "pending");
-  const resolvePermission = (id: string, decision: "allow" | "deny") =>
-    routerClient.resolvePermissionRequest(sessionId, id, decision);
   // The dock's subagent stream renders the inner rows themselves, so there a
   // subagent call's card sits right under its own row (keyed by tool_use id).
   const permissionsByToolUse = new Map<string, PermissionRequest[]>();
@@ -1260,8 +1534,6 @@ export function ConversationTab({
     ]);
   }
   // --- Redesign wiring: dock targets, running-subagent substrip ---
-  // The record is authoritative wherever one exists (mergeDelegates).
-  const effectiveTasks = mergeDelegates(tasks, delegates);
   // Stop interrupts claude, which ends every subagent and background process
   // with the reply (perTaskStopAffordance is unset — docs/DELEGATES-DESIGN.md
   // C3b). With any of them running, Stop asks first; the reply alone stops at once.
@@ -1271,7 +1543,6 @@ export function ConversationTab({
     if (subagents + processes === 0) void handleInterrupt();
     else setStopConfirm({ subagents, processes });
   };
-  const tasksByToolUseMap = tasksByToolUse(effectiveTasks);
   // The approval jump's "· <subagent>" — named as its task card titles it.
   const subagentName = (req: PermissionRequest) => {
     if (!req.parent_tool_use_id) return undefined;
@@ -1315,11 +1586,10 @@ export function ConversationTab({
     let toolTimestamp: string | undefined;
     if (dockTarget.toolId) {
       // Any row: the main list's, or a subagent's.
-      for (const r of Object.values(conv.state.rows)) {
-        if (r.role === "tool" && r.tool?.id === dockTarget.toolId) {
-          tool = r.tool;
-          toolTimestamp = r.timestamp;
-        }
+      const r = findTool(conv.state, dockTarget.toolId);
+      if (r?.tool) {
+        tool = r.tool;
+        toolTimestamp = r.timestamp;
       }
     }
     dockView = { type: "tool", tool, timestamp: toolTimestamp };
@@ -1331,6 +1601,7 @@ export function ConversationTab({
       subtype: dockTarget.subtype ?? dockModel?.subagentType,
       items: dockFileItems ?? (dockLive?.length ? dockLive : subagentReplay.get(dockTarget.parentToolUseId)) ?? [],
       task: dockModel,
+      summary: !dockFileItems && dockLive?.length ? dockModel?.summary : undefined,
     };
   }
 
@@ -1348,18 +1619,31 @@ export function ConversationTab({
     if (session.activity !== "active") setWaking(true);
     optimisticTurn.current = !turnLive;
     if (!turnLive) convDispatch({ type: "turn", turn: { active: true } });
+    convDispatch({ type: "sending", on: true });
   };
-  const noteSendError = (msg: string) => {
+  const noteSendError = (msg: string, detail?: { error: unknown; text: string; attachments: number }) => {
+    // The session's host refused this device's grant (a mesh peer's 403):
+    // the message stays in the stream as "Not sent", with Why? and Retry,
+    // not as a toast.
+    const refusal = detail && detail.attachments === 0 ? refusalOf(detail.error, detail.text) : null;
     setWaking(false);
-    setSendError(msg);
-    setSendFailure(msg);
+    if (refusal) {
+      setRefused(refusal);
+    } else {
+      setSendError(msg);
+      setSendFailure(msg);
+    }
     if (optimisticTurn.current) convDispatch({ type: "turn", turn: { active: false } });
     optimisticTurn.current = false;
+    convDispatch({ type: "sending", on: false });
+    return refusal !== null;
   };
   const noteQueued = (q: QueuedMessage) => {
     setWaking(false);
     optimisticTurn.current = false;
+    convDispatch({ type: "sending", on: false }); // it arrives later, as a delivery
     if (!queuedMessages.some((m) => m.id === q.id)) {
+      queueHeardRef.current = true;
       convDispatch({ type: "queued", queued: [...queuedMessages, q] });
     }
   };
@@ -1371,10 +1655,38 @@ export function ConversationTab({
   const noteSent = () => {
     setWaking(false);
     optimisticTurn.current = false;
+    // A send to a sleeping session took whatever was held with it.
+    held.refetch();
   };
   // Resends the transcript's text verbatim: any attachment paths the Router
   // appended the first time are already in it, so the agent gets the same
   // message, and the identical text is what folds the failed try away.
+  // Retry on a refused message: the same text again; it goes from the
+  // stream once it's taken (or comes back refused, updated).
+  const retryRefused = async (r: RefusedSendState) => {
+    setRetryingRefused(true);
+    setSendError(undefined);
+    noteSendStart();
+    try {
+      const result = await routerClient.sendMessage(sessionId, { text: r.text, mentions: [], queue: true });
+      setRefused(null);
+      if (result.status === "queued") noteQueued(result.queued);
+      else noteSent();
+    } catch (err) {
+      noteSendError(err instanceof Error ? err.message : String(err), { error: err, text: r.text, attachments: 0 });
+    } finally {
+      setRetryingRefused(false);
+    }
+  };
+  const refusedTail = refused && (
+    <RefusedSend
+      refused={refused}
+      host={host?.name ?? "the other device"}
+      device={selfDevice?.name ?? "This device"}
+      retrying={retryingRefused}
+      onRetry={() => void retryRefused(refused)}
+    />
+  );
   const retrySend = async (text: string) => {
     setSendError(undefined);
     noteSendStart();
@@ -1386,6 +1698,66 @@ export function ConversationTab({
       noteSendError(err instanceof Error ? err.message : String(err));
     }
   };
+  renderHandlers = {
+    openTool,
+    openTask: (toolUseId, tool) =>
+      openSubagent(
+        toolUseId,
+        tasksByToolUseMap.get(toolUseId)?.description ?? toolTitle(tool, linkName),
+        tasksByToolUseMap.get(toolUseId)?.subagentType,
+      ),
+    retry: (text) => void retrySend(text),
+    signIn: () => {
+      if (auth?.login) setSigningIn({ ...auth, login: auth.login });
+    },
+  };
+  // "Send updates only": wakes a sleeping session within the request, as a
+  // send does (the same "Waking the agent…" line, the same wake errors); the
+  // turn then arrives over the stream like any other. The tail follows it.
+  const deliverHeld = async () => {
+    setDeliveringHeld(true);
+    if (session.activity !== "active") setWaking(true);
+    stick.follow();
+    try {
+      await routerClient.deliverHeldUpdates(sessionId);
+    } catch (err) {
+      setHeldToast({
+        tone: "bad",
+        title: "Couldn't send the updates",
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setWaking(false);
+      setDeliveringHeld(false);
+      held.refetch();
+    }
+  };
+  // The rail's "N updates waiting" (heldRevealSignal): the list is the
+  // stream's tail, so a reader scrolled up is taken back down to it; one
+  // too tall to show whole is shown from its top.
+  const revealHeld = (el: HTMLElement) => {
+    const scroller = streamRef.current;
+    if (!scroller) return;
+    if (el.getBoundingClientRect().top < scroller.getBoundingClientRect().top) {
+      stick.release();
+      el.scrollIntoView?.({ block: "start", behavior: "smooth" });
+    } else {
+      stick.follow();
+    }
+  };
+  const heldTail = (
+    <HeldUpdates
+      sessionId={sessionId}
+      held={held.held}
+      discarded={held.discarded}
+      onDiscard={discardHeld}
+      onRestore={restoreHeld}
+      onDeliver={() => void deliverHeld()}
+      delivering={deliveringHeld}
+      onReveal={revealHeld}
+    />
+  );
+
   // The session dock's props, shared by both views (chat mounts the composer
   // inside it; terminal adds the compose segment and sheet).
   const dockProps = {
@@ -1401,6 +1773,7 @@ export function ConversationTab({
     onChangeTrust: handleChangeTrust,
     work: {
       onCommit: handleCommit,
+      onCommitDialog: () => setCommitDialog({}),
       onLand: handleLand,
       // Chat drafts into the composer. Terminal has no composer mounted, so
       // the draft opens the compose sheet instead: the user reviews it there
@@ -1409,8 +1782,11 @@ export function ConversationTab({
       landing: worktree.landing,
       committing: worktree.committing,
       loadStatus: loadWorktreeStatus,
+      onPush: (target: PushTarget) => setPushDialog({ target }),
+      pushed,
+      push: pushFacts(session, sessionRepos.repos),
+      land: landRepos(session, sessionRepos.repos),
     },
-    landOutcome: latestLandOutcome(worktree.cards),
   };
   // Terminal compose: a draft survives closing the sheet (an accidental Esc
   // never loses a long prompt); only a paste clears it.
@@ -1465,6 +1841,39 @@ export function ConversationTab({
             onCommitted={worktree.noteCommit}
             onOpenFile={onOpenFile}
           />
+          {session && (
+            <PushDialog
+              open={pushDialog !== null}
+              sessionId={sessionId}
+              routerClient={routerClient}
+              session={session}
+              target={pushDialog?.target ?? "branch"}
+              onClose={() => setPushDialog(null)}
+              onPushed={(result) => {
+                setPushed(true);
+                setCommandToast({ tone: "ok", message: pushedCopy(result) });
+                refetchSession();
+                // Its repo.changed follows within a second or so; don't wait to drop the count.
+                refreshSessionRepos(sessionId);
+              }}
+              onAskAgent={!showHistory && terminalBridge ? askInCompose : worktreeActions.onAskAgent}
+            />
+          )}
+          {session && (
+            <LandDialog
+              open={landDialog !== null}
+              sessionId={sessionId}
+              routerClient={routerClient}
+              session={session}
+              fastModel={commitSettings.fastModel}
+              initialRoot={landDialog?.root}
+              land={confirmLand}
+              onClose={() => setLandDialog(null)}
+              // What it did is a card at the tail (the land echo, then its event).
+              onLanded={() => refreshSessionRepos(sessionId)}
+              onCommitDialog={() => setCommitDialog({})}
+            />
+          )}
 
           <div className={styles.body}>
             {showHistory ? (
@@ -1490,15 +1899,21 @@ export function ConversationTab({
                   )}
                   {conv.rows.length === 0 && worktree.cards.length === 0 && !inChatTurn ? (
                     <>
-                      <div className={styles.emptyTranscript}>
-                        {leaderId
-                          ? `Waiting for ${linkName(leaderId) ?? "its leader"} to send the first message`
-                          : "No conversation yet"}
-                      </div>
+                      {conv.missing && session && (session.last_turn_at || session.last_usage) ? (
+                        <MissingTranscript missing={conv.missing} provider={session.provider} remote={remoteHost} />
+                      ) : (
+                        <div className={styles.emptyTranscript}>
+                          {leaderId
+                            ? `Waiting for ${linkName(leaderId) ?? "its leader"} to send the first message`
+                            : "No conversation yet"}
+                        </div>
+                      )}
                       {/* No rows to anchor to — every card is a fallback one. */}
                       {livePermissionRequests.map((req) => (
                         <PermissionCard key={req.id} request={req} onResolve={resolvePermission} />
                       ))}
+                      {refusedTail}
+                      {heldTail}
                     </>
                   ) : (
                     <ChatRenderer
@@ -1506,40 +1921,31 @@ export function ConversationTab({
                       links={links}
                       viewedSessionId={sessionId}
                       linkName={linkName}
-                      attachmentUrl={(id, variant) =>
-                        routerClient.attachmentUrl({ session: sessionId }, id, variant)
-                      }
+                      attachmentUrl={attachmentUrl}
                       turnActive={turnShowing}
                       foldNewCode={wordsPerMinute !== null}
                       toolStatuses={toolStatuses}
                       background={backgroundByTool}
                       tasks={tasksByToolUseMap}
                       selectedToolId={dockTarget?.type === "tool" ? dockTarget.toolId : undefined}
-                      onOpenTool={openTool}
-                      onOpenTask={(toolUseId, tool) =>
-                        openSubagent(
-                          toolUseId,
-                          tasksByToolUseMap.get(toolUseId)?.description ?? toolTitle(tool, linkName),
-                          tasksByToolUseMap.get(toolUseId)?.subagentType,
-                        )
-                      }
+                      onOpenTool={chatCallbacks.openTool}
+                      onOpenTask={chatCallbacks.openTask}
                       worktreeCards={worktree.cards}
                       worktreeActions={worktreeActions}
                       permissionRequests={livePermissionRequests}
                       onResolvePermission={resolvePermission}
                       permissionReveal={permissionReveal}
-                      onRetry={(text) => void retrySend(text)}
+                      onRetry={chatCallbacks.retry}
                       sendFailure={sendFailure}
-                      signIn={
-                        auth?.signed_out && auth.login
-                          ? {
-                              provider: providerLabel(auth.provider),
-                              onSignIn: () => auth.login && setSigningIn({ ...auth, login: auth.login }),
-                            }
-                          : undefined
-                      }
+                      signIn={chatSignIn}
                       find={find.request}
                       onFindStatus={find.onStatus}
+                      tail={
+                        <>
+                          {refusedTail}
+                          {heldTail}
+                        </>
+                      }
                     />
                   )}
                   {transport.status !== "idle" && (
@@ -1604,6 +2010,16 @@ export function ConversationTab({
                       stream, outside it, so the scrollbar ends at its top edge. */}
                   <div ref={runway.spacerRef} className={styles.runwaySpacer} aria-hidden="true" data-testid="runway-spacer" />
                   <div className={styles.pinned} data-testid="pinned-cluster" ref={pinnedRef}>
+                    {showAll.present && (
+                      // The paced reveal trails the agent by more than a couple of
+                      // seconds' reading — offer to skip to the end of it. Floats
+                      // above everything pinned, taking none of its height.
+                      <div className={styles.revealAll} data-leaving={showAll.leaving || undefined}>
+                        <Chip tone="info" onClick={() => reveal.revealAll()}>
+                          Show all
+                        </Chip>
+                      </div>
+                    )}
                     <ApprovalJump
                       pending={pendingPermissions}
                       subagentName={subagentName}
@@ -1622,7 +2038,7 @@ export function ConversationTab({
                         openSubagent(model.toolUseId, model.description ?? "Subagent", model.subagentType)
                       }
                     />
-                    {(working || queuedMessages.length > 0 || showAll.present) && (
+                    {(working || queuedMessages.length > 0) && (
                       // The strip's text rows sit on a solid band of the pane's
                       // own background: scrolled up, the conversation passes
                       // behind them instead of through them.
@@ -1639,20 +2055,16 @@ export function ConversationTab({
                           onCancel={handleCancelQueued}
                           className={styles.queuedAbove}
                         />
-                        {showAll.present && (
-                          // The paced reveal trails the agent by more than a couple of
-                          // seconds' reading — offer to skip to the end of it.
-                          <div className={styles.revealAll} data-leaving={showAll.leaving || undefined}>
-                            <Chip tone="info" onClick={() => reveal.revealAll()}>
-                              Show all
-                            </Chip>
-                          </div>
-                        )}
                       </div>
                     )}
                   </div>
                 </div>
                 {find.open && <FindBar {...find.bar} streamRef={streamRef} />}
+                {loadingAll && (
+                  <div className={styles.loadingAll} role="status" data-testid="loading-all">
+                    Loading earlier messages…
+                  </div>
+                )}
                 <SessionDock {...dockProps} mode="chat">
                   <Composer
                     routerClient={routerClient}
@@ -1682,6 +2094,15 @@ export function ConversationTab({
                     onCompactSession={compaction.compacts ? (i) => void handleCompactNow(i) : undefined}
                     onQueued={noteQueued}
                     onSent={noteSent}
+                    held={
+                      held.held.length > 0
+                        ? {
+                            count: held.held.length,
+                            sources: sourceNames(held.held),
+                            onDiscardAll: () => discardHeld(held.held.map((u) => u.id)),
+                          }
+                        : undefined
+                    }
                   />
                 </SessionDock>
               </>
@@ -1730,7 +2151,9 @@ export function ConversationTab({
                 />
               ) : (
                 <div className={styles.ptyUnavailable}>
-                  Shell requires the Electron shell.
+                  {remoteHost
+                    ? `This session runs on ${host?.name ?? "another device"}; shells only open for sessions on this device.`
+                    : "Shell requires the Electron shell."}
                 </div>
               ))}
           </div>
@@ -1770,6 +2193,7 @@ export function ConversationTab({
               sessionId={sessionId}
               client={routerClient}
               statuses={toolStatuses}
+              background={backgroundByTool}
               permissions={permissionsByToolUse}
               onResolvePermission={resolvePermission}
               onClose={() => setDockTarget(null)}
@@ -1793,6 +2217,16 @@ export function ConversationTab({
             />
           )}
 
+          {heldToast && (
+            <Toast
+              tone={heldToast.tone}
+              title={heldToast.title}
+              description={heldToast.description}
+              action={heldToast.undo ? { label: "Undo", onClick: () => restoreHeld(heldToast.undo!) } : undefined}
+              onDismiss={() => setHeldToast(undefined)}
+            />
+          )}
+
           {commandToast && (
             <Toast
               tone={commandToast.tone}
@@ -1805,6 +2239,47 @@ export function ConversationTab({
         </div>
       </LinkBaseProvider>
     </LinkNamesProvider>
+  );
+}
+
+/**
+ * The empty pane of a session that has had turns but whose agent no longer
+ * holds the conversation — most likely its own retention setting deleted it.
+ */
+function MissingTranscript({ missing, provider, remote }: { missing: TranscriptMissing; provider?: string; remote?: boolean }) {
+  const label = provider ? providerLabel(provider) : undefined;
+  const retention = missing.retention;
+  // The settings file isn't there (the agent's defaults apply): like
+  // DiffViewer's "Open in editor", the button says so instead.
+  const [notOnDisk, setNotOnDisk] = useState(false);
+  const openSettings = async () => {
+    if (!retention) return;
+    if ((await getLinkOpener({ remote }).openFile(retention.file)) === "missing") setNotOnDisk(true);
+  };
+  return (
+    <div className={styles.emptyTranscript} data-testid="transcript-missing">
+      <p className={styles.missingText}>
+        This conversation&apos;s transcript is no longer on disk.
+        {retention && (
+          <>
+            {" "}
+            {label ?? "The agent"} deletes transcripts older than its <code>{retention.setting}</code> setting
+            {retention.default_days !== undefined && ` (${retention.default_days} days by default)`}.
+          </>
+        )}
+      </p>
+      {retention && canOpenFiles({ remote }) && (
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={notOnDisk}
+          title={notOnDisk ? `${retention.file} isn't on disk` : retention.file}
+          onClick={() => void openSettings()}
+        >
+          {notOnDisk ? "Not on disk" : `Open ${label ?? "agent"} settings`}
+        </Button>
+      )}
+    </div>
   );
 }
 

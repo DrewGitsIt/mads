@@ -10,6 +10,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -33,9 +35,11 @@ func New(r *runner.Runner) http.Handler {
 	mux.HandleFunc("GET /queue", s.handleQueue)
 	mux.HandleFunc("DELETE /queue/{id}", s.handleCancelQueued)
 	mux.HandleFunc("POST /inject", s.handleInject)
+	mux.HandleFunc("POST /notes", s.handleAddNote)
 	mux.HandleFunc("POST /interrupt", s.handleInterrupt)
 	mux.HandleFunc("POST /compact", s.handleCompact)
 	mux.HandleFunc("GET /worktree", s.handleWorktreeStatus)
+	mux.HandleFunc("POST /worktree/refresh", s.handleWorktreeRefresh)
 	mux.HandleFunc("POST /commit", s.handleCommit)
 	mux.HandleFunc("POST /commit/undo", s.handleUndoCommit)
 	mux.HandleFunc("POST /land", s.handleLand)
@@ -60,8 +64,10 @@ func New(r *runner.Runner) http.Handler {
 // process-liveness probe, not a session-readiness one. Callers that need to
 // know whether the session is ready to accept turns learn that from
 // POST /messages's 503, not from here.
+// handleHealth also names the child (id, pid) so `mads ps` can identify a
+// socket nobody tracks any more — a leftover process.
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"service": "session", "status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{"service": "session", "status": "ok", "id": s.runner.SessionID(), "pid": strconv.Itoa(os.Getpid())})
 }
 
 // handleStatus reports what only this process knows about itself — when
@@ -77,19 +83,24 @@ func (s *server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		// Queue asks for a message sent mid-turn to wait behind the turn
 		// instead of being refused with 409 (runner.SendOrQueue).
 		Queue bool `json:"queue"`
+		// Attached are held link updates riding with this message, set by
+		// the Router on a send that wakes the session
+		// (docs/HELD-UPDATES-DESIGN.md); the runner wraps them ahead of
+		// Text.
+		Attached []contracts.InjectPart `json:"attached"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	if !body.Queue {
-		if err := s.runner.Send(r.Context(), body.Text); err != nil {
+		if err := s.runner.Send(r.Context(), body.Text, body.Attached...); err != nil {
 			writeRunnerError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
 		return
 	}
-	queued, err := s.runner.SendOrQueue(r.Context(), body.Text)
+	queued, err := s.runner.SendOrQueue(r.Context(), body.Text, body.Attached...)
 	if err != nil {
 		writeRunnerError(w, err)
 		return
@@ -177,12 +188,42 @@ func (s *server) handleCompact(w http.ResponseWriter, r *http.Request) {
 func pipelineActive(r *http.Request) bool { return r.URL.Query().Get("pipeline") == "1" }
 
 func (s *server) handleWorktreeStatus(w http.ResponseWriter, r *http.Request) {
-	st, err := s.runner.WorktreeStatus(r.Context(), pipelineActive(r))
+	st, err := s.runner.WorktreeStatus(r.Context(), r.URL.Query().Get("repo"), pipelineActive(r))
 	if err != nil {
 		writeRunnerError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+// handleWorktreeRefresh recounts the header counts (D4) through the
+// runner's coalesced recount, the one turn ends use: the Router routes
+// POST /sessions/{id}/worktree/refresh here while this child is live, so a
+// refresh landing beside a turn-end recount joins it rather than running a
+// second git status. 204 once a recount started after the ask has finished.
+func (s *server) handleWorktreeRefresh(w http.ResponseWriter, r *http.Request) {
+	if err := s.runner.RecountWorktree(r.Context()); err != nil {
+		if errors.Is(err, runner.ErrCountsClosed) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+			return
+		}
+		writeRunnerError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAddNote owes the agent a note on its next turn (the Router has
+// already put it on the record, Session.PendingNotes).
+func (s *server) handleAddNote(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Note string `json:"note"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	s.runner.AddNote(body.Note)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) handleCommit(w http.ResponseWriter, r *http.Request) {
@@ -203,7 +244,7 @@ func (s *server) handleUndoCommit(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	res, err := s.runner.UndoCommit(r.Context(), req.Hash)
+	res, err := s.runner.UndoCommit(r.Context(), req.Repo, req.Hash)
 	if err != nil {
 		writeRunnerError(w, err)
 		return
@@ -214,7 +255,11 @@ func (s *server) handleUndoCommit(w http.ResponseWriter, r *http.Request) {
 // handleLand answers 200 for every outcome — landed, conflicted, refused —
 // since each is a card, not a failure; only an unexpected error isn't.
 func (s *server) handleLand(w http.ResponseWriter, r *http.Request) {
-	res, err := s.runner.Land(r.Context(), pipelineActive(r))
+	var req contracts.LandRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	res, err := s.runner.Land(r.Context(), req, pipelineActive(r))
 	if err != nil {
 		writeRunnerError(w, err)
 		return
@@ -520,11 +565,8 @@ func (s *server) handleCommits(w http.ResponseWriter, r *http.Request) {
 // stored thinking included (runner.KeyedTranscript) — what a keyed v2 viewer
 // merges with the stream's tail. Either read settles the tail first.
 func (s *server) handleTranscript(w http.ResponseWriter, r *http.Request) {
-	rows := s.runner.Transcript
-	if transcriptpage.Keyed(r.URL.Query()) {
-		rows = s.runner.KeyedTranscript
-	}
-	status, body := transcriptpage.Respond(r.URL.Query(), rows(r.Context()))
+	rows, missing := s.runner.TranscriptPage(r.Context(), transcriptpage.Keyed(r.URL.Query()))
+	status, body := transcriptpage.Respond(r.URL.Query(), rows, missing)
 	writeJSON(w, status, body)
 }
 

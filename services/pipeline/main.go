@@ -12,17 +12,19 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/agentenv"
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/localguard"
 	"github.com/drewkidwell/mads/pkg/pipelinerun"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
@@ -39,11 +41,13 @@ import (
 // after the run finishes or a signal arrives before the process exits anyway.
 const shutdownGrace = 10 * time.Second
 
-func newMux() http.Handler {
+// newMux serves the engine's only route. /health names the run (id, pid)
+// so `mads ps` can identify a socket nobody tracks any more.
+func newMux(runID string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]string{"service": "pipeline", "status": "ok"}); err != nil {
+		if err := json.NewEncoder(w).Encode(map[string]string{"service": "pipeline", "status": "ok", "id": runID, "pid": strconv.Itoa(os.Getpid())}); err != nil {
 			log.Printf("health: encode response: %v", err)
 		}
 	})
@@ -294,8 +298,13 @@ func implicitDir(dir string) bool { return dir == "" || dir == "." || dir == "./
 // provider, and concurrency,
 // then hands off to pipelinerun.Run — the child-mode equivalent of
 // cmd/mads/run.go's own resolution chain.
-func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome, fakeScenario string, excludeTaskIDs []string) error {
-	client := dataclient.New(dataURL, "pipeline")
+// tokenFile is the install token's file (empty: <madsHome>/local.token),
+// read and re-read on change for every Data Service call (H4).
+func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome, fakeScenario, tokenFile string, excludeTaskIDs []string) error {
+	if tokenFile == "" {
+		tokenFile = localauth.Path(madsHome)
+	}
+	client := dataclient.New(dataURL, "pipeline", dataclient.WithTokenSource(localauth.FileSource(tokenFile)))
 
 	sess, err := client.Session(ctx, sessionID)
 	if err != nil {
@@ -361,13 +370,19 @@ func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome, fake
 }
 
 func main() {
-	addr := flag.String("addr", "localhost:0", "listen address")
+	// First thing: take any token out of this process's environment, so the
+	// agents a run starts can't inherit one (docs/LOCAL-FRONT-DOOR-DESIGN.md
+	// D4). The install token is read from its file (H4), never handed over.
+	localauth.TakeChildEnv()
+	addr := flag.String("addr", "localhost:0", "TCP listen address, only for running this by hand (ignored with -socket; logs a warning)")
+	socket := flag.String("socket", "", "Unix socket to listen on — what the Router passes (docs/LOCAL-FRONT-DOOR-DESIGN.md D9)")
 	runID := flag.String("run-id", "", "pipeline run ID (required)")
 	sessionID := flag.String("session-id", "", "session ID (required)")
 	tplName := flag.String("template", "", "pipeline template (registry name, required)")
 	exclude := flag.String("exclude-task-ids", "", "comma-separated task IDs the run leaves out")
 	dataURL := flag.String("data-url", "http://localhost:17374", "Data Service base URL")
 	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root (env MADS_HOME)")
+	tokenFile := flag.String("token-file", "", "the install token's file, read (and re-read on change) for Data Service calls (default <mads-home>/local.token); the Router passes it")
 	fakeScenario := flag.String("fake-scenario", "", "scenario YAML for the fake provider (rehearsal and e2e runs; same format as `mads run -fake-scenario`)")
 	flag.Parse()
 
@@ -376,14 +391,19 @@ func main() {
 	// below fails — a resolution failure then surfaces as a genuine
 	// non-zero process exit, routed through the Router's existing
 	// onPipelineExit -> PipelineFailed path, not a spawn-time error.
-	ln, err := net.Listen("tcp", *addr)
+	ln, err := childsock.ListenChild("pipeline", *socket, *addr)
 	if err != nil {
-		log.Fatalf("pipeline: listen %s: %v", *addr, err)
+		log.Fatalf("pipeline: listen: %v", err)
 	}
 	log.Printf("pipeline: listening on %s", ln.Addr())
 
-	// Only the Router calls the pipeline engine; no browser page does.
-	srv := &http.Server{Handler: localguard.New("pipeline", "", nil).Wrap(newMux())}
+	// Only the Router calls the pipeline engine; no browser page does. On
+	// its socket no page can; a hand-run TCP port keeps localguard.
+	handler := newMux(*runID)
+	if *socket == "" {
+		handler = localguard.New("pipeline", "", nil).Wrap(handler)
+	}
+	srv := &http.Server{Handler: handler}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
 
@@ -396,7 +416,7 @@ func main() {
 
 	runErr := make(chan error, 1)
 	go func() {
-		runErr <- run(ctx, *runID, *sessionID, *tplName, *dataURL, *madsHome, *fakeScenario, pipelinerun.SplitTaskIDs(*exclude))
+		runErr <- run(ctx, *runID, *sessionID, *tplName, *dataURL, *madsHome, *fakeScenario, *tokenFile, pipelinerun.SplitTaskIDs(*exclude))
 	}()
 
 	select {

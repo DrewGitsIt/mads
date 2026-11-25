@@ -9,10 +9,13 @@ import "time"
 // counts.
 //
 // The file list is what differs on disk from the baseline, not the touch
-// ledger: a file the agent touched and put back is absent, and a file
-// changed by something mads didn't see (the user, a detached process) is
-// present with Attributed false. The ledger contributes attribution and
-// turn membership only.
+// ledger: a file the agent touched and put back is absent. In a session's
+// own worktree, a file changed by something mads didn't see (the user, a
+// detached process) is present with Attributed false. A session working in
+// place shares its folder, so there only files its tools changed or its
+// commits include are listed, and a Note counts the rest (the Commit
+// dialog shows them). The ledger contributes attribution and turn
+// membership.
 type ChangeSet struct {
 	// Baseline is the comparison actually used: one of the Baseline* consts.
 	Baseline string `json:"baseline"`

@@ -1,10 +1,12 @@
-import type { PermissionRequest, ToolStatus, ToolUse } from "../../router/types";
+import type { Delegate, PermissionRequest, ToolStatus, ToolUse } from "../../router/types";
 import { Fold, useArrivals } from "../../components/Motion";
 import { PermissionCard } from "../ChatRenderer/PermissionCard";
-import type { TaskModel } from "./conversationItems";
+import { mergeDelegates, type TaskModel } from "./conversationItems";
 import { KindIcon, Spinner, StatusGlyph } from "./primitives";
 import { formatElapsed, formatMs, formatTokens } from "./toolDisplay";
 import { useElapsedNow } from "../../utils/relativeTime";
+import { waitingOnText } from "../../router/delegateLive";
+import { WaitingGlyph } from "../../features/sessions/rail/StatusMark";
 import styles from "./TaskCard.module.css";
 
 export interface TaskCardProps {
@@ -29,6 +31,7 @@ const noResolve = async () => {};
 /** Hover text for an ended delegate: what ended it, and whether mads had to conclude that. */
 function stateTitle(model?: TaskModel): string | undefined {
   if (!model?.state || model.state === "running") return undefined;
+  if (model.waitingOn) return `turn ended, waiting on ${waitingOnText(model.waitingOn)}`;
   const why = model.status ? ` (${model.status.replace("_", " ")})` : "";
   return model.inferred ? `${model.state}${why} — concluded by mads, no report from the agent` : `${model.state}${why}`;
 }
@@ -65,7 +68,9 @@ function LiveTaskCounters({ model }: { model: TaskModel }) {
 /**
  * The status glyph for a task's state. A delegate record (model.state) says
  * how it ended — failed and stopped included, which the task-line fold used
- * to render as a green check (any notification) or an interrupted mark.
+ * to render as a green check (any notification) or an interrupted mark — and
+ * whether a completed run is still waiting on work it owns, which is the
+ * rail's waiting dial rather than a ✓ that says it is done.
  */
 export function TaskStatusGlyph({ model, blocked }: { model?: TaskModel; blocked?: boolean }) {
   if (blocked) return <StatusGlyph status="blocked" />;
@@ -73,7 +78,7 @@ export function TaskStatusGlyph({ model, blocked }: { model?: TaskModel; blocked
     case "running":
       return <Spinner />;
     case "completed":
-      return <StatusGlyph status="completed" />;
+      return model.waitingOn ? <WaitingGlyph /> : <StatusGlyph status="completed" />;
     case "failed":
       return <StatusGlyph status="failed" />;
     case "stopped":
@@ -161,6 +166,54 @@ export function TaskCard({
           </Fold>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * A subagent's own Agent call, in that subagent's conversation (DelegateView):
+ * the delegate it spawned, as a card with live status that opens that
+ * delegate in the main pane — not a tool row inside "N actions", where a
+ * subagent's subagents used to disappear. Matched by the call's id
+ * (Delegate.tool_use_id), and drawn from the record alone: the task-line
+ * fold only covers the session's own agent's tasks.
+ *
+ * The task card's frame and pieces (its glyphs and counters), laid out the
+ * way the rail rows are — status first, so the glyph reads the same in both
+ * places — with the kind on a small second line and an explicit "Open ›",
+ * since a click here leaves the conversation rather than opening the dock.
+ */
+export function DelegateCallCard({ delegate, onOpen }: { delegate: Delegate; onOpen?: (d: Delegate) => void }) {
+  const model = mergeDelegates(new Map(), new Map([[delegate.harness_id, delegate]])).get(delegate.harness_id)!;
+  const kind = ["subagent", delegate.type].filter(Boolean).join(" · ");
+  const waiting = model.waitingOn ? ` · waiting on ${waitingOnText(model.waitingOn)}` : "";
+  const counters = taskCounters(model);
+  return (
+    <div className={styles.card} data-testid="delegate-call-card" data-harness-id={delegate.harness_id}>
+      <button type="button" className={[styles.head, styles.callHead].join(" ")} onClick={() => onOpen?.(delegate)}>
+        <span className={styles.callGlyph} title={stateTitle(model)}>
+          <TaskStatusGlyph model={model} />
+        </span>
+        <span className={styles.callName}>
+          <span className={styles.title}>{delegate.description || delegate.type || "Subagent"}</span>
+          <span className={styles.callKind}>
+            {kind}
+            {waiting}
+          </span>
+        </span>
+        <span className={styles.meta} data-find-skip>
+          {model.waitingOn ? (
+            "waiting"
+          ) : (
+            (model.running || counters) && (
+              <span data-testid="task-counters">
+                <TaskCounters model={model} />
+              </span>
+            )
+          )}
+          <span className={styles.callOpen}>Open ›</span>
+        </span>
+      </button>
     </div>
   );
 }

@@ -61,6 +61,7 @@ func (p *keyedProvider) Matrix() provider.Matrix {
 		provider.BehaviorCompactionFocus:    provider.Unsupported,
 		provider.BehaviorDelegateLifecycle:  provider.Unsupported,
 		provider.BehaviorDelegateTranscript: provider.Unsupported,
+		provider.BehaviorBackgroundOutput:   provider.Unsupported,
 		provider.BehaviorDelegateSteer:      provider.Unsupported,
 		provider.BehaviorDelegateStop:       provider.Unsupported,
 	}

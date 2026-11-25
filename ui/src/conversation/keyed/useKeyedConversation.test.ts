@@ -112,6 +112,37 @@ describe("useKeyedConversation", () => {
     expect(hook.result.current.state.hasMore).toBe(false);
   });
 
+  it("loads every older page as one merge, oldest first", async () => {
+    const rows: TranscriptMessage[] = Array.from({ length: 350 }, (_, i) => ({ role: "agent", key: `k${i}`, text: `m${i}` }));
+    const { hook, client } = setup(rows);
+    await waitFor(() => expect(hook.result.current.rows).toHaveLength(100));
+    const before = hook.result.current.state;
+    let merged = false;
+    await act(async () => {
+      merged = await hook.result.current.loadAllOlder(() => false);
+    });
+    expect(merged).toBe(true);
+    expect(client.transcriptPageCalls).toHaveLength(4); // the last page, then three older
+    expect(keys(hook.result.current.rows)).toEqual(rows.map((r) => r.key));
+    expect(hook.result.current.state.hasMore).toBe(false);
+    expect(hook.result.current.state).not.toBe(before);
+  });
+
+  it("merges nothing when cancelled on the way", async () => {
+    const rows: TranscriptMessage[] = Array.from({ length: 350 }, (_, i) => ({ role: "agent", key: `k${i}`, text: `m${i}` }));
+    const { hook, client } = setup(rows);
+    await waitFor(() => expect(hook.result.current.rows).toHaveLength(100));
+    let calls = 0;
+    let merged = true;
+    await act(async () => {
+      merged = await hook.result.current.loadAllOlder(() => ++calls > 2);
+    });
+    expect(merged).toBe(false);
+    expect(client.transcriptPageCalls.length).toBeLessThan(4);
+    expect(hook.result.current.rows).toHaveLength(100);
+    expect(hook.result.current.state.hasMore).toBe(true);
+  });
+
   it("a reopened stream that starts fresh merges the last page: what settled while it was down", async () => {
     const { hook, src, client } = setup([{ role: "user", key: "u0", text: "hi" }]);
     await waitFor(() => expect(keys(hook.result.current.rows)).toEqual(["u0"]));
@@ -140,5 +171,33 @@ describe("useKeyedConversation", () => {
     });
     await new Promise((r) => setTimeout(r, 0));
     expect(client.transcriptPageCalls).toHaveLength(1);
+  });
+
+  it("carries the last page's missing note, and clears it when a page comes back without one", async () => {
+    const missing = { retention: { file: "/h/.claude/settings.json", setting: "cleanupPeriodDays", default_days: 30 } };
+    const client = new FakeRouterClient();
+    client.transcripts["s1"] = [];
+    const real = client.getTranscriptPage.bind(client);
+    client.getTranscriptPage = async (id, p) => ({ ...(await real(id, p)), missing });
+    const hook = renderHook(() => useKeyedConversation(client, "s1", { stream: true }));
+    const src = () => client.v2Sources[client.v2Sources.length - 1].source;
+    await waitFor(() => expect(hook.result.current.missing).toEqual(missing));
+
+    // The turn-end refresh: the agent has written its store.
+    client.getTranscriptPage = real;
+    client.transcripts["s1"] = [{ role: "agent", key: "a1", text: "done" }];
+    act(() => {
+      src().emitFrame("hello", { epoch: "e", seq: 0, keyed: true, resume: "fresh", turn: { active: false }, queued: [] });
+      src().emitFrame("replay_end", {}, "e:0");
+      src().emitFrame("turn_end", {}, "e:1");
+    });
+    await waitFor(() => expect(hook.result.current.missing).toBeUndefined());
+
+    // A resync swap reads it again.
+    client.getTranscriptPage = async (id, p) => ({ ...(await real(id, p)), missing: {} });
+    act(() => {
+      src().emitFrame("resync", { reason: "epoch" });
+    });
+    await waitFor(() => expect(hook.result.current.missing).toEqual({}));
   });
 });

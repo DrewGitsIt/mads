@@ -1,4 +1,4 @@
-import { afterEach } from "vitest";
+import { afterEach, beforeEach } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { clearAllStagedAttachments } from "./components/Attachments/stagedAttachments";
 import { clearLaunchpadDraft } from "./features/sessions/launchpad/launchpadDraft";
@@ -40,7 +40,16 @@ for (const name of ["localStorage", "sessionStorage"] as const) {
   }
 }
 
-afterEach(() => {
+// The event bus keeps its cursor and readiness for the window's life, and
+// reads the log head before its first connect. Each test gets a fresh bus
+// primed at cursor 0 (ready, so a first subscribe opens at once with
+// since=0); router/events.test.ts resets it to undefined to exercise the head
+// read. Imported lazily for the same vi.mock reason as below.
+beforeEach(async () => {
+  (await import("./router/events")).resetEventsBusForTests?.(0);
+});
+
+afterEach(async () => {
   cleanup();
   // One in-memory store for the whole file: without this, state a test persisted
   // (the rail's seen-session ids, say) decides what the next test renders.
@@ -49,4 +58,18 @@ afterEach(() => {
   // the first test to touch a session handed them) and the launchpad draft.
   clearAllStagedAttachments();
   clearLaunchpadDraft();
+  // And the window-wide session list, which otherwise hands one test's
+  // sessions (and its in-flight fetch) to the next. Imported lazily: a module
+  // a setup file imports up front is cached before the test file's vi.mock
+  // calls register, so a static import here would pull router/events past
+  // the tests that mock it.
+  (await import("./router/sessionsStore")).resetSessionsStoreForTests?.();
+  // And the window-wide repo state (COMMIT-LAND-PUSH D10), lazily for the same reason.
+  (await import("./router/repoStateStore")).resetRepoStateStoreForTests?.();
+  // And the window-wide change sets the rail and the Changes tab share.
+  (await import("./files/useChangeSet")).resetChangeSetStoreForTests?.();
+  // And the per-session worktree recounts (in flight, and when each last finished).
+  (await import("./conversation/Worktree/worktreeRefresh")).resetWorktreeRefreshForTests?.();
+  // And which git state parts each session has "updating" (docs/GIT-STATE-DESIGN.md).
+  (await import("./router/gitUpdating")).resetGitUpdatingForTests?.();
 });

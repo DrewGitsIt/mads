@@ -258,6 +258,7 @@ func (p *Provider) Matrix() provider.Matrix {
 		// the ACP wire this adapter reads.
 		provider.BehaviorDelegateLifecycle:  provider.Unsupported,
 		provider.BehaviorDelegateTranscript: provider.Unsupported,
+		provider.BehaviorBackgroundOutput:   provider.Unsupported,
 		provider.BehaviorDelegateSteer:      provider.Unsupported,
 		provider.BehaviorDelegateStop:       provider.Unsupported,
 		// hermes stores none of its live ids: live items carry provisional

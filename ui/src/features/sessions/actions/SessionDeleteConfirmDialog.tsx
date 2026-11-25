@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "../../../components/ConfirmDialog/ConfirmDialog";
 import {
   EMPTY_AGENT_STATE,
@@ -91,6 +91,9 @@ function lossSentence(state: SessionDeleteState, openTasks: number): string {
  * same words for a session asleep for three days and one mid-turn with a
  * pipeline running (mockup docs/mockups/session-delete-confirm.html).
  */
+/** The longest Delete waits for the opening recount before it's offered anyway. */
+export const RECOUNT_WAIT_MS = 5_000;
+
 export function SessionDeleteConfirmDialog({
   open,
   session,
@@ -103,6 +106,20 @@ export function SessionDeleteConfirmDialog({
   const status = statusOf(session, agentState, openTaskBreakdown);
   const state = sessionDeleteState(status, session);
   const openTasks = totalOpenTasks(openTaskBreakdown);
+  // An isolated session's work is recounted as the dialog opens (UnlandedWork).
+  // Delete waits for that answer: confirming before it lands confirms against
+  // stale counts, and deleting stops the session process mid-recount (its
+  // `git status` killed — a 500 to the dialog). Locally that's instant; to a
+  // session on another device (mesh mode) it's a round trip.
+  const recounts = open && isIsolated(session) && Boolean(routerClient);
+  const [recounted, setRecounted] = useState<string>();
+  const checking = recounts && recounted !== session.id;
+  // A recount that never answers (a device gone quiet) can't hold Delete hostage.
+  useEffect(() => {
+    if (!checking) return;
+    const t = setTimeout(() => setRecounted(session.id), RECOUNT_WAIT_MS);
+    return () => clearTimeout(t);
+  }, [checking, session.id]);
   return (
     <ConfirmDialog
       open={open}
@@ -117,9 +134,11 @@ export function SessionDeleteConfirmDialog({
           openTaskBreakdown={openTaskBreakdown}
           openTasks={openTasks}
           routerClient={routerClient}
+          onRecounted={() => setRecounted(session.id)}
         />
       }
       confirmLabel={CONFIRM_LABEL[state]}
+      confirmDisabled={checking}
       onConfirm={onConfirm}
       onCancel={onCancel}
     />
@@ -138,7 +157,9 @@ function DeleteDescription({
   openTaskBreakdown,
   openTasks,
   routerClient,
+  onRecounted,
 }: {
+  onRecounted?: () => void;
   state: SessionDeleteState;
   status: RailStatus;
   session: Session;
@@ -206,7 +227,7 @@ function DeleteDescription({
           </div>
         )}
       </div>
-      {isIsolated(session) && <UnlandedWork session={session} routerClient={routerClient} />}
+      {isIsolated(session) && <UnlandedWork session={session} routerClient={routerClient} onRecounted={onRecounted} />}
       <ShellBusyLine sessionId={session.id} />
       <div className={styles.loss}>{lossSentence(state, openTasks)}</div>
       <div className={styles.keeps}>
@@ -259,7 +280,16 @@ function ShellBusyLine({ sessionId }: { sessionId: string }) {
  * session works in that folder, or a pipeline run merges into it, delete
  * keeps the folder and branch, and this says so instead.
  */
-function UnlandedWork({ session, routerClient }: { session: Session; routerClient?: RouterClient }) {
+function UnlandedWork({
+  session,
+  routerClient,
+  onRecounted,
+}: {
+  session: Session;
+  routerClient?: RouterClient;
+  /** The recount settled, either way: Delete can go ahead. */
+  onRecounted?: () => void;
+}) {
   const [counts, setCounts] = useState<{
     unlanded: number;
     uncommitted: number;
@@ -271,6 +301,8 @@ function UnlandedWork({ session, routerClient }: { session: Session; routerClien
     sharedWith: [],
     pipeline: false,
   });
+  const recountedRef = useRef(onRecounted);
+  recountedRef.current = onRecounted;
   useEffect(() => {
     if (!routerClient) return;
     let cancelled = false;
@@ -285,7 +317,10 @@ function UnlandedWork({ session, routerClient }: { session: Session; routerClien
             pipeline: st.pipeline_running ?? false,
           });
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) recountedRef.current?.();
+      });
     return () => {
       cancelled = true;
     };

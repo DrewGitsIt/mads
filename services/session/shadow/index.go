@@ -140,6 +140,16 @@ func BaselineOriginal(ctx context.Context, shadowDir, root, relPath string) (con
 	return content, true
 }
 
+// HasBaseline reports whether root has a usable shadow baseline commit:
+// whether "unchanged since the session started" can be told for its files.
+func HasBaseline(ctx context.Context, shadowDir, root string) bool {
+	if shadowDir == "" {
+		return false
+	}
+	_, err := readGit(ctx, filepath.Join(shadowDir, RootKey(root)), "rev-parse", "--quiet", "--verify", BaselineTag+"^{commit}")
+	return err == nil
+}
+
 // FirstCaptureOriginal resolves a file's content as of the session's first
 // captured tool call on it — the best "original" a root with no baseline
 // commit (a non-repo root, see Store.Baseline) can offer. It is the file's

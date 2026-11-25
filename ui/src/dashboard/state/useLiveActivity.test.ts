@@ -55,4 +55,36 @@ describe("useLiveActivity", () => {
     const wantActive = fixtureSessions.filter((s) => s.activity === "active").length + 1;
     expect(result.current.activeSessionCount).toBe(wantActive);
   });
+
+  // A reconnect can bring a burst (everything since the bus's cursor): one
+  // listSessions + metricsPipelineRuns per session.*/pipeline.* event, before.
+  it("collapses a burst of 200 matching events into at most 2 refetches", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new FakeMetricsClient();
+      const listSessions = vi.spyOn(client, "listSessions");
+      const runs = vi.spyOn(client, "metricsPipelineRuns");
+      const { result } = renderHook(() => useLiveActivity(client));
+      await act(async () => {}); // the mount fetch waits a tick for the bus's ready barrier
+      expect(listSessions).toHaveBeenCalledTimes(1);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(result.current.loading).toBe(false);
+
+      const source = FakeEventSource.instances[0];
+      act(() => {
+        for (let i = 0; i < 200; i++) {
+          const seq = 5_000_000 + i;
+          const type = i % 2 ? "session.updated" : "pipeline.completed";
+          source.emit(type, JSON.stringify({ seq, type, actor: "router", session_id: "ses_x" }));
+        }
+      });
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      const refetches = listSessions.mock.calls.length - 1;
+      expect(refetches).toBeGreaterThanOrEqual(1);
+      expect(refetches).toBeLessThanOrEqual(2);
+      expect(runs.mock.calls.length).toBe(listSessions.mock.calls.length);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

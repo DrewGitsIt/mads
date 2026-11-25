@@ -198,3 +198,31 @@ func TestBrowserNavigationToDeepLinkGetsIndex(t *testing.T) {
 		t.Fatalf("GET /deep/link body = %q, want the SPA shell (index.html)", got)
 	}
 }
+
+// TestAPIAnswersAreNoStore: Router JSON is live state, never for a browser
+// cache (Chromium queues identical in-flight GETs behind a cacheable one);
+// the static UI keeps its own caching, and a handler's own Cache-Control
+// (the SSE streams') wins.
+func TestAPIAnswersAreNoStore(t *testing.T) {
+	srv := newTestServerWithUIDist(t, writeUIDist(t))
+	get := func(path string) *http.Response {
+		t.Helper()
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		return resp
+	}
+	for _, path := range []string{"/sessions", "/sessions/nope/changeset", "/sessions/nope/repos"} {
+		if got := get(path).Header.Get("Cache-Control"); got != "no-store" {
+			t.Errorf("GET %s Cache-Control = %q, want no-store", path, got)
+		}
+	}
+	for _, path := range []string{"/", "/assets/app.js"} {
+		if got := get(path).Header.Get("Cache-Control"); got == "no-store" || got == "" {
+			t.Errorf("GET %s Cache-Control = %q, want the static UI's own", path, got)
+		}
+	}
+}

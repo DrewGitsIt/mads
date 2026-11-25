@@ -8,6 +8,7 @@ import { RailChangesList } from "./RailChangesList";
 import { RailProposalList } from "./RailProposalList";
 import { countNonScratch, type ChangesFocus } from "../files/changesModel";
 import { useSeenState } from "../files/seenState";
+import { useChangeBaseline } from "../files/changeBaseline";
 import { useChangeSet } from "../files/useChangeSet";
 import { useProposalStore } from "./useProposalStore";
 import styles from "./ContextRail.module.css";
@@ -61,7 +62,9 @@ export function ContextRail({
   // Fetched here (not in RailChangesList) so the Changes tab can show the
   // file count even while the Tasks tab is active — otherwise the tab gives
   // no hint of what's behind it. Scratch files aren't counted.
-  const { changeSet, loading: changesLoading, error: changesError } = useChangeSet(routerClient, sessionId);
+  // The Changes tab's "Compare to" choice, so the rail and the tab agree.
+  const [baseline] = useChangeBaseline(sessionId);
+  const { changeSet, loading: changesLoading, error: changesError } = useChangeSet(routerClient, sessionId, baseline);
   const { isUnseen } = useSeenState(sessionId);
   const changedCount = countNonScratch(changeSet);
   const openChanges =

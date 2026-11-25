@@ -32,6 +32,9 @@ type wireLine struct {
 	TotalCostUSD float64                   `json:"total_cost_usd"`
 	ModelUsage   map[string]wireModelUsage `json:"modelUsage"`
 	Origin       *wireOrigin               `json:"origin"`
+	// ToolUseResult is a user line's structured tool result; only a
+	// background call's task id is read (background_output.go).
+	ToolUseResult json.RawMessage `json:"tool_use_result"`
 
 	// assistant-line API-failure fields: the CLI writes an assistant line of
 	// its own (model "<synthetic>") when a request failed, flagged
@@ -610,7 +613,7 @@ func (l *wireLine) keyedEvents(interrupted bool, partial bool, k *lineKeys) []pr
 			evs = append(evs, provider.Event{
 				Kind:    provider.EventToolResult,
 				Key:     k.tool(b.ToolUseID),
-				Tool:    &provider.ToolUse{ID: b.ToolUseID},
+				Tool:    &provider.ToolUse{ID: b.ToolUseID, Background: backgroundOf(l.ToolUseResult, toolResultBlocks(l.Message))},
 				Text:    toolResultText(b.Content),
 				IsError: b.IsError,
 			})

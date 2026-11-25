@@ -269,3 +269,35 @@
   font: 500 var(--fs-chip) var(--mono);
   overflow-wrap: anywhere;
 }
+
+/* Mesh mode: browsing folders on another device (RemoteFolderBrowser). */
+.remoteBrowser {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.remotePath {
+  padding: 0 var(--space-2);
+  color: var(--text2);
+  font: 400 var(--fs-chip) var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.remoteRow {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.remoteList {
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.remoteError {
+  padding: var(--space-1) var(--space-2);
+  color: var(--text3);
+  font: 400 var(--fs-chip) var(--sans);
+}

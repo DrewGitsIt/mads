@@ -4,16 +4,16 @@ import { findAll } from "./findText";
 const SKIP = "[data-find-skip], time";
 
 /**
- * Ranges for every match of `pattern` in the text `el` renders. Matching
+ * Static ranges for every match of `pattern` in the text `el` renders. Matching
  * runs over the element's text nodes joined end to end, so a match may span
- * nodes (a word half in **bold**); each match maps back to a Range. A <br>
+ * nodes (a word half in **bold**); each match maps back to a range. A <br>
  * reads as the newline it stands for, so text across a line break matches
  * the way it reads (and as the transcript's own text does), not run
  * together. A plain
  * walk rather than a TreeWalker: it skips chrome a whole subtree at a time,
  * and behaves the same in every DOM the tests run.
  */
-export function domMatches(el: Element, pattern: RegExp): Range[] {
+export function domMatches(el: Element, pattern: RegExp): AbstractRange[] {
   const nodes: Text[] = [];
   const starts: number[] = [];
   let text = "";
@@ -44,9 +44,17 @@ export function domMatches(el: Element, pattern: RegExp): Range[] {
     return [nodes[i], Math.min(Math.max(at - starts[i], 0), length)];
   };
   return findAll(text, pattern).map(({ start, length }) => {
+    const [startContainer, startOffset] = locate(start, false);
+    const [endContainer, endOffset] = locate(start + length, true);
+    // Static, not live: the browser updates every live Range on every DOM
+    // removal, and a short query makes thousands (useFind measures them
+    // through one). A DOM without StaticRange (the tests') gets live ones.
+    if (typeof StaticRange === "function") {
+      return new StaticRange({ startContainer, startOffset, endContainer, endOffset });
+    }
     const range = el.ownerDocument.createRange();
-    range.setStart(...locate(start, false));
-    range.setEnd(...locate(start + length, true));
+    range.setStart(startContainer, startOffset);
+    range.setEnd(endContainer, endOffset);
     return range;
   });
 }

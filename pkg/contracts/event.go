@@ -321,6 +321,99 @@ const (
 	WorkspaceUpdated EventType = "workspace.updated"
 	WorkspaceDeleted EventType = "workspace.deleted"
 
+	// PeerCreated, PeerUpdated and PeerDeleted track the mesh peer list:
+	// the devices this node views (docs/MESH-MODE-DESIGN.md D3) and the
+	// devices paired with it, viewed or not. Payload: the registry's usual
+	// {"id", "name"}.
+	PeerCreated EventType = "peer.created"
+	PeerUpdated EventType = "peer.updated"
+	PeerDeleted EventType = "peer.deleted"
+	// PeerReachabilityChanged fires when the Router's view of a peer
+	// settles into a new state (connected, unreachable, denied,
+	// version_mismatch), so connects and disconnects can be read back from
+	// the event log. A change must hold for the Router's debounce before
+	// it's logged; the first successful connect is logged at once.
+	// Payload: PeerReachabilityChange.
+	PeerReachabilityChanged EventType = "peer.reachability_changed"
+	// DevicePaired, DeviceUnpaired and DeviceGrantChanged are the audit
+	// trail of who may reach this host (docs/MESH-AUTH-DESIGN.md D8),
+	// written by the peer registry in the same transaction as the row
+	// change and its peer.* event: paired when a fingerprint is pinned,
+	// unpaired when it's removed (a changed key is both, as rotation is),
+	// grant_changed when a paired device's level or ceilings change.
+	// Readers that only need the current list follow peer.*. Payload:
+	// DeviceChange.
+	DevicePaired       EventType = "device.paired"
+	DeviceUnpaired     EventType = "device.unpaired"
+	DeviceGrantChanged EventType = "device.grant_changed"
+	// DeviceRefused is the Mesh Service turning a device away: a key not
+	// paired here, or a request above its level or past a ceiling
+	// (docs/MESH-AUTH-DESIGN.md D8). Debounced per device, code and route,
+	// and rate-capped overall, so a hostile client can't flood the log.
+	// Payload: DeviceRefusal.
+	DeviceRefused EventType = "device.refused"
+	// DeviceIntroduced is a device pinned here by an admin device's
+	// introduction (docs/MESH-AUTH-DESIGN.md D5), in place of
+	// device.paired; the envelope's actor is the introducer. Payload:
+	// DeviceChange.
+	DeviceIntroduced EventType = "device.introduced"
+	// DeviceCodeCreated is a pairing code made on this host (D6). The
+	// secret is never in it. Payload: PairingCode.
+	DeviceCodeCreated EventType = "device.code_created"
+	// DevicePairRequested is a device that presented a valid pairing code,
+	// waiting for this host's approval. Payload: PairRequest.
+	DevicePairRequested EventType = "device.pair_requested"
+	// DevicePairDeclined is a pairing request this host declined. Approval
+	// is device.paired (how "code"). Payload: PairRequest.
+	DevicePairDeclined EventType = "device.pair_declined"
+	// DeviceSettingsChanged is this host's user changing its mesh settings
+	// (Settings → Paired devices: the mesh network, Advanced options). The
+	// setting itself is the mesh_settings row (migration 0038); this event
+	// is written in the same transaction, the history in the activity log
+	// and what the Mesh Service follows. Written only with host authority,
+	// never by a relayed device, under the store's fixed actor "settings"
+	// (who changed it is in the payload). Payload: MeshSettingsChange.
+	DeviceSettingsChanged EventType = "device.settings_changed"
+	// DeviceDiscoverable is this device's setup window opening, renewed or
+	// closing (docs/MESH-NETWORK-DESIGN.md U4): written by the Data
+	// Service's PUT /devices/discoverable, with host authority only, under
+	// the store's fixed actor "settings". The Mesh Service follows it.
+	// Payload: Discoverable.
+	DeviceDiscoverable EventType = "device.discoverable"
+	// DeviceDiscovered is this device answering a discovery probe, or
+	// getting a discovered pairing request, during its window. Audit only,
+	// debounced per address. Payload: DeviceDiscovery.
+	DeviceDiscovered EventType = "device.discovered"
+	// DeviceLevelUncapped is the Mesh Service noting a device whose
+	// effective level rose when the tailnet policy stopped capping levels
+	// (docs/MESH-NETWORK-DESIGN.md, "The WhoIs change"; round-1 review S6):
+	// its grant here is above what the policy's mesh capability named, or
+	// the policy didn't let it in at all. Once per device per run. Payload:
+	// DeviceUncapped.
+	DeviceLevelUncapped EventType = "device.level_uncapped"
+	// DevicePairStarted is a device starting a discovered pairing with this
+	// host (its commitment arrived, round-2 review R1): shown on the host
+	// so a request that never comes ("a device started pairing") is
+	// noticed. Payload: DeviceDiscovery.
+	DevicePairStarted EventType = "device.pair_started"
+	// DevicePairingAbandoned is the Mesh Service closing the setup window
+	// because several pairings were started and never finished (someone
+	// trying check codes). Payload: PairingAbandoned.
+	DevicePairingAbandoned EventType = "device.pairing_abandoned"
+
+	// MeshListening is this node's Mesh Service starting to listen: where
+	// other devices reach it, with what it reports about this host. The
+	// Router reads the newest one to put its own address in a pairing code.
+	// Payload: MeshListener.
+	MeshListening EventType = "mesh.listening"
+
+	// SessionDeviceMessage is a message a paired device sent to a session
+	// here over the mesh, accepted by the session (sent or queued). The
+	// envelope's actor is the device (docs/MESH-AUTH-DESIGN.md D8): the
+	// session child records the turn itself, so this is where the device
+	// shows. Payload: DeviceMessage.
+	SessionDeviceMessage EventType = "session.device_message"
+
 	// LinkCreated fires when a linked-sessions grant set is created
 	// (docs/LINKED-SESSIONS-DESIGN.md). Payload: {"granting_session_id":
 	// string, "subject_session_id": string, "grants": []string}. Envelope
@@ -339,6 +432,15 @@ const (
 	// the message was delivered into); Actor is stamped "link-<id>", not
 	// the granting session's own actor identity.
 	LinkMessageInjected EventType = "link.message_injected"
+	// LinkDigestDiscarded fires when the user discards held link updates
+	// (docs/HELD-UPDATES-DESIGN.md decision 9) — the long-term audit of a
+	// soft delete the store purges. Payload: {"ids": []int64}. Envelope
+	// SessionID is the recipient (granting) session; one event per session
+	// the ids touched.
+	LinkDigestDiscarded EventType = "link.digest_discarded"
+	// LinkDigestRestored fires when discarded held updates are restored
+	// (Undo). Same payload and SessionID as LinkDigestDiscarded.
+	LinkDigestRestored EventType = "link.digest_restored"
 	// TurnEnded fires when a session's agent completes a turn with non-empty
 	// activity (docs/LINKED-SESSIONS-DESIGN.md decision 4) — the trigger the
 	// Router's digest watcher subscribes to in order to compress and push a
@@ -507,6 +609,21 @@ const (
 )
 
 // EventTypes is the full registry, for validation and enumeration.
+// RepoChanged fires when a repo's branches moved — a commit, merge,
+// reset, rebase, fetch or push, from mads or anything else — once per
+// settled burst (docs/COMMIT-LAND-PUSH-DESIGN.md D10). No session id: the
+// repo is shared. Payload: RepoChangedPayload. Readers refetch repo state
+// (GET /repos/state, GET /sessions/{id}/repos) for repos they show.
+const RepoChanged EventType = "repo.changed"
+
+// SessionGitStateUpdated fires when the Router finishes a recompute of a
+// session's git-derived state that a trigger (or a read of a cold or stale
+// part) asked for, whether or not the result changed
+// (docs/GIT-STATE-DESIGN.md). Payload: GitStateUpdatedPayload. Readers
+// refetch the cached GET of the parts in Changed; every part in Parts is no
+// longer "updating" as of Generation.
+const SessionGitStateUpdated EventType = "session.git_state_updated"
+
 var EventTypes = []EventType{
 	SessionCreated, SessionProvisioning, SessionRenamed, SessionActivityChanged, SessionUpdated, SessionDeleted, SessionCrashed,
 	SessionPermissionRequested, SessionPermissionResolved,
@@ -524,12 +641,16 @@ var EventTypes = []EventType{
 	CapabilityCreated, CapabilityUpdated, CapabilityDeleted, CapabilityHealthChanged,
 	AgentCreated, AgentUpdated, AgentDeleted, AgentSelected, AgentOutcomeRecorded, AgentDraftGenerated,
 	WorkspaceCreated, WorkspaceUpdated, WorkspaceDeleted,
-	LinkCreated, LinkUpdated, LinkDeleted, LinkMessageInjected, TurnEnded,
+	PeerCreated, PeerUpdated, PeerDeleted, PeerReachabilityChanged,
+	DevicePaired, DeviceUnpaired, DeviceGrantChanged, DeviceRefused,
+	DeviceIntroduced, DeviceCodeCreated, DevicePairRequested, DevicePairDeclined,
+	DeviceSettingsChanged, DeviceDiscoverable, DeviceDiscovered, DeviceLevelUncapped, DevicePairStarted, DevicePairingAbandoned, MeshListening, SessionDeviceMessage,
+	LinkCreated, LinkUpdated, LinkDeleted, LinkMessageInjected, LinkDigestDiscarded, LinkDigestRestored, TurnEnded,
 	TemplateCreated, TemplateUpdated, TemplateDeleted,
 	ProfileCreated, ProfileUpdated, ProfileDeleted, ConfigUpdated,
 	AttachmentAdded, AccountAuthChanged,
 	MergeAttempted, MergeConflicted, MergeCompleted, MergeRefused, MergeAutoResolved, LandRetried, LandAutofixed,
-	WorktreeEnsured,
+	WorktreeEnsured, RepoChanged, SessionGitStateUpdated,
 	UsageRecorded, CapabilityInvoked,
 	StageAttemptRef, StageCapabilitiesMounted,
 	SynthesisProposalCreated, SynthesisProposalApproved, SynthesisProposalDismissed,

@@ -1461,6 +1461,7 @@ The Data Service maintains an append-only `events` table. Every state mutation a
 
 **Consumers:**
 - The Router subscribes on behalf of the UI (filtered per open view) and forwards over SSE
+- The UI's own bus is live-only: it starts at the log head (`GET /events/head`) and never replays; what it needs from before then it reads over REST, after the head read (the barrier in `ui/src/router/events.ts`)
 - A Pipeline Engine subscribes to its session's task events — this is how it notices mid-run task creation (§6 Dynamic Work Queue)
 - Session services subscribe where useful (e.g., synthesis reacting to file-change events)
 - Retro jobs and the metrics dashboard **query** the log historically rather than subscribing

@@ -38,6 +38,7 @@ export interface NewSessionCardProps {
   /** This session — the pills' starting values and the relationship row's name. */
   session?: Session;
   sessionId: string;
+  /** The session's device's client (clientForHost): validation, names and providers are that device's. */
   routerClient: RouterClient;
   initialGoal: string;
   block?: NewSessionBlock;
@@ -123,7 +124,7 @@ export function NewSessionCard({
   const goalRef = useRef(goal);
   goalRef.current = goal;
   const cadenceLabelId = useId();
-  const { providers } = useProviderMatrix();
+  const { providers } = useProviderMatrix(routerClient);
 
   const [name, setName] = useState("");
   const [takenNames, setTakenNames] = useState<string[]>([]);

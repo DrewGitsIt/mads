@@ -132,9 +132,23 @@ user edits mixed in unattributed.
   the only "before" was a mid-session pre-image, because the worktree didn't
   exist at session start. `pkg/changes/worktrees.go` drops any file under the
   session folder that's in a known harness worktree location (matched by
-  path, so removed ones count) or a live linked worktree. Nested repos and
-  submodules aren't affected. A note gives the count. The work shows once it
+  path, so removed ones count) or a live linked worktree of the folder's own
+  repo. Nested repos, submodules and other repos' worktrees aren't affected:
+  a session in `/` or `~/repo` that makes its own worktrees is doing its own
+  work there *(2026-11-16)*. A note gives the count. The work shows once it
   lands in the folder. Delegates may later get their own changes view.
+- **Only the session's own changes, in a shared folder** *(agreed
+  2026-11-09)*. A session working in place shares its folder with the user
+  and other sessions, so "what differs on disk since it started" was
+  everyone's work (914 files for a session that changed 91). It now lists
+  only files its tools changed or its commits include, on every baseline,
+  with a note counting the rest. Other people's changes appear only in the
+  Commit dialog, where they're needed. A session in its own worktree still
+  lists everything there; a session with no ledger rows and no commits
+  (a harness that reports no tool use) isn't filtered.
+- **One baseline per session** *(agreed 2026-11-09)*: the Context Rail's
+  Changes list follows the Changes tab's "Compare to" (in memory, shared
+  per session) and says "Compared to main" when it isn't Session start.
 - **Search** *(agreed)*: whole-token matches win (`.ts` matches `foo.ts`, not
   `foo.tsx`; a camelCase hump counts as a word edge). Any partial matches
   hidden that way are counted, with a "show N partial matches" link. When

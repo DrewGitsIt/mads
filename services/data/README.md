@@ -21,10 +21,14 @@ Router's retro engine (`services/router`'s `job.GenerateRetro`).
 ```sh
 make run        # listens on localhost:17374 (-addr to change)
 curl localhost:17374/health
+mads api --data GET /sessions      # every other route needs the install token
 ```
 
 Data lives in `~/.mads/mads.db` by default; override with `-data-dir` or
-`MADS_DATA_DIR`. Migrations apply automatically at startup.
+`MADS_DATA_DIR`. Migrations apply automatically at startup. The install token
+lives in `$MADS_HOME/local.token` (`-mads-home`, default `~/.mads`); the
+service creates it on first start if neither it nor the Router has
+(docs/LOCAL-FRONT-DOOR-DESIGN.md).
 
 ## Test it
 
@@ -39,19 +43,39 @@ database path (503).
 
 ## API contract
 
+**Authentication (the local front door, docs/LOCAL-FRONT-DOOR-DESIGN.md D3):**
+every route except `GET /health` requires the install token as
+`Authorization: Bearer <token>`, the token being the contents of
+`$MADS_HOME/local.token` (`pkg/localauth`; `pkg/dataclient`'s `WithToken` /
+`WithTokenSource`). Without it: `401
+{"code":"unauthorized","error":"…use mads api, … local.token"}`. Refusals are
+logged with method and path, never the presented value. A token file other
+users can read, or another user owns, is refused at startup. Rotation
+(`mads token rotate`) is picked up on the next request. Session and pipeline
+children read the token from the file the Router names (`-token-file`), never from
+env, argv or a pipe (H4). Every open request (an event stream) ends when its
+credential is revoked, at once on rotation.
+`-insecure-no-auth` exists only for `go test` builds and is refused otherwise.
+
 Wire types live in `pkg/contracts` (Envelope, Task, ValidationError) with golden fixtures
 in `pkg/contracts/testdata/`. Counterparties: the Router (reads/subscribes on behalf of
 the UI) and the other services (writes via lease, event append via outbox).
 
-- `GET /health` — `{"service":"data","status":"ok","root":"/abs/checkout","started_at":"<RFC 3339>"}`;
-  503 when the db is unreachable. `root` is the cwd the service was launched from —
-  `scripts/app.sh` refuses to reuse a Data Service started from a different checkout.
+- `GET /health` — open to all, but anonymous callers get only
+  `{"service":"data","status":"ok"}`; with the token it adds
+  `"root":"/abs/checkout","started_at":"<RFC 3339>"`. 503 when the db is
+  unreachable. `root` is the cwd the service was launched from —
+  `scripts/app.sh` (which sends the token) refuses to reuse a Data Service
+  started from a different checkout.
 - `POST /events` — append a standalone event (envelope minus seq/timestamp); 201 with
   the assigned seq; 422 `ValidationError` listing every problem at once.
 - `GET /events?since=<seq>&session_id=<id>&types=task.*,note.created` — filtered,
   seq-ordered. Plain request: one JSON batch (capped at 500; page with `since`).
   With `Accept: text/event-stream`: history replay from the cursor, then live pushes;
   each SSE message's `id` is the event seq, so clients resume with `since=<last id>`.
+- `GET /events/head` — `{"seq": N}`, the log's current max seq (0 when empty). A client
+  that seeds its state over REST streams with `since=<head>` from then on, so the stream
+  never replays history to it.
 
 Task routes (spec §3–§4; mutations carry `X-Mads-Actor`, defaulting to `user`):
 
@@ -100,6 +124,30 @@ its `agent.*`/`capability.*`/`workspace.*` event. `GET /agents` backs
 outcomes are recorded as `agent.selected` / `agent.outcome_recorded` events through
 the general event log, not through this registry CRUD surface.
 
+`/peers` (mesh mode) rides the same routes. A row is a device this node views
+(`mesh_url`), a device paired with this host (`fingerprint`, `grant`,
+`pairing`; docs/MESH-AUTH-DESIGN.md A3), or both, all in the row's JSON
+(migration `0035` unchanged; a row from before pairing reads as viewed,
+unpaired). The store keeps a fingerprint on one row (checked in the write
+transaction), validates the grant level and ceilings, owns the `pairing`
+record, and appends `device.paired` / `device.unpaired` /
+`device.grant_changed` beside the `peer.*` event. Granting `admin`
+(including loosening an admin's ceilings) needs the install token presented
+directly, with no `X-Mads-Mesh-Peer` mark from a mesh-relayed request: 403
+otherwise (Q2), checked in the write transaction against the stored row.
+A write relayed for a mesh device also names it (`X-Mads-Mesh-Device`, its
+fingerprint): the device must be paired here at admin, and may only remove a
+device, introduce one (paired-only, `pairing.how` introduction, logged as
+`device.introduced`) or change a device's level (403 otherwise, D5).
+Names may not be `candidates` or start with `per_`. Every registry's `PUT` and
+`DELETE` take `If-Match: <updated_at as read>` for a conditional write: 409
+`stale` if the row changed since (`updated_at` only moves forward per row).
+If-Match must echo `updated_at` exactly as read, as nanosecond RFC 3339: a
+value rounded on the way (a JavaScript `Date` keeps milliseconds) never
+matches and always gets 409. After the clock steps back, a row's
+`updated_at` can be ahead of the clock until the clock catches up.
+`POST` with an id already in use is 422, never a replace.
+
 - `POST /capabilities/{id-or-name}/health` `{healthy, reason?}` — records a capability's
   last-known health (spec §12.6), called by the Session Service's capability runtime
   (`services/session/internal/runner`) on every session start and guided-diagnostics check.
@@ -122,7 +170,9 @@ session's active task → heuristic candidates → orphan flag; `commit.created`
 always, `commit.linked` when a rung resolves.
 
 Link routes (`docs/LINKED-SESSIONS-DESIGN.md`, W1.7): `POST/GET/PUT/DELETE
-/links(/{id})`, `GET /sessions/{id}/links`. A `Link` is directed (granting
+/links(/{id})`, `GET /sessions/{id}/links`, and the bulk `GET
+/links?session_ids=a,b,c` (each link once; 1 to `contracts.MaxLinkSessionIDs`
+ids, else 422). A `Link` is directed (granting
 session → subject session) and always stores a grant *set* from
 `{read, inject, orchestrate}` — presets (`monitor`, `hand_raiser`, `leader`) are
 just named shorthands resolved to a grant set before storage, so new grant

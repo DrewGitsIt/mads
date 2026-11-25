@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { RouterClient } from "../router/client";
-import { subscribeToEvents } from "../router/events";
+import { coalesce } from "../router/coalesce";
+import { eventsReady, subscribeToEvents } from "../router/events";
 import type { Task } from "../router/types";
 
 export interface TaskStore {
@@ -23,41 +24,50 @@ const TASK_STORE_EVENT_TYPES = [
 ];
 
 /**
- * Fetches GET /tasks then subscribes to the shared event bus. Event payloads
- * are sparse (§6) — every task/note envelope triggers a refetch of that one
- * task via getTask, patched into state; task.discarded removes it. Never
- * trusts envelope.payload to reconstruct state.
+ * Fetches GET /tasks then follows the shared event bus. Event payloads are
+ * sparse (§6) — every task/note envelope triggers a refetch of the session's
+ * list, never trusting envelope.payload to reconstruct state; task.discarded
+ * also removes the task at once.
+ *
+ * Order safety: the mount read and every event refetch go through one
+ * single-flight coalescer (router/coalesce.ts), so two list reads are never
+ * in flight together and an event heard mid-read buys one more read after it
+ * — the last response applied is always the newest one requested. Discards
+ * are terminal and applied locally, so a snapshot requested before a discard
+ * (and landing after it) could carry the task back; snapshots are filtered
+ * by every discard this store has heard.
  */
 export function useTaskStore(routerClient: RouterClient, sessionId: string): TaskStore {
   const [tasks, setTasks] = useState<Task[]>([]);
 
   useEffect(() => {
     let cancelled = false;
-    routerClient.listTasks(sessionId).then((t) => {
-      if (!cancelled) setTasks(t);
-    });
-
+    const discarded = new Set<string>();
+    const fetcher = coalesce(() =>
+      routerClient.listTasks(sessionId).then((list) => {
+        if (cancelled) return;
+        setTasks(discarded.size === 0 ? list : list.filter((t) => !discarded.has(t.id)));
+      }),
+    );
     const unsubscribe = subscribeToEvents({ sessionId, types: TASK_STORE_EVENT_TYPES }, (envelope) => {
       if (!envelope.task_id) return;
-
       if (envelope.type === "task.discarded") {
-        setTasks((prev) => prev.filter((t) => t.id !== envelope.task_id));
-        return;
+        const id = envelope.task_id;
+        discarded.add(id);
+        setTasks((prev) => prev.filter((t) => t.id !== id));
       }
-
-      routerClient.getTask(envelope.task_id).then((t) => {
-        setTasks((prev) => {
-          const idx = prev.findIndex((p) => p.id === t.id);
-          if (idx === -1) return [...prev, t];
-          const next = [...prev];
-          next[idx] = t;
-          return next;
-        });
-      });
+      fetcher.request();
+    });
+    // The mount read waits for the bus's ready barrier (router/events.ts
+    // eventsReady), subscribed first: the bus never replays, so a read served
+    // before it fixes its cursor could miss an event landing in between.
+    void eventsReady(sessionId).then(() => {
+      if (!cancelled) fetcher.now();
     });
 
     return () => {
       cancelled = true;
+      fetcher.cancel();
       unsubscribe();
     };
   }, [routerClient, sessionId]);

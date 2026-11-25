@@ -5,10 +5,16 @@ import {
   checkResolutionsPrompt,
   commitPathReason,
   nameFiles,
+  notMineNote,
   outsideControlTitle,
+  pushRefusalCopy,
+  pushedCopy,
+  rebasePrompt,
   refusalCopy,
+  repoName,
   resolveConflictPrompt,
   tidyOutsidePrompt,
+  uncommittedCopy,
   undoRefusalCopy,
 } from "./worktreeCopy";
 
@@ -56,16 +62,16 @@ describe("refusalCopy", () => {
     );
     expect(refusalCopy("primary_untracked", "main", ["a", "b"]).body).toContain("a and b, which aren't tracked");
     expect(refusalCopy("dirty", "main", ["x.go"]).body).toBe(
-      "x.go is uncommitted in the session's folder. Commit it first — if Commit doesn't list one, ask the agent to commit or revert it. Land only moves committed work.",
+      "x.go is uncommitted in the session's folder. Commit it first. Land only moves committed work.",
     );
   });
 
-  it("says which dirty files Commit can't take, and who can deal with them", () => {
+  it("says which dirty files are off the change list, and where Commit lists them", () => {
     const copy = refusalCopy("dirty", "main", ["a.go", "b.go", "notes.md"], ["b.go", "notes.md"]);
     expect(copy.title).toBe("Changes outside this session are holding Land back");
     expect(copy.body).toBe(
-      "b.go and notes.md changed in the session's folder but aren't on its change list (edited through a shell, most likely), " +
-        "so Commit can't include them. Ask the agent to commit or revert them, or commit them yourself in the session's folder, " +
+      "b.go and notes.md changed in the session's folder but aren't on its change list (edited through a shell, most likely). " +
+        "Commit lists them under “Changed by someone else”, unchecked: commit them there, or ask the agent to commit or revert them, " +
         "then Land again. Commit this session's other 1 changed file too.",
     );
     expect(copy.body).not.toContain("Commit b.go");
@@ -112,7 +118,9 @@ describe("worktree copy helpers", () => {
       "These files changed outside this session's change list: scratch.txt, out/x.log. Commit the ones that belong to this work and revert the rest, so this session can land.",
     );
     expect(tidyOutsidePrompt()).toContain("git status shows them");
-    expect(outsideControlTitle(1)).toMatch(/^1 file in this session's folder .* can't include it and Land won't run until it's/);
+    expect(outsideControlTitle(1)).toMatch(
+      /^1 file in this session's folder .* Land won't run until it's committed or reverted\. Commit can take it as changes by someone else\./,
+    );
   });
 
   it("explains undo refusals and per-path commit outcomes", () => {
@@ -121,6 +129,23 @@ describe("worktree copy helpers", () => {
     expect(undoRefusalCopy("already_pushed")).toBe("Can't undo: it has already been pushed.");
     expect(commitPathReason("already_committed")).toBe("already committed");
     expect(commitPathReason("rejected", "outside_folder")).toBe("outside this session's folder");
+  });
+
+  it("says whose a file changed by someone else is, as far as it's known", () => {
+    expect(notMineNote({ by: { id: "ses_1", name: "Launchpad Pills UX Polish" }, since: "session" })).toBe(
+      "session “Launchpad Pills UX Polish”",
+    );
+    expect(notMineNote({ by: { id: "ses_1", name: "" } })).toBe("session “ses_1”");
+    expect(notMineNote({ since: "session" })).toBe("changed while this session ran");
+    expect(notMineNote({ since: "before" })).toBe("uncommitted before this session started");
+    expect(notMineNote({})).toBe("not by this session");
+  });
+
+  it("names a repo by its folder and counts uncommitted files across repos", () => {
+    expect(repoName("/home/u/repo/mads")).toBe("mads");
+    expect(repoName("/home/u/repo/mads/")).toBe("mads");
+    expect(uncommittedCopy(9, 1)).toBe("9 uncommitted");
+    expect(uncommittedCopy(11, 2)).toBe("11 uncommitted in 2 repos");
   });
 });
 
@@ -143,3 +168,26 @@ describe("autoResolvedCopy", () => {
   });
 });
 
+describe("push copy (D5)", () => {
+  it("says what was pushed where", () => {
+    expect(pushedCopy({ outcome: "pushed", pushed: 3, remote: "origin", remote_branch: "main" })).toBe(
+      "Pushed 3 commits to origin/main",
+    );
+    expect(pushedCopy({ outcome: "pushed", pushed: 1, remote: "origin", remote_branch: "main", rebased: true })).toBe(
+      "Pushed 1 commit to origin/main after rebasing",
+    );
+  });
+
+  it("words the refusals the confirmation doesn't already explain", () => {
+    expect(pushRefusalCopy("push_failed")).toBe("git push said no. Nothing was forced.");
+    expect(pushRefusalCopy("moved")).toMatch(/^The branch moved since this opened/);
+    expect(pushRefusalCopy("whatever")).toBe("Push didn't run.");
+  });
+
+  it("asks the agent to rebase, naming the conflicts", () => {
+    expect(rebasePrompt("feat", "origin/main", ["a.go", "b.go"])).toBe(
+      "Please rebase feat onto origin/main and resolve the conflicts in: a.go, b.go.",
+    );
+    expect(rebasePrompt(undefined, "origin/main", [])).toBe("Please rebase this branch onto origin/main and resolve its conflicts.");
+  });
+});

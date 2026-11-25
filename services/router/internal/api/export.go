@@ -12,7 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/services/router/internal/safeserve"
 )
 
 // exportSchema versions the JSON wrapper GET /sessions/{id}/export?format=json
@@ -81,6 +83,9 @@ func (s *server) handleExportSession(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", exportFilename(sess.Name, doc.ExportedAt, format)))
+	// The transcript is the agent's and its users' words: a download,
+	// never a page on this origin (safeserve).
+	safeserve.Apply(w.Header(), http.StatusOK)
 	_, _ = w.Write(body)
 }
 
@@ -146,11 +151,11 @@ func preferLive(live []contracts.TranscriptMessage, err error, stored func() []c
 func fetchChildTranscript(ctx context.Context, addr string) ([]contracts.TranscriptMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/transcript", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, childsock.URL(addr, "/transcript"), nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := childsock.Client.Do(req)
 	if err != nil {
 		return nil, err
 	}

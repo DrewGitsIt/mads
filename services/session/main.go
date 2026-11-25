@@ -9,7 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,9 +18,11 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/agentenv"
 	"github.com/drewkidwell/mads/pkg/capability"
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/localguard"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/claudecode"
@@ -86,7 +87,7 @@ func resolveAgentEnv(cfg contracts.Config, parentEnv []string) (mode agentenv.Mo
 // fakeScenario, when set, scripts the fake provider (the YAML `mads run
 // -fake-scenario` and the pipeline service take), so a test driving a real
 // session child through the Router can script its turns too.
-func buildProviderRegistry(mode agentenv.Mode, passthrough, credEnv []string, fakeScenario string) (*provider.Registry, error) {
+func buildProviderRegistry(madsHome string, mode agentenv.Mode, passthrough, credEnv []string, fakeScenario string) (*provider.Registry, error) {
 	registry := provider.NewRegistry()
 	if err := registry.Register(claudecode.New(claudecode.Config{
 		EnvMode:        mode,
@@ -139,13 +140,15 @@ func buildProviderRegistry(mode agentenv.Mode, passthrough, credEnv []string, fa
 	})); err != nil {
 		return nil, fmt.Errorf("register codex provider: %w", err)
 	}
-	fakeProv := fake.New()
+	// The Router's own fake serves background output from the same dir.
+	bgOpt := fake.WithBackgroundDir(filepath.Join(madsHome, "fake-background"))
+	fakeProv := fake.New(bgOpt)
 	if fakeScenario != "" {
 		sc, err := fake.LoadScenario(fakeScenario)
 		if err != nil {
 			return nil, fmt.Errorf("fake scenario: %w", err)
 		}
-		if fakeProv, err = fake.NewWithScenario(sc); err != nil {
+		if fakeProv, err = fake.NewWithScenario(sc, bgOpt); err != nil {
 			return nil, fmt.Errorf("fake scenario: %w", err)
 		}
 	}
@@ -172,7 +175,14 @@ func resolveWorktreeRoot(flagValue, madsHome string) string {
 }
 
 func main() {
-	addr := flag.String("addr", "localhost:0", "listen address")
+	// First thing: take the scoped token (and any stray install token) out
+	// of this process's environment, so nothing it starts — the agent above
+	// all — can inherit either (docs/LOCAL-FRONT-DOOR-DESIGN.md D4). The
+	// install token itself is never handed over: this process reads it from
+	// its file (H4).
+	_, routerToken := localauth.TakeChildEnv()
+	addr := flag.String("addr", "localhost:0", "TCP listen address, only for running this by hand (ignored with -socket; logs a warning)")
+	socket := flag.String("socket", "", "Unix socket to listen on — what the Router passes (docs/LOCAL-FRONT-DOOR-DESIGN.md D9)")
 	sessionID := flag.String("session-id", "", "session ID this process serves (required)")
 	dataURL := flag.String("data-url", "http://localhost:17374", "Data Service base URL")
 	routerURL := flag.String("router-url", "http://localhost:17373", "Router base URL (used by session-scoped capabilities, e.g. the orchestrate MCP server)")
@@ -182,6 +192,7 @@ func main() {
 	fastModelProvider := flag.String("fast-model", "fake", "registered provider to use for the Fast Model tier (synthesis, etc.)")
 	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root for credentials + MCP server registry (env MADS_HOME)")
 	fakeScenario := flag.String("fake-scenario", "", "scenario YAML for the fake provider (tests; same format as `mads run -fake-scenario`)")
+	tokenFile := flag.String("token-file", "", "the install token's file, read (and re-read on change) for Data Service calls (default <mads-home>/local.token); the Router passes it")
 	madsCmd := flag.String("mads-cmd", "", "mads CLI binary for the orchestrate capability (default: $MADS_BIN, else the mads beside this binary, else $PATH)")
 	flag.Parse()
 
@@ -189,7 +200,10 @@ func main() {
 		log.Fatal("session: -session-id is required")
 	}
 
-	data := dataclient.New(*dataURL, *sessionID)
+	if *tokenFile == "" {
+		*tokenFile = localauth.Path(*madsHome)
+	}
+	data := dataclient.New(*dataURL, *sessionID, dataclient.WithTokenSource(localauth.FileSource(*tokenFile)))
 
 	// Best-effort like the credstore/vault-refs opens below: an unreachable
 	// Data Service here degrades to env_mode's zero value (inherit), not a
@@ -201,7 +215,7 @@ func main() {
 	}
 	mode, passthrough, credEnv := resolveAgentEnv(cfg, os.Environ())
 
-	registry, err := buildProviderRegistry(mode, passthrough, credEnv, *fakeScenario)
+	registry, err := buildProviderRegistry(*madsHome, mode, passthrough, credEnv, *fakeScenario)
 	if err != nil {
 		log.Fatalf("session: %v", err)
 	}
@@ -216,6 +230,8 @@ func main() {
 	r.WorktreeRoot = resolveWorktreeRoot(*worktreeRoot, *madsHome)
 	r.ShadowRoot = *shadowRoot
 	r.RouterURL = *routerURL
+	r.RouterToken = routerToken
+	r.TokenFile = *tokenFile
 	// Empty means "resolve it yourself": setupOrchestrate falls back to
 	// pkg/madsbin ($MADS_BIN, then this binary's own directory, then $PATH).
 	r.MadsCmd = *madsCmd
@@ -249,9 +265,9 @@ func main() {
 
 	// Bound before r.Start so a taken port fails fast, before any provider
 	// process is spawned.
-	ln, err := net.Listen("tcp", *addr)
+	ln, err := childsock.ListenChild("session", *socket, *addr)
 	if err != nil {
-		log.Fatalf("session: listen %s: %v", *addr, err)
+		log.Fatalf("session: listen: %v", err)
 	}
 
 	if err := r.Start(ctx); err != nil {
@@ -265,8 +281,14 @@ func main() {
 	// a moment later.
 	log.Printf("session: listening on %s", ln.Addr())
 
-	// Only the Router and the agent's own tools call a session; none is a browser page.
-	srv := &http.Server{Handler: localguard.New("session", "", nil).Wrap(api.New(r))}
+	// Only the Router calls a session. On its Unix socket the directory's
+	// 0700 and the same-user check keep everyone else out and no browser can
+	// reach it; a hand-run TCP port still gets localguard against pages.
+	handler := api.New(r)
+	if *socket == "" {
+		handler = localguard.New("session", "", nil).Wrap(handler)
+	}
+	srv := &http.Server{Handler: handler}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
 

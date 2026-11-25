@@ -60,7 +60,10 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	defer func() { _ = os.RemoveAll(dir) }()
+	// Not a defer: os.Exit below skips deferred calls, which leaked this
+	// ~21 MB dir (the envdump + mads binaries) into $TMPDIR on every run.
+	// The build panics leave it behind too; those are failures to look at,
+	// not a steady-state leak.
 
 	envdumpBin = filepath.Join(dir, "envdump")
 	build := exec.Command("go", "build", "-o", envdumpBin,
@@ -76,7 +79,9 @@ func TestMain(m *testing.M) {
 		panic("build mads: " + err.Error() + "\n" + string(out))
 	}
 
-	os.Exit(m.Run())
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 func newCapabilityTestSession(t *testing.T, base, agentName string) contracts.Session {

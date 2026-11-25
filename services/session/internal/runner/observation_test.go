@@ -10,6 +10,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/data/datatest"
@@ -182,6 +183,13 @@ func TestCommitInSessionWorktreeReportsLinkage(t *testing.T) {
 	}
 	r := New(sess.ID, data, reg)
 	r.Cwd = dir
+	// Hook v2 reads the install token from the file mads.tokenFile names
+	// (docs/LOCAL-FRONT-DOOR-DESIGN.md D6); without one it stays silent.
+	home := t.TempDir()
+	if _, err := localauth.LoadOrCreate(home); err != nil {
+		t.Fatal(err)
+	}
+	r.TokenFile = localauth.Path(home)
 	if err := r.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
 	}

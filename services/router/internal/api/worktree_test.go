@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/childsock"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
@@ -124,7 +126,7 @@ func TestWorktreeRoutesForwardToLiveChild(t *testing.T) {
 	if got.Route != "POST /commit/undo" || !strings.Contains(got.Body, `"abc"`) {
 		t.Errorf("undo = %+v", got)
 	}
-	got = decodeJSON[marker](t, postJSON(t, srv.URL+"/sessions/"+sess.ID+"/land", struct{}{}))
+	got = decodeJSON[marker](t, postJSON(t, srv.URL+"/sessions/"+sess.ID+"/land", contracts.LandRequest{Message: "Land it"}))
 	if got.Via != "child" || got.Route != "POST /land" || got.Query != "" {
 		t.Errorf("land = %+v, want forwarded with no pipeline gate", got)
 	}
@@ -188,7 +190,7 @@ func TestWorktreeRoutesRunDirectlyWhenInactive(t *testing.T) {
 		t.Errorf("one-click commit = %+v", auto)
 	}
 
-	resp = postJSON(t, url+"/land", struct{}{})
+	resp = postJSON(t, url+"/land", contracts.LandRequest{Message: "Land it"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("land: status %d", resp.StatusCode)
 	}
@@ -212,7 +214,7 @@ func TestWorktreeRoutesRunDirectlyWhenInactive(t *testing.T) {
 	}
 }
 
-// Drafting refuses paths the session didn't change, like Commit.
+// Drafting refuses paths outside the repo, like Commit.
 func TestCommitDraftValidatesPaths(t *testing.T) {
 	srv, data := newWorktreeServer(t)
 	sess, _ := isolatedRecord(t, data, "draft")
@@ -449,7 +451,7 @@ func TestWorktreeRoutesDirectLandRefusesLocked(t *testing.T) {
 
 	landed := make(chan contracts.LandResult, 1)
 	go func() {
-		resp := postJSON(t, url+"/land", struct{}{})
+		resp := postJSON(t, url+"/land", contracts.LandRequest{Message: "Land it"})
 		landed <- decodeJSON[contracts.LandResult](t, resp)
 	}()
 	time.Sleep(200 * time.Millisecond) // Land is waiting on the lock, holding the wake lock
@@ -472,7 +474,8 @@ func TestWorktreeRoutesDirectLandRefusesLocked(t *testing.T) {
 }
 
 // POST /worktree/refresh recounts the header from git, for work committed
-// outside mads that no turn end counted. 404 for an unknown session.
+// outside mads that no turn end counted: 202 at once, the counts landing
+// after. 404 for an unknown session.
 func TestWorktreeRefreshRecountsHeader(t *testing.T) {
 	srv, data := newWorktreeServer(t)
 	sess, _ := isolatedRecord(t, data, "Committed by hand")
@@ -487,23 +490,85 @@ func TestWorktreeRefreshRecountsHeader(t *testing.T) {
 		return rec.UncommittedCount, rec.UnlandedCount
 	}
 
-	if resp := postJSON(t, url, struct{}{}); resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("refresh: status %d, want 204", resp.StatusCode)
+	if resp := postJSON(t, url, struct{}{}); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("refresh: status %d, want 202", resp.StatusCode)
 	}
-	if u, l := counts(); u != 1 || l != 0 {
-		t.Fatalf("counts = %d/%d, want 1/0", u, l)
-	}
+	waitUntil(t, "counts 1/0", func() bool { u, l := counts(); return u == 1 && l == 0 })
 
 	wtGit(t, sess.WorktreeDir, "add", "feature.txt")
 	wtGit(t, sess.WorktreeDir, "commit", "-q", "-m", "by hand")
-	if resp := postJSON(t, url, struct{}{}); resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("refresh: status %d, want 204", resp.StatusCode)
+	if resp := postJSON(t, url, struct{}{}); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("refresh: status %d, want 202", resp.StatusCode)
 	}
-	if u, l := counts(); u != 0 || l != 1 {
-		t.Errorf("after a commit by hand: counts = %d/%d, want 0/1", u, l)
-	}
+	waitUntil(t, "counts 0/1 after a commit by hand", func() bool { u, l := counts(); return u == 0 && l == 1 })
 
 	if resp := postJSON(t, srv.URL+"/sessions/ses_missing/worktree/refresh", struct{}{}); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("unknown session: status %d, want 404", resp.StatusCode)
+	}
+}
+
+// POST /worktree/refresh with a live child goes to the child's coalesced
+// recount (the one turn ends use) rather than a second one in the Router;
+// a child without the route (started by an older build) falls back to the
+// Router's own recount. 202 either way.
+func TestWorktreeRefreshRoutesToLiveChild(t *testing.T) {
+	data := dataclient.New(datatest.Start(t), "router")
+	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
+	t.Cleanup(func() { sup.Shutdown(context.Background()) })
+	srv := httptest.NewServer(api.New(testOptions(t, data, sup)))
+	t.Cleanup(srv.Close)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "refresh routing", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}](t, resp)
+	id := created.Session.ID
+	addr, ok := sup.SessionAddr(id)
+	if !ok {
+		t.Fatal("no live child; this test needs one")
+	}
+	childRefreshes := func() int {
+		t.Helper()
+		resp, err := childsock.Client.Get(childsock.URL(addr, "/test/worktree-refreshes"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return decodeJSON[int](t, resp)
+	}
+
+	countsDone := func() int {
+		n := 0
+		for _, p := range gitStateEvents(t, data, id) {
+			if slices.Contains(p.Parts, contracts.GitPartCounts) {
+				n++
+			}
+		}
+		return n
+	}
+	url := srv.URL + "/sessions/" + id + "/worktree/refresh"
+	if resp := postJSON(t, url, nil); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("refresh: status %d, want 202", resp.StatusCode)
+	}
+	waitUntil(t, "the recount", func() bool { return countsDone() == 1 })
+	if n := childRefreshes(); n != 1 {
+		t.Fatalf("child recounts = %d, want 1 (routed to the child)", n)
+	}
+
+	resp, err := childsock.Client.Post(childsock.URL(addr, "/test/worktree-refresh-missing"), "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp := postJSON(t, url, nil); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("refresh with an older child: status %d, want 202", resp.StatusCode)
+	}
+	waitUntil(t, "the Router's own recount", func() bool { return countsDone() == 2 })
+	if n := childRefreshes(); n != 1 {
+		t.Errorf("child recounts = %d, want still 1", n)
 	}
 }

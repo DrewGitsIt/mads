@@ -21,6 +21,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/localauth"
 )
 
 var (
@@ -98,11 +99,14 @@ func requireLocalRunner(t *testing.T) {
 }
 
 // cleanEnv builds a process environment rooted at an isolated HOME, with no
-// leaked MADS_DATA_DIR from the outer test process's own environment.
+// leaked MADS_DATA_DIR, MADS_HOME or XDG_DATA_HOME from the outer test
+// process's own environment — uninstall deletes the XDG shadow root, so a
+// leaked XDG_DATA_HOME would point it at the developer's real one.
 func cleanEnv(home string) []string {
 	env := make([]string, 0, len(os.Environ()))
 	for _, e := range os.Environ() {
-		if strings.HasPrefix(e, "HOME=") || strings.HasPrefix(e, "MADS_DATA_DIR=") {
+		if strings.HasPrefix(e, "HOME=") || strings.HasPrefix(e, "MADS_DATA_DIR=") ||
+			strings.HasPrefix(e, "MADS_HOME=") || strings.HasPrefix(e, "XDG_DATA_HOME=") {
 			continue
 		}
 		env = append(env, e)
@@ -213,7 +217,13 @@ func freshInstall(t *testing.T) (madsPath, home string) {
 	}
 	base, stop := startDataService(t, home)
 	defer stop()
-	cfg, err := dataclient.New(base, "smoketest").Config(context.Background())
+	// First run also creates the install token (docs/LOCAL-FRONT-DOOR-DESIGN.md
+	// D1), which every route but /health needs.
+	tok, err := localauth.ReadToken(dataDir)
+	if err != nil {
+		t.Fatalf("first run didn't create the install token: %v", err)
+	}
+	cfg, err := dataclient.New(base, "smoketest", dataclient.WithToken(tok)).Config(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

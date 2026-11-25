@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/orchestratemcp"
 )
 
@@ -37,6 +38,10 @@ func cmdOrchestrateMCP(stdin io.Reader, stdout io.Writer) error {
 		return fmt.Errorf("internal orchestrate-mcp: MADS_ROUTER_URL and MADS_SESSION_ID are required")
 	}
 	readOnly := os.Getenv("MADS_ORCHESTRATE_READONLY") != ""
-	srv := orchestratemcp.New(routerURL, sessionID, readOnly, stdin, stdout)
+	// The session-scoped token the Runner put in this server's own env
+	// (docs/LOCAL-FRONT-DOOR-DESIGN.md D4); out of the env once read.
+	token := os.Getenv(localauth.EnvRouterToken)
+	_ = os.Unsetenv(localauth.EnvRouterToken)
+	srv := orchestratemcp.New(routerURL, sessionID, token, readOnly, stdin, stdout)
 	return srv.Run(context.Background())
 }
