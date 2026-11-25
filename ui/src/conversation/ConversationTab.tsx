@@ -117,12 +117,12 @@ import { selfStore } from "../router/devices";
 import styles from "./ConversationTab.module.css";
 import { useWorktreeRefresh } from "./Worktree/worktreeRefresh";
 
-// When the user last dismissed this session's compaction banner — lets a
-// replayed failure (see replayedCompactStatus) stay acknowledged across
-// remounts instead of reappearing every time the conversation is opened.
 /** No permission cards: the terminal transport's, as one array so it's the same every render. */
 const NO_PERMISSIONS: PermissionRequest[] = [];
 
+// When the user last dismissed this session's compaction banner — lets a
+// replayed failure (see replayedCompactStatus) stay acknowledged across
+// remounts instead of reappearing every time the conversation is opened.
 const compactDismissedKey = (sessionId: string) => `mads.compactDismissedAt.${sessionId}`;
 
 function readCompactDismissedAt(sessionId: string): string | undefined {
@@ -1337,7 +1337,12 @@ export function ConversationTab({
   // The record is authoritative wherever one exists (mergeDelegates). Made
   // once per change, so a task card's model is the same object until it changes.
   const effectiveTasks = useMemo(() => mergeDelegates(tasks, delegates), [tasks, delegates]);
-  const tasksByToolUseMap = useMemo(() => tasksByToolUse(effectiveTasks), [effectiveTasks]);
+  const lastTasksByToolUse = useRef<ReadonlyMap<string, TaskModel>>(new Map());
+  const tasksByToolUseMap = useMemo(() => {
+    const byTool = tasksByToolUse(effectiveTasks, lastTasksByToolUse.current);
+    lastTasksByToolUse.current = byTool;
+    return byTool;
+  }, [effectiveTasks]);
   const dockModel = dockParent ? [...effectiveTasks.values()].find((t) => t.toolUseId === dockParent) : undefined;
   const dockLive = useMemo(
     () => (dockParent ? rowsSubStream(subagentRows(conv.state, dockParent)) : undefined),

@@ -14,6 +14,7 @@ import {
   resumeRunningTasks,
   reuseAnchored,
   reuseItems,
+  tasksByToolUse,
   transcriptSubStream,
   type SourceEntry,
   type TaskModel,
@@ -485,5 +486,19 @@ describe("reusing the last render's items", () => {
     // Every list the same: the map itself is the last one.
     expect(reuseAnchored(prev, new Map([["t1", [a]], ["t2", [b]]]))).toBe(prev);
     expect(reuseAnchored(prev, new Map([["t1", [a]]]))).not.toBe(prev);
+  });
+});
+
+describe("tasksByToolUse", () => {
+  it("keeps the last model of a task that reads the same, and takes the new one of a task that changed", () => {
+    const a: TaskModel = { taskId: "a", toolUseId: "ta", running: true, completed: false, toolUses: 1 };
+    const b: TaskModel = { taskId: "b", toolUseId: "tb", running: false, completed: true };
+    const first = tasksByToolUse(new Map([["a", a], ["b", b]]));
+    const next = tasksByToolUse(new Map([["a", { ...a, toolUses: 2 }], ["b", { ...b }]]), first);
+    expect(next.get("tb")).toBe(b);
+    expect(next.get("ta")).not.toBe(a);
+    expect(next.get("ta")?.toolUses).toBe(2);
+    // A field that appears is a change too.
+    expect(tasksByToolUse(new Map([["b", { ...b, summary: "done" }]]), first).get("tb")).not.toBe(b);
   });
 });

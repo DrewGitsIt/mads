@@ -198,6 +198,8 @@ export function anchorPermissions(
   items: ConversationItem[],
   requests: PermissionRequest[],
 ): { anchored: Map<string, PermissionRequest[]>; unanchored: PermissionRequest[] } {
+  // No cards (most commits): nothing to anchor, so no walk of every call.
+  if (requests.length === 0) return { anchored: new Map(), unanchored: [] };
   const rendered = new Set<string>();
   for (const item of items) {
     if (item.type === "task" && item.tool.id) rendered.add(item.tool.id);
@@ -536,10 +538,27 @@ function withPrior(prior: number | undefined, live: number | undefined): number 
   return prior === undefined && live === undefined ? undefined : (prior ?? 0) + (live ?? 0);
 }
 
-export function tasksByToolUse(tasks: ReadonlyMap<string, TaskModel>): Map<string, TaskModel> {
+export function tasksByToolUse(
+  tasks: ReadonlyMap<string, TaskModel>,
+  prev?: ReadonlyMap<string, TaskModel>,
+): Map<string, TaskModel> {
   const byTool = new Map<string, TaskModel>();
-  for (const t of tasks.values()) if (t.toolUseId) byTool.set(t.toolUseId, t);
+  for (const t of tasks.values()) {
+    if (!t.toolUseId) continue;
+    // mergeDelegates remakes every model on any change: keep the last
+    // one that reads the same, so only the changed task's card re-renders.
+    const old = prev?.get(t.toolUseId);
+    byTool.set(t.toolUseId, old && sameFields(old, t) ? old : t);
+  }
   return byTool;
+}
+
+/** Shallow equality: the same keys, each the same value. */
+function sameFields<T extends object>(a: T, b: T): boolean {
+  if (a === b) return true;
+  const ka = Object.keys(a) as (keyof T)[];
+  if (ka.length !== Object.keys(b).length) return false;
+  return ka.every((k) => k in b && Object.is(a[k], b[k]));
 }
 
 // ---------------------------------------------------------------------------
