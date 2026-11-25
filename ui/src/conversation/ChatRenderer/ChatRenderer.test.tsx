@@ -880,11 +880,12 @@ describe("ChatRenderer — quiet-update pills", () => {
   });
 
   it("measures the stream without forcing layout on an ordinary commit, and eases from the height laid out before the fold", () => {
-    const observers: (() => void)[] = [];
+    type Entry = { borderBoxSize: { blockSize: number }[] };
+    const observers: ((entries: Entry[]) => void)[] = [];
     vi.stubGlobal(
       "ResizeObserver",
       class {
-        constructor(cb: () => void) {
+        constructor(cb: (entries: Entry[]) => void) {
           observers.push(cb);
         }
         observe() {}
@@ -902,8 +903,10 @@ describe("ChatRenderer — quiet-update pills", () => {
     rerender(<ChatRenderer rows={[...keyed([digest]), reply("NO")]} links={[]} viewedSessionId="v" />);
     rerender(<ChatRenderer rows={[...keyed([digest]), reply("NOO")]} links={[]} viewedSessionId="v" />);
     expect(spy).not.toHaveBeenCalled();
-    height = 600;
-    act(() => observers.forEach((cb) => cb()));
+    // The observer reports the border box; reading offsetHeight here would
+    // force layout, so the spy must stay untouched.
+    act(() => observers.forEach((cb) => cb([{ borderBoxSize: [{ blockSize: 599.6 }] }])));
+    expect(spy).not.toHaveBeenCalled();
     // Settled as NOOP, the pair folds: 600 → 500 is the drop, not 400 → 500.
     height = 500;
     rerender(<ChatRenderer rows={[...keyed([digest]), { key: "r", role: "agent", text: "NOOP" }]} links={[]} viewedSessionId="v" />);

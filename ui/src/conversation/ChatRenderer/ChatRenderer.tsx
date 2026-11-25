@@ -539,11 +539,13 @@ export function ChatRenderer({
     if (!el) return;
     height.current = el.offsetHeight; // once, at mount
     if (typeof ResizeObserver === "undefined") return;
-    // Read inside the observer's callback, where layout is already clean.
-    const observer = new ResizeObserver(() => {
-      height.current = el.offsetHeight;
+    // The border box, as offsetHeight measures it (rounded the same way);
+    // read from the entry, so the callback never forces layout itself.
+    const observer = new ResizeObserver((entries) => {
+      const box = entries[entries.length - 1]?.borderBoxSize?.[0];
+      height.current = box ? Math.round(box.blockSize) : el.offsetHeight;
     });
-    observer.observe(el);
+    observer.observe(el, { box: "border-box" });
     return () => observer.disconnect();
   }, []);
   const [easing, setEasing] = useState<{ key: string; px: number } | null>(null);
