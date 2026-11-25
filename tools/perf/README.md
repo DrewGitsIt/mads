@@ -38,8 +38,8 @@ Unit tests:
 
 ```sh
 make perf-tools-test                                    # Go: perfseed + git shim (-tags perf)
-npx --prefix ui vitest run --config e2e/perf/vitest.perf.config.ts   # report, scenario aliases
-npx --prefix ui tsc -p ui/e2e/perf                      # type-check the specs
+(cd ui && npx vitest run --config e2e/perf/vitest.perf.config.ts)   # report, chat probe and trace, scenario aliases
+(cd ui && npx tsc -p e2e/perf)                          # type-check the specs
 ```
 
 ## What lives where
