@@ -3,6 +3,7 @@ import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-li
 import type { ReactNode } from "react";
 import { OPEN_CREATED_SESSION_EVENT, OPEN_SESSION_EVENT } from "../../../appNavigation";
 import { setFlags } from "../../../featureFlags";
+import { RouterHTTPError } from "../../../router/client";
 import { FakeRouterClient } from "../../../router/fixtures";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import type {
@@ -506,5 +507,25 @@ describe("useLinkCommandState", () => {
     const { result } = renderHook(() => useLinkCommandState(client, "s-this", [monitor]));
     await waitFor(() => expect(result.current.pipelineRunning).toBe(true));
     expect(result.current.leader).toBeUndefined();
+  });
+
+  it("a deleted leader's dangling link doesn't lead; a newer live leader does", async () => {
+    setFlags({ multiRepo: false, linkedSessions: true, remoteRegistry: false });
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "metricsPipelineRuns").mockResolvedValue([]);
+    vi.spyOn(client, "getSession").mockImplementation(async (id) => {
+      if (id === "s-gone") throw new RouterHTTPError(404, "not found");
+      return { ...THIS, id, name: "new-lead" };
+    });
+    const dead: Link = { ...lead, id: "l0", granting_session_id: "s-gone", created_at: "2026-11-01T00:00:00Z" };
+    const { result, rerender } = renderHook(({ links }) => useLinkCommandState(client, "s-this", links), {
+      initialProps: { links: [dead] },
+    });
+    await waitFor(() => expect(result.current.leader).toBeUndefined());
+
+    // Re-led: the live link is newer than the dangling one, whichever order the list holds them in.
+    const live: Link = { ...lead, id: "l2", granting_session_id: "s-new", created_at: "2026-11-02T00:00:00Z" };
+    rerender({ links: [dead, live] });
+    await waitFor(() => expect(result.current.leader).toEqual({ id: "s-new", name: "new-lead" }));
   });
 });

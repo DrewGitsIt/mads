@@ -761,9 +761,8 @@ func subjectPipelineLive(tx *Tx, sessionID string) (bool, error) {
 // orchestrateHolderConflictInTx returns the validation message for
 // subjectID already having an orchestrate holder other than excludeLinkID
 // (the link being updated or merged into), or "" if it has none. The message
-// names the holder session so the refusal is actionable. A holder whose
-// session record is gone (session deletion leaves links dangling) is named
-// by id alone.
+// names the holder session so the refusal is actionable; a holder whose
+// session record is gone never conflicts (orchestrateHolderInTx).
 func (l *Links) orchestrateHolderConflictInTx(tx *Tx, subjectID, excludeLinkID string) (string, error) {
 	holderID, err := orchestrateHolderInTx(tx, subjectID, excludeLinkID)
 	if err != nil || holderID == "" {
@@ -900,10 +899,14 @@ func ledSessionsInTx(tx *Tx, grantingID string) ([]string, error) {
 
 // orchestrateHolderInTx returns the granting session id of subjectID's
 // orchestrate-carrying link other than excludeLinkID, or "" if there is
-// none.
+// none. A link whose holder session is gone doesn't count: session deletion
+// leaves links dangling, and a deleted leader must not block a new one.
 func orchestrateHolderInTx(tx *Tx, subjectID, excludeLinkID string) (string, error) {
 	rows, err := tx.tx.Query(
-		`SELECT id, granting_session_id, grants FROM links WHERE subject_session_id = ? ORDER BY created_at`, subjectID)
+		`SELECT id, granting_session_id, grants FROM links
+		 WHERE subject_session_id = ?
+		   AND EXISTS (SELECT 1 FROM sessions WHERE sessions.id = links.granting_session_id)
+		 ORDER BY created_at`, subjectID)
 	if err != nil {
 		return "", err
 	}

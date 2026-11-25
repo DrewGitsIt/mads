@@ -357,6 +357,33 @@ func TestLinkCreateRefusesSecondOrchestrateHolder(t *testing.T) {
 	}
 }
 
+// Deleting a leader leaves its link dangling; the dead leader must not
+// count as the subject's orchestrate holder, so a new leader can take over.
+func TestLinkCreateIgnoresDeletedOrchestrateHolder(t *testing.T) {
+	links, sessions, _ := newLinkStore(t)
+	ctx := context.Background()
+	leaderA := mkSession(t, sessions, contracts.Session{Name: "leaderA"})
+	leaderB := mkSession(t, sessions, contracts.Session{Name: "leaderB"})
+	subject := mkSession(t, sessions, contracts.Session{Name: "subject"})
+
+	if err := links.Create(ctx, &contracts.Link{
+		GrantingSessionID: leaderA.ID, SubjectSessionID: subject.ID,
+		Grants: []contracts.Grant{contracts.GrantOrchestrate},
+	}, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessions.Delete(ctx, leaderA.ID, "user"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := links.Create(ctx, &contracts.Link{
+		GrantingSessionID: leaderB.ID, SubjectSessionID: subject.ID,
+		Grants: []contracts.Grant{contracts.GrantOrchestrate},
+	}, "user"); err != nil {
+		t.Fatalf("new leader after the old one was deleted: %v", err)
+	}
+}
+
 // Updating an existing orchestrate-holding link's own grants must not trip
 // over its own row when checking the single-holder rule.
 func TestLinkUpdateOrchestrateExcludesOwnRow(t *testing.T) {
