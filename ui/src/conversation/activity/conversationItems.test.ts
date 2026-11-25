@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Delegate, Envelope, TranscriptMessage } from "../../router/types";
+import type { KeyedRow } from "../keyed/conversation";
 import {
   mergeDelegates,
   appendSubagentItem,
@@ -11,6 +12,8 @@ import {
   rowsSubStream,
   rowsToEntries,
   resumeRunningTasks,
+  reuseAnchored,
+  reuseItems,
   transcriptSubStream,
   type SourceEntry,
   type TaskModel,
@@ -428,5 +431,56 @@ describe("appendSubagentItem — text times", () => {
     let streams = appendSubagentItem(new Map(), "tu1", { kind: "text", text: "Found ", timestamp: "2026-10-09T10:00:00Z" });
     streams = appendSubagentItem(streams, "tu1", { kind: "text", text: "three.", timestamp: "2026-10-09T10:00:04Z" });
     expect(streams.get("tu1")).toEqual([{ type: "text", text: "Found three.", timestamp: "2026-10-09T10:00:00Z" }]);
+  });
+});
+
+describe("reusing the last render's items", () => {
+  const rows: KeyedRow[] = [
+    { key: "u", role: "user" as const, text: "go" },
+    { key: "t1", role: "tool" as const, tool: { id: "t1", name: "Read" } },
+    { key: "t2", role: "tool" as const, tool: { id: "t2", name: "Read" } },
+    { key: "a", role: "agent" as const, text: "done" },
+  ];
+  const derive = (rs: KeyedRow[]) => buildItems(rowsToEntries(rs));
+
+  it("makes a row's entry once", () => {
+    expect(rowsToEntries(rows)[1]).toBe(rowsToEntries([...rows])[1]);
+  });
+
+  it("keeps every item whose rows are the same objects, and replaces the one whose row changed", () => {
+    const first = reuseItems(new Map(), derive(rows));
+    const same = reuseItems(first.byKey, derive([...rows]));
+    same.items.forEach((item, i) => expect(item).toBe(first.items[i]));
+    const changed = [rows[0], rows[1], { ...rows[2], tool: { id: "t2", name: "Read", result: { text: "x" } } }, rows[3]];
+    const next = reuseItems(same.byKey, derive(changed));
+    expect(next.items[0]).toBe(first.items[0]);
+    expect(next.items[1]).not.toBe(first.items[1]); // the group holding the changed row
+    expect(next.items[2]).toBe(first.items[2]);
+  });
+
+  it("replaces an item whose liveness changed, and drops keys that are gone", () => {
+    const first = reuseItems(new Map(), derive(rows));
+    const live = reuseItems(first.byKey, derive([rows[0], rows[1], rows[2], { ...rows[3], current: true }]));
+    expect(live.items[2]).not.toBe(first.items[2]);
+    const fewer = reuseItems(first.byKey, derive(rows.slice(0, 1)));
+    expect([...fewer.byKey.keys()]).toEqual(["u"]);
+  });
+
+  it("keeps a plan whose todos read the same, though they're parsed anew", () => {
+    const plan = (status: string): KeyedRow[] => [
+      { key: "p", role: "tool" as const, tool: { id: "p", name: "TodoWrite", input: { todos: [{ content: "x", status }] } } },
+    ];
+    const first = reuseItems(new Map(), derive(plan("pending")));
+    expect(reuseItems(first.byKey, derive(plan("pending"))).items[0]).toBe(first.items[0]);
+    expect(reuseItems(first.byKey, derive(plan("completed"))).items[0]).not.toBe(first.items[0]);
+  });
+
+  it("keeps an anchor's permission list while it holds the same requests", () => {
+    const a = { id: "r1" } as never;
+    const b = { id: "r2" } as never;
+    const prev = new Map([["t1", [a]], ["t2", [b]]]);
+    const next = reuseAnchored(prev, new Map([["t1", [a]], ["t2", [b, a]]]));
+    expect(next.get("t1")).toBe(prev.get("t1"));
+    expect(next.get("t2")).toEqual([b, a]);
   });
 });

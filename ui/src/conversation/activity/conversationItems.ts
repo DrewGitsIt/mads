@@ -223,16 +223,87 @@ export function anchorPermissions(
  * and `live` when the row is the current turn's own.
  */
 export function rowsToEntries(rows: KeyedRow[]): SourceEntry[] {
-  return rows.map((row): SourceEntry => {
-    const live = row.current || undefined;
-    if (row.role === "tool" && row.tool) {
-      return { type: "tool", tool: row.tool, timestamp: row.timestamp, live, key: row.key };
-    }
-    if (row.role === "thinking") {
-      return { type: "thinking", text: row.text ?? "", timestamp: row.timestamp, live, key: row.key };
-    }
-    return { type: "message", message: row, live, key: row.key };
+  return rows.map(entryOf);
+}
+
+/** Each row's entry, made once: rows are immutable, so a row that didn't change keeps its entry. */
+const entryCache = new WeakMap<KeyedRow, SourceEntry>();
+
+function entryOf(row: KeyedRow): SourceEntry {
+  const hit = entryCache.get(row);
+  if (hit) return hit;
+  const live = row.current || undefined;
+  const entry: SourceEntry =
+    row.role === "tool" && row.tool
+      ? { type: "tool", tool: row.tool, timestamp: row.timestamp, live, key: row.key }
+      : row.role === "thinking"
+        ? { type: "thinking", text: row.text ?? "", timestamp: row.timestamp, live, key: row.key }
+        : { type: "message", message: row, live, key: row.key };
+  entryCache.set(row, entry);
+  return entry;
+}
+
+/**
+ * The previous render's items, reused where nothing in them changed: an
+ * item is the same object as last time when it holds the same entries (by
+ * identity — rowsToEntries keeps a row's), so a memoized component skips it
+ * (docs/CHAT-STREAM-PER-BATCH-COST.md). `prev` is the last call's result;
+ * keys that are gone drop out.
+ */
+export function reuseItems(
+  prev: ReadonlyMap<string, ConversationItem>,
+  items: ConversationItem[],
+): { items: ConversationItem[]; byKey: Map<string, ConversationItem> } {
+  const byKey = new Map<string, ConversationItem>();
+  const out = items.map((item) => {
+    const old = prev.get(item.key);
+    const kept = old && sameItem(old, item) ? old : item;
+    byKey.set(item.key, kept);
+    return kept;
   });
+  return { items: out, byKey };
+}
+
+function sameItem(a: ConversationItem, b: ConversationItem): boolean {
+  if (a === b) return true;
+  switch (b.type) {
+    case "message":
+      return a.type === "message" && a.message === b.message && a.live === b.live;
+    case "activity":
+      return a.type === "activity" && a.live === b.live && sameList(a.entries, b.entries);
+    case "plan":
+      return (
+        a.type === "plan" &&
+        a.live === b.live &&
+        a.todos.length === b.todos.length &&
+        a.todos.every((t, i) => t.content === b.todos[i].content && t.status === b.todos[i].status)
+      );
+    case "task":
+      return a.type === "task" && a.tool === b.tool && a.timestamp === b.timestamp && a.live === b.live;
+    case "card":
+      return a.type === "card" && a.id === b.id;
+  }
+}
+
+/** Same length, same elements by identity. */
+export function sameList<T>(a: readonly T[], b: readonly T[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+/**
+ * anchorPermissions' lists, reused per anchor while they hold the same
+ * requests — so a card arriving for one call leaves every other call's list,
+ * and the item rendering it, as it was.
+ */
+export function reuseAnchored(
+  prev: ReadonlyMap<string, PermissionRequest[]>,
+  anchored: Map<string, PermissionRequest[]>,
+): Map<string, PermissionRequest[]> {
+  for (const [id, list] of anchored) {
+    const old = prev.get(id);
+    if (old && sameList(old, list)) anchored.set(id, old);
+  }
+  return anchored;
 }
 
 /**
