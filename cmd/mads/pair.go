@@ -270,11 +270,16 @@ This host: %s, %s, fingerprint %s
 			var out struct {
 				IntroducedByThis []struct{ Name string } `json:"introduced_by_this"`
 				AlsoRemoved      []struct{ Name string } `json:"also_removed"`
+				There            string                  `json:"there"`
+				ThereError       string                  `json:"there_error"`
 			}
 			if err := call(http.MethodDelete, "/devices/"+fp+q, nil, &out); err != nil {
 				return fmt.Errorf("pair remove: %w", err)
 			}
 			_, _ = fmt.Fprintf(stdout, "removed %s here\n", key)
+			if line := thereLine(key, out.There, out.ThereError); line != "" {
+				_, _ = fmt.Fprintln(stdout, line)
+			}
 			for _, d := range out.AlsoRemoved {
 				_, _ = fmt.Fprintf(stdout, "  and %s, which it introduced\n", d.Name)
 			}
@@ -294,8 +299,10 @@ This host: %s, %s, fingerprint %s
 			return printJSON(stdout, raw)
 		}
 		var res struct {
-			Here  string `json:"here"`
-			Hosts []struct {
+			Here       string `json:"here"`
+			There      string `json:"there"`
+			ThereError string `json:"there_error"`
+			Hosts      []struct {
 				Name   string `json:"name"`
 				Result string `json:"result"`
 				Error  string `json:"error"`
@@ -312,6 +319,9 @@ This host: %s, %s, fingerprint %s
 			return fmt.Errorf("pair remove: %w", err)
 		}
 		_, _ = fmt.Fprintf(stdout, "%s: %s here\n", key, res.Here)
+		if line := thereLine(key, res.There, res.ThereError); line != "" {
+			_, _ = fmt.Fprintln(stdout, line)
+		}
 		failed := false
 		for _, h := range res.Hosts {
 			line := "  " + paircode.CleanText(h.Name) + ": " + h.Result
@@ -353,6 +363,27 @@ type joinStatus struct {
 	PeerID    string    `json:"peer_id,omitempty"`
 	Error     string    `json:"error,omitempty"`
 	Self      string    `json:"self"`
+}
+
+// thereLine says how asking a removed device to forget this one went
+// (docs/MESH-NETWORK-DESIGN.md F6, R1); "" when it wasn't asked.
+func thereLine(name, there, why string) string {
+	why = paircode.CleanText(why)
+	switch there {
+	case "removed":
+		return "  removed on " + name + " too"
+	case "not_paired":
+		return "  " + name + " didn't have this device paired any more"
+	case "offline":
+		s := "  " + name + " didn't answer: it may still list this device until it hears from it"
+		if why != "" {
+			s += " (" + why + ")"
+		}
+		return s
+	case "failed":
+		return "  " + name + " couldn't forget this device: " + firstNonEmptyStr(why, "it answered with an error") + "; remove this device there too"
+	}
+	return ""
 }
 
 func verb(level string) string {

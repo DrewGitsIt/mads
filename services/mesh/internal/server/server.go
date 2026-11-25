@@ -13,12 +13,13 @@
 //     up in this host's paired devices (Options.Devices). A key that isn't
 //     paired here is refused (unpaired_device), and logged as
 //     device.refused.
-//  3. With RequireTailnet (the default; D2's "only accept devices on my
-//     tailnet"), also identify the caller with tailscaled WhoIs: a node
-//     owned by this node's user, untagged, holding the mesh app
-//     capability. Both factors must pass.
-//  4. The effective level is the device's grant (D3), capped by the
-//     capability's level when the tailnet is required. /mesh/hello needs
+//  3. On the Tailscale network, with its identity check on (the default;
+//     docs/MESH-NETWORK-DESIGN.md S4), also identify the caller with
+//     tailscaled WhoIs: a node owned by this node's user, untagged. It can
+//     only refuse: it never lowers a level, and it reads nothing from the
+//     tailnet policy. With the check on and tailscaled unreachable it
+//     fails closed.
+//  4. The effective level is the device's grant (D3). /mesh/hello needs
 //     nothing more; every other route needs its class (authz.Routes) at or
 //     below that level, and passes the grant's ceilings (D4).
 //  5. Forward to the loopback Router as a plain program would: Host
@@ -46,6 +47,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,6 +57,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/devicekey"
 	"github.com/drewkidwell/mads/pkg/localauth"
+	"github.com/drewkidwell/mads/pkg/meshnet"
 	"github.com/drewkidwell/mads/services/mesh/internal/authz"
 	"github.com/drewkidwell/mads/services/mesh/internal/tailnet"
 )
@@ -106,13 +109,22 @@ type Appender interface {
 
 // Options configures a Server.
 type Options struct {
-	Self tailnet.Self
+	// Self is this node as tailscaled saw it at start, for tests;
+	// TailnetSelf, when set, is asked instead (tailscaled may come and go).
+	Self        tailnet.Self
+	TailnetSelf func() (tailnet.Self, error)
+	// Addresses is where this host listens now, for /mesh/hello (viewers
+	// learn new addresses from it, docs/MESH-NETWORK-DESIGN.md F5).
+	Addresses func() []contracts.NetAddress
+	// TailscaleKeyExpiry is this node's Tailscale key expiry, for
+	// /mesh/hello (nil: off, or not on Tailscale).
+	TailscaleKeyExpiry func() *time.Time
 	// Tailnet identifies callers by WhoIs; used only with RequireTailnet.
 	Tailnet Identifier
-	// RequireTailnet also requires tailnet identity as a second factor
-	// (D2): same user, untagged, holding tailnet.MeshCap, whose level then
-	// caps the grant's. The value to start with: SetRequireTailnet changes
-	// it live (this host's "Only accept devices on my tailnet" setting).
+	// RequireTailnet is the Tailscale network's identity check (S4): on
+	// connections that arrive on the Tailscale network, also require
+	// tailnet identity (same user, untagged). Refuse-only. The value to
+	// start with: SetRequireTailnet changes it live (this host's setting).
 	RequireTailnet bool
 	// Devices is who may connect, and at what grant.
 	Devices Devices
@@ -143,6 +155,12 @@ type Options struct {
 	// Name is this host's mads name (the Router's -mesh-name): how pairing
 	// answers name it. Empty: the tailnet host name.
 	Name string
+	// CloseWindow closes the setup window where it's kept (the Data
+	// Service), saying why: the Mesh Service closing it itself (R1).
+	CloseWindow func(reason string)
+	// AddressPolicy checks addresses a joiner gives this host (S3): nil is
+	// the strict policy (no loopback).
+	AddressPolicy *meshnet.DialPolicy
 	// WhoIsTTL caches a caller's identity per IP. Short, so a policy change
 	// in the admin console takes effect within seconds.
 	WhoIsTTL time.Duration
@@ -158,8 +176,23 @@ type Server struct {
 	// trust, the host's default trust), with this node's token.
 	router  *http.Client
 	refused *refusals
-	// pairLimits rate-limit /mesh/pair: per address and overall.
+	// pairLimits rate-limit /mesh/pair and /mesh/discover: per address and
+	// overall.
 	pairLimits *pairLimits
+	// discoverUntil is the setup window's end (Unix nanoseconds; 0 closed):
+	// /mesh/discover and discovered pair requests exist only before it.
+	discoverUntil atomic.Int64
+	// discovered debounces device.discovered per address.
+	discovered *discoveries
+	// commits are discovered requests' commitments, waiting for their
+	// reveal.
+	commits commitStore
+	// abuseClosed: this window was closed for abandoned pairings; its
+	// renewals don't reopen it (windowOpened names it).
+	abuseClosed  atomic.Bool
+	windowOpened atomic.Int64
+	// uncapped is the devices noteUncapped has reported this run.
+	uncapped map[devicekey.Fingerprint]bool
 
 	mu    sync.Mutex
 	cache map[string]cachedCaller
@@ -191,6 +224,7 @@ func New(opts Options) *Server {
 		router:     &http.Client{Transport: transport, Timeout: 10 * time.Second},
 		refused:    newRefusals(opts.Audit, opts.Now),
 		pairLimits: newPairLimits(opts.Now),
+		discovered: newDiscoveries(opts.Audit, opts.Now),
 	}
 	s.requireTailnet.Store(opts.RequireTailnet)
 	target := opts.RouterURL
@@ -235,10 +269,10 @@ func New(opts Options) *Server {
 type caller struct {
 	peer  contracts.Peer
 	fp    devicekey.Fingerprint
-	level contracts.GrantLevel // effective: the grant, capped by the tailnet
-	node  string               // tailnet node name, with RequireTailnet
-	// tailnet: the tailnet factor was checked at admission (it was
-	// required then).
+	level contracts.GrantLevel // effective: the grant
+	node  string               // tailnet node name, when the check ran
+	// tailnet: the Tailscale identity check ran at admission (on the
+	// Tailscale network, with the check on).
 	tailnet bool
 }
 
@@ -263,6 +297,10 @@ func stamp(h http.Header, c caller) {
 	h.Set(contracts.MeshDeviceHeader, string(c.fp))
 }
 
+// SelfPath is the route this device's own key may call to see its Mesh
+// Service answers (T5).
+const SelfPath = "/mesh/self"
+
 // ServeHTTP is the gate.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if reason := browserReason(r); reason != "" {
@@ -284,11 +322,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, r, "", http.StatusForbidden, "no_client_certificate", err.Error())
 		return
 	}
+	markServed(r.Context())
+	if r.URL.Path == SelfPath && s.opts.Device != "" && fp == s.opts.Device {
+		// This device's own Router asking whether its Mesh Service answers
+		// on an address it reported (round-2 T5): its own key only, and
+		// nothing but 204.
+		w.Header().Set("Connection", "close")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	// The tailnet factor first: a caller that isn't one of this user's
 	// tailnet devices is turned away before its key is looked at, so it
-	// can't spend the audit log's budget for unpaired keys.
+	// can't spend the audit log's budget for unpaired keys. Only on the
+	// Tailscale network: a connection on the home Wi-Fi isn't a tailnet
+	// connection, so a tailnet check there would only ever refuse.
 	var tc tailnet.Caller
-	requireTailnet := s.requireTailnet.Load()
+	network := connNet(r.Context())
+	requireTailnet := s.requireTailnet.Load() && network.Tailscale
 	if requireTailnet {
 		var ok bool
 		if tc, ok = s.tailnetGate(w, r, fp.Short()); !ok {
@@ -302,9 +352,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/mesh/pair" || strings.HasPrefix(r.URL.Path, "/mesh/pair/") {
 		// The one surface an unpaired key may reach: presenting a pairing
-		// code, and asking how its request went (D6). Still behind the
+		// code, and asking how its request went (D6); while the setup
+		// window is open, a discovered request too. Still behind the
 		// tailnet factor above, when it's required.
 		s.handlePair(w, r, fp, tc)
+		return
+	}
+	if r.URL.Path == "/mesh/discover" && !s.sweepCommits() && s.DiscoverableNow() {
+		// The one unauthenticated route, and only while this device's setup
+		// window is open (S6). Outside it, it doesn't exist: the request
+		// goes on below and gets what any request gets (unpaired_device
+		// for a key that isn't paired here).
+		s.handleDiscover(w, r, fp)
 		return
 	}
 	dev, ok := s.opts.Devices.Lookup(string(fp))
@@ -313,17 +372,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// per handshake, not a kept-alive channel to retry on.
 		w.Header().Set("Connection", "close")
 		s.refuseDevice(w, r, caller{fp: fp}, "", http.StatusForbidden, "unpaired_device",
-			"this host hasn't paired device "+fp.Short()+"; to let it in, run on this host: mads pair --accept "+fp.Grouped())
+			"this host hasn't paired device "+fp.Short())
 		return
 	}
+	// The grant is the level: the Tailscale check can only refuse, never
+	// lower it (docs/MESH-NETWORK-DESIGN.md, "The WhoIs change").
 	c := caller{peer: dev, fp: fp, level: dev.Level()}
 	if requireTailnet {
 		c.node, c.tailnet = tc.NodeName, true
-		// The capability is only the second factor's gate; the grant
-		// decides the level. Should the tailnet policy name a lower level
-		// than the grant, the lower one holds: neither side can raise what
-		// the other allows.
-		c.level = authz.Min(c.level, authz.CapabilityLevel(tc.Access))
+		s.noteUncapped(c, tc)
 	}
 	// A paired device through both factors, granted something here: its
 	// connection stays open. One granted nothing gets its answer (hello
@@ -336,6 +393,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/mesh/hello":
 		s.handleHello(w, r, c)
+		return
+	case r.URL.Path == "/mesh/forget":
+		s.handleForget(w, r, c)
 		return
 	case r.URL.Path == "/mesh/fs/list":
 		if !authz.Allows(c.level, authz.Control) {
@@ -371,8 +431,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.forward(w, r, c)
 }
 
-// tailnetGate is the second factor (D2): WhoIs, same user, untagged, and
-// the mesh capability.
+// tailnetGate is the Tailscale identity check (S4): WhoIs, same user,
+// untagged.
 func (s *Server) tailnetGate(w http.ResponseWriter, r *http.Request, label string) (tailnet.Caller, bool) {
 	tc, err := s.whois(r.Context(), r.RemoteAddr)
 	code, msg, definite := s.tailnetVerdict(tc, err)
@@ -380,7 +440,13 @@ func (s *Server) tailnetGate(w http.ResponseWriter, r *http.Request, label strin
 	case code == "":
 		return tc, true
 	case !definite:
-		s.logTailnetRefusal(r.RemoteAddr, code, "whois %s: %v", r.RemoteAddr, err)
+		// The reason is tailscaled's error, else the verdict's own (this
+		// host can't read its own identity): never "(<nil>)" (round-2 T7).
+		why := msg
+		if err != nil {
+			why = err.Error()
+		}
+		s.logTailnetRefusal(r.RemoteAddr, code, "refusing %s from %s: the Tailscale identity check is on but tailscaled can't confirm it (%s); turn the check off, or start Tailscale", clip(r.URL.Path), r.RemoteAddr, why)
 		closeIfUnadmitted(w, r)
 		writeError(w, http.StatusServiceUnavailable, code, msg)
 	default:
@@ -669,11 +735,13 @@ type activeReq struct {
 	remote string // for the tailnet factor's re-check
 	grant  grantKey
 	level  contracts.GrantLevel // effective, as admitted
-	// tailnet: admitted with the tailnet factor checked.
-	tailnet bool
-	label   string
-	what    string
-	cancel  context.CancelFunc
+	// tailnet: admitted with the tailnet factor checked; onTailscale: it
+	// arrived on the Tailscale network (the only one the check applies to).
+	tailnet     bool
+	onTailscale bool
+	label       string
+	what        string
+	cancel      context.CancelFunc
 }
 
 // grantKey is what a request was admitted under: the device's stored level
@@ -692,7 +760,8 @@ func grantOf(p contracts.Peer) grantKey {
 
 func (s *Server) forward(w http.ResponseWriter, r *http.Request, c caller) {
 	ctx, cancel := context.WithCancel(r.Context())
-	a := &activeReq{fp: string(c.fp), remote: r.RemoteAddr, grant: grantOf(c.peer), level: c.level, tailnet: c.tailnet, label: c.label(), what: r.Method + " " + clip(r.URL.Path), cancel: cancel}
+	a := &activeReq{fp: string(c.fp), remote: r.RemoteAddr, grant: grantOf(c.peer), level: c.level, tailnet: c.tailnet,
+		onTailscale: connNet(r.Context()).Tailscale, label: c.label(), what: r.Method + " " + clip(r.URL.Path), cancel: cancel}
 	s.mu.Lock()
 	s.active[a] = struct{}{}
 	s.mu.Unlock()
@@ -708,10 +777,11 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, c caller) {
 		writeError(w, http.StatusForbidden, "grant_changed", "this device's grant changed; retry")
 		return
 	}
-	// The same for "Only accept devices on my tailnet" turned on meanwhile:
+	// The same for the Tailscale check turned on meanwhile:
 	// SetRequireTailnet's re-check may have run before this request was in
-	// s.active, so one admitted without the tailnet factor gets it now.
-	if !a.tailnet && s.requireTailnet.Load() {
+	// s.active, so one admitted on the Tailscale network without the check
+	// gets it now.
+	if !a.tailnet && a.onTailscale && s.requireTailnet.Load() {
 		if why := s.stillOnTailnet(a); why != "" {
 			log.Printf("mesh: refusing %s for %s: the tailnet is required now, and %s", a.what, a.label, why)
 			writeError(w, http.StatusForbidden, "grant_changed", "this host now only accepts devices on its tailnet; retry")
@@ -729,21 +799,17 @@ func (s *Server) stillGranted(a *activeReq) bool {
 	return ok && grantOf(p) == a.grant
 }
 
-// stillOnTailnet re-checks a's tailnet factor: "" when it still passes at
-// the effective level a was admitted at, else why not. A transient WhoIs
-// failure is no answer: whois keeps the last good one for a grace period,
-// and only past it does the failure end the request.
+// stillOnTailnet re-checks a's tailnet factor: "" when it still passes,
+// else why not. A transient WhoIs failure is no answer: whois keeps the
+// last good one for a grace period, and only past it does the failure end
+// the request.
 func (s *Server) stillOnTailnet(a *activeReq) string {
-	p, ok := s.opts.Devices.Lookup(a.fp)
-	if !ok {
+	if _, ok := s.opts.Devices.Lookup(a.fp); !ok {
 		return "" // the directory check's business
 	}
 	tc, err := s.whois(context.Background(), a.remote)
 	if code, _, _ := s.tailnetVerdict(tc, err); code != "" {
 		return "its tailnet identity check failed (" + code + ")"
-	}
-	if authz.Min(p.Level(), authz.CapabilityLevel(tc.Access)) != a.level {
-		return "its tailnet capability changed"
 	}
 	return ""
 }
@@ -772,15 +838,18 @@ func (s *Server) Revalidate() {
 	}
 }
 
-// RevalidateTailnet ends every forwarded request whose tailnet factor no
-// longer passes at the level it was admitted at: a capability lowered or
-// removed in the tailnet policy, a node gone from the tailnet. The tailnet
-// sends no events, so RevalidateEvery runs this on a clock.
+// RevalidateTailnet ends every forwarded request that came in on the
+// Tailscale network whose tailnet factor no longer passes: a node gone
+// from the tailnet, or moved to another user. The tailnet sends no events,
+// so RevalidateEvery runs this on a clock.
 func (s *Server) RevalidateTailnet() {
 	if !s.requireTailnet.Load() {
 		return
 	}
 	for _, a := range s.activeReqs() {
+		if !a.onTailscale {
+			continue
+		}
 		if why := s.stillOnTailnet(a); why != "" {
 			log.Printf("mesh: ending %s for %s: %s", a.what, a.label, why)
 			a.cancel()
@@ -802,10 +871,10 @@ func (s *Server) SetRequireTailnet(on bool) {
 		return
 	}
 	if on {
-		log.Printf("mesh: only accepting devices on this tailnet (tailnet identity required, besides a paired device key)")
+		log.Printf("mesh: Tailscale identity check on: on the Tailscale network, only this tailnet user's untagged devices (besides a paired device key)")
 		s.RevalidateTailnet()
 	} else {
-		log.Printf("mesh: accepting paired devices from any network (tailnet identity no longer required)")
+		log.Printf("mesh: Tailscale identity check off: a paired device key is enough on every network")
 	}
 }
 
@@ -826,9 +895,10 @@ func (s *Server) RevalidateEvery(ctx context.Context, d time.Duration) {
 // --- Hello ---------------------------------------------------------------------
 
 func (s *Server) handleHello(w http.ResponseWriter, _ *http.Request, c caller) {
-	writeJSON(w, http.StatusOK, Hello{
-		Node:          s.opts.Self.HostName,
-		DNSName:       s.opts.Self.DNSName,
+	self := s.self()
+	h := Hello{
+		Node:          firstNonEmpty(self.HostName, s.opts.Name),
+		DNSName:       self.DNSName,
 		MadsCommit:    s.opts.Commit,
 		MeshAPI:       MeshAPI,
 		Access:        authz.Levels(c.level),
@@ -836,8 +906,36 @@ func (s *Server) handleHello(w http.ResponseWriter, _ *http.Request, c caller) {
 		Platform:      s.opts.Platform,
 		HostsSessions: s.opts.HostsSessions,
 		Grant:         string(c.peer.Level()),
-		TailnetCapped: authz.Min(c.level, c.peer.Level()) != c.peer.Level(),
-	})
+	}
+	// Q7: a paired device granted nothing still learns where this host
+	// listens, to show "Lets this host ..." and to work once granted.
+	if s.opts.Addresses != nil {
+		h.Addresses = s.opts.Addresses()
+	}
+	if s.opts.TailscaleKeyExpiry != nil {
+		h.TailscaleKeyExpiry = s.opts.TailscaleKeyExpiry()
+	}
+	writeJSON(w, http.StatusOK, h)
+}
+
+// self is this node as tailscaled last said (zero when it can't be asked).
+func (s *Server) self() tailnet.Self {
+	if s.opts.TailnetSelf != nil {
+		if self, err := s.opts.TailnetSelf(); err == nil {
+			return self
+		}
+		return tailnet.Self{}
+	}
+	return s.opts.Self
+}
+
+func firstNonEmpty(ss ...string) string {
+	for _, v := range ss {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // Hello is GET /mesh/hello: who this node is, and what the caller may do
@@ -860,12 +958,18 @@ type Hello struct {
 	Platform string `json:"platform,omitempty"`
 	// HostsSessions is whether this host has mads sessions to view.
 	HostsSessions bool `json:"hosts_sessions"`
-	// Grant is the caller's grant here before the tailnet capability caps
-	// it ("" none); TailnetCapped says the capability (the tailnet
-	// policy's access list) holds it below that, e.g. an admin grant under
-	// a policy of ["control"] acts as control.
+	// Grant is the caller's grant here ("" none). TailnetCapped is always
+	// false now that the tailnet policy never caps a level; it stays in the
+	// contract for one release.
 	Grant         string `json:"grant,omitempty"`
 	TailnetCapped bool   `json:"tailnet_capped,omitempty"`
+	// Addresses is where this host listens now, each with its network's
+	// kind and label (docs/MESH-NETWORK-DESIGN.md F5): viewers merge them
+	// into the host's row. Additive: MeshAPI stays 2.
+	Addresses []contracts.NetAddress `json:"addresses,omitempty"`
+	// TailscaleKeyExpiry is when this host's Tailscale key expires (absent:
+	// off, or not on Tailscale): the viewers' early warning.
+	TailscaleKeyExpiry *time.Time `json:"tailscale_key_expiry,omitempty"`
 }
 
 // whoisTimeout bounds one LocalAPI call: a hung tailscaled can't hold a
@@ -912,18 +1016,22 @@ func (s *Server) whois(ctx context.Context, remoteAddr string) (tailnet.Caller, 
 // tailnetVerdict is the second factor's answer on a WhoIs result: "" when
 // the caller passes, else a refusal code and message. definite is false
 // only for a transient failure (no verdict yet).
+// The check reads nothing from the tailnet policy (no app capability):
+// same tailnet user, not tagged. With this node's own identity unknown
+// (tailscaled unreachable) there's no verdict, and the caller fails closed.
 func (s *Server) tailnetVerdict(tc tailnet.Caller, err error) (code, msg string, definite bool) {
+	self := s.self()
 	switch {
 	case errors.Is(err, tailnet.ErrNotFound):
 		return "not_tailnet", "caller is not a tailnet peer", true
 	case err != nil:
-		return "whois_failed", "couldn't identify the caller with tailscaled", false
-	case tc.UserID != s.opts.Self.UserID:
+		return "whois_failed", "couldn't identify the caller with tailscaled (the Tailscale identity check is on)", false
+	case self.UserID == 0:
+		return "whois_failed", "this host can't read its own tailnet identity (the Tailscale identity check is on)", false
+	case tc.UserID != self.UserID:
 		return "other_user", "mesh peers must belong to this node's owner", true
 	case len(tc.Tags) > 0:
-		return "tagged_node", "tagged nodes can't join the mesh (v1)", true
-	case !tc.HasCap:
-		return "no_capability", "the tailnet policy grants this device no " + tailnet.MeshCap, true
+		return "tagged_node", "tagged nodes can't join the mesh (they have no user; turn off key expiry for a server instead)", true
 	}
 	return "", "", true
 }
@@ -1039,3 +1147,46 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
+
+// noteUncapped records, once per device per run, a device whose level is
+// above what the tailnet policy's capability allowed before the cap was
+// dropped (S6): log and device.level_uncapped, so an upgrade that raises
+// a level is on record.
+func (s *Server) noteUncapped(c caller, tc tailnet.Caller) {
+	capLevel := authz.CapabilityLevel(tc.Access)
+	if c.level == contracts.GrantNone || (tc.HasCap && rankOf(capLevel) >= rankOf(c.level)) {
+		return
+	}
+	s.mu.Lock()
+	if s.uncapped == nil {
+		s.uncapped = map[devicekey.Fingerprint]bool{}
+	}
+	seen := s.uncapped[c.fp]
+	s.uncapped[c.fp] = true
+	s.mu.Unlock()
+	if seen {
+		return
+	}
+	was := "refused it (no mesh capability)"
+	if tc.HasCap {
+		was = "capped it at " + string(capLevel)
+		if capLevel == contracts.GrantNone {
+			was = "named no level for it"
+		}
+	}
+	log.Printf("mesh: %s acts at its grant here, %s: the tailnet policy %s before the cap was dropped", c.label(), c.level, was)
+	if s.opts.Audit == nil {
+		return
+	}
+	ev := contracts.DeviceUncapped{Fingerprint: string(c.fp), PeerID: c.peer.ID, Name: c.peer.Name, Level: c.level, Capability: capLevel, HadCapability: tc.HasCap}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		payload, _ := json.Marshal(ev)
+		if err := s.opts.Audit.Append(ctx, &contracts.Envelope{Type: contracts.DeviceLevelUncapped, Actor: "mesh", Payload: payload}); err != nil {
+			log.Printf("mesh: log device.level_uncapped: %v", err)
+		}
+	}()
+}
+
+func rankOf(l contracts.GrantLevel) int { return slices.Index(contracts.GrantLevels, l) + 1 }

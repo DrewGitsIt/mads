@@ -16,13 +16,16 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/devicekey"
+	"github.com/drewkidwell/mads/pkg/meshnet"
 	"github.com/drewkidwell/mads/services/mesh/internal/paired"
 	"github.com/drewkidwell/mads/services/mesh/internal/server"
 	"github.com/drewkidwell/mads/services/mesh/internal/tailnet"
@@ -44,12 +47,58 @@ type Options struct {
 	// (default "linux").
 	Access   []string
 	Platform string
+	// Networks is how many listeners it runs, each on its own port, each a
+	// "network" of its own (lan:test-0, lan:test-1, ...): a viewer can be
+	// made to move between them (Drop). Default 1.
+	Networks int
 }
 
 // Mesh is a running Mesh Service.
 type Mesh struct {
-	// URL is its mesh_url as rows store it: http://127.0.0.1:port.
+	// URL is its mesh_url as rows store it: http://127.0.0.1:port (the
+	// first network's).
 	URL string
+	// Addrs are each network's host:port.
+	Addrs []string
+	nets  []*dropListener
+}
+
+// Drop takes network i away: its listener closes, and so does every
+// connection it accepted (a Wi-Fi gone, not just a closed port).
+func (m *Mesh) Drop(i int) { m.nets[i].drop() }
+
+type dropListener struct {
+	net.Listener
+	mu      sync.Mutex
+	conns   []net.Conn
+	dropped bool
+}
+
+func (l *dropListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.dropped {
+		_ = c.Close()
+		return nil, net.ErrClosed
+	}
+	l.conns = append(l.conns, c)
+	return c, nil
+}
+
+func (l *dropListener) drop() {
+	l.mu.Lock()
+	l.dropped = true
+	conns := l.conns
+	l.conns = nil
+	l.mu.Unlock()
+	_ = l.Close()
+	for _, c := range conns {
+		_ = c.Close()
+	}
 }
 
 // Start runs a Mesh Service on 127.0.0.1 for the test's lifetime, tailnet
@@ -80,28 +129,47 @@ func Start(t *testing.T, opts Options) *Mesh {
 	}
 	data := dataclient.New(opts.DataURL, "mesh", dataclient.WithToken(opts.Token))
 	devices := paired.New(data)
+	if opts.Networks <= 0 {
+		opts.Networks = 1
+	}
+	m := &Mesh{}
+	var addrs []contracts.NetAddress
+	var nets []contracts.ListeningNetwork
+	for i := 0; i < opts.Networks; i++ {
+		raw, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		dl := &dropListener{Listener: raw}
+		m.nets = append(m.nets, dl)
+		m.Addrs = append(m.Addrs, raw.Addr().String())
+		id := "lan:test-" + strconv.Itoa(i)
+		addrs = append(addrs, contracts.NetAddress{Via: "direct", Addr: raw.Addr().String(), Kind: "lan", Label: "Test network " + strconv.Itoa(i), Network: id})
+		nets = append(nets, contracts.ListeningNetwork{ID: id, Kind: "lan", Label: "Test network " + strconv.Itoa(i), Addrs: []string{"127.0.0.1"}, Chosen: true, Listening: true})
+	}
+	m.URL = "http://" + m.Addrs[0]
 	gate := server.New(server.Options{
 		Self: self, Tailnet: tn, RequireTailnet: true, Devices: devices, Audit: data,
 		RouterURL: routerURL, Token: func() string { return opts.Token }, Device: opts.Identity.Fingerprint(),
 		Platform: opts.Platform, HostsSessions: true, Pairing: data, WhoIsTTL: time.Second, Name: opts.HostName,
+		Addresses: func() []contracts.NetAddress { return addrs }, AddressPolicy: &meshnet.DialPolicy{AllowLoopback: true},
 	})
 	devices.OnReload(gate.Revalidate)
-	raw, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ln := gate.Listen(raw, server.DefaultListenLimits)
-	srv := &http.Server{Handler: gate, TLSConfig: tlsConfig, ConnContext: gate.ConnContext, ReadHeaderTimeout: 10 * time.Second}
+	devices.OnDiscoverable(func(w contracts.Discoverable) { gate.SetWindow(w) })
+	srv := &http.Server{Handler: gate, TLSConfig: gate.TLSConfig(tlsConfig), ConnContext: gate.ConnContext, ReadHeaderTimeout: 10 * time.Second}
 	ctx, cancel := context.WithCancel(context.Background())
 	go devices.Run(ctx)
-	go func() { _ = srv.ServeTLS(ln, "", "") }()
+	for _, dl := range m.nets {
+		ln := gate.Listen(dl, server.DefaultListenLimits)
+		go func() { _ = srv.ServeTLS(ln, "", "") }()
+	}
 	t.Cleanup(func() {
 		cancel()
 		_ = srv.Close()
 	})
-	m := &Mesh{URL: "http://" + ln.Addr().String()}
 	payload, _ := json.Marshal(contracts.MeshListener{Node: opts.HostName, DNSName: self.DNSName, MeshURL: m.URL, Fingerprint: string(opts.Identity.Fingerprint()),
-		Platform: opts.Platform, HostsSessions: true, RequireTailnet: true})
+		Platform: opts.Platform, HostsSessions: true, RequireTailnet: true, Addresses: addrs, Port: m.nets[0].Addr().(*net.TCPAddr).Port,
+		Networks: nets, TailnetCheckStatus: "on"})
 	if err := data.Append(context.Background(), &contracts.Envelope{Type: contracts.MeshListening, Actor: "mesh", Payload: payload}); err != nil {
 		t.Fatal(err)
 	}

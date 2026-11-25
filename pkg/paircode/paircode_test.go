@@ -3,7 +3,10 @@ package paircode
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -18,18 +21,27 @@ func sample(t *testing.T) Code {
 		t.Fatal(err)
 	}
 	return Code{
-		Host:        "pop-os",
-		MeshURL:     "http://pop-os.example.ts.net:17380",
+		Host: "pop-os",
+		Addresses: []Address{
+			{Via: "direct", Addr: "100.101.4.7:17380", Kind: "overlay", Label: "Tailscale"},
+			{Via: "direct", Addr: "192.168.1.20:17380", Kind: "lan", Label: "Home"},
+		},
 		Fingerprint: devicekey.FingerprintOf(ed25519.PublicKey(bytes.Repeat([]byte{7}, ed25519.PublicKeySize))),
 		ExpiresAt:   time.Unix(1_800_000_000, 0),
 		Secret:      secret,
 	}
 }
 
+// raw encodes a code body by hand, at any version.
+func raw(version string, w any) string {
+	b, _ := json.Marshal(w)
+	return "mads-pair-" + version + ":" + base64.RawURLEncoding.EncodeToString(b)
+}
+
 func TestRoundTrip(t *testing.T) {
 	c := sample(t)
 	s := Encode(c)
-	if !strings.HasPrefix(s, "mads-pair-1:") || strings.ContainsAny(s, " \n=+/") {
+	if !strings.HasPrefix(s, "mads-pair-2:") || strings.ContainsAny(s, " \n=+/") {
 		t.Fatalf("encoded = %q", s)
 	}
 	// A terminal or a chat app may wrap it; whitespace anywhere is fine.
@@ -38,9 +50,68 @@ func TestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Host != c.Host || got.MeshURL != c.MeshURL || got.Fingerprint != c.Fingerprint ||
+	if got.Host != c.Host || got.Fingerprint != c.Fingerprint || got.Version != 2 ||
 		!got.ExpiresAt.Equal(c.ExpiresAt) || !bytes.Equal(got.Secret, c.Secret) {
 		t.Fatalf("parsed %+v, want %+v", got, c)
+	}
+	if len(got.Addresses) != 2 || got.Addresses[0] != c.Addresses[0] || got.Addresses[1] != c.Addresses[1] || got.MeshURL != "http://100.101.4.7:17380" {
+		t.Fatalf("addresses %+v (mesh_url %q)", got.Addresses, got.MeshURL)
+	}
+	// Eight addresses with labels fit with room to spare.
+	for i := 0; i < 10; i++ {
+		c.Addresses = append(c.Addresses, Address{Via: "direct", Addr: "pop-os-" + strings.Repeat("x", 40) + ".tail4c2e.ts.net:1738" + string(rune('0'+i)), Kind: "overlay", Label: strings.Repeat("L", 60)})
+	}
+	s = Encode(c)
+	if len(s) > maxLen {
+		t.Fatalf("8 addresses: %d bytes", len(s))
+	}
+	if got, err := Parse(s); err != nil || len(got.Addresses) != MaxAddresses {
+		t.Fatalf("cap: %d addresses, %v", len(got.Addresses), err)
+	}
+}
+
+// New builds still read v1 codes, as one legacy address.
+func TestParseV1(t *testing.T) {
+	c := sample(t)
+	in := raw("1", map[string]any{"n": "pop-os", "u": "http://pop-os.example.ts.net:17380", "f": string(c.Fingerprint), "e": 1_800_000_000,
+		"s": base64.RawURLEncoding.EncodeToString(c.Secret)})
+	got, err := Parse(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != 1 || len(got.Addresses) != 1 || got.Addresses[0].Addr != "pop-os.example.ts.net:17380" || got.MeshURL != "http://pop-os.example.ts.net:17380" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestParseV2Addresses(t *testing.T) {
+	c := sample(t)
+	body := func(a any) map[string]any {
+		return map[string]any{"n": "pop-os", "f": string(c.Fingerprint), "e": 1_800_000_000, "s": base64.RawURLEncoding.EncodeToString(c.Secret), "a": a}
+	}
+	// An unknown adapter is skipped, never fatal; so is a bad address.
+	got, err := Parse(raw("2", body([]map[string]string{
+		{"v": "relay", "h": "relay.example:443"},
+		{"v": "direct", "h": "169.254.169.254:17380"},
+		{"v": "direct", "h": "192.168.1.20:17380", "k": "bogus", "l": "Ho\u202eme"},
+	})))
+	if err != nil || len(got.Addresses) != 1 || got.Addresses[0].Kind != "" || got.Addresses[0].Label != "Home" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	// None usable: named as such.
+	if _, err := Parse(raw("2", body([]map[string]string{{"v": "relay", "h": "relay.example:443"}}))); !errors.Is(err, ErrNoAddress) {
+		t.Fatalf("no usable: %v", err)
+	}
+	if _, err := Parse(raw("2", body([]map[string]string{}))); !errors.Is(err, ErrNoAddress) {
+		t.Fatalf("empty: %v", err)
+	}
+	// More than eight: damaged.
+	var many []map[string]string
+	for i := 0; i < 9; i++ {
+		many = append(many, map[string]string{"v": "direct", "h": "192.168.1.20:1738" + string(rune('0'+i))})
+	}
+	if _, err := Parse(raw("2", body(many))); !errors.Is(err, ErrNotACode) {
+		t.Fatalf("nine: %v", err)
 	}
 }
 
@@ -58,17 +129,18 @@ func TestSecretAndHash(t *testing.T) {
 
 func TestParseRefuses(t *testing.T) {
 	good := Encode(sample(t))
-	body := strings.TrimPrefix(good, "mads-pair-1:")
+	body := strings.TrimPrefix(good, "mads-pair-2:")
 	for name, in := range map[string]string{
-		"junk":          "pop-os 4TXP-R55O",
-		"v0 mockup":     "mads-pair:pop-os:4TXPR55OXYNU5KWIO7RKXWACS22QEZIKBPIDOVLCLXBPL7EE2BFQ:Q4XN7K",
+		"junk":          "pop-os UQDU-PBGT",
+		"v0 mockup":     "mads-pair:pop-os:UQDUPBGTB6PCPZYH4ISNMOWUZYWTJKFO2IV7GANMQUQO7KPOUDFA:Q4XN7K",
 		"no version":    "mads-pair-:" + body,
-		"bad base64":    "mads-pair-1:" + body[:len(body)-3] + "***",
-		"truncated":     "mads-pair-1:" + body[:len(body)/2],
-		"huge":          "mads-pair-1:" + strings.Repeat("A", 5000),
-		"not json":      "mads-pair-1:aGVsbG8",
+		"bad base64":    "mads-pair-2:" + body[:len(body)-3] + "***",
+		"truncated":     "mads-pair-2:" + body[:len(body)/2],
+		"huge":          "mads-pair-2:" + strings.Repeat("A", 5000),
+		"not json":      "mads-pair-2:aGVsbG8",
 		"empty":         "",
 		"negative vers": "mads-pair--1:" + body,
+		"v1 with a":     "mads-pair-1:" + body,
 	} {
 		if _, err := Parse(in); !errors.Is(err, ErrNotACode) {
 			t.Errorf("%s: err = %v, want ErrNotACode", name, err)
@@ -76,8 +148,8 @@ func TestParseRefuses(t *testing.T) {
 	}
 	// Another version is named as such.
 	var verr *VersionError
-	if _, err := Parse("mads-pair-2:" + body); !errors.As(err, &verr) || verr.Got != 2 || !strings.Contains(err.Error(), "newer") {
-		t.Fatalf("v2: %v", err)
+	if _, err := Parse("mads-pair-3:" + body); !errors.As(err, &verr) || verr.Got != 3 || !strings.Contains(err.Error(), "newer") {
+		t.Fatalf("v3: %v", err)
 	}
 	if _, err := Parse("mads-pair-0:" + body); !errors.As(err, &verr) || !strings.Contains(err.Error(), "older") {
 		t.Fatalf("v0: %v", err)
@@ -85,14 +157,19 @@ func TestParseRefuses(t *testing.T) {
 	// Bad parts inside a well-formed envelope.
 	for name, mutate := range map[string]func(*Code){
 		"short secret": func(c *Code) { c.Secret = c.Secret[:16] },
-		"bad url":      func(c *Code) { c.MeshURL = "https://pop-os:17380/x" },
-		"no port":      func(c *Code) { c.MeshURL = "http://pop-os" },
 		"bad pin":      func(c *Code) { c.Fingerprint = "NOTAFINGERPRINT" },
 	} {
 		c := sample(t)
 		mutate(&c)
 		if _, err := Parse(Encode(c)); !errors.Is(err, ErrNotACode) {
 			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	for name, u := range map[string]string{"bad url": "https://pop-os:17380/x", "no port": "http://pop-os"} {
+		c := sample(t)
+		in := raw("1", map[string]any{"n": "pop-os", "u": u, "f": string(c.Fingerprint), "e": 1, "s": base64.RawURLEncoding.EncodeToString(c.Secret)})
+		if _, err := Parse(in); !errors.Is(err, ErrNotACode) {
+			t.Errorf("v1 %s: err = %v", name, err)
 		}
 	}
 }
@@ -133,6 +210,23 @@ func TestCheckTarget(t *testing.T) {
 	}
 	if _, ok := TargetIP("http://mac.tail4c2e.ts.net:17380"); ok {
 		t.Error("TargetIP on a name")
+	}
+}
+
+// The vectors the UI's cleanText (ui/src/router/devices.ts) shares.
+func TestCleanTextVectors(t *testing.T) {
+	raw, err := os.ReadFile("testdata/cleantext.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vs []struct{ Name, In, Out string }
+	if err := json.Unmarshal(raw, &vs); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range vs {
+		if got := CleanText(v.In); got != v.Out {
+			t.Errorf("%s: CleanText(%q) = %q, want %q", v.Name, v.In, got, v.Out)
+		}
 	}
 }
 

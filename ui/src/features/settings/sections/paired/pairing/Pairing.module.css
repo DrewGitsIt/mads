@@ -1,58 +1,5 @@
 /* The pairing, introduce and remove dialogs (docs/mockups/paired-devices-v3.html .Pairing_*, .Remove_*). */
 
-.choices {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-.choice {
-  display: grid;
-  grid-template-columns: 28px 1fr auto;
-  gap: var(--space-3);
-  align-items: center;
-  width: 100%;
-  text-align: left;
-  padding: var(--space-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  background: var(--bg0);
-  color: var(--text);
-  font: inherit;
-  cursor: pointer;
-}
-.choice:hover:not(:disabled) {
-  border-color: var(--text3);
-  background: var(--bg2);
-}
-.choice:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-.choiceIcon {
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--r-sm);
-  background: var(--bg3);
-  color: var(--text2);
-  font: 700 13px var(--mono);
-}
-.choiceTitle {
-  font: 600 var(--fs-ui) var(--sans);
-}
-.choiceHelp {
-  display: block;
-  margin-top: 2px;
-  color: var(--text3);
-  font-size: var(--fs-sm);
-  line-height: 1.4;
-}
-.choiceCaret {
-  transform: rotate(-45deg);
-  color: var(--text3);
-}
-
 .codeString,
 .textarea {
   font-variant-numeric: slashed-zero;
@@ -342,6 +289,20 @@
   transform-origin: left;
   animation: arm 1s linear forwards;
 }
+/* Held back, it reads as "wait" (a quiet button, the bar filling under
+   it), not as a faded primary: in dark mode that was a pale tan block (Q15). */
+.arming > button:disabled {
+  opacity: 1;
+  background: var(--bg3);
+  color: var(--text3);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.arming[data-armed] > button:disabled {
+  opacity: 0.4;
+  background: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: none;
+}
 .arming[data-armed]::after {
   opacity: 0;
   transition: opacity var(--dur-fast);
@@ -364,4 +325,9 @@
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+.vouchMark {
+  color: var(--ok-fg);
+  font-weight: 700;
+  margin-right: 4px;
 }

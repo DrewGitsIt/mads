@@ -20,7 +20,7 @@ import (
 func TestMeshSettingsRoute(t *testing.T) {
 	g := datatest.StartGuarded(t)
 	data := dataclient.New(g.URL, "router", dataclient.WithToken(g.Token))
-	mgr := NewManager(data, Options{SelfName: "mac"})
+	mgr := NewManager(data, Options{AllowLoopback: true, SelfName: "mac"})
 	mux := http.NewServeMux()
 	mux.Handle("/devices/", mgr.Devices())
 	srv := httptest.NewServer(mgr.Handler(mux))
@@ -94,33 +94,5 @@ func TestMeshSettingsRoute(t *testing.T) {
 	}
 	if code, _, body := put(`{"require_tailnet":false}`, false); code != http.StatusConflict || !strings.Contains(body, "require_tailnet_locked") {
 		t.Fatalf("locked: %d %s", code, body)
-	}
-}
-
-// An introduced device's address is checked against the live setting:
-// a Mesh Service that started with the tailnet off, since turned on here,
-// refuses an IP (C).
-func TestCheckTargetFollowsTheLiveSetting(t *testing.T) {
-	g := datatest.StartGuarded(t)
-	data := dataclient.New(g.URL, "router", dataclient.WithToken(g.Token))
-	meshData := dataclient.New(g.URL, "mesh", dataclient.WithToken(g.Token))
-	mgr := NewManager(data, Options{SelfName: "pop-os"})
-	raw, _ := json.Marshal(contracts.MeshListener{Node: "pop-os", DNSName: "pop-os.tail1234.ts.net", MeshURL: "http://pop-os.tail1234.ts.net:17380", RequireTailnet: false})
-	if err := meshData.Append(context.Background(), &contracts.Envelope{Type: contracts.MeshListening, Actor: "mesh", Payload: raw}); err != nil {
-		t.Fatal(err)
-	}
-	const ip = "http://100.101.102.103:17380"
-	if err := mgr.checkTarget(context.Background(), ip); err != nil {
-		t.Fatalf("tailnet not required: %v", err)
-	}
-	on := true
-	if _, err := data.SetMeshSettings(context.Background(), contracts.MeshSettings{RequireTailnet: &on}); err != nil {
-		t.Fatal(err)
-	}
-	if err := mgr.checkTarget(context.Background(), ip); err == nil {
-		t.Fatal("an IP passed with the tailnet now required")
-	}
-	if err := mgr.checkTarget(context.Background(), "http://spark.tail1234.ts.net:17380"); err != nil {
-		t.Fatalf("a MagicDNS name: %v", err)
 	}
 }

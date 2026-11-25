@@ -12,6 +12,7 @@ import { FakeRouterClient } from "../../router/fixtures";
 import { setPlatform } from "../../platform/shortcut";
 import type { Model, Session } from "../../router/types";
 import type { CommandDescriptor } from "./commands/types";
+import { HostScopeProvider } from "../../router/hostScope";
 import { useState } from "react";
 import { Popover } from "../../components/Popover/Popover";
 
@@ -1138,6 +1139,26 @@ describe("Composer", () => {
   });
 
   describe("command registry", () => {
+    it("a command sees the device the session lives on (its host scope)", async () => {
+      const client = new FakeRouterClient();
+      const seen = vi.fn();
+      const pop = { name: "pop-os", self: false, reachable: true };
+      render(
+        <HostScopeProvider host={pop}>
+          <Composer
+            routerClient={client}
+            sessionId="session-active"
+            commands={[{ name: "new", description: "start a session", execute: (_, api) => seen(api.ctx.host) }]}
+          />
+        </HostScopeProvider>,
+      );
+      const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: "/new" } });
+      await waitFor(() => menu().getByRole("option", { name: /^\/new/ }));
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      await waitFor(() => expect(seen).toHaveBeenCalledWith(pop));
+    });
+
     it("renders an unavailable command disabled with its reason; arrows skip it and Enter on it only shows the reason", async () => {
       const client = new FakeRouterClient();
       const sendMessage = vi.spyOn(client, "sendMessage");

@@ -302,7 +302,16 @@ var Routes = map[string]Class{
 	// joining another host, introducing to another host, removing
 	// everywhere, the activity log, this device.
 	"GET /devices/self":                        Deny,
+	"POST /devices/check":                      Deny,
 	"PUT /devices/settings":                    Deny,
+	"POST /devices/discoverable":               Deny,
+	"GET /devices/discovered":                  Deny,
+	"POST /devices/discovered/{fp}/request":    Deny,
+	"POST /devices/pair/{id}/confirm":          Deny,
+	"POST /devices/tailscale/login":            Deny,
+	"POST /devices/{fp}/addresses":             Deny,
+	"DELETE /devices/{fp}/addresses/{addr}":    Deny,
+	"POST /devices/{fp}/redial":                Deny,
 	"GET /devices/activity":                    Deny,
 	"POST /devices/pairing-code":               Deny,
 	"DELETE /devices/pairing-code/{id}":        Deny,

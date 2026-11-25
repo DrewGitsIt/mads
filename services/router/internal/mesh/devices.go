@@ -18,6 +18,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/devicekey"
+	"github.com/drewkidwell/mads/pkg/meshnet"
 	"github.com/drewkidwell/mads/pkg/paircode"
 )
 
@@ -28,9 +29,17 @@ import (
 //
 // Local only (the install token's holder; Deny over the mesh):
 //
-//	GET    /devices/self                          this device
-//	PUT    /devices/settings                      {require_tailnet}: "Only
-//	                                              accept devices on my tailnet"
+//	GET    /devices/self                          this device, and its mesh network
+//	PUT    /devices/settings                      {networks, tailnet_check?, public?,
+//	                                              confirm_public?}: the mesh network
+//	POST   /devices/discoverable                  {on}: this device's setup window
+//	GET    /devices/discovered                    mads devices found (a search)
+//	POST   /devices/discovered/{fp}/request       ask a found device to pair
+//	POST   /devices/pair/{id}/confirm             {match}: the check code matched
+//	POST   /devices/tailscale/login               start a Tailscale sign-in
+//	POST   /devices/{fp}/addresses                {addr}: add an address (user)
+//	DELETE /devices/{fp}/addresses/{addr}         remove one the user added
+//	POST   /devices/{fp}/redial                   try again now
 //	GET    /devices/activity?device=&limit=&before= the device activity log
 //	POST   /devices/pairing-code                  a pairing code (host)
 //	DELETE /devices/pairing-code/{id}             retire an unused one
@@ -44,6 +53,7 @@ import (
 //	                                              this device administers
 //	POST   /devices/{fp}/remove-everywhere        {hosts?}: remove here, then on
 //	                                              every host this device administers
+//	POST   /devices/check                         check every paired row now (F6)
 //
 // Also over the mesh, for a device administering this host (authz Admin):
 //
@@ -88,10 +98,37 @@ func (m *Manager) Devices() http.Handler {
 		}
 	}
 	mux.HandleFunc("GET /devices", admitted(m.listDevices))
+	mux.HandleFunc("POST /devices/check", local(m.checkDevices))
 	mux.HandleFunc("GET /devices/self", local(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, m.selfDevice(r.Context()))
 	}))
 	mux.HandleFunc("PUT /devices/settings", local(m.setMeshSettings))
+	mux.HandleFunc("POST /devices/discoverable", local(m.setDiscoverable))
+	mux.HandleFunc("GET /devices/discovered", local(m.discovered))
+	mux.HandleFunc("POST /devices/discovered/{fp}/request", local(m.requestDiscovered))
+	mux.HandleFunc("POST /devices/pair/{id}/confirm", local(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Match *bool `json:"match"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&body); err != nil || body.Match == nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "give match: true (the same number) or false")
+			return
+		}
+		st, err := m.confirmJoin(r.Context(), r.PathValue("id"), *body.Match)
+		var pe *pairCodeError
+		switch {
+		case errors.As(err, &pe):
+			writeError(w, pe.status, pe.code, pe.msg)
+		case err != nil:
+			writeError(w, http.StatusBadGateway, "pair_failed", err.Error())
+		default:
+			writeJSON(w, http.StatusOK, st)
+		}
+	}))
+	mux.HandleFunc("POST /devices/tailscale/login", local(m.tailscaleLogin))
+	mux.HandleFunc("POST /devices/{fp}/addresses", local(m.addAddress))
+	mux.HandleFunc("DELETE /devices/{fp}/addresses/{addr}", local(m.removeAddress))
+	mux.HandleFunc("POST /devices/{fp}/redial", local(m.redial))
 	mux.HandleFunc("GET /devices/activity", local(m.deviceActivity))
 	mux.HandleFunc("POST /devices/pairing-code", local(m.createPairingCode))
 	mux.HandleFunc("DELETE /devices/pairing-code/{id}", local(func(w http.ResponseWriter, r *http.Request) {
@@ -128,22 +165,24 @@ func (m *Manager) Devices() http.Handler {
 		writeJSON(w, http.StatusOK, out)
 	}))
 	mux.HandleFunc("POST /devices/pair", local(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Code string `json:"code"`
-		}
+		var body JoinRequest
 		if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&body); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON: "+err.Error())
 			return
 		}
-		st, err := m.startJoin(r.Context(), body.Code)
+		out, err := m.startJoin(r.Context(), body)
 		var pe *pairCodeError
 		switch {
 		case errors.As(err, &pe):
-			writeError(w, pe.status, pe.code, pe.msg)
+			writeErrorExtra(w, pe.status, pe.code, pe.msg, pe.extra)
 		case err != nil:
 			writeError(w, http.StatusBadGateway, "pair_failed", err.Error())
 		default:
-			writeJSON(w, http.StatusAccepted, st)
+			if _, updated := out.(UpdateAddressesResult); updated {
+				writeJSON(w, http.StatusOK, out)
+				return
+			}
+			writeJSON(w, http.StatusAccepted, out)
 		}
 	}))
 	mux.HandleFunc("GET /devices/pair/{id}", local(func(w http.ResponseWriter, r *http.Request) {
@@ -185,30 +224,6 @@ func relayedLevel(r *http.Request) (contracts.GrantLevel, bool) {
 		l = contracts.GrantNone
 	}
 	return l, true
-}
-
-// checkTarget checks a mesh address another device chose for this host to
-// dial, against this host's own tailnet (its Mesh Service's
-// mesh.listening). With the tailnet required (the live setting,
-// requireTailnet, not what the Mesh Service started with), only a MagicDNS name: a
-// Tailscale IPv4 address is also carrier-grade NAT space, and the Router
-// can't ask tailscaled whose an address is (the Mesh Service can, for a
-// joiner).
-func (m *Manager) checkTarget(ctx context.Context, meshURL string) error {
-	l, ok, err := m.selfMesh(ctx)
-	if err != nil || !ok {
-		return errors.New("this host's Mesh Service has never said where it listens")
-	}
-	if err := paircode.CheckTarget(meshURL, paircode.TargetPolicy{TailnetSuffix: paircode.TailnetSuffixOf(l.DNSName)}); err != nil {
-		return err
-	}
-	if _, isIP := paircode.TargetIP(meshURL); isIP {
-		if required, _ := m.requireTailnet(ctx, l, true); !required {
-			return nil
-		}
-		return errors.New("give the device's MagicDNS name, not an address")
-	}
-	return nil
 }
 
 // viewOnlyMsg refuses a remote change to a device this host only views.
@@ -282,8 +297,18 @@ func (m *Manager) listDevices(w http.ResponseWriter, r *http.Request) {
 		writeDeviceDataError(w, err)
 		return
 	}
+	out, err := m.deviceRows(r.Context(), relayed)
+	if err != nil {
+		writeDeviceDataError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// deviceRows is GET /devices's list, from the rows as last reloaded.
+func (m *Manager) deviceRows(ctx context.Context, relayed bool) ([]contracts.DeviceStatus, error) {
 	lastUsed := map[string]time.Time{}
-	if uses, err := m.data.DeviceLastUsed(r.Context()); err == nil {
+	if uses, err := m.data.DeviceLastUsed(ctx); err == nil {
 		for _, u := range uses {
 			i := strings.LastIndex(u.Actor, "/")
 			if i < 0 {
@@ -315,23 +340,36 @@ func (m *Manager) listDevices(w http.ResponseWriter, r *http.Request) {
 		default:
 			s = contracts.PeerStatus{Peer: p}
 		}
+		s = m.overlayLocked(s)
 		if relayed {
-			// Another device never reads this host's dial errors (its
-			// addresses, its network): just the state.
+			// Another device never reads this host's dial errors, nor where
+			// this host reaches its devices (addresses, last good, mesh_url):
+			// just the state.
 			s.Reason = ""
+			s.Peer = forRelay(s.Peer)
+		} else {
+			s.Path, s.Addresses = m.pathStatus(p)
+			s.Diagnosis = diagnosis(s, m.opts.Now())
 		}
-		d := contracts.DeviceStatus{PeerStatus: m.overlayLocked(s)}
+		d := contracts.DeviceStatus{PeerStatus: s}
 		if p.IsPaired() {
 			if at, ok := lastUsed[devicekey.Fingerprint(p.Fingerprint).Short()]; ok {
 				t := at
 				d.LastUsedAt = &t
+			}
+			if t, ok := m.thereOfLocked(p.Fingerprint); ok {
+				at := t.at
+				d.PairingThere, d.PairingThereReason, d.PairingCheckedAt = t.state, t.reason, &at
+				if relayed {
+					d.PairingThereReason = ""
+				}
 			}
 		}
 		out = append(out, d)
 	}
 	m.mu.Unlock()
 	slices.SortFunc(out, func(a, b contracts.DeviceStatus) int { return strings.Compare(a.Name, b.Name) })
-	writeJSON(w, http.StatusOK, out)
+	return out, nil
 }
 
 func (m *Manager) deviceActivity(w http.ResponseWriter, r *http.Request) {
@@ -478,7 +516,17 @@ func (m *Manager) setGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = m.Reload(r.Context())
+	if _, relayed := relayedLevel(r); relayed {
+		out = forRelay(out)
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// forRelay is a row as another device may read it: never where this host
+// reaches its devices (addresses, last good, mesh_url; round-2 R4).
+func forRelay(p contracts.Peer) contracts.Peer {
+	p.MeshURL, p.LastGood, p.Addresses = "", nil, nil
+	return p
 }
 
 func (m *Manager) removeDevice(w http.ResponseWriter, r *http.Request) {
@@ -509,6 +557,11 @@ func (m *Manager) removeDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	intro := introducedBy(peers, string(fp))
 	out := DeviceRemoval{IntroducedByThis: hostsOf(intro), AlsoRemoved: []PairHost{}, Absent: cur == nil}
+	if _, relayed := relayedLevel(r); cur != nil && !relayed {
+		// This host's own user removing it: it's asked to forget this
+		// device first, and the row here goes whatever it answers (F6 R1).
+		out.There, out.ThereError = m.forgetOn(r.Context(), *cur)
+	}
 	if cur != nil {
 		if err := m.deleteRow(r.Context(), *cur); err != nil {
 			writeDeviceDataError(w, err)
@@ -532,6 +585,11 @@ type DeviceRemoval struct {
 	// Absent: the device itself wasn't paired here (already removed); with
 	// also_introduced, its introductions were still looked for.
 	Absent bool `json:"absent,omitempty"`
+	// There is how asking the device to forget this one went (F6 R1):
+	// removed, not_paired, offline or failed, with ThereError. Absent for a
+	// removal relayed by a device administering this host.
+	There      string `json:"there,omitempty"`
+	ThereError string `json:"there_error,omitempty"`
 }
 
 func wantIntroduced(v string) bool { return v == "1" || v == "true" }
@@ -601,6 +659,9 @@ type Introduction struct {
 	Platform      string `json:"platform,omitempty"`
 	HostsSessions *bool  `json:"hosts_sessions,omitempty"`
 	MeshURL       string `json:"mesh_url,omitempty"`
+	// Addresses are the introduced device's addresses (an older
+	// introducer sends only MeshURL).
+	Addresses []contracts.NetAddress `json:"addresses,omitempty"`
 	// Level is "none", view, chat or control: at most the introducer's
 	// own here, never admin.
 	Level string `json:"level"`
@@ -646,14 +707,33 @@ func (m *Manager) acceptIntroduction(w http.ResponseWriter, r *http.Request) {
 		Fingerprint: string(fp),
 		Pairing:     &contracts.PeerPairing{How: contracts.PairIntroduction},
 	}
-	if in.MeshURL != "" {
-		// This host will dial it: only a device on this tailnet (at any
-		// port).
-		if err := m.checkTarget(r.Context(), in.MeshURL); err != nil {
-			writeError(w, http.StatusUnprocessableEntity, "bad_mesh_url", "the introduced device's mesh address must be a device on this host's tailnet (with the tailnet required, its MagicDNS name)")
+	// This host may dial the introduced device's addresses: each must be
+	// one this host could reach on a network it's on, never loopback,
+	// link-local or metadata (S3; checked again at every dial).
+	addrs := in.Addresses
+	if len(addrs) == 0 && in.MeshURL != "" {
+		host, ok := contracts.MeshURLHost(strings.TrimSuffix(in.MeshURL, "/"))
+		if !ok {
+			writeError(w, http.StatusUnprocessableEntity, "bad_address", "the introduced device's mesh address must be http://host:port")
 			return
 		}
-		row.MeshURL = strings.TrimSuffix(in.MeshURL, "/")
+		addrs = []contracts.NetAddress{{Via: meshnet.DirectVia, Addr: host}}
+	}
+	if len(addrs) > contracts.MaxPeerAddresses {
+		writeError(w, http.StatusUnprocessableEntity, "bad_address", "at most 8 addresses")
+		return
+	}
+	now := m.opts.Now().UTC()
+	for _, a := range addrs {
+		if a.Via != "" && a.Via != meshnet.DirectVia {
+			continue
+		}
+		if err := m.policy.CheckAddress(a.Addr); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "bad_address", "the introduced device's address "+a.Addr+" isn't one this host would dial: "+err.Error())
+			return
+		}
+		a.Via = meshnet.DirectVia
+		row.Addresses = append(row.Addresses, contracts.MeshAddress{NetAddress: a, Source: contracts.SourceIntroduced, AddedAt: now})
 	}
 	plat := strings.ToLower(in.Platform)
 	if !contracts.ValidPlatform(plat) {
@@ -695,7 +775,7 @@ func (m *Manager) acceptIntroduction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = m.Reload(r.Context())
-	writeJSON(w, http.StatusCreated, row)
+	writeJSON(w, http.StatusCreated, forRelay(row)) // relayed only
 }
 
 // IntroduceRequest is POST /devices/{fp}/introduce: introduce the device
@@ -729,7 +809,7 @@ func (m *Manager) introduceTo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "bad_request", "a device can't be introduced to itself")
 		return
 	}
-	in := Introduction{Fingerprint: dev.Fingerprint, Name: dev.Name, MeshURL: dev.MeshURL, Level: levelWord(level)}
+	in := Introduction{Fingerprint: dev.Fingerprint, Name: dev.Name, MeshURL: dev.MeshURL, Addresses: netAddresses(dev.Candidates()), Level: levelWord(level)}
 	if dev.Remote != nil {
 		in.Platform, in.HostsSessions = dev.Remote.Platform, dev.Remote.HostsSessions
 	}
@@ -846,6 +926,11 @@ type RemoveResult struct {
 	// AlsoRemoved those removed with it (also_introduced).
 	IntroducedByThis []PairHost `json:"introduced_by_this"`
 	AlsoRemoved      []PairHost `json:"also_removed"`
+	// There is how asking the device itself to forget this one went (F6
+	// R1), when it was removed here: removed, not_paired, offline or
+	// failed, with ThereError.
+	There      string `json:"there,omitempty"`
+	ThereError string `json:"there_error,omitempty"`
 }
 
 // HostRemoval is one host's result: removed, offline (not reached; retry),
@@ -926,20 +1011,21 @@ func (m *Manager) removeEverywhere(w http.ResponseWriter, r *http.Request) {
 	intro := introducedBy(all, string(fp))
 	res := RemoveResult{Device: PairHost{Fingerprint: string(fp)}, Hosts: []HostRemoval{}, CannotManage: []KnownHost{},
 		IntroducedByThis: hostsOf(intro), AlsoRemoved: []PairHost{}}
+	// Removing it here: it's asked to forget this device first (F6 R1),
+	// alongside the hosts below, all inside the one budget; the row here
+	// goes once it has answered (or not), whatever it said.
+	removeHere := target != nil && len(req.Hosts) == 0
+	forgot := make(chan [2]string, 1)
+	if removeHere {
+		t := *target
+		go func() {
+			there, why := m.forgetOn(r.Context(), t)
+			forgot <- [2]string{there, why}
+		}()
+	}
 	switch {
-	case target != nil && len(req.Hosts) == 0:
+	case removeHere:
 		res.Device.Name = target.Name
-		if err := m.deleteRow(r.Context(), *target); err != nil {
-			writeDeviceDataError(w, err)
-			return
-		}
-		res.Here = "removed"
-		m.mu.Lock()
-		m.removed[string(fp)] = target.Name
-		m.mu.Unlock()
-		if req.AlsoIntroduced {
-			res.AlsoRemoved = m.removeRows(r.Context(), intro)
-		}
 	case target != nil:
 		res.Device.Name = target.Name
 		res.Here = "kept"
@@ -999,6 +1085,21 @@ func (m *Manager) removeEverywhere(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 	wg.Wait()
+	if removeHere {
+		f := <-forgot
+		res.There, res.ThereError = f[0], f[1]
+		if err := m.deleteRow(r.Context(), *target); err != nil {
+			writeDeviceDataError(w, err)
+			return
+		}
+		res.Here = "removed"
+		m.mu.Lock()
+		m.removed[string(fp)] = target.Name
+		m.mu.Unlock()
+		if req.AlsoIntroduced {
+			res.AlsoRemoved = m.removeRows(r.Context(), intro)
+		}
+	}
 	res.Hosts = append(res.Hosts, results...)
 	if len(req.Hosts) == 0 {
 		slices.SortFunc(skipped, func(a, b HostRemoval) int { return strings.Compare(a.Name, b.Name) })

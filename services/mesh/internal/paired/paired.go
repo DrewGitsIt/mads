@@ -18,6 +18,7 @@ package paired
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"slices"
@@ -31,10 +32,12 @@ import (
 )
 
 // peerEvents are the changes that can alter the directory: the peer rows,
-// and this host's mesh settings (device.settings_changed, "Only accept
-// devices on my tailnet"). Other device.* audit events always commit
-// beside a peer.* one, so they needn't be followed.
-var peerEvents = []string{string(contracts.PeerCreated), string(contracts.PeerUpdated), string(contracts.PeerDeleted), string(contracts.DeviceSettingsChanged)}
+// this host's mesh settings (device.settings_changed: its mesh networks
+// and the Tailscale check) and its setup window (device.discoverable).
+// Other device.* audit events always commit beside a peer.* one, so they
+// needn't be followed.
+var peerEvents = []string{string(contracts.PeerCreated), string(contracts.PeerUpdated), string(contracts.PeerDeleted),
+	string(contracts.DeviceSettingsChanged), string(contracts.DeviceDiscoverable)}
 
 // Directory is the in-memory paired-device list, by fingerprint.
 type Directory struct {
@@ -59,6 +62,11 @@ type Directory struct {
 	settings     contracts.MeshSettings
 	haveSettings bool
 	onSettings   func(contracts.MeshSettings)
+	// window is this host's setup window as last read, and
+	// onDiscoverable runs when it changes (OnDiscoverable).
+	window         contracts.Discoverable
+	haveWindow     bool
+	onDiscoverable func(contracts.Discoverable)
 }
 
 // retryLogEvery is how many failed attempts in a row go by between log
@@ -214,6 +222,23 @@ func (d *Directory) OnSettings(f func(contracts.MeshSettings)) {
 	d.mu.Unlock()
 }
 
+// OnDiscoverable sets f to run with this host's setup window after the
+// first successful reload, and after every reload that finds it changed,
+// outside the directory's lock. Set it before Run.
+func (d *Directory) OnDiscoverable(f func(contracts.Discoverable)) {
+	d.mu.Lock()
+	d.onDiscoverable = f
+	d.mu.Unlock()
+}
+
+// Settings is this host's mesh settings as last read, and whether they
+// have been.
+func (d *Directory) Settings() (contracts.MeshSettings, bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.settings, d.haveSettings
+}
+
 // Reload replaces the directory from the Data Service, then re-reads this
 // host's mesh settings. The list comes first and stands on its own: a
 // revocation applies whatever happens to the settings read. That read
@@ -255,7 +280,29 @@ func (d *Directory) Reload(ctx context.Context) error {
 		hook()
 	}
 	d.reloadSettings(ctx)
+	d.reloadWindow(ctx)
 	return nil
+}
+
+// reloadWindow re-reads this host's setup window and calls
+// OnDiscoverable's hook when it changed. An error keeps the last one (a
+// window that can't be read again closes on its own clock).
+func (d *Directory) reloadWindow(ctx context.Context) {
+	w, err := d.data.Discoverable(ctx)
+	if err != nil {
+		log.Printf("mesh: this host's setup window: %v", err)
+		return
+	}
+	d.mu.Lock()
+	var hook func(contracts.Discoverable)
+	if !d.haveWindow || !d.window.Until.Equal(w.Until) {
+		d.window, d.haveWindow = w, true
+		hook = d.onDiscoverable
+	}
+	d.mu.Unlock()
+	if hook != nil {
+		hook(w)
+	}
 }
 
 // reloadSettings re-reads this host's mesh settings and calls OnSettings's
@@ -309,10 +356,7 @@ func (d *Directory) Loaded() bool {
 }
 
 func sameSettings(a, b contracts.MeshSettings) bool {
-	switch {
-	case a.RequireTailnet == nil || b.RequireTailnet == nil:
-		return a.RequireTailnet == nil && b.RequireTailnet == nil
-	default:
-		return *a.RequireTailnet == *b.RequireTailnet
-	}
+	ra, _ := json.Marshal(a)
+	rb, _ := json.Marshal(b)
+	return string(ra) == string(rb)
 }

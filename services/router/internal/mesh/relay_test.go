@@ -81,7 +81,7 @@ func TestRelayedWritesCarryTheDeviceActor(t *testing.T) {
 	if err := data.CreatePeer(context.Background(), admin); err != nil {
 		t.Fatal(err)
 	}
-	mgr := NewManager(data, Options{SelfName: "mac"})
+	mgr := NewManager(data, Options{AllowLoopback: true, SelfName: "mac"})
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		no := false
 		p := &contracts.Peer{Name: r.URL.Query().Get("name"), Viewed: &no, Fingerprint: testFingerprint(byte(len(r.URL.Query().Get("name")))),

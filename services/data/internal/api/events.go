@@ -186,6 +186,10 @@ func parseFilter(r *http.Request) (store.Filter, *contracts.ValidationError) {
 // that change (docs/MESH-AUTH-DESIGN.md).
 var writtenBy = map[contracts.EventType]string{
 	contracts.DeviceRefused:           "mesh",
+	contracts.DeviceDiscovered:        "mesh",
+	contracts.DeviceLevelUncapped:     "mesh",
+	contracts.DevicePairStarted:       "mesh",
+	contracts.DevicePairingAbandoned:  "mesh",
 	contracts.MeshListening:           "mesh",
 	contracts.PeerReachabilityChanged: "router",
 }

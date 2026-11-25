@@ -706,8 +706,8 @@ h1, h2, h3, p, ul, ol, dl, dd { margin: 0; }
 const PLATFORM_KIND = { macOS: "computer", Linux: "computer", Windows: "computer", iOS: "phone", Android: "phone" };
 const kindOf = (dev) => PLATFORM_KIND[DEV[dev].platform] || "unknown";
 const DEV = {
-  mac:     { name: "Drews-MacBook-Air", short: "MacBook-Air", platform: "macOS", fp: "TZKPXLSIXT6BBYB7WSXUB3YPMJSLUGJXY22XQ3A6PT6X7BFJZRKA", dns: "drews-macbook-air.tail4c2e.ts.net" },
-  pop:     { name: "pop-os", short: "pop-os", platform: "Linux", fp: "4TXPR55OXYNU5KWIO7RKXWACS22QEZIKBPIDOVLCLXBPL7EE2BFQ", dns: "pop-os.tail4c2e.ts.net" },
+  mac:     { name: "Alexs-MacBook-Air", short: "MacBook-Air", platform: "macOS", fp: "JZHVB5F7CZEZT2X4STFI2OGSKWA4WLVA5AHMI7L266KCKCOYPZ5Q", dns: "alexs-macbook-air.tail4c2e.ts.net" },
+  pop:     { name: "pop-os", short: "pop-os", platform: "Linux", fp: "UQDUPBGTB6PCPZYH4ISNMOWUZYWTJKFO2IV7GANMQUQO7KPOUDFA", dns: "pop-os.tail4c2e.ts.net" },
   iphone:  { name: "Drew’s iPhone", platform: "iOS", fp: "7QHNMZ3CA2LDVKX4RP6EJW5TNOBYGF2SHU7IK3QZDLMAX6VC4RTE", dns: "drews-iphone.tail4c2e.ts.net" },
   display: { name: "Kitchen display", platform: "unknown", fp: "CJ4W2NRTPYXE6HDAZQ7KLMB3SVU5OIF2WKXN7GEPAR4DYJ3TBQ6L", dns: "kitchen-display.tail4c2e.ts.net" },
   spark:   { name: "spark", platform: "macOS", fp: "H6RDKZ2YPM4QWXN7VEC3TL5JAB2UFGI6SOKM3YQRWDPLE7ZNX4HA", dns: "spark.tail4c2e.ts.net" },
@@ -749,7 +749,7 @@ function seed() {
           L("iphone", "refused", `sent a message to <q>meta arctic review</q>. Refused: it runs at Full access.`, "5 min ago"),
           L("display", "refused", `sent a message to <q>docs sweep</q>. Refused: it may only view.`, "1 h ago"),
           L("mac", "level", `changed from administer to control, by this device`, "Nov 18"),
-          L("display", "introduced", `introduced by <b>Drews-MacBook-Air</b>; may view`, "Nov 18"),
+          L("display", "introduced", `introduced by <b>Alexs-MacBook-Air</b>; may view`, "Nov 18"),
           L("iphone", "paired", `paired with a pairing code; may chat with`, "Nov 18"),
           L("mac", "level", `changed from control to administer, by this device`, "Nov 18"),
           L("mac", "paired", `paired with a pairing code; may control`, "Nov 17"),
@@ -1127,7 +1127,7 @@ function renderPaste(d) {
        <textarea id="paste-code" class="settingInput_input settingInput_mono Pairing_textarea" spellcheck="false" placeholder="mads-pair:…" data-input="text" data-autofocus>${esc(d.text)}</textarea>
        ${r.error ? `<p class="Pairing_error" role="alert">${esc(r.error)}</p>` : ""}</div>
      ${preview}
-     <div class="Mock_sim"><b>MOCKUP</b> ${btn("Fill spark’s code", fill(`mads-pair:spark:${DEV.spark.fp}:Q4XN7K`))} ${btn(`Fill ${esc(nm(other()))}’s code`, fill(S.codes[other()]?.code || `mads-pair:${DEV[other()].name}:${DEV[other()].fp}:OLD2AB`))} ${btn("Fill junk", fill("pop-os 4TXP-R55O"))}</div>`,
+     <div class="Mock_sim"><b>MOCKUP</b> ${btn("Fill spark’s code", fill(`mads-pair:spark:${DEV.spark.fp}:Q4XN7K`))} ${btn(`Fill ${esc(nm(other()))}’s code`, fill(S.codes[other()]?.code || `mads-pair:${DEV[other()].name}:${DEV[other()].fp}:OLD2AB`))} ${btn("Fill junk", fill("pop-os UQDU-PBGT"))}</div>`,
     cancelBtn() + btn("Ask to pair", () => request(r.dev, me(), "p2"), { variant: "primary", size: "md", disabled: !r.dev }));
 }
 
@@ -1355,7 +1355,7 @@ function mockBar() {
   return `<div class="Mock_bar" role="toolbar" aria-label="Mockup controls (not part of the app)"><span class="Mock_tag">MOCKUP</span>
     <div class="Mock_group"><span>Theme</span>${b("Dark", S.theme === "dark", set("theme", "dark"))}${b("Light", S.theme === "light", set("theme", "light"))}</div><span class="Mock_sep"></span>
     <div class="Mock_group"><span>Screen</span>${b("Settings", !conv, set("view", "settings"))}${b("Refused msg", conv, set("view", "conversation"))}</div><span class="Mock_sep"></span>
-    ${conv ? `<div class="Mock_group"><span>Sender</span>${b("Drew’s iPhone", S.sender === "iphone", () => { S.sender = "iphone"; S.convo = seedConvo(); S.why = {}; render(); })}${b("Drews-MacBook-Air", S.sender === "mac", () => { S.sender = "mac"; S.convo = seedConvo(); S.why = {}; render(); })}</div><span class="Mock_note">Reads pop-os’s live settings for the sender.</span>`
+    ${conv ? `<div class="Mock_group"><span>Sender</span>${b("Drew’s iPhone", S.sender === "iphone", () => { S.sender = "iphone"; S.convo = seedConvo(); S.why = {}; render(); })}${b("Alexs-MacBook-Air", S.sender === "mac", () => { S.sender = "mac"; S.convo = seedConvo(); S.why = {}; render(); })}</div><span class="Mock_note">Reads pop-os’s live settings for the sender.</span>`
     : `<div class="Mock_group"><span>I am</span>${b("MacBook-Air", S.me === "mac", set("me", "mac"))}${b("pop-os", S.me === "pop", set("me", "pop"))}</div><span class="Mock_sep"></span>
       <div class="Mock_group">${b("pop-os offline", S.popOffline, () => { S.popOffline = !S.popOffline; render(); })}${b("Reset", false, () => { const t = S.theme; S = seed(); S.theme = t; render(); })}</div>`}</div>`;
 }

@@ -215,7 +215,10 @@ export async function bootTopology(opts: BootTopologyOptions): Promise<Topology>
     [sessionBin, "./services/session"],
     [pipelineBin, "./services/pipeline"],
   ] as const) {
-    execFileSync("go", ["build", "-o", out, pkg], { cwd: repoRoot, stdio: "inherit" });
+    // mesh_loopback: the Paired devices journeys' stand-in devices listen
+    // on 127.0.0.1, which a production Router refuses to dial
+    // (-mesh-allow-loopback below is refused without it).
+    execFileSync("go", ["build", "-tags", "mesh_loopback", "-o", out, pkg], { cwd: repoRoot, stdio: "inherit" });
   }
 
   const tmpDir = mkdtempSync(path.join(tmpdir(), "mads-ui-smoke-run-"));
@@ -274,6 +277,10 @@ export async function bootTopology(opts: BootTopologyOptions): Promise<Topology>
       homeDir,
       "-ui-dist",
       uiDist,
+      "-mesh-allow-loopback",
+      // Never this machine's real tailscaled (a socket that doesn't exist).
+      "-localapi-socket",
+      path.join(tmpDir, "no-tailscaled.sock"),
       ...(opts.routerArgs ?? []),
     ],
     env,

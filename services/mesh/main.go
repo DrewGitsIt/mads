@@ -1,12 +1,16 @@
 // Command mesh is the Mesh Service: the gate that lets the Routers of a
 // user's other devices reach this node's Router (docs/MESH-MODE-DESIGN.md,
-// docs/MESH-AUTH-DESIGN.md). It binds only to this node's tailnet address
-// and speaks TLS 1.3 with client certificates only: a caller is the paired
-// device whose key it proves (pinned in the Data Service's paired devices,
-// followed by internal/paired), authorised by that device's grant. By
-// default tailnet identity (WhoIs plus the app capability) is required as
-// well, as a second factor (-require-tailnet). Allowed requests are
-// forwarded to the loopback Router.
+// docs/MESH-AUTH-DESIGN.md, docs/MESH-NETWORK-DESIGN.md). It listens only
+// on this device's mesh networks (the ones its user chose: a VPN such as
+// Tailscale, a LAN, never one it wasn't told to), finding this machine's
+// networks itself; it starts without tailscaled, which it asks only for
+// names, peers and the optional identity check. It speaks TLS 1.3 with
+// client certificates only: a caller is the paired device whose key it
+// proves (pinned in the Data Service's paired devices, followed by
+// internal/paired), authorised by that device's grant. On the Tailscale
+// network an identity check (same tailnet user, untagged; on by default)
+// can refuse a caller, never raise or lower its level. Allowed requests
+// are forwarded to the loopback Router.
 package main
 
 import (
@@ -18,13 +22,14 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
 	"runtime"
 	"runtime/debug"
-	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -32,31 +37,42 @@ import (
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/devicekey"
 	"github.com/drewkidwell/mads/pkg/localauth"
+	"github.com/drewkidwell/mads/pkg/meshnet"
+	"github.com/drewkidwell/mads/pkg/meshnet/mdns"
+	"github.com/drewkidwell/mads/pkg/meshnet/tailscale"
+	"github.com/drewkidwell/mads/services/mesh/internal/netloop"
 	"github.com/drewkidwell/mads/services/mesh/internal/paired"
 	"github.com/drewkidwell/mads/services/mesh/internal/server"
-	"github.com/drewkidwell/mads/services/mesh/internal/tailnet"
 )
 
-// DefaultPort is the mesh listener's port, the one the tailnet grant opens.
-const DefaultPort = 17380
+// DefaultPort is the mesh port, the same on every network (Q10).
+const DefaultPort = meshnet.DefaultPort
 
 func main() {
-	addr := flag.String("addr", "", "listen address; default is this node's tailnet IPv4 on -port. Never 0.0.0.0: the mesh is tailnet-only")
-	port := flag.Int("port", DefaultPort, "listen port when -addr is empty")
+	addr := flag.String("addr", "", "listen only on this address (ip:port), whatever this device's mesh network setting says: for tests and manual setups. Never 0.0.0.0")
+	port := flag.Int("port", 0, "the mesh port on every network (default: this host's setting, 17380)")
 	routerURL := flag.String("router-url", "http://localhost:17373", "this node's Router")
-	dataURL := flag.String("data-url", "http://localhost:17374", "this node's Data Service, read for the paired-device list")
-	socket := flag.String("localapi-socket", tailnet.DefaultSocket, "tailscaled LocalAPI socket")
-	whoisTTL := flag.Duration("whois-ttl", 10*time.Second, "how long a caller's tailnet identity is cached; bounds how fast a policy change takes effect")
+	dataURL := flag.String("data-url", "http://localhost:17374", "this node's Data Service, read for the paired-device list and mesh settings")
+	socket := flag.String("localapi-socket", "", "tailscaled LocalAPI socket; default: found as tailscale's own CLI finds it (Linux "+tailscale.LinuxSocket+", the macOS app's port and token, or "+tailscale.DarwinSocket+")")
+	whoisTTL := flag.Duration("whois-ttl", 10*time.Second, "how long a caller's tailnet identity is cached")
 	fsRoot := flag.String("fs-root", "", "root of /mesh/fs/list; default $HOME. \"off\" disables folder browsing")
 	madsHome := flag.String("mads-home", localauth.DefaultHome(), "local state root (env MADS_HOME); the install token is read from <mads-home>/local.token")
 	tokenFile := flag.String("token-file", "", "the install token's file, read (and re-read on change) and sent to the local Router as its bearer (default <mads-home>/local.token)")
-	requireTailnet := flag.Bool("require-tailnet", true, "also require tailnet identity (WhoIs: this node's user, untagged, holding the mesh capability) besides a paired device key; the capability's level caps the grant's. Unset, this host's \"Only accept devices on my tailnet\" setting (Settings → Paired devices) decides, followed live, and this is its default; given, it overrides the setting")
+	requireTailnet := flag.Bool("require-tailnet", true, "the Tailscale network's identity check: on the Tailscale network, only this tailnet user's untagged devices (besides a paired device key). Refuse-only. Unset, this host's setting decides (Settings → Paired devices → Mesh network), followed live; given, it overrides the setting")
 	platform := flag.String("platform", runtime.GOOS, "the platform /mesh/hello reports for this host (other devices derive its kind from it); a phone's app would say ios or android")
 	hostsSessions := flag.Bool("hosts-sessions", true, "whether /mesh/hello says this host has mads sessions to view")
 	meshName := flag.String("mesh-name", shortHostname(), "this host's mads name, as its Router's -mesh-name: how pairing answers name it")
+	allowLoopback := flag.Bool("mesh-allow-loopback", false, "test builds only (go test, or -tags mesh_loopback): bind loopback addresses only, never a real network's, and accept loopback joiners")
+	fakeNetworks := flag.String("fake-networks", "", "with -mesh-allow-loopback: a JSON file of the networks (meshnet.Network, loopback addresses only) this machine is on, read on every scan, instead of its interfaces")
 	flag.Parse()
+	if *allowLoopback && !meshnet.LoopbackAllowed() {
+		log.Fatal("mesh: -mesh-allow-loopback is refused: only go test builds, or builds with -tags mesh_loopback, may use it")
+	}
+	if *fakeNetworks != "" && !*allowLoopback {
+		log.Fatal("mesh: -fake-networks needs -mesh-allow-loopback (a test build)")
+	}
 	// -require-tailnet given explicitly pins it; unset, the stored setting
-	// decides (docs/MESH-AUTH-DESIGN.md: "Only accept devices on my tailnet").
+	// decides.
 	requireTailnetFlag := false
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "require-tailnet" {
@@ -69,13 +85,26 @@ func main() {
 	if *tokenFile == "" {
 		*tokenFile = localauth.Path(*madsHome)
 	}
+	if *addr != "" {
+		if err := refuseWildcard(*addr); err != nil {
+			log.Fatalf("mesh: -addr %s: %v", *addr, err)
+		}
+		if host, _, _ := net.SplitHostPort(*addr); *allowLoopback && !isLoopbackHost(host) {
+			log.Fatalf("mesh: -addr %s: -mesh-allow-loopback binds loopback only", *addr)
+		}
+	}
 
 	target, err := url.Parse(*routerURL)
 	if err != nil || target.Scheme == "" || target.Host == "" {
 		log.Fatalf("mesh: -router-url %q: not a URL", *routerURL)
 	}
-
 	tokens := localauth.FileSource(*tokenFile)
+
+	// One Mesh Service per mads home, whoever started it (app.sh, a
+	// systemd unit, by hand).
+	if err := lockInstance(*madsHome); err != nil {
+		log.Fatalf("mesh: %v", err)
+	}
 
 	// This device's identity (D1): the key the TLS listener presents, which
 	// other hosts pin. Without it there is nothing to serve.
@@ -86,22 +115,6 @@ func main() {
 	tlsConfig, err := devicekey.ServerConfig(id)
 	if err != nil {
 		log.Fatalf("mesh: TLS certificate: %v", err)
-	}
-
-	tn := tailnet.New(*socket)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	self, err := tn.Self(ctx)
-	cancel()
-	if err != nil {
-		log.Fatalf("mesh: reading this node from tailscaled (%s): %v", *socket, err)
-	}
-
-	listen := *addr
-	if listen == "" {
-		listen = net.JoinHostPort(self.IPv4, strconv.Itoa(*port))
-	}
-	if err := refuseWildcard(listen); err != nil {
-		log.Fatalf("mesh: -addr %s: %v", listen, err)
 	}
 
 	var fsys *server.FS
@@ -117,94 +130,225 @@ func main() {
 		}
 	}
 
+	// tailscaled is a helper, asked for names, peers and the identity
+	// check; the Mesh Service runs without it.
+	ts := tailscale.New(tailscale.Locator{Socket: *socket})
+	helper := &tailscale.Helper{Client: ts}
+	direct := &meshnet.Direct{Sys: meshnet.OSSystem(), Helpers: []meshnet.Helper{helper}}
+	var adapter meshnet.Adapter = direct
+	if *fakeNetworks != "" {
+		adapter = meshnet.FileNetworks{Direct: direct, Path: *fakeNetworks}
+	}
+	if *allowLoopback {
+		adapter = meshnet.LoopbackOnly{Adapter: adapter}
+	}
+
 	// Who may connect: this host's paired devices, followed from the Data
 	// Service in the background (the listener never waits on it; until the
 	// first load every device is refused).
 	data := dataclient.New(*dataURL, "mesh", dataclient.WithTokenSource(tokens))
 	devices := paired.New(data)
+	var loop *netloop.Loop
 	gate := server.New(server.Options{
-		Self:           self,
-		Tailnet:        tn,
-		RequireTailnet: *requireTailnet,
-		Devices:        devices,
-		Audit:          data,
-		RouterURL:      target,
-		Commit:         commit(),
-		FS:             fsys,
-		WhoIsTTL:       *whoisTTL,
-		Token:          tokens,
-		Device:         id.Fingerprint(),
-		Platform:       *platform,
-		HostsSessions:  *hostsSessions,
-		Pairing:        data,
-		Name:           *meshName,
-	})
-	// An unpairing or grant change ends that device's open streams.
-	devices.OnReload(gate.Revalidate)
-	// "Only accept devices on my tailnet", followed live with the paired
-	// list: the stored setting when set, else the flag's default. An
-	// explicit -require-tailnet overrides it.
-	if !requireTailnetFlag {
-		devices.OnSettings(func(ms contracts.MeshSettings) {
-			on := *requireTailnet
-			if ms.RequireTailnet != nil {
-				on = *ms.RequireTailnet
+		TailnetSelf:        func() (tailscale.Self, error) { return loop.TailscaleSelf() },
+		Addresses:          func() []contracts.NetAddress { return loop.Addresses() },
+		TailscaleKeyExpiry: func() *time.Time { return loop.KeyExpiry() },
+		Tailnet:            ts,
+		RequireTailnet:     *requireTailnet,
+		Devices:            devices,
+		Audit:              data,
+		RouterURL:          target,
+		Commit:             commit(),
+		FS:                 fsys,
+		WhoIsTTL:           *whoisTTL,
+		Token:              tokens,
+		Device:             id.Fingerprint(),
+		Platform:           *platform,
+		HostsSessions:      *hostsSessions,
+		Pairing:            data,
+		Name:               *meshName,
+		AddressPolicy:      &meshnet.DialPolicy{AllowLoopback: *allowLoopback},
+		CloseWindow: func(reason string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, err := data.CloseDiscoverable(ctx, reason); err != nil {
+				log.Printf("mesh: close the setup window at the Data Service: %v", err)
 			}
-			gate.SetRequireTailnet(on)
-		})
-	}
-	srv := newHTTPServer(gate, tlsConfig)
+		},
+	})
+	srv := newHTTPServer(gate, gate.TLSConfig(tlsConfig))
 	srv.ConnContext = gate.ConnContext
-	raw, err := net.Listen("tcp", listen)
-	if err != nil {
-		log.Fatalf("mesh: listen %s: %v", listen, err)
-	}
-	// Connections are capped overall and per address, closed unless a
-	// paired device is admitted on them within seconds, and (with the
-	// tailnet required) gated by WhoIs before their handshake.
-	ln := gate.Listen(raw, server.DefaultListenLimits)
-	second := "paired device key and tailnet identity"
-	switch {
-	case !requireTailnetFlag:
-		second += " until this host's setting is read (Only accept devices on my tailnet)"
-	case !*requireTailnet:
-		second = "paired device key only (-require-tailnet=false)"
-	}
-	log.Printf("mesh: %s (%s) listening on %s (TLS; admits by %s), forwarding to %s", self.HostName, self.DNSName, ln.Addr(), second, target)
-	log.Printf("mesh: this device is %s", id.Fingerprint().Short())
 
 	runCtx, stopRun := context.WithCancel(context.Background())
 	defer stopRun()
-	// Say where this host is reached, for its Router to put in a pairing
-	// code (D6). Retried until the Data Service takes it.
-	go announce(runCtx, data, contracts.MeshListener{
-		Node: self.HostName, DNSName: self.DNSName, MeshURL: advertisedURL(*addr, ln.Addr().String(), self.DNSName),
-		Fingerprint: string(id.Fingerprint()), Platform: *platform, HostsSessions: *hostsSessions, RequireTailnet: *requireTailnet,
-		RequireTailnetFlag: requireTailnetFlag,
+	reports := newReporter(data)
+	go reports.run(runCtx)
+	// One connection budget per network (S1), kept across a listener's
+	// moves.
+	var budgetsMu sync.Mutex
+	budgets := map[string]*server.Budget{}
+	loop = netloop.New(netloop.Options{
+		Adapter:   adapter,
+		Tailscale: helper,
+		Settings:  devices.Settings,
+		Window:    gate.DiscoverableUntil,
+		FixedAddr: *addr,
+		Port:      *port,
+		Bind: func(n meshnet.Network, l net.Listener) {
+			budgetsMu.Lock()
+			b, ok := budgets[n.ID]
+			if !ok {
+				b = server.NewBudget(server.DefaultListenLimits)
+				budgets[n.ID] = b
+			}
+			budgetsMu.Unlock()
+			ts := n.ID == meshnet.TailscaleID || (n.ID == "fixed" && inTailnet(n))
+			ln := gate.ListenOn(l, b, server.Net{ID: n.ID, Label: n.Label, Tailscale: ts, TailnetOnly: ts && !*allowLoopback})
+			go func() {
+				// ServeTLS with the certificate already in TLSConfig (made in
+				// memory from the device key: no certificate files), HTTP/2
+				// included. Returns when the loop closes the listener.
+				if err := srv.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+					log.Printf("mesh: serve %s: %v", n.ID, err)
+					loop.Kick()
+				}
+			}()
+		},
+		Report:       reports.offer,
+		TailnetCheck: gate.RequireTailnet,
+		Base: contracts.MeshListener{Node: *meshName, Fingerprint: string(id.Fingerprint()), Platform: *platform,
+			HostsSessions: *hostsSessions, RequireTailnetFlag: requireTailnetFlag},
+		Advertise: func(ctx context.Context, n meshnet.Network, p int, addrs []netip.Addr) error {
+			c, err := mdns.Listen(n.Iface)
+			if err != nil {
+				return err
+			}
+			log.Printf("mesh: setup window: advertising _mads._tcp on %s (%s)", n.Label, n.Iface)
+			return mdns.Advertise(ctx, c, mdns.Advert{Instance: *meshName, Host: *meshName, Port: p, Addrs: addrs,
+				TXT: map[string]string{"v": "1", "n": *meshName, "p": *platform, "fp": id.Fingerprint().Short()}})
+		},
 	})
+	// An unpairing or grant change ends that device's open streams.
+	devices.OnReload(gate.Revalidate)
+	// This host's settings, followed live: where it listens, and the
+	// Tailscale check (unless -require-tailnet was given).
+	devices.OnSettings(func(ms contracts.MeshSettings) {
+		if !requireTailnetFlag {
+			gate.SetRequireTailnet(ms.TailnetCheck())
+		}
+		if len(ms.Chosen()) == 0 && *addr == "" {
+			log.Printf("mesh: no mesh network chosen yet: listening nowhere (Settings → Paired devices → Set up mesh, or mads mesh setup)")
+		}
+		loop.Kick()
+	})
+	// The setup window, opened and closed at the device.
+	devices.OnDiscoverable(func(w contracts.Discoverable) {
+		gate.SetWindow(w)
+		loop.Kick()
+	})
+	log.Printf("mesh: this device is %s; forwarding to %s", id.Fingerprint().Short(), target)
 	go devices.Run(runCtx)
-	// The tailnet side of a grant sends no events: re-check open requests
-	// on its cache's clock, so a capability lowered in the policy ends
-	// streams too.
+	go loop.Run(runCtx)
+	// The tailnet side sends no events: re-check open requests on the
+	// Tailscale network on WhoIs's clock.
 	every := *whoisTTL
 	if every <= 0 {
 		every = 10 * time.Second
 	}
 	go gate.RevalidateEvery(runCtx, every)
 
-	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGTERM, os.Interrupt)
-		<-sig
-		stopRun()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(ctx)
-	}()
-	// ServeTLS with the certificate already in TLSConfig (made in memory
-	// from the device key: no certificate files), HTTP/2 included.
-	if err := srv.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("mesh: %v", err)
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, os.Interrupt)
+	<-sig
+	stopRun()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(ctx)
+}
+
+func isLoopbackHost(h string) bool {
+	ip, err := netip.ParseAddr(h)
+	return err == nil && ip.Unmap().IsLoopback()
+}
+
+// inTailnet reports whether a fixed (-addr) network's address is a
+// Tailscale one.
+func inTailnet(n meshnet.Network) bool {
+	for _, a := range n.Addrs {
+		for _, p := range meshnet.TailnetRanges {
+			if p.Contains(a) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// reporter appends mesh.listening, newest report first: one being retried
+// is replaced by a newer one.
+type reporter struct {
+	data *dataclient.Client
+	mu   sync.Mutex
+	next *contracts.MeshListener
+	wake chan struct{}
+}
+
+func newReporter(data *dataclient.Client) *reporter {
+	return &reporter{data: data, wake: make(chan struct{}, 1)}
+}
+
+func (r *reporter) offer(l contracts.MeshListener) {
+	r.mu.Lock()
+	r.next = &l
+	r.mu.Unlock()
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (r *reporter) run(ctx context.Context) {
+	backoff := time.Second
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.wake:
+		}
+		for {
+			r.mu.Lock()
+			l := r.next
+			r.mu.Unlock()
+			if l == nil {
+				break
+			}
+			payload, _ := json.Marshal(l)
+			err := r.data.Append(ctx, &contracts.Envelope{Type: contracts.MeshListening, Actor: "mesh", Payload: payload})
+			if err == nil {
+				r.mu.Lock()
+				if r.next == l {
+					r.next = nil
+				}
+				r.mu.Unlock()
+				where := "nowhere"
+				if len(l.Addresses) > 0 {
+					var as []string
+					for _, a := range l.Addresses {
+						as = append(as, a.Addr)
+					}
+					where = strings.Join(as, ", ")
+				}
+				log.Printf("mesh: reported: reachable at %s (Tailscale check %s)", where, l.TailnetCheckStatus)
+				backoff = time.Second
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			backoff = min(backoff*2, 30*time.Second)
+		}
 	}
 }
 
@@ -229,15 +373,15 @@ func newHTTPServer(h http.Handler, tlsConfig *tls.Config) *http.Server {
 	}
 }
 
-// refuseWildcard keeps the mesh off every interface but the one asked for:
-// an empty or unspecified host would put the Router's API on the LAN.
+// refuseWildcard keeps -addr off every interface but the one asked for: an
+// empty or unspecified host would put the Router's API on every network.
 func refuseWildcard(addr string) error {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return err
 	}
 	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
-		return errors.New("the mesh listener must bind a specific address, normally this node's tailnet IP")
+		return errors.New("the mesh listener must bind a specific address")
 	}
 	return nil
 }
@@ -251,43 +395,6 @@ func shortHostname() string {
 	}
 	h, _, _ = strings.Cut(h, ".")
 	return h
-}
-
-// advertisedURL is the mesh_url other devices dial for this host: the
-// listen address when -addr names one, else this node's MagicDNS name (or
-// its tailnet IP) on the listener's port. Stored as http://host:port and
-// always dialled with TLS, as every mesh_url is.
-func advertisedURL(addrFlag, listening, dnsName string) string {
-	host, port, err := net.SplitHostPort(listening)
-	if err != nil {
-		return "http://" + listening
-	}
-	if addrFlag == "" {
-		if dns := strings.TrimSuffix(dnsName, "."); dns != "" {
-			host = dns
-		}
-	}
-	return "http://" + net.JoinHostPort(host, port)
-}
-
-// announce appends mesh.listening, retrying with backoff until it's taken
-// or ctx ends.
-func announce(ctx context.Context, data *dataclient.Client, l contracts.MeshListener) {
-	payload, _ := json.Marshal(l)
-	backoff := time.Second
-	for {
-		err := data.Append(ctx, &contracts.Envelope{Type: contracts.MeshListening, Actor: "mesh", Payload: payload})
-		if err == nil {
-			log.Printf("mesh: advertised as %s", l.MeshURL)
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(backoff):
-		}
-		backoff = min(backoff*2, 30*time.Second)
-	}
 }
 
 func commit() string {

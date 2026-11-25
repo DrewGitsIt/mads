@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { RouterClient } from "../../router/client";
 import { useCompactionSupport } from "../../router/compaction";
+import { useHostScope } from "../../router/hostScope";
 import type { Link, QueuedMessage, Session, Usage } from "../../router/types";
 import {
   commandCandidates,
@@ -274,6 +275,7 @@ export function Composer({
     ]);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the fields commands read, see above
   const commandSession = useMemo(() => session, [sessionKey]);
+  const host = useHostScope();
   const commandCtx = useMemo<CommandContext>(
     () => ({
       routerClient,
@@ -282,6 +284,7 @@ export function Composer({
       provider,
       compaction,
       session: commandSession,
+      host,
       linkedSessions,
       leader,
       pipelineRunning,
@@ -293,6 +296,7 @@ export function Composer({
       provider,
       compaction,
       commandSession,
+      host,
       linkedSessions,
       leader,
       pipelineRunning,

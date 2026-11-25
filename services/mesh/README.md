@@ -1,26 +1,39 @@
 # Mesh Service
 
 The gate for mesh mode ([docs/MESH-MODE-DESIGN.md](../../docs/MESH-MODE-DESIGN.md),
-[docs/MESH-AUTH-DESIGN.md](../../docs/MESH-AUTH-DESIGN.md)). It lets the Routers
+[docs/MESH-AUTH-DESIGN.md](../../docs/MESH-AUTH-DESIGN.md),
+[docs/MESH-NETWORK-DESIGN.md](../../docs/MESH-NETWORK-DESIGN.md)). It lets the Routers
 on the user's other devices reach **this** node's Router:
-- It binds only to this node's tailnet IPv4 (`:17380`).
+- It listens only on this device's **mesh network**: the network its user chose
+  (Tailscale, another VPN, a LAN), on its own addresses there (`:17380`), never a
+  wildcard. It finds this machine's networks itself every 10 s (`internal/netloop`,
+  `pkg/meshnet`) and moves a listener when its network's address changes. A fresh
+  install has no mesh network and listens nowhere until set up (`mads mesh setup`,
+  or Settings → Paired devices). It starts without tailscaled, which it asks only
+  for names, peers and the identity check (`pkg/meshnet/tailscale`, which finds the
+  LocalAPI on Linux and on macOS).
 - It speaks **TLS 1.3 only, with client certificates** (mutual TLS, D2). Its
   server certificate is made in memory at start from this device's key
   (`$MADS_HOME/device.key`, `pkg/devicekey`); there are no certificate files.
 - A caller is the **paired device** whose key it proves: the fingerprint of its
   certificate key, looked up in this host's paired devices. An unpaired key is
   refused (`unpaired_device`).
-- By default it also requires **tailnet identity** (WhoIs: same user, untagged,
-  holding the app capability `github.com/drewgitsit/mads/cap/mesh`) as a second
-  factor (`-require-tailnet`). Both must pass.
+- On the **Tailscale** network only, an identity check (on by default; WhoIs: same
+  tailnet user, untagged) can refuse a caller. It never lowers a level and reads
+  nothing from the tailnet policy. With the check on and tailscaled unreachable,
+  the Tailscale network refuses everyone (fails closed).
 - It authorises the device by its **grant** (view, chat, control or admin) and
   ceilings (C1–C3), over a per-route class table, and forwards allowed requests
   to the loopback Router with the device as the actor.
 
-It also serves `/mesh/hello` (who this node is, and what the caller may do here)
-and `/mesh/fs/list` (the folder browser for starting a session here from another
-device). Both are behind TLS like everything else; there is no unauthenticated
-endpoint.
+It also serves `/mesh/hello` (who this node is, what the caller may do here, where
+it listens now and its Tailscale key expiry) and `/mesh/fs/list` (the folder browser
+for starting a session here from another device). While this device's setup window
+is open (at most 10 minutes, opened at the device: `device.discoverable`), it also
+answers `GET /mesh/discover` (name, platform, fingerprint) to anyone completing the
+TLS handshake, takes discovered pairing requests (`POST /mesh/pair` with mode
+`discovered`, a check code both screens show), and advertises `_mads._tcp` over mDNS
+on a LAN mesh network. Outside the window there is no unauthenticated endpoint.
 
 The **paired devices** come from the Data Service (`internal/paired`): loaded at
 start and followed through `peer.*` events, retrying with backoff while the Data
@@ -35,14 +48,20 @@ It does **not**:
   of the Data Service's `mesh_peers`.
 - Write to the Data Service, except:
   - `device.refused` audit events (debounced per device, code and route);
-  - `mesh.listening` at start: its mesh address, fingerprint and whether
-    `-require-tailnet` was given (what the Router's Settings and pairing
-    codes read);
-  - a joiner's pairing request (`POST /devices/pair` redeems a code:
-    `RedeemPairingCode`), which the host's user then approves or declines.
+  - `mesh.listening`: where it listens on each network, its fingerprint and
+    the Tailscale check (what the Router's Settings and pairing codes read);
+  - a joiner's pairing request (a code redeemed, or a discovered request
+    during the setup window), which the host's user then approves or
+    declines, and a joiner's "the number didn't match" (undoes that
+    pairing);
+  - closing the setup window after abandoned pairings;
+  - forgetting a paired device that asks to be forgotten (`/mesh/forget`,
+    docs/MESH-NETWORK-DESIGN.md F6).
 - Serve any UI.
 
-The Router never learns it exists, beyond the headers on the requests it
+The Router reaches it only to check that this device's own Mesh Service
+answers at an address (`GET /mesh/self`, before showing or sharing it).
+Otherwise it learns it exists only from the headers on the requests it
 forwards: `X-Mads-Mesh-Peer` (the calling device's name here, which also
 marks the request as relayed), `X-Mads-Mesh-Level` (its effective level),
 `X-Mads-Mesh-Device` (its full fingerprint) and `X-Mads-Actor` (the device,
@@ -51,26 +70,24 @@ as the actor of what it does).
 ## Run it alone
 
 ```sh
-make build && ../../bin/mesh                      # needs tailscaled; binds <tailnet IPv4>:17380
+make build && ../../bin/mesh                      # listens on this device's chosen mesh network
 ../../bin/mesh -addr 127.0.0.1:17380 -fs-root off  # loopback, for poking at it locally
 ```
 
 **Flags:**
 - `-router-url` (default `http://localhost:17373`).
-- `-localapi-socket` (default `/var/run/tailscale/tailscaled.sock`. It's mode 0666
-  on Linux, so no root is needed).
-- `-require-tailnet` (default `true`): also require tailnet identity. The
-  capability is only the second factor's gate: the paired device's grant
-  decides the level, capped by the highest level the capability's `access`
-  list names (view, chat, control, admin), whichever is lower. `false` admits
-  by device key alone (still only on the tailnet IP).
-  **Precedence:** left unset, this host's own setting decides: "Only accept
-  devices on my tailnet" in Settings → Paired devices (`PUT
-  /devices/settings` on the Router, stored as the newest
-  `device.settings_changed` in the Data Service). The paired-device list
-  follows it with the peer rows, so a change applies live: turning it on
-  ends open streams that no longer pass the tailnet check. Never set, it's
-  `true`, and the Mesh Service starts with `true` until it has read it.
+- `-addr` (default none): listen only here, whatever the setting says (tests,
+  manual setups). `-port` (default: the setting's, 17380).
+- `-localapi-socket` (default: found as tailscale's own CLI finds it: Linux
+  `/var/run/tailscale/tailscaled.sock`, mode 0666; the macOS app's localhost port and
+  token; or the open-source macOS daemon's `/var/run/tailscaled.socket`).
+- `-require-tailnet` (default `true`): the Tailscale network's identity check.
+  Refuse-only: the paired device's grant is its level.
+  **Precedence:** left unset, this host's own setting decides (the Tailscale
+  network's `tailnet_check` in the `mesh_settings` row, `PUT /devices/settings` on
+  the Router). The Mesh Service follows `device.settings_changed`, so a change
+  applies live: turning it on ends open streams on the Tailscale network that no
+  longer pass the check. It starts with `true` until it has read the setting.
   Given explicitly (`-require-tailnet` or `-require-tailnet=false`), the
   flag wins for as long as the Mesh Service runs that way; it says so in
   `mesh.listening` (`require_tailnet_flag`), and Settings shows the switch
@@ -193,7 +210,10 @@ refusal can say why and revocation needs no reconnect.
    and opens a request for this host to approve: 201 `server.PairStatus`.
    Every bad secret (wrong, expired, used, malformed) gets one 403
    `pairing_refused`, audited and debounced; this host's own key is 403
-   `pair_self`, a key already paired here 409 `already_paired`. Rate-limited
+   `pair_self`. A key already paired here re-pairs: its request is taken as
+   any other, and approval updates its row in place (F6). The key that
+   used a code may present it again for that request's lifetime and gets
+   the same request back. Rate-limited
    per address (5, then one per 12 s) and overall (120, then one per
    500 ms): 429. A joiner's own mesh address must be on this tailnet at the
    mesh port (422 `bad_mesh_url`).
@@ -201,6 +221,9 @@ refusal can say why and revocation needs no reconnect.
 6. **The key isn't paired here:** 403 `unpaired_device` (audited), and the
    connection is closed. The effective level is the grant, capped with
    `-require-tailnet` by the capability's.
+6a. **`POST /mesh/forget`** (F6): any paired caller, any level, none
+   included: the Data Service deletes its row (`device.unpaired`, by
+   `itself`) and its live requests end. 204.
 7. **`GET /mesh/hello`:** 200 [`Hello`](internal/server/server.go), with
    `access` the effective level and every level below it (empty: granted
    nothing).

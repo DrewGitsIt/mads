@@ -566,7 +566,7 @@ func copyRecorded(w http.ResponseWriter, rec *httptest.ResponseRecorder) {
 // Service authenticates this device by its certificate, then uses its own
 // node's token for its own Router.
 func (m *Manager) forward(w http.ResponseWriter, r *http.Request, p contracts.Peer, path string) {
-	c, err := m.conn(p)
+	c, err := m.conn(r.Context(), p)
 	if err != nil {
 		state, reason := dialFailure(p, err)
 		writeError(w, http.StatusBadGateway, "peer_"+string(state), p.Name+": "+reason)

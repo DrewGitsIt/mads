@@ -1,7 +1,10 @@
 # Mesh auth: secure across devices, with no login
 
 **Status:** Built (A1–A7, 2026-11-17 to 2026-11-20) and merged with mesh
-mode (`docs/MESH-MODE-DESIGN.md`). Deferred: QR codes and phone pairing
+mode (`docs/MESH-MODE-DESIGN.md`). Its tailnet-only parts (the tailnet
+policy capability capping levels, listening only on the Tailscale address)
+are superseded by `docs/MESH-NETWORK-DESIGN.md`: networks are adapters,
+and Tailscale is an optional, refuse-only identity check. Deferred: QR codes and phone pairing
 (D6), C1 "held" (D4), LAN listening, and P2's host shells. The
 implementation notes below record each step as it landed, and the cutover
 runbook how it was deployed.

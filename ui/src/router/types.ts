@@ -2317,7 +2317,7 @@ export interface SessionHost {
  * A peer's live state as the Router sees it (contracts.PeerReachability).
  * "unpaired": no device key is pinned for it here, so it is never dialled.
  */
-export type PeerReachability = "unknown" | "connected" | "unreachable" | "denied" | "version_mismatch" | "unpaired";
+export type PeerReachability = "unknown" | "connected" | "unreachable" | "denied" | "version_mismatch" | "unpaired" | "no_shared_network";
 
 /** GET /peers row: a device this node views, plus its live state. */
 export interface PeerStatus {

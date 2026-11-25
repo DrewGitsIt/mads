@@ -1,0 +1,727 @@
+/* The mesh network (docs/mockups/network-reachability-v4.html): the empty
+   state, Set up mesh, the Mesh network card, and Troubleshoot connection. */
+
+/* MeshEmptyState */
+.emptyCard {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-5);
+  align-items: center;
+  padding: var(--space-5);
+}
+.emptyTitle {
+  margin: 0;
+  font: 650 17px/1.3 var(--sans);
+  color: var(--text);
+}
+.emptyBody {
+  margin: 6px 0 0;
+  max-width: 62ch;
+  color: var(--text2);
+  font-size: var(--fs-ui);
+  line-height: 1.5;
+}
+.emptySteps {
+  display: flex;
+  gap: var(--space-4);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+.emptySteps li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.emptySteps i {
+  font-style: normal;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--bg3);
+  color: var(--text2);
+  font: 600 11px var(--sans);
+}
+.emptyActions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+/* Set up mesh: pinned near the top, growing downward, so Add and Done
+   stay put as devices are found and answered (Q5). */
+.setupDialog {
+  width: 600px;
+  gap: var(--space-4);
+  align-self: flex-start;
+  margin-top: 8vh;
+  max-height: calc(92vh - var(--space-5));
+}
+.steps {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text3);
+  font: 500 var(--fs-sm) var(--sans);
+}
+.contents {
+  display: contents;
+}
+.steps li[aria-current="step"] {
+  color: var(--accent);
+}
+.steps li[data-done] {
+  color: var(--text2);
+}
+.stepRule {
+  width: 16px;
+  height: 1px;
+  background: var(--line);
+}
+.lede {
+  margin: 0;
+  color: var(--text2);
+  font-size: var(--fs-ui);
+  line-height: 1.5;
+}
+.lede b {
+  color: var(--text);
+  font-weight: 600;
+}
+.note {
+  margin: 0;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.note b {
+  color: var(--text2);
+  font-weight: 600;
+}
+.note a,
+.tips a,
+.reachSteps a {
+  color: var(--accent);
+}
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.quick {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+}
+.linkButton {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.linkButton:hover {
+  text-decoration-color: currentColor;
+}
+.done {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0;
+  color: var(--text2);
+}
+.done b {
+  color: var(--text);
+  font-weight: 600;
+}
+.doneMark,
+.failMark {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  flex: none;
+}
+/* The mark holds in dark mode too: ok-soft alone all but vanished there (Q15). */
+.doneMark {
+  background: color-mix(in srgb, var(--ok-fg) 22%, transparent);
+  color: var(--ok-fg);
+}
+.readyMark {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.failMark {
+  background: var(--warn-soft);
+  color: var(--warn-fg);
+}
+
+/* "Give your devices a network in common" */
+.tips {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.tips ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text2);
+  font-size: var(--fs-body);
+  line-height: 1.55;
+}
+.tips li + li {
+  margin-top: 6px;
+}
+.tips li b {
+  color: var(--text);
+}
+.tipsGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tipsHead {
+  margin: 0;
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--text2);
+}
+.later {
+  margin: 0;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+
+/* NetworkChoice: a radio card */
+.choice {
+  display: grid;
+  grid-template-columns: 20px 28px 1fr;
+  gap: var(--space-3);
+  align-items: start;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg0);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.choice:hover {
+  border-color: var(--text3);
+}
+.choice:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.choice[aria-checked="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 60%, var(--bg0));
+}
+.choiceNone {
+  grid-template-columns: 20px 1fr;
+}
+.mark {
+  margin-top: 5px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text3);
+  display: grid;
+  place-items: center;
+}
+.choice[aria-checked="true"] .mark {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.choice[aria-checked="true"] .mark::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-ink);
+}
+.netIcon {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  background: var(--bg3);
+  color: var(--text2);
+}
+.netIcon svg {
+  width: 16px;
+  height: 16px;
+}
+.choiceTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: 600 var(--fs-ui) var(--sans);
+}
+.meaning {
+  display: block;
+  margin-top: 2px;
+  color: var(--text2);
+  font-size: var(--fs-body);
+}
+.safety {
+  display: block;
+  margin-top: 4px;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.safety[data-warn] {
+  color: var(--warn-fg);
+}
+
+/* AddDevices: the found list */
+.foundHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+.spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid var(--bg4);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+  flex: none;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.foundList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg0);
+}
+.foundItem {
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--line-soft);
+}
+.foundItem:first-child {
+  border-top: 0;
+}
+.foundLine {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.foundLine > span:nth-child(2) {
+  min-width: 0;
+}
+.foundName {
+  font: 600 var(--fs-ui) var(--sans);
+  color: var(--text);
+}
+.foundMeta {
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  font-variant-numeric: slashed-zero;
+}
+/* The short fingerprint and the waiting line never break mid-token (Q10). */
+.foundFp,
+.wait {
+  white-space: nowrap;
+}
+.spacer {
+  flex: 1;
+}
+.wait {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text2);
+  font-size: var(--fs-sm);
+}
+.after {
+  margin: var(--space-2) 0 var(--space-1) 36px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.empty {
+  margin: 0;
+  padding: var(--space-4) var(--space-3);
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+.help {
+  margin: 0;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.help b {
+  color: var(--text2);
+  font-weight: 600;
+}
+.helpFold > summary {
+  color: var(--text2);
+}
+.helpFold > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-1);
+}
+.help code {
+  font-size: 11.5px;
+  color: var(--text2);
+  background: var(--bg2);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+.actionsRow {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.error {
+  margin: 0;
+  color: var(--bad-fg);
+  font-size: var(--fs-sm);
+}
+.vouch {
+  margin: 0;
+  font: 400 var(--fs-chat)/1.45 var(--sans);
+  color: var(--text);
+}
+.vouchMark {
+  color: var(--ok-fg);
+  font-weight: 700;
+  margin-right: 4px;
+}
+
+/* MeshNetworkCard */
+.cardMain {
+  display: grid;
+  grid-template-columns: 28px 1fr auto auto;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+}
+.cardValue {
+  font: 500 var(--fs-ui) var(--sans);
+  color: var(--text);
+}
+.cardMeaning {
+  margin-top: 1px;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.cardState {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text2);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+.cardBanner {
+  padding: 0 var(--space-4) var(--space-3);
+}
+.cardAdvanced {
+  border-top: 1px solid var(--line-soft);
+}
+/* The disclosure triangle at a size that reads as one (Q15). */
+.cardAdvanced > summary::before {
+  font-size: 13px;
+  line-height: 1;
+}
+.cardAdvanced > div:last-child {
+  padding: 0 var(--space-4) var(--space-3);
+}
+.port {
+  font: 500 var(--fs-body) var(--mono);
+  color: var(--text);
+}
+
+/* An inline banner with a link or button (no dismiss: it holds while the condition does). */
+.banner {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+  font: var(--fs-body) var(--sans);
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--r-sm);
+}
+.bannerIcon {
+  width: 16px;
+  text-align: center;
+  font-weight: 650;
+}
+.bannerMessage {
+  min-width: 0;
+  color: var(--text);
+}
+.bannerTitle {
+  font-weight: 650;
+  margin-right: 6px;
+}
+.bannerDescription {
+  color: var(--text2);
+}
+.banner[data-tone="warn"] {
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--line));
+  border-left-color: var(--warn);
+}
+.banner[data-tone="warn"] .bannerIcon {
+  color: var(--warn);
+}
+.banner[data-tone="bad"] {
+  background: var(--bad-soft);
+  border-color: color-mix(in srgb, var(--bad) 35%, var(--line));
+  border-left-color: var(--bad);
+}
+.banner[data-tone="bad"] .bannerIcon {
+  color: var(--bad);
+}
+.banner[data-tone="info"] {
+  background: var(--info-soft);
+  border-color: color-mix(in srgb, var(--info) 35%, var(--line));
+  border-left-color: var(--info);
+}
+.banner[data-tone="info"] .bannerIcon {
+  color: var(--info);
+}
+.linkBtn {
+  display: inline-flex;
+  align-items: center;
+  font: 650 var(--fs-sm) var(--sans);
+  padding: 4.5px var(--space-2);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  color: var(--text2);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.linkBtn:hover {
+  color: var(--text);
+  background: var(--bg2);
+  border-color: var(--text3);
+}
+
+/* Troubleshoot connection */
+.troubleWrap {
+  grid-column: 1 / -1;
+}
+.trouble > summary {
+  padding: var(--space-1) 0;
+}
+.troubleSummary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.troubleBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+}
+.reach {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--bad) 35%, var(--line));
+  border-left: 3px solid var(--bad);
+  border-radius: var(--r-sm);
+  background: var(--bad-soft);
+}
+.reach[data-tone="warn"] {
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--line));
+  border-left-color: var(--warn);
+  background: var(--warn-soft);
+}
+.reachIcon {
+  grid-row: 1 / span 3;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--bad) 22%, transparent);
+  color: var(--bad-fg);
+  font-weight: 700;
+}
+.reach[data-tone="warn"] .reachIcon {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+  color: var(--warn-fg);
+}
+.reachTitle {
+  margin: 0;
+  font: 650 var(--fs-ui) var(--sans);
+  color: var(--text);
+}
+.reachFacts {
+  margin: 0;
+  color: var(--text2);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+}
+.reachFacts b {
+  color: var(--text);
+  font-weight: 600;
+}
+.reachSteps {
+  margin: var(--space-1) 0 0;
+  padding-left: 18px;
+  color: var(--text2);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+}
+.reachSteps li + li {
+  margin-top: 3px;
+}
+.reachSteps b {
+  color: var(--text);
+  font-weight: 600;
+}
+.reachSteps code {
+  font-size: 11.5px;
+}
+.reachLater {
+  color: var(--text3);
+}
+.reachLater::marker {
+  color: var(--text3);
+}
+.troubleBody .pathCard {
+  max-width: none;
+  background: var(--bg1);
+}
+.pathHead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-1);
+}
+.pathTitle {
+  margin: 0;
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--text2);
+}
+.pathHeadNote {
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+.pathList {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--space-3);
+}
+.pathItem {
+  display: grid;
+  grid-template-columns: 10px minmax(150px, 1fr) minmax(0, 1.3fr) auto;
+  gap: var(--space-3);
+  align-items: baseline;
+  padding: 7px 0;
+  border-top: 1px solid var(--line-soft);
+  font-size: var(--fs-sm);
+}
+.pathItem:first-child {
+  border-top: 0;
+}
+.pathItem > :first-child {
+  align-self: center;
+}
+.pathWhere {
+  min-width: 0;
+}
+.pathLabel {
+  color: var(--text);
+  font-weight: 600;
+}
+.pathAddr {
+  display: block;
+  font: 500 11.5px var(--mono);
+  color: var(--text3);
+  font-variant-numeric: slashed-zero;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pathState {
+  color: var(--text2);
+  min-width: 0;
+}
+.pathState b {
+  color: var(--text);
+  font-weight: 600;
+}
+.pathState small {
+  display: block;
+  color: var(--text3);
+  font-size: var(--fs-chip);
+}
+.pathWhen {
+  color: var(--text3);
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.pathItem[data-off] .pathLabel,
+.pathItem[data-off] .pathState {
+  color: var(--text3);
+}
+.pathFoot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--line-soft);
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+.pathEmpty {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+/* Why a found device offers Re-pair: the warning colour, never green (F6 R5). */
+.help.repairWhy {
+  color: var(--warn-fg);
+}

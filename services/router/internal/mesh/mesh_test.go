@@ -234,7 +234,7 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	h := &harness{id: newIdentity(t), data: dataclient.New(datatest.Start(t), "test"), clk: &clock{now: time.Unix(1_000_000, 0)}}
-	h.mgr = NewManager(h.data, Options{SelfName: "mac", Now: h.clk.Now, Debounce: 10 * time.Second, Identity: h.id})
+	h.mgr = NewManager(h.data, Options{AllowLoopback: true, SelfName: "mac", Now: h.clk.Now, Debounce: 10 * time.Second, Identity: h.id})
 	h.local = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/sessions":
@@ -338,11 +338,12 @@ func TestProbeClassification(t *testing.T) {
 		t.Fatalf("unpinned peer: %+v", got)
 	}
 	// Pinned to another key: the handshake is refused, and the reason
-	// names both keys.
+	// names both keys. Another device answering at an address counts as
+	// that address not answering (F4), not as the device refusing.
 	wrong := row
 	wrong.ID, wrong.Fingerprint = "per_wrong", testFingerprint(9)
 	got := h.mgr.ProbePeer(ctx, wrong)
-	if got.State != contracts.PeerDenied || !strings.Contains(got.Reason, devicekey.Fingerprint(p.fp).Short()) || !strings.Contains(got.Reason, devicekey.Fingerprint(testFingerprint(9)).Short()) {
+	if got.State != contracts.PeerUnreachable || !strings.Contains(got.Reason, "a different device answered") || !strings.Contains(got.Reason, devicekey.Fingerprint(p.fp).Short()) || !strings.Contains(got.Reason, devicekey.Fingerprint(testFingerprint(9)).Short()) {
 		t.Fatalf("pinned to another key: %+v", got)
 	}
 	if p.handshakes.Load() != before {
@@ -525,6 +526,11 @@ func TestReachabilityIsDebounced(t *testing.T) {
 	evs := h.reachabilityEvents(t)
 	if len(evs) != 3 || evs[1].To != contracts.PeerUnreachable || evs[1].Reason != "connection refused" || evs[2].To != contracts.PeerConnected {
 		t.Fatalf("events = %+v", evs)
+	}
+	// The recovery says which path it's on, as the first connect does.
+	path, _ := h.mgr.pathStatus(contracts.Peer{Fingerprint: p.fp})
+	if v := evs[2].Via; path == nil || v == nil || v.Addr != path.Addr || v.Addr != evs[0].Via.Addr {
+		t.Fatalf("the recovery's via = %+v (path %+v)", v, path)
 	}
 }
 
@@ -878,7 +884,7 @@ func TestAddingAPairedOnlyDeviceViewsIt(t *testing.T) {
 func TestMeshRelayedWritesNeverGrantAdmin(t *testing.T) {
 	g := datatest.StartGuarded(t)
 	data := dataclient.New(g.URL, "router", dataclient.WithToken(g.Token))
-	mgr := NewManager(data, Options{SelfName: "mac"})
+	mgr := NewManager(data, Options{AllowLoopback: true, SelfName: "mac"})
 	seed := byte(10)
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		no := false

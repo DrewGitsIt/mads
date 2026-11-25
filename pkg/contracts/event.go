@@ -367,12 +367,39 @@ const (
 	// is device.paired (how "code"). Payload: PairRequest.
 	DevicePairDeclined EventType = "device.pair_declined"
 	// DeviceSettingsChanged is this host's user changing its mesh settings
-	// (Settings → Paired devices → Advanced options): the newest one is the
-	// setting, so the Data Service keeps no other copy. Written only with
-	// host authority, never by a relayed device, under the store's fixed
-	// actor "settings" (who changed it is in the payload). Payload:
-	// MeshSettingsChange.
+	// (Settings → Paired devices: the mesh network, Advanced options). The
+	// setting itself is the mesh_settings row (migration 0038); this event
+	// is written in the same transaction, the history in the activity log
+	// and what the Mesh Service follows. Written only with host authority,
+	// never by a relayed device, under the store's fixed actor "settings"
+	// (who changed it is in the payload). Payload: MeshSettingsChange.
 	DeviceSettingsChanged EventType = "device.settings_changed"
+	// DeviceDiscoverable is this device's setup window opening, renewed or
+	// closing (docs/MESH-NETWORK-DESIGN.md U4): written by the Data
+	// Service's PUT /devices/discoverable, with host authority only, under
+	// the store's fixed actor "settings". The Mesh Service follows it.
+	// Payload: Discoverable.
+	DeviceDiscoverable EventType = "device.discoverable"
+	// DeviceDiscovered is this device answering a discovery probe, or
+	// getting a discovered pairing request, during its window. Audit only,
+	// debounced per address. Payload: DeviceDiscovery.
+	DeviceDiscovered EventType = "device.discovered"
+	// DeviceLevelUncapped is the Mesh Service noting a device whose
+	// effective level rose when the tailnet policy stopped capping levels
+	// (docs/MESH-NETWORK-DESIGN.md, "The WhoIs change"; round-1 review S6):
+	// its grant here is above what the policy's mesh capability named, or
+	// the policy didn't let it in at all. Once per device per run. Payload:
+	// DeviceUncapped.
+	DeviceLevelUncapped EventType = "device.level_uncapped"
+	// DevicePairStarted is a device starting a discovered pairing with this
+	// host (its commitment arrived, round-2 review R1): shown on the host
+	// so a request that never comes ("a device started pairing") is
+	// noticed. Payload: DeviceDiscovery.
+	DevicePairStarted EventType = "device.pair_started"
+	// DevicePairingAbandoned is the Mesh Service closing the setup window
+	// because several pairings were started and never finished (someone
+	// trying check codes). Payload: PairingAbandoned.
+	DevicePairingAbandoned EventType = "device.pairing_abandoned"
 
 	// MeshListening is this node's Mesh Service starting to listen: where
 	// other devices reach it, with what it reports about this host. The
@@ -617,7 +644,7 @@ var EventTypes = []EventType{
 	PeerCreated, PeerUpdated, PeerDeleted, PeerReachabilityChanged,
 	DevicePaired, DeviceUnpaired, DeviceGrantChanged, DeviceRefused,
 	DeviceIntroduced, DeviceCodeCreated, DevicePairRequested, DevicePairDeclined,
-	DeviceSettingsChanged, MeshListening, SessionDeviceMessage,
+	DeviceSettingsChanged, DeviceDiscoverable, DeviceDiscovered, DeviceLevelUncapped, DevicePairStarted, DevicePairingAbandoned, MeshListening, SessionDeviceMessage,
 	LinkCreated, LinkUpdated, LinkDeleted, LinkMessageInjected, LinkDigestDiscarded, LinkDigestRestored, TurnEnded,
 	TemplateCreated, TemplateUpdated, TemplateDeleted,
 	ProfileCreated, ProfileUpdated, ProfileDeleted, ConfigUpdated,

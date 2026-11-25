@@ -65,6 +65,8 @@ func main() {
 		err = cmdHooks(os.Args[2:], os.Stdout)
 	case "device":
 		err = cmdDevice(os.Args[2:], os.Stdout)
+	case "mesh":
+		err = cmdMesh(os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
 	case "pair":
 		if len(os.Args) > 2 && isPairSubcommand(os.Args[2]) {
 			err = cmdPairSub(os.Args[2:], os.Stdin, os.Stdout)
@@ -118,6 +120,7 @@ func usage() {
   mads pair --list [--json] | --revoke FINGERPRINT|NAME   # the devices paired with this host
   mads pair code | join [CODE] [--wait] | requests | approve ID --grant LEVEL | decline ID
   mads pair remove NAME|FINGERPRINT [--everywhere]        # pairing by code (D6), through the Router
+  mads mesh setup | status | add | approve | code | join | set | remove | address add   # mads mesh --help
   mads --version
 
 The Data Service must be running (make -C services/data run). Every command

@@ -5,18 +5,33 @@ import styles from "./Fingerprint.module.css";
 
 const groupsOf = (fp: string) => fp.match(/.{1,4}/g) ?? [];
 
-/** The whole fingerprint in groups of four, the short form's four in the accent. */
-export function FingerprintGroups({ fingerprint, big, columns = 4 }: { fingerprint: string; big?: boolean; columns?: 4 | 7 }) {
+/** Groups per line of the whole fingerprint: its 13 groups read as two lines, 7 and 6. */
+const PER_LINE = 7;
+
+/**
+ * The whole fingerprint, one format everywhere (the chip's popover, a
+ * code's prompt, a row's details): groups of four joined by hyphens as
+ * the chip writes them, seven to a line, the short form's four in the
+ * accent, so the chip's text is literally its start.
+ */
+export function FingerprintGroups({ fingerprint, big }: { fingerprint: string; big?: boolean }) {
+  const groups = groupsOf(fingerprint);
+  const lines: string[][] = [];
+  for (let i = 0; i < groups.length; i += PER_LINE) lines.push(groups.slice(i, i + PER_LINE));
   return (
-    <div
-      className={[styles.full, big && styles.big].filter(Boolean).join(" ")}
-      style={{ gridTemplateColumns: `repeat(${columns}, auto)` }}
-      aria-label={`Fingerprint ${groupsOf(fingerprint).join(" ")}`}
-    >
-      {groupsOf(fingerprint).map((g, i) => (
-        <span key={i} aria-hidden="true">
-          {g}
-        </span>
+    <div className={[styles.full, big && styles.big].filter(Boolean).join(" ")} aria-label={`Fingerprint ${groups.join(" ")}`}>
+      {lines.map((line, l) => (
+        <div key={l} aria-hidden="true">
+          {line.map((g, i) => {
+            const n = l * PER_LINE + i;
+            return (
+              <span key={i} data-short={n < 4 || undefined}>
+                {g}
+                {n < groups.length - 1 ? "-" : ""}
+              </span>
+            );
+          })}
+        </div>
       ))}
     </div>
   );
@@ -54,11 +69,7 @@ export function FingerprintChip({ fingerprint, label, help }: { fingerprint: str
     >
       <div role="dialog" aria-label={`${label} fingerprint`}>
         <div className={styles.label}>{label} · fingerprint</div>
-        <div className={styles.groups}>
-          {groups.map((g, i) => (
-            <span key={i}>{g}</span>
-          ))}
-        </div>
+        <FingerprintGroups fingerprint={fingerprint} />
         <p className={styles.help}>{help} The first four groups are its short form.</p>
         <div className={styles.row}>
           <Button

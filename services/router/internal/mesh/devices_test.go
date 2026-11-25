@@ -300,8 +300,11 @@ func TestRelayedDeviceListHasNoDialErrors(t *testing.T) {
 	if d := read(false); d.Reason == "" {
 		t.Fatal("locally the reason is shown")
 	}
-	if d := read(true); d.Reason != "" {
-		t.Fatalf("relayed reason %q", d.Reason)
+	if d := read(true); d.Reason != "" || d.MeshURL != "" || d.LastGood != nil || len(d.Addresses) != 0 || d.Path != nil {
+		t.Fatalf("relayed: reason %q, where it's reached %q %+v %+v", d.Reason, d.MeshURL, d.LastGood, d.Addresses)
+	}
+	if d := read(false); d.MeshURL == "" {
+		t.Fatal("locally mesh_url is shown")
 	}
 }
 
@@ -428,7 +431,7 @@ func TestDataErrorsCarryNoInternals(t *testing.T) {
 	g := datatest.StartGuarded(t)
 	h := newHarness(t)
 	h.data = dataclient.New(g.URL, "router", dataclient.WithToken(g.Token))
-	h.mgr = NewManager(h.data, Options{SelfName: "mac", Identity: h.id})
+	h.mgr = NewManager(h.data, Options{AllowLoopback: true, SelfName: "mac", Identity: h.id})
 	srv := newDevicesServer(t, h, h.mgr.Devices())
 	secret := bytes.Repeat([]byte{7}, 32)
 	if _, err := h.data.CreatePairingCode(context.Background(), paircode.Hash(secret)); err != nil {

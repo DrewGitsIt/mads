@@ -5,9 +5,10 @@ import { SegmentedControl } from "../../../../components/SegmentedControl/Segmen
 import { Select } from "../../../../components/Select/Select";
 import { InfoTip } from "../../../../components/Tooltip/Tooltip";
 import { SettingsCard } from "../../SettingsCard";
-import type { DeviceRow, PeerCeilings } from "../../../../router/devices";
+import type { DeviceRow, PeerCeilings, SelfMesh } from "../../../../router/devices";
 import { ActivityList } from "./DeviceActivity";
-import { dateTime, levelOf } from "./model";
+import { dateTime, hostsSessions, levelOf } from "./model";
+import { TroubleshootConnection } from "./TroubleshootConnection";
 import styles from "./PairedDevices.module.css";
 
 export const TRUST_OPTIONS = [
@@ -17,9 +18,9 @@ export const TRUST_OPTIONS = [
   { value: "read_only", label: "Read-only" },
 ];
 
-function OptRow({ label, labelId, tag, help, children }: { label: ReactNode; labelId?: string; tag?: ReactNode; help?: ReactNode; children: ReactNode }) {
+function OptRow({ label, labelId, tag, help, children, stacked }: { label: ReactNode; labelId?: string; tag?: ReactNode; help?: ReactNode; children?: ReactNode; stacked?: boolean }) {
   return (
-    <div className={styles.optRow}>
+    <div className={[styles.optRow, stacked && styles.optStacked].filter(Boolean).join(" ")}>
       <div>
         <div className={styles.optLabelLine}>
           <span className={styles.optLabel} id={labelId}>
@@ -29,7 +30,7 @@ function OptRow({ label, labelId, tag, help, children }: { label: ReactNode; lab
         </div>
         {help && <div className={styles.optHelp}>{help}</div>}
       </div>
-      <div className={styles.optControl}>{children}</div>
+      {children && <div className={styles.optControl}>{children}</div>}
     </div>
   );
 }
@@ -41,14 +42,20 @@ export interface DeviceDetailsProps {
   onCeilings: (ceilings: PeerCeilings) => void;
   onRemove: () => void;
   busy?: boolean;
+  /** This device's mesh network, and this device's short name, for Troubleshoot connection. */
+  mesh?: SelfMesh;
+  host?: string;
+  /** Paste a pairing code… (updates its addresses). */
+  onPaste?: () => void;
+  onToast?: (t: { tone: "ok" | "info" | "bad"; title: string; description?: string }) => void;
 }
 
 /**
- * A row's details, inline under it: its limits (Advanced options), its
- * fingerprint and pairing date, Remove device…, and its slice of the
- * activity log.
+ * A row's details, inline under it: Troubleshoot connection (for a device
+ * this one dials), its limits (Advanced options), its fingerprint and
+ * pairing date, Remove device…, and its slice of the activity log.
  */
-export function DeviceDetails({ row, rows, onCeilings, onRemove, busy }: DeviceDetailsProps) {
+export function DeviceDetails({ row, rows, onCeilings, onRemove, busy, mesh, host = "device", onPaste, onToast }: DeviceDetailsProps) {
   const level = levelOf(row);
   const ceilings = row.grant?.ceilings ?? {};
   const chatOn = level === "chat";
@@ -57,6 +64,10 @@ export function DeviceDetails({ row, rows, onCeilings, onRemove, busy }: DeviceD
   const c1 = ceilings.full_trust_chat === "refused" || ceilings.full_trust_chat === "held" ? "refused" : "allowed";
   return (
     <div className={styles.detail} id={`detail-${row.id}`}>
+      {/* A device this one dials: Troubleshoot connection (U3). */}
+      {row.fingerprint && hostsSessions(row) && row.reachability && (
+        <TroubleshootConnection row={row} host={host} mesh={mesh} onPaste={onPaste ?? (() => {})} onToast={onToast ?? (() => {})} />
+      )}
       <div>
         <div className={styles.detailTitle}>Advanced options</div>
         <SettingsCard className={styles.detailCard}>
@@ -104,15 +115,17 @@ export function DeviceDetails({ row, rows, onCeilings, onRemove, busy }: DeviceD
                 />
               </OptRow>
               <OptRow
+                stacked
                 label="Fingerprint"
                 help={
-                  <span className={styles.fpHelp}>
-                    Compare with <code>mads device</code> on {row.name}.
-                  </span>
+                  <>
+                    <FingerprintGroups fingerprint={row.fingerprint} />
+                    <span className={styles.fpHelp}>
+                      Compare with the fingerprint next to <b>This device</b> on {row.name}.
+                    </span>
+                  </>
                 }
-              >
-                <FingerprintGroups fingerprint={row.fingerprint} />
-              </OptRow>
+              />
             </>
           ) : (
             <OptRow label="Not paired" help={`${row.name} was added before pairing: no key is pinned for it, so it can't use mads here.`}>

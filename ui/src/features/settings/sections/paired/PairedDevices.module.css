@@ -1,14 +1,12 @@
 /* Settings → Paired devices (docs/mockups/paired-devices-v3.html): the panel,
    This device bar, the table with inline details, and the activity log. */
 
+/* The Settings column (SettingsCard's 760px), as every other section. */
 .panel {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  max-width: 1060px;
-}
-.panel > * {
-  max-width: none;
+  gap: var(--space-3);
+  max-width: 760px;
 }
 .error {
   color: var(--bad-fg);
@@ -18,11 +16,38 @@
   color: var(--text3);
 }
 
+/* A pairing just answered here, under the bar (not a toast over it). */
+.outcome {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  background: var(--bg1);
+  color: var(--text2);
+  font-size: var(--fs-body);
+}
+.outcome b {
+  color: var(--text);
+  font-weight: 600;
+}
+.outcomeMark {
+  color: var(--ok-fg);
+  font-weight: 700;
+}
+.outcomeText {
+  flex: 1;
+  min-width: 0;
+}
+
 /* ThisDeviceBar */
 .bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2) var(--space-3);
   padding: var(--space-3) var(--space-4);
   border: 1px solid var(--line-soft);
   border-radius: var(--r);
@@ -33,32 +58,26 @@
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-  flex: 1;
+  flex: 1 1 auto;
 }
 .whoLabel {
   white-space: nowrap;
   color: var(--text3);
-  font: 600 var(--fs-chip) var(--sans);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  font: 400 var(--fs-sm) var(--sans);
 }
 .whoName {
+  min-width: 0;
   font: 650 var(--fs-ui) var(--sans);
   color: var(--text);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .barActions {
   display: flex;
   gap: var(--space-2);
   flex: none;
-}
-.ariaDisabled[aria-disabled="true"] {
-  opacity: 0.4;
-  cursor: default;
-}
-.ariaDisabled[aria-disabled="true"]:hover {
-  background: transparent;
-  color: var(--text2);
+  margin-left: auto;
 }
 
 /* DeviceTable */
@@ -70,13 +89,12 @@
   border-collapse: collapse;
   font-size: var(--fs-body);
 }
+/* Sentence-case headers, as SettingRow labels read (no uppercase caps). */
 .table th {
   text-align: left;
   padding: var(--space-2) var(--space-3);
   color: var(--text3);
-  font: 600 var(--fs-chip) var(--sans);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  font: 500 var(--fs-sm) var(--sans);
   border-bottom: 1px solid var(--line-soft);
   white-space: nowrap;
 }
@@ -150,6 +168,10 @@
   transform: rotate(-45deg);
   transition: transform var(--dur) var(--ease-io);
 }
+/* A connection problem: the status reads in the bad colour (U3). */
+.row[data-problem] .statusText {
+  color: var(--bad-fg);
+}
 .row[aria-expanded="true"] .chevCaret {
   transform: translateY(-0.1em) rotate(45deg);
 }
@@ -198,11 +220,9 @@
   }
 }
 .detailTitle {
-  font: 600 var(--fs-chip) var(--sans);
-  color: var(--text3);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  margin: 0 0 6px;
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--text2);
+  margin: var(--space-2) 0 6px;
 }
 .detailCard {
   background: var(--bg1);
@@ -213,6 +233,15 @@
   gap: var(--space-4);
   align-items: center;
   padding: var(--space-2) var(--space-3);
+}
+.optStacked {
+  grid-template-columns: 1fr;
+}
+.optStacked .optHelp {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
 }
 .optRow + .optRow {
   border-top: 1px solid var(--line-soft);
@@ -255,30 +284,34 @@
 .spacer {
   flex: 1;
 }
-.fpHelp code {
-  font-size: 11.5px;
+.fpHelp b {
+  color: var(--text2);
+  font-weight: 600;
 }
-@container (max-width: 900px) {
-  .statusText {
-    display: none;
-  }
-  .table th.statusHead {
-    font-size: 0;
-  }
+/* In the 760px column: tighter cells, details stacked; narrower, the
+   status wraps under its dot rather than going (Q4), and the read-only
+   "It lets" column goes first. */
+@container (max-width: 760px) {
   .table th,
   .table td {
     padding-left: var(--space-2);
     padding-right: var(--space-2);
   }
-}
-@container (max-width: 760px) {
   .detail {
     grid-template-columns: 1fr;
   }
 }
-@container (max-width: 620px) {
+@container (max-width: 640px) {
   .letsCol {
     display: none;
+  }
+  .table td:has(.status) {
+    white-space: normal;
+  }
+  .status {
+    align-items: baseline;
+    white-space: normal;
+    max-width: 11em;
   }
 }
 
@@ -290,12 +323,10 @@
   padding: var(--space-3) var(--space-4) var(--space-2);
 }
 .activityTitle {
-  margin: 0;
   flex: 1;
-  font: 650 var(--fs-sm) var(--sans);
-  color: var(--text2);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+}
+.activityHead .activityTitle {
+  padding: 0;
 }
 .activityFilter {
   width: 200px;
@@ -364,4 +395,8 @@
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
+}
+/* Re-pair, after a "No longer paired on …" status (F6 R4). */
+.repair {
+  margin-left: var(--space-2);
 }

@@ -8,7 +8,7 @@ import (
 
 func TestRefuseWildcard(t *testing.T) {
 	for addr, ok := range map[string]bool{
-		"100.69.97.70:17380": true,
+		"100.64.0.70:17380": true,
 		"127.0.0.1:17380":    true,
 		":17380":             false,
 		"0.0.0.0:17380":      false,

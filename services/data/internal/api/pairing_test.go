@@ -285,12 +285,19 @@ func TestPairApprove(t *testing.T) {
 		t.Fatalf("approve answered name %q", done.Name)
 	}
 
-	// The same device again (it redeemed a second code before the first
-	// was approved) is already paired.
+	// The same device again (it redeemed a second code) re-pairs: its
+	// request says so, and approval updates its row in place (F6 R2).
 	again := e.pendingRequest(t, 1)
+	if again.Repair == nil || again.Repair.PeerID != p.ID || again.Repair.Level != contracts.GrantChat {
+		t.Fatalf("repair = %+v", again.Repair)
+	}
 	code, raw = e.call(t, "POST", "/pairing/requests/"+again.ID+"/approve", contracts.PairDecision{Level: contracts.GrantView}, nil)
-	if code != http.StatusConflict || !strings.Contains(string(raw), "already_paired") {
-		t.Fatalf("approve an already-paired device: %d %s", code, raw)
+	if code != http.StatusOK {
+		t.Fatalf("re-pair an already-paired device: %d %s", code, raw)
+	}
+	_ = json.Unmarshal(raw, &done)
+	if done.PeerID != p.ID {
+		t.Fatalf("re-pair pinned %s, want the row %s", done.PeerID, p.ID)
 	}
 }
 

@@ -8,12 +8,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/devicekey"
+	"github.com/drewkidwell/mads/pkg/meshnet"
 	"github.com/drewkidwell/mads/pkg/paircode"
 	"github.com/drewkidwell/mads/services/data/datatest"
 	"github.com/drewkidwell/mads/services/mesh/meshtest"
@@ -30,13 +32,23 @@ type node struct {
 	mgr    *Manager
 	router *httptest.Server
 	mesh   *meshtest.Mesh
+	// dataURL and token are its Data Service's.
+	dataURL, token string
+	// ahead moves its Router's clock forward (setAhead): read by its
+	// goroutines, so never swap mgr.opts.Now while it runs.
+	ahead atomic.Int64
 }
+
+// setAhead moves n's Router clock d ahead of the real one.
+func (n *node) setAhead(d time.Duration) { n.ahead.Store(int64(d)) }
 
 func newNode(t *testing.T, name string, host bool) *node {
 	t.Helper()
 	g := datatest.StartGuarded(t)
-	n := &node{name: name, id: newIdentity(t), data: dataclient.New(g.URL, "router", dataclient.WithToken(g.Token))}
-	n.mgr = NewManager(n.data, Options{SelfName: name, Identity: n.id, PairPoll: 20 * time.Millisecond, Platform: "darwin"})
+	n := &node{name: name, id: newIdentity(t), data: dataclient.New(g.URL, "router", dataclient.WithToken(g.Token)), dataURL: g.URL, token: g.Token}
+	n.mgr = NewManager(n.data, Options{AllowLoopback: true, SelfName: name, Identity: n.id, PairPoll: 20 * time.Millisecond, Platform: "darwin",
+		SearchBackoff: []time.Duration{50 * time.Millisecond},
+		Now:           func() time.Time { return time.Now().Add(time.Duration(n.ahead.Load())) }})
 	devices := n.mgr.Devices()
 	api := http.NewServeMux()
 	api.Handle("/devices", devices)
@@ -125,7 +137,7 @@ type apiErr struct {
 func TestPairingByCodeEndToEnd(t *testing.T) {
 	host, joiner := newNode(t, "pop-os", true), newNode(t, "mac", false)
 	c := host.code(t)
-	if !strings.HasPrefix(c.Code, "mads-pair-1:") || c.Host.MeshURL != host.mesh.URL || c.Host.Fingerprint != string(host.id.Fingerprint()) {
+	if !strings.HasPrefix(c.Code, "mads-pair-2:") || c.Host.MeshURL != host.mesh.URL || c.Host.Fingerprint != string(host.id.Fingerprint()) || len(c.Host.Addresses) != 1 {
 		t.Fatalf("code = %+v", c)
 	}
 	// The code's secret is in the answer and nowhere in the host's log.
@@ -194,15 +206,46 @@ func TestPairingByCodeEndToEnd(t *testing.T) {
 		t.Fatalf("joiner /peers = %+v", peers)
 	}
 
-	// Pairing again with the same host is refused on both sides.
+	// Pasting a paired host's code again offers to update its addresses
+	// (F2.6) and, asked to, does, without using the code up. The same key
+	// from a fresh install (the host still has it) re-pairs: the host's
+	// request says so, and approval keeps its row (F6 R2).
 	c2 := host.code(t)
-	if code := joiner.call(t, "POST", "/devices/pair", map[string]string{"code": c2.Code}, &e); code != http.StatusConflict || e.Code != "already_paired" {
+	if code := joiner.call(t, "POST", "/devices/pair", map[string]string{"code": c2.Code}, &e); code != http.StatusConflict || e.Code != "already_paired_update" {
 		t.Fatalf("pair again (joiner): %d %+v", code, e)
+	}
+	var upd UpdateAddressesResult
+	if code := joiner.call(t, "POST", "/devices/pair", JoinRequest{Code: c2.Code, UpdateAddresses: true}, &upd); code != http.StatusOK || !upd.UpdateAddresses || upd.PeerID != pop.ID {
+		t.Fatalf("update addresses: %d %+v", code, upd)
+	}
+	if row, _ := joiner.device(t, string(host.id.Fingerprint())); len(row.Addresses) == 0 || row.Addresses[0].Addr != strings.TrimPrefix(host.mesh.URL, "http://") {
+		t.Fatalf("after update: %+v", row.Addresses)
 	}
 	twin := newNode(t, "mac", false)
 	twin.mgr.opts.Identity = joiner.id // the same key, a fresh install
-	if code := twin.call(t, "POST", "/devices/pair", map[string]string{"code": c2.Code}, &e); code != http.StatusConflict || e.Code != "already_paired" {
-		t.Fatalf("pair again (host): %d %+v", code, e)
+	var st2 JoinStatus
+	if code := twin.call(t, "POST", "/devices/pair", map[string]string{"code": c2.Code}, &st2); code != http.StatusAccepted {
+		t.Fatalf("pair again (host): %d %+v", code, st2)
+	}
+	host.call(t, "GET", "/devices/pair-requests", nil, &reqs)
+	var again *contracts.PairRequest
+	for i := range reqs {
+		if reqs[i].ID == st2.RequestID {
+			again = &reqs[i]
+		}
+	}
+	if again == nil || again.Repair == nil || again.Repair.PeerID != mac.ID || again.Repair.Level != contracts.GrantControl {
+		t.Fatalf("re-pair request = %+v", again)
+	}
+	if code := host.call(t, "POST", "/devices/pair-requests/"+again.ID+"/approve", map[string]string{"level": "chat"}, nil); code != http.StatusOK {
+		t.Fatalf("approve the re-pair: %d", code)
+	}
+	waitFor(t, "the twin to pin the host", func() bool {
+		twin.call(t, "GET", "/devices/pair/"+st2.ID, nil, &st2)
+		return st2.State != contracts.PairPending
+	})
+	if row, _ := host.device(t, string(joiner.id.Fingerprint())); row.ID != mac.ID || row.Level() != contracts.GrantChat {
+		t.Fatalf("host's row after the re-pair = %+v", row)
 	}
 
 	// The host's activity log has it all, newest first, and by device.
@@ -240,12 +283,12 @@ func TestPairingPinsTheHostKey(t *testing.T) {
 		t.Fatalf("the real code after a wrong pin: %d", code)
 	}
 	// Bad input is named.
-	if code := joiner.call(t, "POST", "/devices/pair", map[string]string{"code": "pop-os 4TXP"}, &e); code != http.StatusUnprocessableEntity || e.Code != "bad_code" {
+	if code := joiner.call(t, "POST", "/devices/pair", map[string]string{"code": "pop-os UQDU"}, &e); code != http.StatusUnprocessableEntity || e.Code != "bad_code" {
 		t.Fatalf("junk: %d %+v", code, e)
 	}
-	v2 := strings.Replace(c.Code, "mads-pair-1:", "mads-pair-2:", 1)
-	if code := joiner.call(t, "POST", "/devices/pair", map[string]string{"code": v2}, &e); code != http.StatusUnprocessableEntity || e.Code != "code_version" {
-		t.Fatalf("v2: %d %+v", code, e)
+	v3 := strings.Replace(c.Code, "mads-pair-2:", "mads-pair-3:", 1)
+	if code := joiner.call(t, "POST", "/devices/pair", map[string]string{"code": v3}, &e); code != http.StatusUnprocessableEntity || e.Code != "code_version" {
+		t.Fatalf("v3: %d %+v", code, e)
 	}
 }
 
@@ -344,23 +387,23 @@ func TestAdminDeviceOverTheMesh(t *testing.T) {
 	if len(intro) != 1 || !strings.HasPrefix(intro[0].Actor, "device:mac/") {
 		t.Fatalf("device.introduced = %+v", intro)
 	}
-	// An introduced device's address must be on the host's tailnet.
+	// An introduced device's address must be one the host would dial (S3).
 	evil := newIdentity(t)
 	if err := mac.data.CreatePeer(context.Background(), &contracts.Peer{Name: "evil", MeshURL: "http://10.1.2.3:22", Viewed: &no, Fingerprint: string(evil.Fingerprint())}); err != nil {
 		t.Fatal(err)
 	}
-	if code := mac.call(t, "POST", "/devices/"+string(evil.Fingerprint())+"/introduce", IntroduceRequest{Host: "pop-os", Level: "view"}, &e); code != http.StatusUnprocessableEntity || e.Code != "bad_mesh_url" {
+	if code := mac.call(t, "POST", "/devices/"+string(evil.Fingerprint())+"/introduce", IntroduceRequest{Host: "pop-os", Level: "view"}, &e); code != http.StatusUnprocessableEntity || e.Code != "bad_address" {
 		t.Fatalf("introduce an address off the tailnet: %d %+v", code, e)
 	}
 	if ev, err := mac.data.Peer(context.Background(), "evil"); err == nil {
 		_ = mac.data.DeletePeer(context.Background(), ev.ID)
 	}
-	// With the tailnet required the host can't confirm whose an
-	// address is (CGNAT space), so only a MagicDNS name; any port.
+	// Any network's address is fine at arrival (the prefix rule is
+	// checked at dial time): a tailnet IP, a MagicDNS name at any port.
 	for _, tc := range []struct {
 		url  string
 		want int
-	}{{"http://100.100.1.2:17380", http.StatusUnprocessableEntity}, {"http://tab.example.ts.net:9000", http.StatusCreated}} {
+	}{{"http://100.100.1.2:17380", http.StatusCreated}, {"http://tab.example.ts.net:9000", http.StatusCreated}, {"http://169.254.169.254:17380", http.StatusUnprocessableEntity}} {
 		id := newIdentity(t)
 		if err := mac.data.CreatePeer(context.Background(), &contracts.Peer{Name: "tab", MeshURL: tc.url, Viewed: &no, Fingerprint: string(id.Fingerprint())}); err != nil {
 			t.Fatal(err)
@@ -416,6 +459,22 @@ func TestAdminDeviceOverTheMesh(t *testing.T) {
 	}
 	if code, c := remote("PUT", "/devices/"+string(other.Fingerprint())+"/grant", GrantRequest{Level: "view"}); code != http.StatusOK {
 		t.Fatalf("lower an admin remotely: %d %s", code, c)
+	}
+	// Round-2 review R4: the row a grant answers with never says where the
+	// host reaches the device.
+	located := newIdentity(t)
+	if err := host.data.CreatePeer(context.Background(), &contracts.Peer{Name: "located", Viewed: &no, Fingerprint: string(located.Fingerprint()), MeshURL: "http://192.168.1.44:17380",
+		Addresses: []contracts.MeshAddress{{NetAddress: contracts.NetAddress{Via: meshnet.DirectVia, Addr: "192.168.1.44:17380"}, Source: contracts.SourceUser}},
+		Grant:     &contracts.PeerGrant{Level: contracts.GrantView}}); err != nil {
+		t.Fatal(err)
+	}
+	if code, body, err := mac.mgr.peerCall(context.Background(), hostRow.Peer, "PUT", "/devices/"+string(located.Fingerprint())+"/grant", GrantRequest{Level: "chat"}); err != nil || code != http.StatusOK ||
+		strings.Contains(string(body), "192.168.1.44") || strings.Contains(string(body), "mesh_url\":\"h") || strings.Contains(string(body), "last_good") || !strings.Contains(string(body), "located") {
+		t.Fatalf("relayed grant answer: %d %s %v", code, body, err)
+	}
+	if code, body, err := mac.mgr.peerCall(context.Background(), hostRow.Peer, "POST", "/devices/introduce", Introduction{Fingerprint: string(newIdentity(t).Fingerprint()), Name: "intro", Level: "view", MeshURL: "http://192.168.1.45:17380"}); err != nil || code != http.StatusCreated ||
+		strings.Contains(string(body), "192.168.1.45") {
+		t.Fatalf("relayed introduction answer: %d %s %v", code, body, err)
 	}
 	// A device paired at none before grants carried levels (no grant, not
 	// viewed) is managed remotely like any other.
@@ -487,7 +546,7 @@ func TestRemoteGrantChangeEndsStreams(t *testing.T) {
 	if !ok {
 		t.Fatal("spark didn't pin the host")
 	}
-	c, err := spark.mgr.conn(hostRow.Peer)
+	c, err := spark.mgr.conn(context.Background(), hostRow.Peer)
 	if err != nil {
 		t.Fatal(err)
 	}
