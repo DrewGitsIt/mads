@@ -24,6 +24,8 @@ export interface ProxyRequest {
   declaredStart?: number;
   firstByte?: number;
   lastByte?: number;
+  /** A conversation's /output stream: when each text_delta frame went out to the page (Date.now() ms; scenario 10x). */
+  deltaAt?: number[];
 }
 
 export interface ProxySnapshot {

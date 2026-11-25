@@ -64,6 +64,9 @@ const server = createServer((req, res) => {
     declaredStart: undefined,
     firstByte: undefined,
     lastByte: undefined,
+    // A conversation's /output stream (scenario 10x): when each text_delta
+    // frame went out to the page, Date.now() ms.
+    deltaAt: undefined,
   };
   requests.push(rec);
   mark(1);
@@ -113,6 +116,10 @@ const server = createServer((req, res) => {
         // The current line's head, enough to read an `id: <seq>` line.
         let line = "";
         const isEvents = rec.sse && rec.path === "/events";
+        const isOutput = rec.sse && /\/output$/.test(rec.path);
+        if (isOutput) rec.deltaAt = [];
+        // /output: the current frame's `event:` name.
+        let event = "";
         if (isEvents) {
           eventsRes.add(res);
           res.on("close", () => eventsRes.delete(res));
@@ -129,8 +136,20 @@ const server = createServer((req, res) => {
             // Frames end in a blank line; JSON data lines never hold a raw newline.
             for (let i = 0; i < chunk.length; i++) {
               const nl = chunk[i] === 10;
-              if (nl && prevNL) rec.frames++;
+              if (nl && prevNL) {
+                rec.frames++;
+                if (isOutput) {
+                  if (event === "text_delta" && rec.deltaAt.length < 200_000) rec.deltaAt.push(Date.now());
+                  event = "";
+                }
+              }
               prevNL = nl;
+              if (isOutput) {
+                if (nl) {
+                  if (line.startsWith("event: ")) event = line.slice(7);
+                  line = "";
+                } else if (line.length < 32) line += String.fromCharCode(chunk[i]);
+              }
               if (isEvents) {
                 if (nl) {
                   // The harness contract (tools/perf/docs/PLAN.md): a stream
