@@ -13,9 +13,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/childsock"
@@ -72,6 +74,22 @@ func main() {
 		log.Fatalf("testchild: listen %s: %v", *addr, err)
 	}
 	log.Printf("testchild: listening on %s", ln.Addr())
+
+	// TESTCHILD_TERM_DELAY makes SIGTERM a graceful stop that takes that
+	// long, then writes TESTCHILD_TERM_MARKER (if set) and exits 0 — the
+	// shape of a real child's own shutdown, for tests that it gets its grace.
+	if d, err := time.ParseDuration(os.Getenv("TESTCHILD_TERM_DELAY")); err == nil {
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, syscall.SIGTERM)
+		go func() {
+			<-sigs
+			time.Sleep(d)
+			if marker := os.Getenv("TESTCHILD_TERM_MARKER"); marker != "" {
+				_ = os.WriteFile(marker, []byte("stopped"), 0o600)
+			}
+			os.Exit(0)
+		}()
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /output", func(w http.ResponseWriter, r *http.Request) {

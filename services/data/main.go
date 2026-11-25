@@ -11,7 +11,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -161,5 +163,49 @@ func main() {
 	if root, err := os.Getwd(); err == nil {
 		ident.Root = root
 	}
-	log.Fatal(http.Serve(ln, newHandler(db, ident, door)))
+	// Request contexts derive from reqCtx so shutdown can end the event
+	// streams, which srv.Shutdown alone waits on forever.
+	reqCtx, reqCancel := context.WithCancel(context.Background())
+	defer reqCancel()
+	srv := &http.Server{Handler: newHandler(db, ident, door), BaseContext: func(net.Listener) context.Context { return reqCtx }}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(ln) }()
+
+	// Signals end in a drain and db.Close (deferred above), not an
+	// instant death; later signals are logged, never fatal.
+	sigs := make(chan os.Signal, 2)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	select {
+	case err := <-serveErr:
+		log.Fatalf("data: serve: %v", err)
+	case <-sigs:
+	}
+	go func() {
+		for sig := range sigs {
+			log.Printf("data: %v while shutting down", sig)
+		}
+	}()
+	log.Printf("data: shutting down")
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownGrace)
+	defer shutdownCancel()
+	httpDone := make(chan error, 1)
+	go func() { httpDone <- srv.Shutdown(shutdownCtx) }()
+	// Writes in flight get streamGrace to finish; then the streams are cut.
+	select {
+	case err := <-httpDone:
+		httpDone <- err
+	case <-time.After(streamGrace):
+	}
+	reqCancel()
+	if err := <-httpDone; err != nil {
+		log.Printf("data: HTTP shutdown: %v", err)
+	}
 }
+
+// shutdownGrace bounds the whole drain; streamGrace is how long requests in
+// flight get before every request context (event streams included) is
+// cancelled.
+const (
+	shutdownGrace = 5 * time.Second
+	streamGrace   = time.Second
+)

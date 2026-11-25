@@ -322,7 +322,10 @@ func main() {
 	// sessionArgv/pipelineArgv are built before net.Listen resolves ln.Addr()
 	// (below), so -router-url must be sourced from *addr, the configured
 	// flag value, not the post-bind address.
-	sessionArgv := append(strings.Fields(*sessionCmd), "-router-url", "http://"+*addr)
+	// Both kinds of child get this Router's Data Service, not their own
+	// localhost:17374 default: a Router on another -data-url (a scratch
+	// stack) must never have its sessions writing to the default one.
+	sessionArgv := append(strings.Fields(*sessionCmd), "-router-url", "http://"+*addr, "-data-url", *dataURL)
 	pipelineArgv := append(strings.Fields(*pipelineCmd), "-data-url", *dataURL)
 
 	if *insecureNoAuth && !localauth.InsecureAllowed() {
@@ -474,10 +477,28 @@ func main() {
 	// (/devices) and what each paired device lets this node do. Routing
 	// is a pass-through until a device this node views is added.
 	meshMgr := mesh.NewManager(data, mesh.Options{SelfName: *meshName, Identity: deviceID})
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), attachmentStore, *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist), guard, repoState, gitState, auth, meshMgr)}
+	// Every request's context derives from reqCtx, cancelled at shutdown:
+	// srv.Shutdown alone never ends a long-lived stream (/events, a proxied
+	// child /output), so the drain would otherwise always run its full grace.
+	reqCtx, reqCancel := context.WithCancel(context.Background())
+	defer reqCancel()
+	srv := &http.Server{BaseContext: func(net.Listener) context.Context { return reqCtx }, Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), attachmentStore, *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist), guard, repoState, gitState, auth, meshMgr)}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	// The first SIGINT/SIGTERM starts shutdown; later ones are logged, never
+	// fatal. Restoring the default action instead (what NotifyContext's stop
+	// does) let a second signal — Ctrl-C, then app.sh's exit trap — kill
+	// the Router before it stopped its children, orphaning every session.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigs := make(chan os.Signal, 2)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		cancel()
+		for sig := range sigs {
+			log.Printf("router: %v while shutting down; still stopping children", sig)
+		}
+	}()
 
 	// Non-blocking: Serve starts on schedule whether or not a harness
 	// binary is slow, broken or absent. The warm overlaps the orphan sweep
@@ -534,14 +555,19 @@ func main() {
 			log.Fatalf("router: serve: %v", err)
 		}
 	case <-ctx.Done():
-		stop()
 		log.Printf("router: shutting down")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
-		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownGrace)
+		defer shutdownCancel()
+		// Stop taking requests first (Shutdown closes the listener before it
+		// waits), then the children, each with its full grace while the Data
+		// Service is still up, then end whatever streams are left.
+		httpDone := make(chan error, 1)
+		go func() { httpDone <- srv.Shutdown(shutdownCtx) }()
+		sup.Shutdown(shutdownCtx)
+		reqCancel()
+		if err := <-httpDone; err != nil {
 			log.Printf("router: HTTP shutdown: %v", err)
 		}
-		sup.Shutdown(shutdownCtx)
 		// The mesh manager's shutdown flush (what paired devices let this
 		// one do, held back by its write debounce) is bounded at 3 s.
 		select {

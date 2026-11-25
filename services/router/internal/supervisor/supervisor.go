@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -30,6 +31,10 @@ import (
 
 // terminateGrace is how long Terminate waits after SIGTERM before SIGKILL.
 const terminateGrace = 5 * time.Second
+
+// ErrShuttingDown is what a spawn returns once Shutdown has begun: the
+// children Shutdown is stopping must not be joined by new ones it never saw.
+var ErrShuttingDown = errors.New("supervisor: shutting down")
 
 type pipelineEntry struct {
 	proc      *child.Process
@@ -54,6 +59,7 @@ type Supervisor struct {
 	sessions  map[string]*child.Process
 	pipelines map[string]*pipelineEntry
 	deleting  map[string]int // sessions with a delete in flight — see TerminateSessionForDelete
+	closed    bool           // Shutdown has begun; spawns are refused
 }
 
 // New builds a Supervisor. data must be a dataclient.Client using the
@@ -184,6 +190,9 @@ func (s *Supervisor) credentialEnv(ctx context.Context) []string {
 // holder identity IS the session ID — matches spec: "when a session or
 // pipeline stage claims a task").
 func (s *Supervisor) SpawnSession(ctx context.Context, sessionID string) (string, error) {
+	if s.isClosed() {
+		return "", ErrShuttingDown
+	}
 	argv := append(append(append([]string{}, s.sessionArgv...), "-session-id", sessionID), s.tokenArgs()...)
 	env := s.credentialEnv(ctx)
 	var scopedTok string
@@ -210,6 +219,13 @@ func (s *Supervisor) SpawnSession(ctx context.Context, sessionID string) (string
 		return "", err
 	}
 	s.mu.Lock()
+	if s.closed {
+		// Shutdown began while this child was starting, after it took its
+		// snapshot: stop it here, since nothing else will.
+		s.mu.Unlock()
+		_ = p.Terminate(context.Background(), terminateGrace)
+		return "", ErrShuttingDown
+	}
 	s.sessions[sessionID] = p
 	hasPipeline := s.hasPipelineForSessionLocked(sessionID)
 	s.mu.Unlock()
@@ -237,6 +253,9 @@ func (s *Supervisor) SpawnSession(ctx context.Context, sessionID string) (string
 // re-resolved once by the caller. excludeTaskIDs, when non-empty, rides
 // -exclude-task-ids (comma-joined): tasks the run must never launch.
 func (s *Supervisor) SpawnPipeline(ctx context.Context, runID, sessionID, templateID string, excludeTaskIDs []string) (string, error) {
+	if s.isClosed() {
+		return "", ErrShuttingDown
+	}
 	argv := append(append([]string{}, s.pipelineArgv...),
 		"-run-id", runID, "-session-id", sessionID, "-template", templateID)
 	if len(excludeTaskIDs) > 0 {
@@ -255,6 +274,11 @@ func (s *Supervisor) SpawnPipeline(ctx context.Context, runID, sessionID, templa
 		return "", err
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = p.Terminate(context.Background(), terminateGrace)
+		return "", ErrShuttingDown
+	}
 	s.pipelines[runID] = &pipelineEntry{proc: p, sessionID: sessionID}
 	s.mu.Unlock()
 	// Edge A (docs/LINKED-SESSIONS-DESIGN.md decision 6): grant the implicit
@@ -568,10 +592,21 @@ func (s *Supervisor) PipelineAddr(runID string) (string, bool) {
 	return e.proc.Addr, true
 }
 
-// Shutdown terminates every tracked child. Used on Router SIGINT/SIGTERM so
-// a clean shutdown doesn't orphan "go run" child processes.
+// isClosed reports whether Shutdown has begun.
+func (s *Supervisor) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+// Shutdown terminates every tracked child and refuses spawns from then on.
+// Used on Router SIGINT/SIGTERM so a clean shutdown doesn't orphan child
+// processes. Each child gets its full terminateGrace whatever ctx's
+// deadline: an expired ctx used to SIGKILL every child at once, skipping
+// their own shutdown (marking the session inactive, releasing leases).
 func (s *Supervisor) Shutdown(ctx context.Context) {
 	s.mu.Lock()
+	s.closed = true
 	procs := make([]*child.Process, 0, len(s.sessions)+len(s.pipelines))
 	for _, p := range s.sessions {
 		procs = append(procs, p)
@@ -586,7 +621,7 @@ func (s *Supervisor) Shutdown(ctx context.Context) {
 		wg.Add(1)
 		go func(p *child.Process) {
 			defer wg.Done()
-			_ = p.Terminate(ctx, terminateGrace)
+			_ = p.Terminate(context.WithoutCancel(ctx), terminateGrace)
 		}(p)
 	}
 	wg.Wait()

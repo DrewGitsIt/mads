@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The local end-to-end entry point (until W7 packaging does this properly):
 # ensures the Data Service and Router are up, then launches the Electron app.
-# Services it starts are stopped again when the app exits; services that were
+# Services it starts — and every session and pipeline child under them — are
+# stopped again when the app exits; services that were
 # already running are left alone — but only reused if they were launched from
 # THIS checkout (their /health reports it), since the Router serves the UI
 # from its own cwd's ui/dist: a Router left running by another checkout would
@@ -15,8 +16,9 @@ usage() {
 Usage: scripts/app.sh [--restart]
 
 Start the Data Service and Router (built from this checkout) if they aren't
-running, then launch the Electron app. Services this script starts are
-stopped again when the app exits.
+running, then launch the Electron app. When the app exits (quit, Ctrl-C),
+everything this script started stops with it: the Router, every session and
+pipeline child it runs, then the Data Service.
 
 First makes sure the install token exists ($MADS_HOME/local.token, default
 ~/.mads; see docs/LOCAL-FRONT-DOOR-DESIGN.md): the services and the app need it.
@@ -27,11 +29,11 @@ changes). One from another checkout, or an older build that doesn't say, is
 refused.
 
 Options:
-  --restart   First stop whatever is listening on the Router and Data Service
-              ports (any checkout, any build; SIGTERM, Router first), then
-              build and start fresh ones from this checkout. Stopping the
-              Router cuts off any agent turn in progress; sessions start
-              again on their next message.
+  --restart   First stop whatever is running (any checkout, any build): the
+              Router, every session and pipeline child, including ones a
+              dead Router left behind, then the Data Service. Then build and
+              start fresh ones from this checkout. Any agent turn in progress
+              is cut off; sessions start again on their next message.
   -h, --help  Show this help.
 
 Environment:
@@ -39,6 +41,9 @@ Environment:
                          another checkout or an older build.
   MADS_DATA_ADDR         Data Service address (default localhost:17374).
   MADS_ROUTER_ADDR       Router address (default localhost:17373).
+  MADS_APP_LOG_DIR       Where the service logs go (default /tmp).
+  MADS_APP_NO_UI=1       Start the services but not the Electron app; wait
+                         for Ctrl-C (or SIGTERM), then stop them as above.
 USAGE
 }
 
@@ -62,6 +67,7 @@ cd "$REPO_ROOT"
 
 DATA_ADDR="${MADS_DATA_ADDR:-localhost:17374}"
 ROUTER_ADDR="${MADS_ROUTER_ADDR:-localhost:17373}"
+LOG_DIR="${MADS_APP_LOG_DIR:-/tmp}"
 
 # The local front door (docs/LOCAL-FRONT-DOOR-DESIGN.md D7): every Router and
 # Data Service API call needs the install token in $MADS_HOME/local.token.
@@ -81,13 +87,29 @@ authed_curl() {
   printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" | curl -K - "$@"
 }
 
-started=()
+# What this script started, stopped again on exit (and only that: services it
+# reused belong to whoever started them).
+started_data="" started_router=""
 cleanup() {
-  for pid in "${started[@]:-}"; do
-    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
-  done
+  # A second Ctrl-C mustn't abandon the stop halfway.
+  trap '' INT TERM
+  if [ -n "$started_router" ]; then
+    stop_pid "$started_router" "Router"
+    # A --restart elsewhere may have replaced our Router with a new one; its
+    # children aren't ours to stop.
+    local other
+    other="$(listener_pid "$ROUTER_ADDR")"
+    if [ -n "$other" ] && [ "$other" != "$started_router" ]; then
+      echo "app.sh: another Router (pid $other) runs on $ROUTER_ADDR now; leaving its sessions alone"
+    else
+      sweep_children
+    fi
+  fi
+  [ -z "$started_data" ] || stop_pid "$started_data" "Data Service"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 up() { curl -sf -o /dev/null "$1" 2>/dev/null; }
 
@@ -172,12 +194,62 @@ check_reuse() { # <addr> <display name> <extra stop note>
 
 ROUTER_STOP_NOTE="stopping the Router also ends the agent sessions and pipeline runs it is running: a turn in progress is cut off, and sessions start again on their next message"
 
-# --restart: SIGTERM whatever LISTENS on addr's port — by port, never by
-# process name — and wait for the port to free. SIGTERM only: the Router
-# needs it to shut its session/pipeline children down cleanly, so a process
-# that won't go is reported, not SIGKILLed.
+# Stop one service process and wait for it to EXIT, not just for its port to
+# free: a Router closes its listener first and stops its children after, so a
+# free port says nothing about what is still running. SIGTERM, then SIGKILL
+# only after budget seconds, said out loud — a full stop must leave nothing.
+stop_pid() { # <pid> <display name> [budget seconds, default 30]
+  local pid="$1" name="$2" budget="${3:-30}" i
+  kill -0 "$pid" 2>/dev/null || return 0
+  kill -TERM "$pid" 2>/dev/null || true
+  echo "app.sh: stopping $name (pid $pid)…"
+  for ((i = 0; i < budget * 5; i++)); do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.2
+  done
+  echo "app.sh: the $name (pid $pid) is still running ${budget}s after SIGTERM; killing it" >&2
+  kill -KILL "$pid" 2>/dev/null || true
+}
+
+# Stop every session and pipeline child still running — whatever the Router
+# didn't stop, and any a Router that died left behind. `mads ps` finds them by
+# their sockets under $MADS_HOME/run and asks each one for its pid. Each child
+# leads its own process group (the Router spawns them so), and the group is
+# what's signaled, so their agent CLIs and MCP servers go too.
+sweep_children() {
+  local pids=() pid pgid i alive
+  while read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] && pids+=("$pid")
+  done < <(MADS_HOME="$MADS_HOME_DIR" ./bin/mads ps -router "http://$ROUTER_ADDR" 2>/dev/null | awk 'NR > 1 { print $3 }')
+  [ "${#pids[@]}" -gt 0 ] || return 0
+  echo "app.sh: ${#pids[@]} session/pipeline child(ren) still running after the Router stopped: ${pids[*]}" >&2
+  signal_children() { # <signal>
+    for pid in "${pids[@]}"; do
+      pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')"
+      if [ "$pgid" = "$pid" ]; then
+        kill "-$1" -- "-$pid" 2>/dev/null || true
+      else
+        kill "-$1" "$pid" 2>/dev/null || true
+      fi
+    done
+  }
+  signal_children TERM
+  for ((i = 0; i < 75; i++)); do # 75 * 0.2s = 15s: a pipeline takes up to 10s
+    alive=0
+    for pid in "${pids[@]}"; do
+      kill -0 "$pid" 2>/dev/null && alive=1
+    done
+    [ "$alive" = 1 ] || return 0
+    sleep 0.2
+  done
+  echo "app.sh: killing the children still running 15s after SIGTERM" >&2
+  signal_children KILL
+}
+
+# --restart: stop whatever LISTENS on addr's port — by port, never by process
+# name — and wait for that process to exit.
 stop_listener() { # <addr> <display name>
-  local addr="$1" name="$2" pid body root started i
+  local addr="$1" name="$2" pid body root started
   if ! command -v lsof >/dev/null 2>&1; then
     if up "http://$addr/health"; then
       echo "app.sh: --restart needs lsof to find the $name listening on $addr; stop it yourself and run app.sh again." >&2
@@ -197,24 +269,15 @@ stop_listener() { # <addr> <display name>
   root="$(health_field "$body" root)"
   started="$(health_field "$body" started_at)"
   [ -n "$root" ] || root="$(pid_cwd "$pid")"
-  if ! kill -TERM "$pid" 2>/dev/null; then
-    echo "app.sh: could not signal the $name (pid $pid) on $addr; stop it yourself and run app.sh again." >&2
-    exit 1
-  fi
-  for ((i = 0; i < 50; i++)); do # 50 * 0.2s = 10s
-    if [ -z "$(listener_pid "$addr")" ]; then
-      echo "app.sh: stopped $name pid $pid${root:+ from $root}${started:+ (started $started)}"
-      return 0
-    fi
-    sleep 0.2
-  done
-  echo "app.sh: the $name (pid $pid) on $addr is still running 10s after SIGTERM; stop it yourself and run app.sh again." >&2
-  exit 1
+  stop_pid "$pid" "$name"
+  echo "app.sh: stopped $name pid $pid${root:+ from $root}${started:+ (started $started)}"
 }
 
 if [ "$restart" = 1 ]; then
-  # Router first, so it never runs against a missing Data Service.
+  # Router first, so it never runs against a missing Data Service; the
+  # children next, while the Data Service is still up for their own shutdown.
   stop_listener "$ROUTER_ADDR" "Router"
+  sweep_children
   stop_listener "$DATA_ADDR" "Data Service"
 fi
 
@@ -231,19 +294,30 @@ fi
 
 if [ "$data_running" = 0 ]; then
   go build -o bin/data ./services/data
-  ./bin/data -addr "$DATA_ADDR" >> /tmp/mads-data.log 2>&1 &
-  started+=($!)
-  wait_up "http://$DATA_ADDR/health" "$!" "data service" /tmp/mads-data.log
+  # Its own process group (set -m): a Ctrl-C reaches this script and the
+  # app, never the services directly, so cleanup decides the stop order.
+  set -m
+  ./bin/data -addr "$DATA_ADDR" >> "$LOG_DIR/mads-data.log" 2>&1 &
+  started_data=$!
+  set +m
+  wait_up "http://$DATA_ADDR/health" "$started_data" "data service" "$LOG_DIR/mads-data.log"
   echo "app.sh: started data service ($DATA_ADDR)"
 fi
 
 if [ "$router_running" = 0 ]; then
   go build -o bin/router ./services/router
   go build -o bin/session ./services/session
-  ./bin/router -addr "$ROUTER_ADDR" -data-url "http://$DATA_ADDR" -session-cmd ./bin/session >> /tmp/mads-router.log 2>&1 &
-  started+=($!)
-  wait_up "http://$ROUTER_ADDR/health" "$!" "router" /tmp/mads-router.log
+  set -m
+  ./bin/router -addr "$ROUTER_ADDR" -data-url "http://$DATA_ADDR" -session-cmd ./bin/session >> "$LOG_DIR/mads-router.log" 2>&1 &
+  started_router=$!
+  set +m
+  wait_up "http://$ROUTER_ADDR/health" "$started_router" "router" "$LOG_DIR/mads-router.log"
   echo "app.sh: started router ($ROUTER_ADDR)"
+fi
+
+if [ "${MADS_APP_NO_UI:-}" = 1 ]; then
+  echo "app.sh: services up; no app (MADS_APP_NO_UI=1). Ctrl-C to stop them."
+  while :; do sleep 1; done
 fi
 
 # Electron has no postinstall and `npm ci` (via `make build`) wipes its

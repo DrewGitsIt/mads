@@ -3,6 +3,7 @@ package supervisor_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1207,5 +1208,47 @@ func TestSpawnSessionHandsOverTokensAndRevokesOnExit(t *testing.T) {
 	}
 	if envPresent(t, paddr, localauth.EnvLocalToken) || envPresent(t, paddr, localauth.EnvRouterToken) {
 		t.Error("pipeline child: want no token in its env")
+	}
+}
+
+func TestShutdownGivesChildrenTheirGraceWithAnExpiredContext(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "stopped")
+	t.Setenv("TESTCHILD_TERM_DELAY", "300ms")
+	t.Setenv("TESTCHILD_TERM_MARKER", marker)
+	base := datatest.Start(t)
+	sup := newSupervisor(t, dataclient.New(base, "router"), nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := sup.SpawnSession(ctx, "ses_grace"); err != nil {
+		t.Fatalf("SpawnSession: %v", err)
+	}
+
+	// The Router's shutdown context can be spent by the time it reaches the
+	// children; that must not turn their SIGTERM into an immediate SIGKILL.
+	expired, expire := context.WithCancel(context.Background())
+	expire()
+	sup.Shutdown(expired)
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("child didn't finish its own shutdown (SIGKILLed before its grace?): %v", err)
+	}
+}
+
+func TestSpawnAfterShutdownIsRefused(t *testing.T) {
+	base := datatest.Start(t)
+	sup := newSupervisor(t, dataclient.New(base, "router"), nil)
+	sup.Shutdown(context.Background())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := sup.SpawnSession(ctx, "ses_late"); !errors.Is(err, supervisor.ErrShuttingDown) {
+		t.Fatalf("SpawnSession after Shutdown: err = %v, want ErrShuttingDown", err)
+	}
+	if _, err := sup.SpawnPipeline(ctx, "run_late", "ses_late", "tmpl", nil); !errors.Is(err, supervisor.ErrShuttingDown) {
+		t.Fatalf("SpawnPipeline after Shutdown: err = %v, want ErrShuttingDown", err)
+	}
+	if got := sup.Children(); len(got) != 0 {
+		t.Fatalf("children after refused spawns: %v, want none", got)
 	}
 }
