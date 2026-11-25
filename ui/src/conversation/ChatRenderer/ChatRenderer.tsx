@@ -735,7 +735,9 @@ export function ChatRenderer({
         }
         if (item.type === "card") {
           const card = cardsById.get(item.id);
-          return card ? <CardRow key={item.key} findKey={item.key} card={card} actions={worktreeActions} /> : null;
+          return card ? (
+            <CardRow key={item.key} findKey={item.key} card={card} actions={worktreeActions} stamps={stamps} />
+          ) : null;
         }
         if (item.type === "task") {
           const id = item.tool.id;
@@ -829,6 +831,8 @@ const CardRow = memo(function CardRow({
   findKey: string;
   card: WorktreeCardModel;
   actions?: WorktreeCardActions;
+  /** stampsKey(): a new day or time zone re-renders the card's stamp. */
+  stamps: string;
 }) {
   return (
     <div className={styles.findable} data-find={findKey}>

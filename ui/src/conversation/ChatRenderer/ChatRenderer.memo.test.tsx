@@ -6,6 +6,7 @@ import type { PermissionRequest, ToolStatus, ToolUse } from "../../router/types"
 import type { KeyedRow } from "../keyed/conversation";
 import type { TaskModel } from "../activity/conversationItems";
 import type { FindRequest } from "../Find/useFind";
+import type { WorktreeCardModel } from "../Worktree/worktreeCards";
 
 // What re-rendered, read off the components every item renders through:
 // a message's Markdown (by its text), an open group's rows (by tool id, via
@@ -240,17 +241,30 @@ describe("ChatRenderer — a streamed delta re-renders only what it changed", ()
     expect(live().hasAttribute("data-open")).toBe(false);
   });
 
-  it("re-labels stamps at midnight without any row changing", () => {
+  it("re-labels stamps at midnight without any row changing: messages and Commit/Land cards", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 10, 24, 23, 59));
     const at = new Date(2026, 10, 24, 22, 30).toISOString();
     const rows: KeyedRow[] = [{ key: "a", role: "agent", text: "late reply", timestamp: at }];
-    const c = setup({ rows });
-    const stamp = () => c.view.container.querySelector("time")!.textContent!;
-    expect(stamp()).not.toMatch(/Nov/);
+    const card: WorktreeCardModel = {
+      id: "c1",
+      seq: 1,
+      timestamp: new Date(2026, 10, 24, 22, 40).toISOString(),
+      kind: "committed",
+      hash: "abc1234",
+      subject: "late commit",
+      drafted: false,
+      undone: false,
+      tip: true,
+    };
+    const worktreeCards = [card];
+    const c = setup({ rows, worktreeCards });
+    const stamps = () => [...c.view.container.querySelectorAll("time")].map((t) => t.textContent!);
+    expect(stamps()).toHaveLength(2);
+    for (const s of stamps()) expect(s).not.toMatch(/Nov/);
     vi.setSystemTime(new Date(2026, 10, 25, 0, 1));
     c.update({ rows: [...rows] });
-    expect(stamp()).toMatch(/Nov/);
+    for (const s of stamps()) expect(s).toMatch(/Nov/);
   });
 
   it("opens a collapsed group holding the approval jump's card, leaving the other groups alone", () => {

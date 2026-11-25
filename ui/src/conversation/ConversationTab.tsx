@@ -117,6 +117,14 @@ import { selfStore } from "../router/devices";
 import styles from "./ConversationTab.module.css";
 import { useWorktreeRefresh } from "./Worktree/worktreeRefresh";
 
+/** What ChatRenderer's stable callbacks call: the latest committed render's handlers. */
+interface ChatHandlers {
+  openTool: (tool: ToolUse) => void;
+  openTask: (toolUseId: string, tool: ToolUse) => void;
+  retry: (text: string) => void;
+  signIn: () => void;
+}
+
 /** No permission cards: the terminal transport's, as one array so it's the same every render. */
 const NO_PERMISSIONS: PermissionRequest[] = [];
 
@@ -1421,12 +1429,13 @@ export function ConversationTab({
   // its memoized items skip a render that didn't touch them
   // (docs/CHAT-STREAM-PER-BATCH-COST.md). Its callbacks are stable and call
   // the latest render's handlers (chatHandlers, set below).
-  const chatHandlers = useRef<{
-    openTool: (tool: ToolUse) => void;
-    openTask: (toolUseId: string, tool: ToolUse) => void;
-    retry: (text: string) => void;
-    signIn: () => void;
-  } | null>(null);
+  const chatHandlers = useRef<ChatHandlers | null>(null);
+  // This render's handlers, made further down (after the early returns), and
+  // taken up once it commits: a render React throws away never leaves its own.
+  let renderHandlers: ChatHandlers | null = null;
+  useLayoutEffect(() => {
+    if (renderHandlers) chatHandlers.current = renderHandlers;
+  });
   const chatCallbacks = useMemo(
     () => ({
       openTool: (tool: ToolUse) => chatHandlers.current?.openTool(tool),
@@ -1688,7 +1697,7 @@ export function ConversationTab({
       noteSendError(err instanceof Error ? err.message : String(err));
     }
   };
-  chatHandlers.current = {
+  renderHandlers = {
     openTool,
     openTask: (toolUseId, tool) =>
       openSubagent(

@@ -158,6 +158,7 @@ export const ActivityGroup = memo(ActivityGroupView, sameGroupProps);
  * group only when they name one of its calls or cards. Every other prop
  * compares by identity, so a prop added later is never skipped.
  */
+// Relies on ActivityGroupView reading statuses, background and permissions only by its own entries' tool ids.
 export function sameGroupProps(a: ActivityGroupProps, b: ActivityGroupProps): boolean {
   if (a.entries !== b.entries) return false;
   const keys = Object.keys(b) as (keyof ActivityGroupProps)[];
@@ -201,6 +202,7 @@ function holds(p: ActivityGroupProps, reveal: PermissionReveal | null | undefine
   );
 }
 
+// Reads statuses, background and permissions only by its own entries' tool ids — sameGroupProps relies on it.
 function ActivityGroupView({
   entries,
   live = false,
