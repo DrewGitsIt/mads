@@ -1,6 +1,13 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import styles from "./Dialog.module.css";
 
+// Open dialogs: only the one drawn on top (the last in the page, so one
+// opened inside another) answers Escape and keeps Tab inside, so a
+// confirmation opened over a dialog never dismisses both.
+const openDialogs = new Set<HTMLElement>();
+const onTop = (el: HTMLElement) =>
+  [...openDialogs].every((o) => o === el || !(el.compareDocumentPosition(o) & Node.DOCUMENT_POSITION_FOLLOWING));
+
 export interface DialogProps {
   title: ReactNode;
   children?: ReactNode;
@@ -38,7 +45,10 @@ export function Dialog({ title, children, actions, onDismiss, alert, confirm, cl
   }, []);
 
   useEffect(() => {
+    const me = ref.current;
+    if (me) openDialogs.add(me);
     function onKey(e: KeyboardEvent) {
+      if (me && !onTop(me)) return;
       if (e.key === "Escape") {
         // A menu or popover open inside has the key first.
         if (e.defaultPrevented || ref.current?.querySelector('[aria-expanded="true"]')) return;
@@ -59,7 +69,10 @@ export function Dialog({ title, children, actions, onDismiss, alert, confirm, cl
       }
     }
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      if (me) openDialogs.delete(me);
+    };
   }, []);
 
   return (

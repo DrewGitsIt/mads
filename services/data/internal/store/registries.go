@@ -15,6 +15,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/devicekey"
+	"github.com/drewkidwell/mads/pkg/meshnet"
 )
 
 // Registry is the shared machinery behind the three registries (agents,
@@ -97,6 +98,36 @@ func WithMeshRelay(ctx context.Context, device string) context.Context {
 func meshRelay(ctx context.Context) (string, bool) {
 	fp, ok := ctx.Value(meshRelayKey{}).(string)
 	return fp, ok
+}
+
+type unpairedByKey struct{}
+
+// WithUnpairedBy says who a peer row's removal is by, for its
+// device.unpaired (docs/MESH-NETWORK-DESIGN.md F6): "itself" (the device
+// asked to be forgotten) or "reconcile" (it no longer had this host
+// paired).
+func WithUnpairedBy(ctx context.Context, by string) context.Context {
+	return context.WithValue(ctx, unpairedByKey{}, by)
+}
+
+func unpairedBy(ctx context.Context) string {
+	by, _ := ctx.Value(unpairedByKey{}).(string)
+	return by
+}
+
+type repairKey struct{}
+
+// WithRepair marks a peer row's update as a re-pairing in place (F6 R2):
+// its key is unchanged, but its pairing record is stamped afresh (paired
+// now, by this write's actor, how the row says) and device.paired is
+// written, as for a new pairing.
+func WithRepair(ctx context.Context) context.Context {
+	return context.WithValue(ctx, repairKey{}, true)
+}
+
+func isRepair(ctx context.Context) bool {
+	ok, _ := ctx.Value(repairKey{}).(bool)
+	return ok
 }
 
 // NewAgents returns the agent registry (spec §9).
@@ -580,7 +611,7 @@ func NewPeers(log *Log) *Registry[contracts.Peer] {
 			if err := checkRelayedPeerWrite(ctx, tx, prev, next); err != nil {
 				return err
 			}
-			return recordPairing(tx, prev, next, actor)
+			return recordPairing(ctx, tx, prev, next, actor)
 		},
 	}
 }
@@ -592,8 +623,14 @@ const maxPeerName = 64
 // routes (services/router/internal/mesh reservedNames).
 var reservedPeerNames = map[string]bool{"candidates": true}
 
+// A row with addresses first has its mesh_url mirrored from them
+// (docs/MESH-NETWORK-DESIGN.md, "The peer row"): last_good's address when
+// it's one of them, else the first. So mesh_url always names a working
+// address for an older build reading the row, and it's kept in one place.
 func validatePeer(p *contracts.Peer) *contracts.ValidationError {
 	var v contracts.ValidationError
+	mirrorMeshURL(p)
+	validatePeerAddresses(p, &v)
 	switch {
 	case p.Name == "":
 		v.Add("name", "required")
@@ -655,7 +692,7 @@ func validatePeer(p *contracts.Peer) *contracts.ValidationError {
 		}
 	}
 	if p.Pairing != nil && p.Pairing.How != "" && !p.Pairing.How.Valid() {
-		v.Add("pairing.how", fmt.Sprintf("must be accept, code, ceremony or introduction; got %q", p.Pairing.How))
+		v.Add("pairing.how", fmt.Sprintf("must be accept, code, ceremony, introduction or discovered; got %q", p.Pairing.How))
 	}
 	if r := p.Remote; r != nil {
 		if !contracts.ValidPlatform(r.Platform) {
@@ -669,6 +706,62 @@ func validatePeer(p *contracts.Peer) *contracts.ValidationError {
 		return nil
 	}
 	return &v
+}
+
+// mirrorMeshURL keeps p's mesh_url equal to its last good address (or its
+// first) when it has addresses.
+func mirrorMeshURL(p *contracts.Peer) {
+	if len(p.Addresses) == 0 {
+		return
+	}
+	target := p.Addresses[0].Addr
+	if p.LastGood != nil {
+		for _, a := range p.Addresses {
+			if strings.EqualFold(a.Addr, p.LastGood.Addr) {
+				target = a.Addr
+			}
+		}
+	}
+	p.MeshURL = contracts.MeshURLOf(target)
+}
+
+// validatePeerAddresses is the address store rules: at most
+// MaxPeerAddresses, each a direct host:port passing the dial policy's
+// shape checks, from a known source, none twice.
+func validatePeerAddresses(p *contracts.Peer, v *contracts.ValidationError) {
+	if len(p.Addresses) > contracts.MaxPeerAddresses {
+		v.Add("addresses", fmt.Sprintf("at most %d", contracts.MaxPeerAddresses))
+	}
+	seen := map[string]bool{}
+	for i := range p.Addresses {
+		a := &p.Addresses[i]
+		f := fmt.Sprintf("addresses[%d]", i)
+		if a.Via == "" {
+			a.Via = meshnet.DirectVia
+		}
+		key := strings.ToLower(a.Addr)
+		switch {
+		case a.Via != meshnet.DirectVia:
+			v.Add(f+".via", "must be direct")
+		case meshnet.CheckShape(a.Addr) != nil:
+			v.Add(f+".addr", meshnet.CheckShape(a.Addr).Error())
+		case seen[key]:
+			v.Add(f+".addr", "listed twice")
+		}
+		seen[key] = true
+		if !a.Source.Valid() {
+			v.Add(f+".source", fmt.Sprintf("must be code, hello, user, joiner, introduced, discovered or legacy; got %q", a.Source))
+		}
+		if a.Kind != "" && !meshnet.Kind(a.Kind).Valid() {
+			v.Add(f+".kind", "must be overlay, lan or public")
+		}
+		if len(a.Label) > 64 || len(a.Network) > 128 {
+			v.Add(f+".label", "too long")
+		}
+	}
+	if p.LastGood != nil && meshnet.CheckShape(p.LastGood.Addr) != nil {
+		v.Add("last_good.addr", "must be host:port")
+	}
 }
 
 // checkAdminGrant enforces Q2 (docs/MESH-AUTH-DESIGN.md) against the
@@ -816,17 +909,19 @@ func checkPeerFingerprintFree(tx *Tx, p *contracts.Peer) error {
 
 // recordPairing owns next's Pairing record and writes the D8 audit events.
 // A newly pinned (or changed) fingerprint is stamped paired now, by actor;
-// an unchanged one keeps its record whatever the caller sent.
-func recordPairing(tx *Tx, prev, next *contracts.Peer, actor string) error {
+// an unchanged one keeps its record whatever the caller sent, unless the
+// write is a re-pairing in place (WithRepair).
+func recordPairing(ctx context.Context, tx *Tx, prev, next *contracts.Peer, actor string) error {
 	var was, now contracts.Peer
 	if prev != nil {
 		was = *prev
 	}
+	repair := isRepair(ctx) && prev != nil && next != nil && next.IsPaired() && was.Fingerprint == next.Fingerprint
 	if next != nil {
 		switch {
 		case !next.IsPaired():
 			next.Pairing = nil
-		case was.Fingerprint == next.Fingerprint:
+		case was.Fingerprint == next.Fingerprint && !repair:
 			next.Pairing = was.Pairing
 		default:
 			how := contracts.PairAccept
@@ -846,11 +941,17 @@ func recordPairing(tx *Tx, prev, next *contracts.Peer, actor string) error {
 		return tx.Append(&contracts.Envelope{Type: typ, Actor: actor, Payload: payload})
 	}
 	if was.IsPaired() && was.Fingerprint != now.Fingerprint {
-		if err := emit(contracts.DeviceUnpaired, was, contracts.DeviceChange{PreviousLevel: was.Level()}); err != nil {
+		c := contracts.DeviceChange{PreviousLevel: was.Level()}
+		if next == nil {
+			c.By = unpairedBy(ctx)
+		}
+		if err := emit(contracts.DeviceUnpaired, was, c); err != nil {
 			return err
 		}
 	}
 	switch {
+	case repair:
+		return emit(contracts.DevicePaired, now, contracts.DeviceChange{Level: now.Level(), PreviousLevel: was.Level(), How: now.Pairing.How, Repair: true})
 	case !now.IsPaired():
 	case was.Fingerprint != now.Fingerprint:
 		typ := contracts.DevicePaired

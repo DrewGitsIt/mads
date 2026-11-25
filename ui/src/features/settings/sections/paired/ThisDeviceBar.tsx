@@ -1,7 +1,6 @@
 import { Button } from "../../../../components/Button/Button";
 import { FingerprintChip } from "../../../../components/Fingerprint/Fingerprint";
 import { KindIcon } from "../../../../components/KindIcon/KindIcon";
-import { Tooltip } from "../../../../components/Tooltip/Tooltip";
 import type { SelfDevice } from "../../../../router/devices";
 import { kindOf, platformLabel } from "./model";
 import styles from "./PairedDevices.module.css";
@@ -10,14 +9,23 @@ export interface ThisDeviceBarProps {
   self: SelfDevice | undefined;
   /** Whether another device lets this one administer it (Introduce needs one). */
   canIntroduce: boolean;
-  /** Why it can't, when there's more to say (a tailnet policy capping an administer). */
-  introduceWhy?: string;
   onIntroduce: () => void;
+  /** Pair with a code: the fallback that always works. */
   onPair: () => void;
+  /** Add devices: the one entry point to finding devices (setup's step 2). */
+  onAdd: () => void;
+  /** A mesh network is chosen: the actions show. */
+  configured: boolean;
 }
 
-/** The section's head: this device (kind, name, short fingerprint), Introduce a device…, Pair a device. */
-export function ThisDeviceBar({ self, canIntroduce, introduceWhy, onIntroduce, onPair }: ThisDeviceBarProps) {
+/**
+ * The section's head: this device (kind, name, short fingerprint) and,
+ * once a mesh network is chosen, Pair with a code and Add devices (and
+ * Introduce a device… when another device lets this one administer it).
+ * Before that, the empty state below it has the way in. Narrow, the
+ * buttons wrap under the name.
+ */
+export function ThisDeviceBar({ self, canIntroduce, onIntroduce, onPair, onAdd, configured }: ThisDeviceBarProps) {
   return (
     <div className={styles.bar}>
       <div className={styles.who}>
@@ -32,26 +40,21 @@ export function ThisDeviceBar({ self, canIntroduce, introduceWhy, onIntroduce, o
           />
         )}
       </div>
+      {configured && (
       <div className={styles.barActions}>
-        {canIntroduce ? (
+        {canIntroduce && (
           <Button variant="ghost" onClick={onIntroduce}>
             Introduce a device…
           </Button>
-        ) : (
-          <Tooltip
-            tip={`You can introduce devices to a device that lets this one administer mads.${introduceWhy ? ` ${introduceWhy}` : ""}`}
-            align="end"
-            focusable={false}
-          >
-            <Button variant="ghost" aria-disabled="true" className={styles.ariaDisabled} onClick={(e) => e.preventDefault()}>
-              Introduce a device…
-            </Button>
-          </Tooltip>
         )}
-        <Button variant="primary" onClick={onPair}>
-          Pair a device
+        <Button variant="ghost" onClick={onPair}>
+          Pair with a code
+        </Button>
+        <Button variant="primary" onClick={onAdd}>
+          Add devices
         </Button>
       </div>
+      )}
     </div>
   );
 }

@@ -75,6 +75,65 @@ func TestDeviceActivity(t *testing.T) {
 	}
 }
 
+// The log leaves out what it doesn't show (discovery probes, the setup
+// window's renewals), so they never push shown entries off a page, and
+// includes a connected device's path changing, by its peer id (S7).
+func TestDeviceActivityShownEntriesAndPathChanges(t *testing.T) {
+	l := openMigratedDB(t)
+	ctx := context.Background()
+	peers := NewPeers(l)
+	pop, mac := testFP(3), testFP(4)
+	pp := &contracts.Peer{Name: "pop-os", MeshURL: "http://100.1.1.1:17380", Fingerprint: string(pop)}
+	mp := &contracts.Peer{Name: "mac", MeshURL: "http://100.1.1.2:17380", Fingerprint: string(mac)}
+	for _, p := range []*contracts.Peer{pp, mp} {
+		if err := peers.Create(ctx, p, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendEv := func(typ contracts.EventType, payload any) int64 {
+		raw, _ := json.Marshal(payload)
+		env := contracts.Envelope{Type: typ, Actor: "router", Payload: raw}
+		if err := l.Append(ctx, &env); err != nil {
+			t.Fatal(err)
+		}
+		return env.Seq
+	}
+	opened := appendEv(contracts.DeviceDiscoverable, contracts.Discoverable{By: "user"})
+	popPath := appendEv(contracts.PeerReachabilityChanged, contracts.PeerReachabilityChange{PeerID: pp.ID, From: contracts.PeerConnected, To: contracts.PeerConnected,
+		Via: &contracts.NetAddress{Addr: "100.1.1.1:17380", Label: "Tailscale"}})
+	appendEv(contracts.PeerReachabilityChanged, contracts.PeerReachabilityChange{PeerID: pp.ID, From: contracts.PeerConnected, To: contracts.PeerUnreachable})
+	macPath := appendEv(contracts.PeerReachabilityChanged, contracts.PeerReachabilityChange{PeerID: mp.ID, From: contracts.PeerConnected, To: contracts.PeerConnected})
+	for range 30 {
+		appendEv(contracts.DeviceDiscoverable, contracts.Discoverable{By: "user", Renew: true})
+		appendEv(contracts.DeviceDiscovered, contracts.DeviceDiscovery{Kind: "probe", Remote: "100.1.1.9:5000"})
+	}
+	seqs := func(evs []contracts.Envelope) []int64 {
+		var out []int64
+		for _, e := range evs {
+			out = append(out, e.Seq)
+		}
+		return out
+	}
+	all, err := l.DeviceActivity(ctx, DeviceActivityFilter{Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := seqs(all), []int64{macPath, popPath, opened}; !equalSeqs(got, want) {
+		t.Fatalf("all = %v, want %v", got, want)
+	}
+	// pop-os's own path change (with its pairing), never mac's.
+	one, _ := l.DeviceActivity(ctx, DeviceActivityFilter{Fingerprint: string(pop), Short: pop.Short()})
+	got := seqs(one)
+	if len(got) == 0 || got[0] != popPath {
+		t.Fatalf("pop-os = %v, want %d first", got, popPath)
+	}
+	for _, s := range got {
+		if s == macPath {
+			t.Fatalf("pop-os's log has mac's path change: %v", got)
+		}
+	}
+}
+
 // The queries use indexes (migration 0036, and idx_events_type), so a
 // large log of other events isn't scanned, and last use isn't sorted.
 func TestDeviceActivityUsesTheIndex(t *testing.T) {
@@ -137,7 +196,7 @@ func TestLastUseIndexMigratesOverAnEarlier0036(t *testing.T) {
 	if err := Migrate(db, Migrations()); err != nil {
 		t.Fatalf("0037 over an earlier 0036: %v", err)
 	}
-	if v, _ := Version(db); v != 37 {
+	if v, _ := Version(db); v < 37 {
 		t.Fatalf("version %d", v)
 	}
 }

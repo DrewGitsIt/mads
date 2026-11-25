@@ -3,9 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"log"
 	"slices"
 	"time"
 
@@ -19,7 +17,11 @@ import (
 //     pair_declined), whose payload names the device by fingerprint;
 //   - any event whose actor is a paired device ("device:<name>/<short
 //     fingerprint>", set by the Mesh Service and carried by the Router), a
-//     device's own actions here.
+//     device's own actions here;
+//   - a paired device's path changing while connected
+//     (peer.reachability_changed from and to connected), by its peer id.
+//
+// Discovery probes and the setup window's renewals are left out.
 //
 // deviceActorTerm is the partial index's expression (migration 0036): a
 // query must use it verbatim for SQLite to use that index.
@@ -28,6 +30,16 @@ const deviceActorTerm = "substr(actor, 1, 7) = 'device:'"
 // deviceTypeTerm is device.* as a range idx_events_type serves (LIKE is
 // case-insensitive in SQLite, so it can't use the index).
 const deviceTypeTerm = "type >= 'device.' AND type < 'device/'"
+
+// deviceShownTerm leaves out the device.* events the log doesn't show, so
+// they never push shown ones off a page: discovery probes (audit only) and
+// the setup window's minute renewals.
+const deviceShownTerm = "type != 'device.discovered' AND NOT (type = 'device.discoverable' AND coalesce(json_extract(payload, '$.renew'), 0) = 1)"
+
+// pathChangeTerm is a connected device's path changing ("Now reached via
+// Tailscale (was home network)"): peer.reachability_changed from and to
+// connected.
+const pathChangeTerm = "type = 'peer.reachability_changed' AND json_extract(payload, '$.from') = 'connected' AND json_extract(payload, '$.to') = 'connected'"
 
 // DeviceActivityFilter selects GET /devices/activity.
 type DeviceActivityFilter struct {
@@ -60,7 +72,7 @@ func (l *Log) DeviceActivity(ctx context.Context, f DeviceActivityFilter) ([]con
 	// range, which idx_events_type serves; LIKE is case-insensitive and
 	// can't), and device actors by the partial index.
 	q1 := `SELECT seq, timestamp, type, session_id, task_id, actor, payload FROM events
-	       WHERE ` + deviceTypeTerm + ` AND seq < ?`
+	       WHERE ` + deviceTypeTerm + ` AND ` + deviceShownTerm + ` AND seq < ?`
 	args1 := []any{before}
 	if f.Fingerprint != "" {
 		q1 += ` AND json_extract(payload, '$.fingerprint') = ?`
@@ -79,6 +91,16 @@ func (l *Log) DeviceActivity(ctx context.Context, f DeviceActivityFilter) ([]con
 	q2 += ` ORDER BY seq DESC LIMIT ?`
 	args2 = append(args2, f.Limit)
 
+	q3 := `SELECT seq, timestamp, type, session_id, task_id, actor, payload FROM events
+	       WHERE ` + pathChangeTerm + ` AND seq < ?`
+	args3 := []any{before}
+	if f.Fingerprint != "" {
+		q3 += ` AND json_extract(payload, '$.peer_id') IN (SELECT id FROM mesh_peers WHERE json_extract(data, '$.fingerprint') = ?)`
+		args3 = append(args3, f.Fingerprint)
+	}
+	q3 += ` ORDER BY seq DESC LIMIT ?`
+	args3 = append(args3, f.Limit)
+
 	a, err := l.scanEvents(ctx, q1, args1...)
 	if err != nil {
 		return nil, err
@@ -87,9 +109,13 @@ func (l *Log) DeviceActivity(ctx context.Context, f DeviceActivityFilter) ([]con
 	if err != nil {
 		return nil, err
 	}
+	c, err := l.scanEvents(ctx, q3, args3...)
+	if err != nil {
+		return nil, err
+	}
 	seen := map[int64]bool{}
-	out := make([]contracts.Envelope, 0, len(a)+len(b))
-	for _, env := range append(a, b...) {
+	out := make([]contracts.Envelope, 0, len(a)+len(b)+len(c))
+	for _, env := range append(append(a, b...), c...) {
 		if !seen[env.Seq] {
 			seen[env.Seq] = true
 			out = append(out, env)
@@ -167,48 +193,4 @@ func (l *Log) scanEvents(ctx context.Context, q string, args ...any) ([]contract
 		out = append(out, env)
 	}
 	return out, rows.Err()
-}
-
-// MeshSettingsActor is the only actor device.settings_changed is read
-// from: SetMeshSettings writes under it, with the user who made the change
-// in the payload (contracts.MeshSettingsChange.By), and POST /events
-// refuses device.* outright, so nothing else can stand in for a setting.
-const MeshSettingsActor = "settings"
-
-// meshSettingsScan bounds how many older events MeshSettings looks back
-// through past ones it can't read.
-const meshSettingsScan = 100
-
-// MeshSettings is this host's mesh settings: the newest readable
-// device.settings_changed written by SetMeshSettings, the zero value when
-// there's none (docs/MESH-AUTH-DESIGN.md, "Only accept devices on my
-// tailnet"). The event is the only copy: the log is the setting's history
-// and its current value at once, the way mesh.listening is this host's
-// address. One it can't decode (or that sets nothing) is skipped for the
-// next older one, so a damaged row can't wedge the setting.
-func (l *Log) MeshSettings(ctx context.Context) (contracts.MeshSettings, error) {
-	evs, err := l.scanEvents(ctx, `SELECT seq, timestamp, type, session_id, task_id, actor, payload FROM events
-	       WHERE type = ? AND actor = ? ORDER BY seq DESC LIMIT ?`, string(contracts.DeviceSettingsChanged), MeshSettingsActor, meshSettingsScan)
-	if err != nil {
-		return contracts.MeshSettings{}, err
-	}
-	for _, ev := range evs {
-		var c contracts.MeshSettingsChange
-		if json.Unmarshal(ev.Payload, &c) != nil || c.RequireTailnet == nil {
-			log.Printf("store: skipping unreadable device.settings_changed seq %d", ev.Seq)
-			continue
-		}
-		return c.MeshSettings, nil
-	}
-	return contracts.MeshSettings{}, nil
-}
-
-// SetMeshSettings records s as this host's mesh settings, made by `by`.
-// The caller checks authority: only this host's own user changes them.
-func (l *Log) SetMeshSettings(ctx context.Context, s contracts.MeshSettings, by string) error {
-	raw, err := json.Marshal(contracts.MeshSettingsChange{MeshSettings: s, By: by})
-	if err != nil {
-		return err
-	}
-	return l.Append(ctx, &contracts.Envelope{Type: contracts.DeviceSettingsChanged, Actor: MeshSettingsActor, Payload: raw})
 }

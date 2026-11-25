@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The local end-to-end entry point (until W7 packaging does this properly):
-# ensures the Data Service and Router are up, then launches the Electron app.
+# ensures the Data Service, Router and Mesh Service are up, then launches the
+# Electron app.
 # Services it starts are stopped again when the app exits; services that were
 # already running are left alone — but only reused if they were launched from
 # THIS checkout (their /health reports it), since the Router serves the UI
@@ -14,9 +15,11 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/app.sh [--restart]
 
-Start the Data Service and Router (built from this checkout) if they aren't
-running, then launch the Electron app. Services this script starts are
-stopped again when the app exits.
+Start the Data Service, Router and Mesh Service (built from this checkout)
+if they aren't running, then launch the Electron app. Services this script
+starts are stopped again when the app exits. The Mesh Service is how other
+devices reach this one; it listens only on this device's mesh network
+(Settings -> Paired devices), nowhere until one is set up.
 
 First makes sure the install token exists ($MADS_HOME/local.token, default
 ~/.mads; see docs/LOCAL-FRONT-DOOR-DESIGN.md): the services and the app need it.
@@ -24,11 +27,13 @@ First makes sure the install token exists ($MADS_HOME/local.token, default
 A service already answering on its port is reused only if its /health says it
 was launched from this checkout (it is not rebuilt; restart it to pick up Go
 changes). One from another checkout, or an older build that doesn't say, is
-refused.
+refused. The Mesh Service has no local port: it's found by the pid in
+$MADS_HOME/run/mesh.lock, and reused only if it runs from this checkout.
 
 Options:
-  --restart   First stop whatever is listening on the Router and Data Service
-              ports (any checkout, any build; SIGTERM, Router first), then
+  --restart   First stop the Mesh Service and whatever is listening on the
+              Router and Data Service ports (any checkout, any build;
+              SIGTERM, Mesh Service, then Router, then Data Service), then
               build and start fresh ones from this checkout. Stopping the
               Router cuts off any agent turn in progress; sessions start
               again on their next message.
@@ -62,6 +67,15 @@ cd "$REPO_ROOT"
 
 DATA_ADDR="${MADS_DATA_ADDR:-localhost:17374}"
 ROUTER_ADDR="${MADS_ROUTER_ADDR:-localhost:17373}"
+
+# Every build here uses exactly go.mod's toolchain, downloading it if this
+# machine's Go is another version: services built with different Go
+# versions behaved differently over the mesh (HTTP/2 on pinned connections,
+# before Go 1.27). GOTOOLCHAIN set by the caller wins.
+if [ -z "${GOTOOLCHAIN:-}" ]; then
+  GOTOOLCHAIN="$(sed -n 's/^toolchain //p' go.mod)"
+  [ -n "$GOTOOLCHAIN" ] && export GOTOOLCHAIN
+fi
 
 # The local front door (docs/LOCAL-FRONT-DOOR-DESIGN.md D7): every Router and
 # Data Service API call needs the install token in $MADS_HOME/local.token.
@@ -170,6 +184,61 @@ check_reuse() { # <addr> <display name> <extra stop note>
   exit 1
 }
 
+# The Mesh Service: one per mads home, holding $MADS_HOME/run/mesh.lock
+# with its pid (it has no local port to find it by, and may listen nowhere).
+MESH_LOCK="$MADS_HOME_DIR/run/mesh.lock"
+
+# The running Mesh Service's pid, or empty: the lock file's pid, if that
+# process is alive and is a mesh binary (a stale file's pid may be reused).
+mesh_pid() {
+  local pid comm
+  [ -f "$MESH_LOCK" ] || return 0
+  IFS= read -r pid < "$MESH_LOCK" || true
+  case "$pid" in '' | *[!0-9]*) return 0 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 0
+  comm="$(ps -o comm= -p "$pid" 2>/dev/null || true)"
+  case "$comm" in mesh | */mesh) echo "$pid" ;; esac
+}
+
+# --restart: SIGTERM the running Mesh Service and wait for it to go.
+stop_mesh() {
+  local pid root i
+  pid="$(mesh_pid)"
+  [ -n "$pid" ] || return 0
+  root="$(pid_cwd "$pid")"
+  if ! kill -TERM "$pid" 2>/dev/null; then
+    echo "app.sh: could not signal the Mesh Service (pid $pid); stop it yourself and run app.sh again." >&2
+    exit 1
+  fi
+  for ((i = 0; i < 50; i++)); do # 50 * 0.2s = 10s
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "app.sh: stopped Mesh Service pid $pid${root:+ from $root}"
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "app.sh: the Mesh Service (pid $pid) is still running 10s after SIGTERM; stop it yourself and run app.sh again." >&2
+  exit 1
+}
+
+# A Mesh Service is already running: reuse it only if it runs from this
+# checkout (its working directory), as for the others.
+check_mesh_reuse() { # <pid>
+  local pid="$1" cwd
+  cwd="$(pid_cwd "$pid")"
+  [ -n "$cwd" ] && [ -d "$cwd" ] && cwd="$(cd "$cwd" && pwd -P)"
+  if [ "$cwd" = "$REPO_ROOT" ] || [ "${MADS_REUSE_SERVICES:-}" = 1 ]; then
+    echo "app.sh: reusing the Mesh Service already running (pid $pid)${cwd:+ from $cwd} — not rebuilt, so restart it to pick up Go changes"
+    return 0
+  fi
+  {
+    echo "app.sh: a Mesh Service is already running (pid $pid)${cwd:+ from $cwd}."
+    echo "This checkout is $REPO_ROOT, so other devices would reach the other checkout's code."
+    echo "Run scripts/app.sh --restart to stop it and start this checkout's, or stop pid $pid yourself, or set MADS_REUSE_SERVICES=1 to use it anyway."
+  } >&2
+  exit 1
+}
+
 ROUTER_STOP_NOTE="stopping the Router also ends the agent sessions and pipeline runs it is running: a turn in progress is cut off, and sessions start again on their next message"
 
 # --restart: SIGTERM whatever LISTENS on addr's port — by port, never by
@@ -213,13 +282,14 @@ stop_listener() { # <addr> <display name>
 }
 
 if [ "$restart" = 1 ]; then
-  # Router first, so it never runs against a missing Data Service.
+  # Mesh Service, then Router, so neither runs against a missing service.
+  stop_mesh
   stop_listener "$ROUTER_ADDR" "Router"
   stop_listener "$DATA_ADDR" "Data Service"
 fi
 
-# Check both before starting either, so a refusal leaves nothing behind.
-data_running=0 router_running=0
+# Check all three before starting any, so a refusal leaves nothing behind.
+data_running=0 router_running=0 mesh_running=0
 if up "http://$DATA_ADDR/health"; then
   data_running=1
   check_reuse "$DATA_ADDR" "Data Service" ""
@@ -227,6 +297,11 @@ fi
 if up "http://$ROUTER_ADDR/health"; then
   router_running=1
   check_reuse "$ROUTER_ADDR" "Router" " ($ROUTER_STOP_NOTE)"
+fi
+running_mesh="$(mesh_pid)"
+if [ -n "$running_mesh" ]; then
+  mesh_running=1
+  check_mesh_reuse "$running_mesh"
 fi
 
 if [ "$data_running" = 0 ]; then
@@ -244,6 +319,30 @@ if [ "$router_running" = 0 ]; then
   started+=($!)
   wait_up "http://$ROUTER_ADDR/health" "$!" "router" /tmp/mads-router.log
   echo "app.sh: started router ($ROUTER_ADDR)"
+fi
+
+if [ "$mesh_running" = 0 ]; then
+  go build -o bin/mesh ./services/mesh
+  ./bin/mesh -router-url "http://$ROUTER_ADDR" -data-url "http://$DATA_ADDR" >> /tmp/mads-mesh.log 2>&1 &
+  started+=($!)
+  # No local port to wait on: it's up once it holds the lock (it then
+  # follows the Data Service and Router by itself).
+  mesh_up=0
+  for ((i = 0; i < 50; i++)); do # 50 * 0.2s = 10s
+    if ! kill -0 "$!" 2>/dev/null; then
+      echo "app.sh: Mesh Service exited during startup — last lines of /tmp/mads-mesh.log:" >&2
+      tail -n 10 /tmp/mads-mesh.log >&2 || true
+      exit 1
+    fi
+    if [ "$(mesh_pid)" = "$!" ]; then mesh_up=1; break; fi
+    sleep 0.2
+  done
+  if [ "$mesh_up" = 0 ]; then
+    echo "app.sh: Mesh Service didn't take $MESH_LOCK within 10s — last lines of /tmp/mads-mesh.log:" >&2
+    tail -n 10 /tmp/mads-mesh.log >&2 || true
+    exit 1
+  fi
+  echo "app.sh: started Mesh Service"
 fi
 
 # Electron has no postinstall and `npm ci` (via `make build`) wipes its

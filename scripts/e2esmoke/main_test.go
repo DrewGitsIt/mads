@@ -371,6 +371,8 @@ func TestFullTopologySmoke(t *testing.T) {
 		"-pipeline-cmd", sessionBin,
 		"-fastmodel-base-url", fm.URL,
 		"-mads-home", homeDir,
+		// Never this machine's real tailscaled.
+		"-localapi-socket", filepath.Join(homeDir, "no-tailscaled.sock"),
 	}, env)
 	defer router.terminate(t, 5*time.Second)
 	routerURL := "http://" + router.addr

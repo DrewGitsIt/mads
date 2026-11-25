@@ -50,7 +50,9 @@ func TestMain(m *testing.M) {
 		{bootRouterBin, "github.com/drewkidwell/mads/services/router"},
 		{bootTestchildBin, "github.com/drewkidwell/mads/services/router/internal/testchild"},
 	} {
-		build := exec.Command("go", "build", "-o", b.out, b.pkg)
+		// mesh_loopback: some boot tests' mesh peers listen on 127.0.0.1
+		// (-mesh-allow-loopback), as the e2e harness's do.
+		build := exec.Command("go", "build", "-tags", "mesh_loopback", "-o", b.out, b.pkg)
 		if out, err := build.CombinedOutput(); err != nil {
 			panic(fmt.Sprintf("build %s: %v\n%s", b.pkg, err, out))
 		}
@@ -318,6 +320,8 @@ func TestDigestwatchSubscribesAtBootAndDeliversDigest(t *testing.T) {
 		"-pipeline-cmd", bootTestchildBin,
 		"-mads-home", homeDir,
 		"-fastmodel-base-url", fastModel.URL,
+		// Never this machine's real tailscaled.
+		"-localapi-socket", filepath.Join(homeDir, "no-tailscaled.sock"),
 	}, env)
 	defer router.terminate(t, 5*time.Second)
 	routerURL := "http://" + router.addr

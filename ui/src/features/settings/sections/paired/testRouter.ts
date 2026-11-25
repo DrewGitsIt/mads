@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { DeviceRow, SelfDevice } from "../../../../router/devices";
+import type { DeviceRow, NetworkView, SelfDevice } from "../../../../router/devices";
 import { FakeEventSource } from "../../../../router/testFakeEventSource";
 
 /** One recorded request to the stubbed Router. */
@@ -64,7 +64,7 @@ export function row(over: Partial<DeviceRow> & { name: string }): DeviceRow {
 
 /** pop-os's view in the mockup: a Mac that doesn't let it in, a phone, a display. */
 export const MAC = row({
-  name: "Drews-MacBook-Air",
+  name: "Alexs-MacBook-Air",
   fingerprint: fp("M"),
   mesh_url: "http://mac.ts.net:17380",
   viewed: false,
@@ -98,3 +98,16 @@ export const STUDIO = row({
 });
 
 export const shortOf = (f: string) => f.match(/.{4}/g)!.slice(0, 4).join("-");
+
+/** A network as GET /devices/self lists it (Tailscale unless told otherwise). */
+export const net = (over: Partial<NetworkView> & { id: string }): NetworkView => ({
+  kind: "overlay",
+  title: "Tailscale",
+  meaning: "vpn_anywhere",
+  who_can_knock: "tailnet_only",
+  risk: "low",
+  chosen: false,
+  available: true,
+  listening: false,
+  ...over,
+});

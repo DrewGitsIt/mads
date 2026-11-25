@@ -1,0 +1,27 @@
+/* The six digits both screens show while a found device pairs
+   (docs/MESH-NETWORK-DESIGN.md U4): Bluetooth-style numeric comparison. */
+.box {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg0);
+}
+.code {
+  flex: none;
+  white-space: nowrap;
+  font: 650 26px/1 var(--mono);
+  letter-spacing: 0.12em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums slashed-zero;
+}
+.text {
+  color: var(--text2);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.text b {
+  color: var(--text);
+}

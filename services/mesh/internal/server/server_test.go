@@ -114,17 +114,28 @@ func (d *fakeDevices) unpair(id *devicekey.Identity) {
 
 // fakeAudit records appended events.
 type fakeAudit struct {
-	mu  sync.Mutex
-	evs []contracts.DeviceRefusal
+	mu   sync.Mutex
+	evs  []contracts.DeviceRefusal
+	envs []contracts.Envelope
 }
 
 func (a *fakeAudit) Append(_ context.Context, env *contracts.Envelope) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.envs = append(a.envs, *env)
+	if env.Type != contracts.DeviceRefused {
+		return nil
+	}
 	var r contracts.DeviceRefusal
 	_ = json.Unmarshal(env.Payload, &r)
-	a.mu.Lock()
 	a.evs = append(a.evs, r)
-	a.mu.Unlock()
 	return nil
+}
+
+func (a *fakeAudit) envelopes() []contracts.Envelope {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]contracts.Envelope(nil), a.envs...)
 }
 
 func (a *fakeAudit) events() []contracts.DeviceRefusal {
@@ -330,7 +341,6 @@ func TestGateRefusals(t *testing.T) {
 		{"paired, not on the tailnet", req{from: "192.0.2.1", as: ids.mac, method: "GET", target: "/sessions"}, "not_tailnet", 403},
 		{"paired, another user's node", req{from: "100.0.0.4", as: ids.mac, method: "GET", target: "/sessions"}, "other_user", 403},
 		{"paired, tagged node", req{from: "100.0.0.5", as: ids.mac, method: "GET", target: "/sessions"}, "tagged_node", 403},
-		{"paired, no capability", req{from: "100.0.0.3", as: ids.mac, method: "GET", target: "/sessions"}, "no_capability", 403},
 		{"paired, granted nothing", req{from: "100.0.0.1", as: ids.idle, method: "GET", target: "/sessions"}, "no_access", 403},
 		{"denied route", req{from: "100.0.0.1", as: ids.mac, method: "GET", target: "/credentials"}, "not_exposed", 403},
 		{"host settings", req{from: "100.0.0.1", as: ids.mac, method: "PUT", target: "/config"}, "not_exposed", 403},
@@ -344,9 +354,6 @@ func TestGateRefusals(t *testing.T) {
 		{"chat can't type into the terminal", req{from: "100.0.0.1", as: ids.chatter, method: "POST", target: "/sessions/ses_1/input"}, "no_access", 403},
 		{"chat can't archive", req{from: "100.0.0.1", as: ids.chatter, method: "DELETE", target: "/sessions/ses_1"}, "no_access", 403},
 		{"chat can't browse folders", req{from: "100.0.0.1", as: ids.chatter, method: "GET", target: "/mesh/fs/list"}, "no_access", 403},
-		// The tailnet capability caps the grant: the mac's key holds
-		// control, but from the phone's node (capability view) it's view.
-		{"capability below the grant", req{from: "100.0.0.2", as: ids.mac, method: "POST", target: "/sessions/ses_1/messages"}, "no_access", 403},
 		{"unknown mesh route", req{from: "100.0.0.1", as: ids.mac, method: "GET", target: "/mesh/nope"}, "not_found", 404},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -633,7 +640,11 @@ func TestHello(t *testing.T) {
 		{"100.0.0.1", f.ids.mac, "view,chat,control"},
 		{"100.0.0.1", f.ids.chatter, "view,chat"},
 		{"100.0.0.1", f.ids.idle, ""},
-		{"100.0.0.2", f.ids.mac, "view"}, // capability view caps the grant
+		// The tailnet policy never caps the grant: from the phone's node
+		// (whose capability says view) the mac's key still holds control.
+		{"100.0.0.2", f.ids.mac, "view,chat,control"},
+		// Nor does a node with no capability at all get refused.
+		{"100.0.0.3", f.ids.mac, "view,chat,control"},
 	} {
 		w := f.serve(t, req{from: tc.from, as: tc.as, method: "GET", target: "/mesh/hello"})
 		if w.Code != 200 {
@@ -664,11 +675,12 @@ func TestWhoIsIsCachedBriefly(t *testing.T) {
 	if f.tn.calls != 1 {
 		t.Fatalf("WhoIs calls = %d, want 1 within the TTL", f.tn.calls)
 	}
-	// Revoke the capability; once the TTL passes the next request sees it.
-	f.tn.set("100.0.0.1", noCap)
+	// The node moves to another user; once the TTL passes the next request
+	// sees it.
+	f.tn.set("100.0.0.1", stranger)
 	now = now.Add(11 * time.Second)
 	if w := f.do(t, "100.0.0.1", "GET", "/sessions", nil); w.Code != 403 {
-		t.Fatalf("revoked capability still served after the TTL: %d", w.Code)
+		t.Fatalf("another user's node still served after the TTL: %d", w.Code)
 	}
 }
 
@@ -799,20 +811,22 @@ func TestTailnetGateRunsBeforeTheKeyLookup(t *testing.T) {
 	}
 }
 
-// A capability lowered in the tailnet policy changes the effective level:
-// the device's open streams end, as for a grant change.
-func TestCapabilityDowngradeEndsStreams(t *testing.T) {
+// A capability lowered in the tailnet policy changes nothing (the check is
+// refuse-only and never reads it), but a node that stops passing the check
+// (moved to another user, tagged) has its open streams ended.
+func TestTailnetCheckFailureEndsStreams(t *testing.T) {
 	f := newFixture(t)
 	front := f.listen(t)
 	s := openEvents(t, meshClient(t, f.ids.mac, f.ids.host), front.URL)
-	f.srv.RevalidateTailnet()
-	if s.endsWithin(300 * time.Millisecond) {
-		t.Fatal("an unchanged capability ended the stream")
-	}
 	f.tn.set("127.0.0.1", tailnet.Caller{NodeName: "mac.ts.net", UserID: owner, HasCap: true, Access: []string{"view"}})
 	f.srv.RevalidateTailnet()
+	if s.endsWithin(300 * time.Millisecond) {
+		t.Fatal("a lowered capability ended the stream: the policy mustn't cap a level")
+	}
+	f.tn.set("127.0.0.1", tailnet.Caller{NodeName: "mac.ts.net", UserID: owner, Tags: []string{"tag:server"}})
+	f.srv.RevalidateTailnet()
 	if !s.endsWithin(3 * time.Second) {
-		t.Fatal("the stream outlived its device's capability")
+		t.Fatal("the stream outlived its node passing the tailnet check")
 	}
 }
 
@@ -860,5 +874,21 @@ func TestRevocationDoesntWaitOnWhoIs(t *testing.T) {
 	}
 	if !s.endsWithin(time.Second) {
 		t.Fatal("the revoked device's stream outlived Revalidate")
+	}
+}
+
+// Round-2 review T5: GET /mesh/self answers this device's own key (its
+// Router checking the Mesh Service answers) with 204 and nothing else,
+// before the tailnet gate; any other key gets what any request gets.
+func TestSelfPathOnlyForThisDevicesKey(t *testing.T) {
+	f := newFixture(t)
+	if w := f.serve(t, req{from: "203.0.113.9", as: f.ids.host, method: "GET", target: SelfPath}); w.Code != http.StatusNoContent || w.Body.Len() != 0 {
+		t.Fatalf("own key: %d %s", w.Code, w.Body)
+	}
+	if w := f.serve(t, req{from: "100.0.0.1", as: f.ids.mac, method: "GET", target: SelfPath}); w.Code == http.StatusNoContent {
+		t.Fatal("another device's key got the self answer")
+	}
+	if len(f.seenRequests()) != 0 {
+		t.Fatal("forwarded to the Router")
 	}
 }

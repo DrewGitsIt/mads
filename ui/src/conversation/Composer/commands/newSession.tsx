@@ -1,5 +1,7 @@
 import { requestOpenCreatedSession, requestOpenSession } from "../../../appNavigation";
-import type { CreateSessionPayload } from "../../../router/types";
+import type { RouterClient } from "../../../router/client";
+import { clientForHost, recordSessionHosts } from "../../../router/mesh";
+import type { CreateSessionPayload, Session } from "../../../router/types";
 import { NewSessionCard, type NewSessionBlock } from "./NewSessionCard";
 import type { NewVariant } from "./newSessionLinks";
 import type {
@@ -28,12 +30,19 @@ export function leaderBlock(ctx: CommandContext): NewSessionBlock | undefined {
   return undefined;
 }
 
+/** The client for this session's device: the Composer's own here, the peer's (through this Router's /peers/{peer}/ proxy) for a session on another device. */
+export function clientFor(ctx: CommandContext): RouterClient {
+  return ctx.host && !ctx.host.self ? clientForHost(ctx.host) : ctx.routerClient;
+}
+
 /**
- * Starts the session. `open` (⌘↵) hands it to the Sessions surface the way
- * the Launchpad does — selected, provisioning shown, the goal auto-sent from
- * its composer. Otherwise (↵) the user stays here: the goal goes out from
- * here and a toast offers to open it. An empty goal (a /new-follower its
- * leader will brief) sends nothing.
+ * Starts the session on this session's device (clientFor): a session on
+ * another device gets its /new there (its folder, models and links are
+ * that device's), tagged with its host as the Launchpad does. `open` (⌘↵) hands it to the Sessions surface the
+ * way the Launchpad does — selected, provisioning shown, the goal auto-sent
+ * from its composer. Otherwise (↵) the user stays here: the goal goes out
+ * from here and a toast offers to open it. An empty goal (a /new-follower
+ * its leader will brief) sends nothing.
  */
 export async function startNewSession(
   api: CommandApi,
@@ -41,7 +50,13 @@ export async function startNewSession(
   goal: string,
   open: boolean,
 ): Promise<void> {
-  const { session } = await api.ctx.routerClient.createSession(payload);
+  const host = api.ctx.host;
+  const client = clientFor(api.ctx);
+  let session: Session = (await client.createSession(payload)).session;
+  if (host && !host.self) {
+    session = { ...session, host };
+    recordSessionHosts([session]);
+  }
   if (open) {
     requestOpenCreatedSession(session, goal);
     return;
@@ -55,7 +70,7 @@ export async function startNewSession(
     return;
   }
   try {
-    await api.ctx.routerClient.sendMessage(session.id, { text: goal, queue: true });
+    await client.sendMessage(session.id, { text: goal, queue: true });
   } catch (err) {
     api.fail(
       `Started ${session.name}, but its goal didn't send: ${err instanceof Error ? err.message : String(err)}`,
@@ -98,7 +113,7 @@ export function newSessionCommand(variant: NewVariant): CommandDescriptor {
           variant={variant}
           session={api.ctx.session}
           sessionId={api.ctx.sessionId}
-          routerClient={api.ctx.routerClient}
+          routerClient={clientFor(api.ctx)}
           initialGoal={args}
           block={block}
           onStart={async (payload, goal, open) => {

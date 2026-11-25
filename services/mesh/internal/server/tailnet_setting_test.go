@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -74,20 +73,5 @@ func TestForwardRechecksATailnetTurnedOnMeanwhile(t *testing.T) {
 	f.srv.forward(w, on, admittedWithout)
 	if w.Code != http.StatusOK {
 		t.Fatalf("on the tailnet: %d %s", w.Code, w.Body)
-	}
-}
-
-// A joiner's own mesh address is checked against the live setting, not
-// the one the Mesh Service started with (C).
-func TestPairAddressCheckFollowsTheLiveSetting(t *testing.T) {
-	f := newFixture(t)
-	f.srv.opts.RequireTailnet = false // started off…
-	f.srv.SetRequireTailnet(true)     // …and turned on since
-	if f.srv.onTailnet(context.Background(), "http://100.100.7.7:17380") {
-		t.Fatal("an IP that isn't this user's tailnet node passed with the tailnet required")
-	}
-	f.srv.SetRequireTailnet(false)
-	if !f.srv.onTailnet(context.Background(), "http://100.100.7.7:17380") {
-		t.Fatal("with the tailnet not required, a Tailscale-range IP is all there is to check")
 	}
 }

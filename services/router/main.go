@@ -29,6 +29,8 @@ import (
 	"github.com/drewkidwell/mads/pkg/devicekey"
 	"github.com/drewkidwell/mads/pkg/localauth"
 	"github.com/drewkidwell/mads/pkg/localguard"
+	"github.com/drewkidwell/mads/pkg/meshnet"
+	"github.com/drewkidwell/mads/pkg/meshnet/tailscale"
 	"github.com/drewkidwell/mads/pkg/preflight"
 	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/repostate"
@@ -316,6 +318,9 @@ func main() {
 	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root for credentials (env MADS_HOME)")
 	registryURL := flag.String("registry-url", "", "remote registry base URL (empty: unset — install/update/publish return a clear error)")
 	insecureNoAuth := flag.Bool("insecure-no-auth", false, "serve without the install token; refused unless this is a go test build")
+	meshAllowLoopback := flag.Bool("mesh-allow-loopback", false, "let mesh peers at 127.0.0.1 be dialled: the e2e harness's stand-in devices; refused unless this is a go test build or one built with -tags mesh_loopback")
+	fakeNetworks := flag.String("fake-networks", "", "with -mesh-allow-loopback: a JSON file of the networks (meshnet.Network, loopback addresses only) this device is on, read every time, instead of its interfaces")
+	localAPISocket := flag.String("localapi-socket", "", "tailscaled LocalAPI socket, for finding devices on the tailnet, Tailscale vouching and the sign-in prompt; default: found as tailscale's own CLI finds it (on macOS, the Tailscale app's port and token)")
 	uiDist := flag.String("ui-dist", "ui/dist", "path to the built UI (ui/dist) served at /; missing or unbuilt serves a placeholder page. Relative to the cwd the router is launched from, not the executable — scripts/app.sh and `make run` both launch from the repo root.")
 	flag.Parse()
 
@@ -325,6 +330,22 @@ func main() {
 	sessionArgv := append(strings.Fields(*sessionCmd), "-router-url", "http://"+*addr)
 	pipelineArgv := append(strings.Fields(*pipelineCmd), "-data-url", *dataURL)
 
+	if *meshAllowLoopback && !meshnet.LoopbackAllowed() {
+		log.Fatal("router: -mesh-allow-loopback is refused: only go test builds, or builds with -tags mesh_loopback (the e2e harness), may dial loopback mesh peers")
+	}
+	if *fakeNetworks != "" && !*meshAllowLoopback {
+		log.Fatal("router: -fake-networks needs -mesh-allow-loopback (a test build)")
+	}
+	var localNetworks func() []meshnet.Network
+	if *fakeNetworks != "" {
+		localNetworks = func() []meshnet.Network {
+			ns, err := meshnet.ReadNetworks(*fakeNetworks)
+			if err != nil {
+				log.Printf("router: -fake-networks: %v", err)
+			}
+			return ns
+		}
+	}
 	if *insecureNoAuth && !localauth.InsecureAllowed() {
 		log.Fatal("router: -insecure-no-auth is refused: only go test builds may serve without the install token")
 	}
@@ -473,7 +494,8 @@ func main() {
 	// reachability, and routing to them; also the paired devices' routes
 	// (/devices) and what each paired device lets this node do. Routing
 	// is a pass-through until a device this node views is added.
-	meshMgr := mesh.NewManager(data, mesh.Options{SelfName: *meshName, Identity: deviceID})
+	meshMgr := mesh.NewManager(data, mesh.Options{SelfName: *meshName, Identity: deviceID, AllowLoopback: *meshAllowLoopback, LocalNetworks: localNetworks,
+		Tailscale: tailscale.New(tailscale.Locator{Socket: *localAPISocket})})
 	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), attachmentStore, *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist), guard, repoState, gitState, auth, meshMgr)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

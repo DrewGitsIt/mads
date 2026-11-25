@@ -22,6 +22,15 @@ export interface StandIn {
   platform: string;
   /** /mesh/pair's request, and what the next poll answers. */
   pair: { requested: number; state: "pending" | "approved" | "declined"; level: string };
+  /**
+   * Discovery (docs/MESH-NETWORK-DESIGN.md U4): whether /mesh/discover
+   * answers (its setup window is open), whether it vouches for a
+   * discovered request (its own Tailscale WhoIs agreed), what it saw of
+   * the two-step commit/reveal, and "No, it was different" calls.
+   */
+  discover: { open: boolean; vouched: boolean; commits: number; reveals: number; mismatches: number };
+  /** Its Tailscale key's expiry, as its hello reports it. */
+  keyExpiry?: string;
   /** DELETE /devices/{fp} calls it saw. */
   deletes: string[];
   /** A pairing code for this device, in pkg/paircode's format. */
@@ -29,7 +38,7 @@ export interface StandIn {
   close(): Promise<void>;
 }
 
-export async function startStandIn(opts: { name: string; allow: string; access?: string[]; platform?: string }): Promise<StandIn> {
+export async function startStandIn(opts: { name: string; allow: string; access?: string[]; platform?: string; port?: number }): Promise<StandIn> {
   const device = newDevice(opts.name);
   const sockets = new Set<TLSSocket>();
   const s: Omit<StandIn, "meshURL" | "close" | "code"> = {
@@ -38,6 +47,7 @@ export async function startStandIn(opts: { name: string; allow: string; access?:
     access: opts.access ?? ["view", "chat", "control"],
     platform: opts.platform ?? "darwin",
     pair: { requested: 0, state: "pending", level: "control" },
+    discover: { open: false, vouched: true, commits: 0, reveals: 0, mismatches: 0 },
     deletes: [],
   };
   const server = http2.createSecureServer(
@@ -58,14 +68,41 @@ export async function startStandIn(opts: { name: string; allow: string; access?:
           device: device.fingerprint,
           platform: s.platform,
           hosts_sessions: true,
+          ...(s.keyExpiry ? { tailscale_key_expiry: s.keyExpiry } : {}),
         });
       }
+      // Only while its setup window is open; otherwise as any unpaired key.
+      if (req.method === "GET" && url === "/mesh/discover") {
+        if (!s.discover.open) return json(403, { code: "unpaired_device", error: "not paired here" });
+        return json(200, { mads: 1, name: opts.name, platform: s.platform, fingerprint: device.fingerprint, mesh_api: 2 });
+      }
       if (req.method === "POST" && url === "/mesh/pair") {
-        s.pair.requested++;
-        return json(201, { request_id: "pr_standin", state: "pending", expires_at: new Date(Date.now() + 300_000).toISOString() });
+        let raw = "";
+        req.setEncoding("utf8");
+        req.on("data", (c: string) => (raw += c));
+        req.on("end", () => {
+          const body = (raw ? JSON.parse(raw) : {}) as { mode?: string; commit?: string; commit_id?: string; nonce?: string };
+          if (body.mode !== "discovered") {
+            s.pair.requested++;
+            return json(201, { request_id: "pr_standin", state: "pending", expires_at: new Date(Date.now() + 300_000).toISOString() });
+          }
+          // Commit, then reveal (C1): the host's nonce is fixed first.
+          if (body.commit) {
+            s.discover.commits++;
+            return json(200, { commit_id: "cm_standin", host_nonce: randomBytes(16).toString("base64url") });
+          }
+          s.discover.reveals++;
+          s.pair.requested++;
+          return json(201, { request_id: "pr_standin", state: "pending", expires_at: new Date(Date.now() + 300_000).toISOString(), vouched: s.discover.vouched });
+        });
+        return;
       }
       if (req.method === "GET" && url === "/mesh/pair/pr_standin") {
-        return json(200, { state: s.pair.state, level: s.pair.state === "approved" ? s.pair.level : "" });
+        return json(200, { state: s.pair.state, level: s.pair.state === "approved" ? s.pair.level : "", vouched: s.discover.vouched });
+      }
+      if (req.method === "POST" && url === "/mesh/pair/pr_standin/mismatch") {
+        s.discover.mismatches++;
+        return json(200, { state: "declined" });
       }
       // A host with no sessions yet: its list is empty.
       if (req.method === "GET" && /^\/sessions(\?|$)/.test(url)) return json(200, []);
@@ -86,7 +123,7 @@ export async function startStandIn(opts: { name: string; allow: string; access?:
     sockets.add(sock);
     sock.on("close", () => sockets.delete(sock));
   });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  await new Promise<void>((r) => server.listen(opts.port ?? 0, "127.0.0.1", r));
   const port = (server.address() as AddressInfo).port;
   const meshURL = `http://127.0.0.1:${port}`;
   return Object.assign(s, {

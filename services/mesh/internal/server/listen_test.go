@@ -65,8 +65,10 @@ func pipeConn(t *testing.T) (*meshConn, net.Conn) {
 	t.Helper()
 	a, b := net.Pipe()
 	t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
-	l := &meshListener{sem: make(chan struct{}, 1), perIP: map[string]int{"pipe": 1}}
-	l.sem <- struct{}{}
+	bud := NewBudget(ListenLimits{MaxConns: 1, MaxPerIP: 1, FirstRequest: time.Hour})
+	bud.ipN["pipe"] = 1
+	bud.sem <- struct{}{}
+	l := &meshListener{b: bud, net: Net{ID: "tailscale", Tailscale: true}}
 	mc := &meshConn{Conn: a, l: l, ip: "pipe"}
 	mc.timer = time.AfterFunc(time.Hour, mc.expire)
 	t.Cleanup(func() { mc.timer.Stop() })
@@ -165,12 +167,12 @@ func TestListenerResistsLockOut(t *testing.T) {
 // connection to the request gate.
 func TestListenerTailnetGateBeforeHandshake(t *testing.T) {
 	f := newFixture(t)
-	f.tn.set("127.0.0.1", noCap)
+	f.tn.set("127.0.0.1", stranger)
 	front := listenFront(t, f, DefaultListenLimits, nil)
 	cfg, _ := devicekey.ClientConfig(f.ids.mac, f.ids.host.Fingerprint())
 	if c, err := tls.Dial("tcp", addrOf(front), cfg); err == nil {
 		_ = c.Close()
-		t.Fatal("a node without the capability completed a handshake")
+		t.Fatal("another user's node completed a handshake")
 	}
 	f.tn.mu.Lock()
 	f.tn.fail = errors.New("tailscaled restarting")
@@ -288,7 +290,7 @@ func TestTailnetRefusalClosesTheConnection(t *testing.T) {
 	f := newFixture(t)
 	// Passed at the handshake, refused per request (no WhoIs cache in the
 	// fixture).
-	f.srv.opts.Tailnet = &alternating{first: full, then: noCap}
+	f.srv.opts.Tailnet = &alternating{first: full, then: stranger}
 	var conns atomic.Int32
 	front := listenFront(t, f, DefaultListenLimits, &conns)
 	c := meshClient(t, f.ids.stranger, f.ids.host)

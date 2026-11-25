@@ -475,3 +475,59 @@ func testFingerprintFor(t *testing.T) string {
 	t.Helper()
 	return string(testFP(9))
 }
+
+// A row's addresses: at most eight, each a direct host:port of a known
+// source; mesh_url mirrors last_good (or the first address), so an older
+// build reading the row still finds a working address.
+func TestPeerAddressesStoreRules(t *testing.T) {
+	ctx := context.Background()
+	peers := NewPeers(openMigratedDB(t))
+	now := time.Now().UTC()
+	addr := func(a string, src contracts.AddressSource) contracts.MeshAddress {
+		return contracts.MeshAddress{NetAddress: contracts.NetAddress{Via: "direct", Addr: a, Kind: "lan"}, Source: src, AddedAt: now}
+	}
+	p := &contracts.Peer{Name: "pop-os", MeshURL: "http://old.example:17380", Addresses: []contracts.MeshAddress{
+		addr("192.168.1.20:17380", contracts.SourceHello), addr("100.101.4.7:17380", contracts.SourceHello),
+	}, LastGood: &contracts.PeerPath{Addr: "100.101.4.7:17380", At: now}}
+	if err := peers.Create(ctx, p, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if p.MeshURL != "http://100.101.4.7:17380" {
+		t.Fatalf("mesh_url = %q, want last_good's", p.MeshURL)
+	}
+	p.LastGood = &contracts.PeerPath{Addr: "10.9.9.9:17380", At: now} // not one of them
+	if err := peers.Update(ctx, p, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := peers.Get(ctx, p.ID); got.MeshURL != "http://192.168.1.20:17380" {
+		t.Fatalf("mesh_url = %q, want the first address", got.MeshURL)
+	}
+	// A viewed row with no addresses still needs a mesh_url.
+	if err := peers.Create(ctx, &contracts.Peer{Name: "empty"}, "test"); err == nil {
+		t.Fatal("a viewed row with no address")
+	}
+	var many []contracts.MeshAddress
+	for i := 0; i < 9; i++ {
+		many = append(many, addr(fmt.Sprintf("192.168.1.%d:17380", i+1), contracts.SourceCode))
+	}
+	for name, bad := range map[string][]contracts.MeshAddress{
+		"nine":       many,
+		"bad shape":  {addr("http://x:17380", contracts.SourceCode)},
+		"metadata":   {addr("169.254.169.254:17380", contracts.SourceCode)},
+		"low port":   {addr("192.168.1.2:22", contracts.SourceCode)},
+		"bad source": {addr("192.168.1.2:17380", "made-up")},
+		"twice":      {addr("192.168.1.2:17380", contracts.SourceCode), addr("192.168.1.2:17380", contracts.SourceHello)},
+		"relay":      {{NetAddress: contracts.NetAddress{Via: "relay", Addr: "r.example:443"}, Source: contracts.SourceCode}},
+	} {
+		err := peers.Create(ctx, &contracts.Peer{Name: "x-" + strings.ReplaceAll(name, " ", "-"), Addresses: bad}, "test")
+		var v *contracts.ValidationError
+		if !errors.As(err, &v) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// A row from before addresses reads as one legacy candidate.
+	old := contracts.Peer{MeshURL: "http://pop-os.example.ts.net:17380"}
+	if c := old.Candidates(); len(c) != 1 || c[0].Source != contracts.SourceLegacy || c[0].Addr != "pop-os.example.ts.net:17380" {
+		t.Fatalf("legacy candidates %+v", c)
+	}
+}

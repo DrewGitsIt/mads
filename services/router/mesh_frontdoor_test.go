@@ -126,7 +126,7 @@ func newMeshRouterStack(t *testing.T) (*routerStack, *mesh.Manager) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mgr := mesh.NewManager(data, mesh.Options{SelfName: "mac", ProbeInterval: 20 * time.Millisecond, IndexInterval: 20 * time.Millisecond, Identity: id})
+	mgr := mesh.NewManager(data, mesh.Options{AllowLoopback: true, SelfName: "mac", ProbeInterval: 20 * time.Millisecond, IndexInterval: 20 * time.Millisecond, Identity: id})
 	h := newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), nil, "", nil, "",
 		identity{root: "/src/checkout"}, localguard.New("router", "17373", nil), nil, nil, auth, mgr)
 	return &routerStack{h: h, home: home, auth: auth, data: data, tokens: tokens}, mgr

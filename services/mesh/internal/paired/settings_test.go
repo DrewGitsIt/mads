@@ -118,3 +118,37 @@ func TestSettingsFailureNeverBlocksARevocation(t *testing.T) {
 		t.Fatalf("settings after a failed read: %+v, want the last good (off)", last)
 	}
 }
+
+// The setup window rides along too: opened and closed at the device
+// (device.discoverable), followed without a restart.
+func TestDirectoryFollowsTheSetupWindow(t *testing.T) {
+	f := newFlakyData(t)
+	w := f.writer()
+	d := New(dataclient.New(f.url, "mesh", dataclient.WithTokenSource(localauth.FileSource(f.tokenFile))))
+	d.minBackoff, d.maxBackoff = 10*time.Millisecond, 50*time.Millisecond
+	var mu sync.Mutex
+	var seen []contracts.Discoverable
+	d.OnDiscoverable(func(win contracts.Discoverable) {
+		mu.Lock()
+		seen = append(seen, win)
+		mu.Unlock()
+	})
+	got := func() []contracts.Discoverable {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]contracts.Discoverable(nil), seen...)
+	}
+	run(t, d)
+	eventually(t, "the first load's window", func() bool { return len(got()) == 1 })
+	if got()[0].Open(time.Now()) {
+		t.Fatal("open before anyone opened it")
+	}
+	if _, err := w.SetDiscoverable(context.Background(), time.Now().Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the window opening", func() bool { g := got(); return len(g) == 2 && g[1].Open(time.Now()) })
+	if _, err := w.SetDiscoverable(context.Background(), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the window closing", func() bool { g := got(); return len(g) == 3 && !g[2].Open(time.Now()) })
+}

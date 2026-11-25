@@ -73,7 +73,7 @@ func remoteFromProbe(p Probe) (contracts.PeerRemote, bool) {
 	switch {
 	case p.Status == 200 && p.Hello.MeshAPI != 0:
 		r := contracts.PeerRemote{Level: topLevel(p.Hello.Access), HostsSessions: p.Hello.HostsSessions,
-			Granted: contracts.GrantLevel(p.Hello.Grant), TailnetCapped: p.Hello.TailnetCapped}
+			Granted: contracts.GrantLevel(p.Hello.Grant), TailnetCapped: p.Hello.TailnetCapped, TailscaleKeyExpiry: p.Hello.TailscaleKeyExpiry}
 		if r.Granted != contracts.GrantNone && !r.Granted.Valid() {
 			r.Granted = contracts.GrantNone
 		}
@@ -98,13 +98,32 @@ func topLevel(access []string) contracts.GrantLevel {
 	return best
 }
 
+// cloneRemote copies r with its own pointer fields: a row write decodes the
+// Data Service's answer into the row, through those pointers, and the
+// in-memory answer (m.remote) mustn't share them.
+func cloneRemote(r contracts.PeerRemote) contracts.PeerRemote {
+	if r.HostsSessions != nil {
+		v := *r.HostsSessions
+		r.HostsSessions = &v
+	}
+	for _, t := range []**time.Time{&r.AsOf, &r.TailscaleKeyExpiry, &r.PairedThereAt} {
+		if *t != nil {
+			v := **t
+			*t = &v
+		}
+	}
+	return r
+}
+
 func sameRemote(a, b *contracts.PeerRemote) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
 	sameHosts := (a.HostsSessions == nil) == (b.HostsSessions == nil) && (a.HostsSessions == nil || *a.HostsSessions == *b.HostsSessions)
+	sameExpiry := (a.TailscaleKeyExpiry == nil) == (b.TailscaleKeyExpiry == nil) && (a.TailscaleKeyExpiry == nil || a.TailscaleKeyExpiry.Equal(*b.TailscaleKeyExpiry))
+	sameThere := (a.PairedThereAt == nil) == (b.PairedThereAt == nil) && (a.PairedThereAt == nil || a.PairedThereAt.Equal(*b.PairedThereAt))
 	return a.Level == b.Level && a.Platform == b.Platform && sameHosts && (a.AsOf == nil) == (b.AsOf == nil) &&
-		a.Granted == b.Granted && a.TailnetCapped == b.TailnetCapped
+		a.Granted == b.Granted && a.TailnetCapped == b.TailnetCapped && sameExpiry && sameThere
 }
 
 // noteRemote folds a probe of p into what p lets this node do, and writes
@@ -125,6 +144,16 @@ func (m *Manager) noteRemote(ctx context.Context, p contracts.Peer, probe Probe)
 		merged = *p.Remote
 	}
 	merged.Level, merged.AsOf, merged.Granted, merged.TailnetCapped = r.Level, &now, r.Granted, r.TailnetCapped
+	if probe.Status == 200 {
+		// Absent from a hello is "off" (or not on Tailscale), not unknown.
+		merged.TailscaleKeyExpiry = r.TailscaleKeyExpiry
+	}
+	if probe.Status == 200 && p.IsPaired() {
+		// It has this node paired: once per pairing (F6 R4's precondition).
+		if at := pairedAtOf(p); !at.IsZero() && (merged.PairedThereAt == nil || !merged.PairedThereAt.Equal(at)) {
+			merged.PairedThereAt = &at
+		}
+	}
 	if r.Platform != "" {
 		merged.Platform = r.Platform
 	}
@@ -149,7 +178,7 @@ func (m *Manager) noteRemote(ctx context.Context, p contracts.Peer, probe Probe)
 		if cur.Fingerprint != p.Fingerprint {
 			return false, errNotEditable // re-keyed meanwhile: not this device's answer
 		}
-		v := merged
+		v := cloneRemote(merged)
 		cur.Remote = &v
 		return false, nil
 	})
@@ -194,7 +223,8 @@ func (m *Manager) flushRemote(ctx context.Context) {
 			if cur.Fingerprint != t.p.Fingerprint {
 				return false, errNotEditable
 			}
-			cur.Remote = &r
+			v := cloneRemote(r)
+			cur.Remote = &v
 			return false, nil
 		})
 		if err != nil && !errors.Is(err, errNotEditable) && !errors.Is(err, dataclient.ErrNotFound) {

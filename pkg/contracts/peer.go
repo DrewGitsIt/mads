@@ -1,6 +1,7 @@
 package contracts
 
 import (
+	"net/url"
 	"slices"
 	"time"
 )
@@ -33,6 +34,16 @@ type Peer struct {
 	// every stored row's), but always dialled with TLS: the scheme is
 	// ignored.
 	MeshURL string `json:"mesh_url"`
+	// Addresses are where this node looks for the device: a short list of
+	// candidates (docs/MESH-NETWORK-DESIGN.md F3), at most
+	// MaxPeerAddresses. A row written before them has none and reads as
+	// one legacy candidate made from MeshURL (Candidates); nothing is
+	// rewritten until the row next changes. MeshURL stays, kept equal to
+	// LastGood (or the first address) by the Data Service, so an older
+	// build reading the row still finds a working address.
+	Addresses []MeshAddress `json:"addresses,omitempty"`
+	// LastGood is the address that last worked.
+	LastGood *PeerPath `json:"last_good,omitempty"`
 	// Hidden keeps the peer registered (and its reachability tracked) but
 	// leaves its sessions out of the All devices list.
 	Hidden bool `json:"hidden,omitempty"`
@@ -66,6 +77,88 @@ type Peer struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// MaxPeerAddresses bounds a row's address list.
+const MaxPeerAddresses = 8
+
+// NetAddress is one address another device may try for a device
+// (meshnet.Candidate's wire form): codes, hellos, pairing requests and
+// introductions carry lists of these. An unknown Via is skipped, never
+// fatal.
+type NetAddress struct {
+	// Via is the adapter: "direct" (TCP to Addr) is the only one so far.
+	Via string `json:"via"`
+	// Addr is host:port.
+	Addr string `json:"addr"`
+	// Kind is overlay, lan or public; empty when not known.
+	Kind  string `json:"kind,omitempty"`
+	Label string `json:"label,omitempty"`
+	// Network is the host's id for the network it's on ("tailscale").
+	Network string `json:"network,omitempty"`
+}
+
+// MeshAddress is one of a row's addresses, with where it came from.
+type MeshAddress struct {
+	NetAddress
+	// Source is code, hello, user, joiner, introduced, discovered or
+	// legacy (made from MeshURL).
+	Source   AddressSource `json:"source"`
+	AddedAt  time.Time     `json:"added_at"`
+	LastOKAt *time.Time    `json:"last_ok_at,omitempty"`
+}
+
+// AddressSource is where a row's address came from.
+type AddressSource string
+
+const (
+	SourceCode       AddressSource = "code"
+	SourceHello      AddressSource = "hello"
+	SourceUser       AddressSource = "user"
+	SourceJoiner     AddressSource = "joiner"
+	SourceIntroduced AddressSource = "introduced"
+	SourceDiscovered AddressSource = "discovered"
+	SourceLegacy     AddressSource = "legacy"
+)
+
+// Valid reports whether s is a known source.
+func (s AddressSource) Valid() bool {
+	switch s {
+	case SourceCode, SourceHello, SourceUser, SourceJoiner, SourceIntroduced, SourceDiscovered, SourceLegacy:
+		return true
+	}
+	return false
+}
+
+// PeerPath is the address that last worked, when, and how fast.
+type PeerPath struct {
+	Addr string    `json:"addr"`
+	At   time.Time `json:"at"`
+	RTT  int64     `json:"rtt_ms,omitempty"`
+}
+
+// Candidates is p's address list, read-time migrated: a row with no
+// Addresses reads as one legacy candidate from MeshURL (none without one).
+func (p Peer) Candidates() []MeshAddress {
+	if len(p.Addresses) > 0 {
+		return p.Addresses
+	}
+	if host, ok := MeshURLHost(p.MeshURL); ok {
+		return []MeshAddress{{NetAddress: NetAddress{Via: "direct", Addr: host}, Source: SourceLegacy, AddedAt: p.CreatedAt}}
+	}
+	return nil
+}
+
+// MeshURLHost is the host:port of a stored http://host:port mesh_url.
+func MeshURLHost(meshURL string) (string, bool) {
+	u, err := url.Parse(meshURL)
+	if err != nil || u.Host == "" || u.Port() == "" {
+		return "", false
+	}
+	return u.Host, true
+}
+
+// MeshURLOf is the stored mesh_url form of a host:port address.
+func MeshURLOf(addr string) string { return "http://" + addr }
 
 // IsViewed reports whether this node views p (Viewed, defaulting to true).
 func (p Peer) IsViewed() bool { return p.Viewed == nil || *p.Viewed }
@@ -141,8 +234,21 @@ type PeerRemote struct {
 	// policy caps it; TailnetCapped says the policy holds Level below it
 	// (e.g. admin granted, the policy's access ["control"]: acts as
 	// control). The UI explains it; the fix is the tailnet policy.
+	// TailnetCapped is always false since the tailnet policy stopped
+	// capping levels (docs/MESH-NETWORK-DESIGN.md); kept one release.
 	Granted       GrantLevel `json:"granted,omitempty"`
 	TailnetCapped bool       `json:"tailnet_capped,omitempty"`
+	// TailscaleKeyExpiry is when the device's Tailscale key expires, as its
+	// hello last said (nil: off, or not on Tailscale): the early warning,
+	// and after it, "Probably signed out of Tailscale".
+	TailscaleKeyExpiry *time.Time `json:"tailscale_key_expiry,omitempty"`
+	// PairedThereAt is the paired_at of the row's pairing that the device
+	// was seen to have (a hello answered while it stood). R4's automatic
+	// removal needs it equal to the row's current paired_at, so a pairing
+	// the other device never confirmed (an introduction, a discovered
+	// pairing whose joiner hasn't confirmed its check code yet, or a
+	// re-pairing since) is never undone (docs/MESH-NETWORK-DESIGN.md F6).
+	PairedThereAt *time.Time `json:"paired_there_at,omitempty"`
 }
 
 // MaxPlatformLen bounds a reported platform.
@@ -260,12 +366,16 @@ const (
 	PairCode PairMethod = "code"
 	// PairIntroduction: introduced by an admin device (A6).
 	PairIntroduction PairMethod = "introduction"
+	// PairDiscovered: found while the host's setup window was open, and
+	// approved on the host with the check code (or Tailscale vouching for
+	// both ends) (docs/MESH-NETWORK-DESIGN.md U4).
+	PairDiscovered PairMethod = "discovered"
 )
 
 // Valid reports whether m is a known method.
 func (m PairMethod) Valid() bool {
 	switch m {
-	case PairAccept, PairCeremony, PairCode, PairIntroduction:
+	case PairAccept, PairCeremony, PairCode, PairIntroduction, PairDiscovered:
 		return true
 	}
 	return false
@@ -289,6 +399,13 @@ type DeviceChange struct {
 	Level         GrantLevel `json:"level,omitempty"`
 	PreviousLevel GrantLevel `json:"previous_level,omitempty"`
 	How           PairMethod `json:"how,omitempty"`
+	// By says who removed a device, on device.unpaired, when it wasn't
+	// this host's user (docs/MESH-NETWORK-DESIGN.md F6): "itself" (it
+	// asked to be forgotten, /mesh/forget) or "reconcile" (it no longer
+	// had this device paired, R4). A re-pairing in place is device.paired
+	// with Repair set.
+	By     string `json:"by,omitempty"`
+	Repair bool   `json:"repair,omitempty"`
 }
 
 // MeshRelayHeader marks a request relayed for a mesh peer. The Mesh
@@ -354,6 +471,10 @@ const (
 	PeerDenied PeerReachability = "denied"
 	// PeerVersionMismatch: it answered with a mesh_api this build doesn't speak.
 	PeerVersionMismatch PeerReachability = "version_mismatch"
+	// PeerNoSharedNetwork: none of the device's addresses is on a network
+	// this device is on now ("Not reachable from this network"). Nothing
+	// is dialled.
+	PeerNoSharedNetwork PeerReachability = "no_shared_network"
 	// PeerUnpaired: this node has no fingerprint pinned for the device, so
 	// it can't verify the device's key and never connects to it
 	// (docs/MESH-AUTH-DESIGN.md D2: no plaintext, no unverified TLS).
@@ -369,7 +490,54 @@ type PeerStatus struct {
 	MadsCommit   string           `json:"mads_commit,omitempty"`
 	Access       []string         `json:"access,omitempty"`
 	CheckedAt    *time.Time       `json:"checked_at,omitempty"`
+	// Path is the address in use now (the Status tooltip: "Connected via
+	// Tailscale · 38 ms"). Nil when not connected.
+	Path *PathStatus `json:"path,omitempty"`
+	// Addresses is the row's address list, each with its live state (only
+	// under Troubleshoot connection). It replaces the row's own
+	// addresses in this view.
+	Addresses []AddressStatus `json:"addresses,omitempty"`
+	// Diagnosis refines the state for the UI: "tailscale_signed_out" (it
+	// stopped answering over Tailscale after its key's last reported
+	// expiry), "tailscale_key_expiring" (connected, expiring within 7 days).
+	Diagnosis string `json:"diagnosis,omitempty"`
 }
+
+// PathStatus is the address a connection uses.
+type PathStatus struct {
+	Addr  string    `json:"addr"`
+	Kind  string    `json:"kind,omitempty"`
+	Label string    `json:"label,omitempty"`
+	RTT   int64     `json:"rtt_ms,omitempty"`
+	Since time.Time `json:"since"`
+}
+
+// AddressStatus is one address with its live state: in_use, works,
+// not_on_network (not on a network this device is on now), not_answering,
+// other_device (another device answered: the pin didn't match), refused
+// (the dial policy), untried.
+type AddressStatus struct {
+	MeshAddress
+	State string `json:"state"`
+	Error string `json:"error,omitempty"`
+}
+
+// Address states (AddressStatus.State).
+const (
+	AddrInUse        = "in_use"
+	AddrWorks        = "works"
+	AddrNotOnNetwork = "not_on_network"
+	AddrNotAnswering = "not_answering"
+	AddrOtherDevice  = "other_device"
+	AddrRefused      = "refused"
+	AddrUntried      = "untried"
+)
+
+// Diagnoses (PeerStatus.Diagnosis).
+const (
+	DiagnosisTailscaleSignedOut   = "tailscale_signed_out"
+	DiagnosisTailscaleKeyExpiring = "tailscale_key_expiring"
+)
 
 // DeviceStatus is one row of Settings → Paired devices: GET /devices on the
 // Router. Every row is listed, viewed or not; Reachability is set only for
@@ -381,7 +549,22 @@ type DeviceStatus struct {
 	// event log records (an event whose actor is the device). Nil: never.
 	// Reads aren't recorded, so a device that only views reads as never.
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	// PairingThere is whether the device has this one paired, as this
+	// device last checked (docs/MESH-NETWORK-DESIGN.md F6, R3): paired,
+	// not_paired, unknown (with PairingThereReason) or other_key (a
+	// different key answered). Absent until checked.
+	PairingThere       string     `json:"pairing_there,omitempty"`
+	PairingThereReason string     `json:"pairing_there_reason,omitempty"`
+	PairingCheckedAt   *time.Time `json:"pairing_checked_at,omitempty"`
 }
+
+// Pairing-there states (DeviceStatus.PairingThere).
+const (
+	PairingTherePaired    = "paired"
+	PairingThereNotPaired = "not_paired"
+	PairingThereUnknown   = "unknown"
+	PairingThereOtherKey  = "other_key"
+)
 
 // PeerReachabilityChange is peer.reachability_changed's payload.
 type PeerReachabilityChange struct {
@@ -391,6 +574,11 @@ type PeerReachabilityChange struct {
 	To        PeerReachability `json:"to"`
 	Reason    string           `json:"reason,omitempty"`
 	RTTMillis int64            `json:"rtt_ms,omitempty"`
+	// Via is the path it's reached by now, when connected; a change of
+	// path while connected is logged too ("Now reached via Tailscale (was
+	// home network)", From and To both connected, ViaFrom the old one).
+	Via     *NetAddress `json:"via,omitempty"`
+	ViaFrom *NetAddress `json:"via_from,omitempty"`
 }
 
 // SessionHost tags a session row with the node it lives on, on the Router's

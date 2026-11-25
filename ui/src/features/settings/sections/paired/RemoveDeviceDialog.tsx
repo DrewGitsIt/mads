@@ -35,6 +35,22 @@ export function introducedBy(row: DeviceRow, rows: DeviceRow[]): DeviceRow[] {
   );
 }
 
+/** What the removed device said when asked to forget this one (F6 R1). */
+export function thereLine({ there, there_error }: Pick<RemoveResult, "there" | "there_error">, device: string, host: string): string {
+  switch (there) {
+    case "removed":
+      return `Removed on ${device} too.`;
+    case "not_paired":
+      return `${device} didn't have this ${host} paired.`;
+    case "offline":
+      return `${device} didn't answer: it may still list this ${host} until it hears from it.`;
+    case "failed":
+      return `${device} couldn't remove this ${host}${there_error ? `: ${there_error.replace(/\.$/, "")}.` : "."} It may still list this ${host} until it hears from it.`;
+    default:
+      return "";
+  }
+}
+
 /**
  * Remove device…: here at once, then on every other host this device
  * administers, each with its own result (Removed; Offline or Failed, with
@@ -51,6 +67,8 @@ export function RemoveDeviceDialog({ row, rows, selfName, host, onClose }: Remov
   // should the devices it vouched for, unless you keep them on purpose.
   const [alsoIntroduced, setAlsoIntroduced] = useState(true);
   const [alsoRemoved, setAlsoRemoved] = useState<RemoveResult["also_removed"]>([]);
+  // What the device itself said when asked to forget this one (F6 R1).
+  const [there, setThere] = useState<Pick<RemoveResult, "there" | "there_error">>({});
   const [error, setError] = useState<string>();
   const dn = row.name;
   const fp = row.fingerprint!;
@@ -73,6 +91,7 @@ export function RemoveDeviceDialog({ row, rows, selfName, host, onClose }: Remov
       if (!hosts) {
         setCannot(out.cannot_manage ?? []);
         setAlsoRemoved(out.also_removed ?? []);
+        setThere({ there: out.there, there_error: out.there_error });
       }
       void devicesStore.refresh();
     } catch (err) {
@@ -191,6 +210,19 @@ export function RemoveDeviceDialog({ row, rows, selfName, host, onClose }: Remov
             <span className={styles.itemHelp}>With the devices it introduced: {(alsoRemoved ?? []).map((d) => d.name).join(", ")}.</span>
           )}
         </li>
+        {there.there && (
+          <li className={styles.item} data-remove-there={there.there}>
+            <span className={styles.itemName}>{dn}</span>
+            {there.there === "removed" ? (
+              <Chip tone="ok">Removed</Chip>
+            ) : there.there === "not_paired" ? (
+              <Chip tone="neutral">Not paired there</Chip>
+            ) : (
+              <Chip tone={there.there === "offline" ? "warn" : "bad"}>{there.there === "offline" ? "Offline" : "Failed"}</Chip>
+            )}
+            <span className={styles.itemHelp}>{thereLine(there, dn, host)}</span>
+          </li>
+        )}
         {outcomes.map((h) => (
           <li className={styles.item} key={h.fingerprint} data-remove-host={h.name} data-result={h.result}>
             <span className={styles.itemName}>{h.name}</span>

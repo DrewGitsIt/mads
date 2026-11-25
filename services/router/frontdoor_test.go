@@ -312,7 +312,7 @@ func TestRotationLogsEverythingOut(t *testing.T) {
 // the door off.
 func TestRouterInsecureNoAuthIsRefusedOutsideTests(t *testing.T) {
 	home := t.TempDir()
-	cmd := exec.Command(bootRouterBin, "-insecure-no-auth", "-addr", "127.0.0.1:0", "-mads-home", home, "-data-url", "http://127.0.0.1:1") //nolint:gosec // test-built binary
+	cmd := exec.Command(bootRouterBin, "-insecure-no-auth", "-addr", "127.0.0.1:0", "-mads-home", home, "-data-url", "http://127.0.0.1:1", "-localapi-socket", filepath.Join(home, "no-tailscaled.sock")) //nolint:gosec // test-built binary
 	cmd.Env = bootCleanEnv(home)
 	out, err := cmd.CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "-insecure-no-auth is refused") {

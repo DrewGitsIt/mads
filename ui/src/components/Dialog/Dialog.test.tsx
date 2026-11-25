@@ -26,4 +26,20 @@ describe("Dialog", () => {
     render(<Dialog alert title="Remove spark?" onDismiss={() => {}} actions={null} />);
     expect(screen.getByRole("alertdialog", { name: "Remove spark?" })).toBeTruthy();
   });
+
+  it("a dialog opened over another has Escape to itself", () => {
+    const outer = vi.fn();
+    const inner = vi.fn();
+    const { rerender } = render(
+      <Dialog title="Add your devices" onDismiss={outer} actions={null}>
+        <Dialog alert confirm title="Let spark control mads?" onDismiss={inner} actions={<button type="button">Cancel</button>} />
+      </Dialog>,
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(inner).toHaveBeenCalledTimes(1);
+    expect(outer).not.toHaveBeenCalled();
+    rerender(<Dialog title="Add your devices" onDismiss={outer} actions={null} />);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(outer).toHaveBeenCalledTimes(1);
+  });
 });

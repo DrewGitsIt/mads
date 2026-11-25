@@ -24,6 +24,11 @@ func writeContext(req *http.Request) context.Context {
 		// relaying device (an admin there) may do remotely.
 		return store.WithMeshRelay(ctx, req.Header.Get(contracts.MeshDeviceHeader))
 	}
+	if req.Method == http.MethodDelete && req.URL.Query().Get("by") == "reconcile" {
+		// The Router removing a device that no longer has this one paired
+		// (docs/MESH-NETWORK-DESIGN.md F6, R4): device.unpaired says so.
+		ctx = store.WithUnpairedBy(ctx, "reconcile")
+	}
 	if localauth.FromContext(ctx).Kind != localauth.Install {
 		return ctx
 	}

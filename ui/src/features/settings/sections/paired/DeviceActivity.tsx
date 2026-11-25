@@ -3,7 +3,8 @@ import { Chip } from "../../../../components/Chip/Chip";
 import { Select } from "../../../../components/Select/Select";
 import { SettingsCard } from "../../SettingsCard";
 import { useDeviceActivity, type DeviceRow } from "../../../../router/devices";
-import { activityLine } from "./model";
+import { activityLine, hiddenActivity } from "./model";
+import card from "../../SettingsCard.module.css";
 import styles from "./PairedDevices.module.css";
 
 /** The log's entries: one device's (compact, inside its row) or every device's. */
@@ -13,10 +14,14 @@ export function ActivityList({ device, rows, compact, limit }: { device?: string
   if (!loaded) return <p className={styles.activityEmpty}>Loading…</p>;
   if (!value || value.length === 0) return <p className={styles.activityEmpty}>Nothing yet.</p>;
   const now = new Date();
+  const shown = value.filter((env) => !hiddenActivity(env));
+  if (shown.length === 0) return <p className={styles.activityEmpty}>Nothing yet.</p>;
   return (
     <ul className={[styles.activityList, compact && styles.compact].filter(Boolean).join(" ")} aria-label="Device activity">
-      {value.map((env) => {
-        const line = activityLine(env, rows, now);
+      {shown.map((env, i) => {
+        // The next older settings change: so a change says what changed.
+        const prev = env.type === "device.settings_changed" ? shown.slice(i + 1).find((e) => e.type === env.type) : undefined;
+        const line = activityLine(env, rows, now, prev);
         return (
           <li key={line.seq} className={styles.activityItem} data-activity-type={env.type}>
             <Chip tone={line.chip.tone}>{line.chip.label}</Chip>
@@ -47,7 +52,7 @@ export function DeviceActivity({ rows }: { rows: DeviceRow[] }) {
   return (
     <SettingsCard>
       <div className={styles.activityHead}>
-        <h3 className={styles.activityTitle} id="device-activity-title">
+        <h3 className={`${card.title} ${styles.activityTitle}`} id="device-activity-title">
           Device activity
         </h3>
         <div className={styles.activityFilter} aria-label="Show activity from">

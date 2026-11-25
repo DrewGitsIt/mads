@@ -65,3 +65,27 @@ describe("JoinStatus polling", () => {
     expect(calls.length).toBe(n);
   });
 });
+
+describe("JoinStatus, a found device's number (S1)", () => {
+  it("Did it show this number?: Yes waits a moment, No has the focus", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const calls = stubRouter({ "POST /devices/pair/pr_1/confirm": { ...pending(300_000), state: "approved", confirm: "matched", level: "view" }, "GET /devices": [] });
+    render(
+      <JoinStatus
+        initial={{ ...pending(300_000), state: "approved", level: "view", mode: "discovered", check_code: "482913", confirm: "needed" }}
+        selfName="x"
+        host="MacBook-Air"
+        rows={[]}
+        onClose={() => {}}
+      />,
+    );
+    const yes = screen.getByRole("button", { name: "Yes, the same number" }) as HTMLButtonElement;
+    expect(yes.disabled).toBe(true);
+    expect(document.activeElement?.textContent).toBe("No, it was different");
+    act(() => yes.click());
+    expect(calls.some((c) => c.path.endsWith("/confirm"))).toBe(false);
+    await advance(1000);
+    expect(yes.disabled).toBe(false);
+  });
+});
+

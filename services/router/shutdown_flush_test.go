@@ -68,6 +68,7 @@ func TestShutdownWritesTheHeldBackReverseLevel(t *testing.T) {
 	router := spawnListening(t, "router", []string{
 		bootRouterBin, "-addr", "127.0.0.1:0", "-data-url", dataURL,
 		"-session-cmd", bootTestchildBin, "-pipeline-cmd", bootTestchildBin, "-mads-home", homeDir,
+		"-mesh-allow-loopback", "-localapi-socket", filepath.Join(homeDir, "no-tailscaled.sock"),
 	}, bootCleanEnv(homeDir))
 	defer router.terminate(t, 10*time.Second)
 	bootEventually(t, 20*time.Second, func() bool { return level() == contracts.GrantControl })

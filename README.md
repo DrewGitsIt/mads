@@ -159,17 +159,22 @@ longer works in a plain browser tab; use the app.
 
 ### Sessions on your other devices (mesh mode)
 
-mads can show and drive sessions running on your other computers, over your
-tailnet ([design](docs/MESH-MODE-DESIGN.md), [security](docs/MESH-AUTH-DESIGN.md)).
-A device that hosts sessions for others runs one more service, the **Mesh
-Service** (`bin/mesh`, built by `make build`). It listens on the device's
-tailnet address (`:17380`), accepts only paired devices over mutual TLS
-(their keys pinned, and by default also on your tailnet, holding the mesh app
-capability), and forwards what each device's grant allows to the local Router.
-`scripts/app.sh` doesn't start it: run it yourself, for example under
-`systemd --user` (see [services/mesh/README.md](services/mesh/README.md)).
-Pair devices in Settings → Paired devices, or with `mads pair code` and
-`mads pair join`. Deploy every service on a host from the same build.
+mads can show and drive sessions running on your other computers, over any
+network your devices already share: a VPN such as Tailscale, a home LAN
+([design](docs/MESH-MODE-DESIGN.md), [networks](docs/MESH-NETWORK-DESIGN.md),
+[security](docs/MESH-AUTH-DESIGN.md)). A device that hosts sessions for others
+runs one more service, the **Mesh Service** (`bin/mesh`, built by `make
+build`). It listens only on the network you choose as the device's mesh
+network (`:17380`), accepts only paired devices over mutual TLS (their keys
+pinned; on Tailscale, by default, also checked as your own tailnet devices),
+and forwards what each device's grant allows to the local Router.
+`scripts/app.sh` builds and starts it with the Data Service and Router (one
+per mads home; it reuses one already running from this checkout), or run it
+yourself, for example under `systemd --user` (see
+[services/mesh/README.md](services/mesh/README.md)).
+Set up and pair devices in Settings → Paired devices, or from a terminal with
+`mads mesh setup` (then `mads mesh add`, `mads mesh code` / `mads mesh join`;
+`mads mesh --help`). Deploy every service on a host from the same build.
 ---
 
 ## Contributing

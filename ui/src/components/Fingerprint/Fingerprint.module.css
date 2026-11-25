@@ -1,5 +1,4 @@
 .chip,
-.groups,
 .full {
   font-variant-numeric: slashed-zero;
   font-feature-settings: "zero" 1;
@@ -29,36 +28,27 @@
   padding: var(--space-3);
 }
 .label {
-  font: 600 var(--fs-chip) var(--sans);
+  font: 500 var(--fs-sm) var(--sans);
   color: var(--text3);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
   margin-bottom: var(--space-2);
 }
-.groups {
-  display: grid;
-  grid-template-columns: repeat(4, auto);
-  justify-content: start;
-  gap: 3px 10px;
-  font: 500 13px/1.5 var(--mono);
+.full {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  font: 500 12px/1.5 var(--mono);
   color: var(--text);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
 }
-.groups span:nth-child(-n + 4),
-.full span:nth-child(-n + 4) {
+.full span[data-short] {
   color: var(--accent);
 }
-.full {
-  display: grid;
-  justify-content: start;
-  gap: 2px 8px;
-  font: 500 11.5px/1.5 Menlo, "SF Mono", ui-monospace, monospace;
-  color: var(--text);
-  letter-spacing: 0.03em;
-}
 .big {
+  align-self: flex-start;
   font-size: 14px;
-  gap: 4px 12px;
+  gap: 4px;
   padding: var(--space-3);
   border: 1px solid var(--line);
   border-radius: var(--r-sm);

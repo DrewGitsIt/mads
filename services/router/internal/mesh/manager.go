@@ -19,6 +19,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/netip"
 	"runtime"
 	"slices"
 	"strings"
@@ -28,6 +29,8 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/devicekey"
+	"github.com/drewkidwell/mads/pkg/meshnet"
+	"github.com/drewkidwell/mads/pkg/meshnet/tailscale"
 )
 
 // MeshAPI is the mesh wire version this Router speaks; it must match the
@@ -60,7 +63,40 @@ type Options struct {
 	// PairPoll is how often a pairing in progress asks the host for its
 	// answer (default 2s).
 	PairPoll time.Duration
-	Now      func() time.Time
+	// ReadyWait bounds how long a pairing request waits for this device's
+	// Mesh Service to report where it listens, when a mesh network is
+	// chosen but nothing is reported yet (it starts listening a few
+	// seconds after the choice); default 15 s. Past it, the addresses are
+	// the chosen network's own, at the mesh port.
+	ReadyWait time.Duration
+	// JoinMaxWait bounds a join's wait whatever the host says (default
+	// contracts.PairRequestTTL); JoinGrace is how long past the request's
+	// expiry the joiner keeps asking (default 30 s).
+	JoinMaxWait, JoinGrace time.Duration
+	Now                    func() time.Time
+	// AllowLoopback lets peers at 127.0.0.1 be dialled: tests and the e2e
+	// harness only (meshnet.LoopbackAllowed refuses it otherwise).
+	AllowLoopback bool
+	// System is what this device's own networks are read from (S2's
+	// prefixes, F3's filter); nil reads the machine (meshnet.OSSystem).
+	// LocalNetworks, when set, is used instead of any detection (tests).
+	System        *meshnet.System
+	LocalNetworks func() []meshnet.Network
+	// Race tunes F3's race (zero: 250 ms stagger, 3 s an attempt, 6 s).
+	Race meshnet.RaceOptions
+	// Tailscale is this machine's tailscaled LocalAPI, for the tailnet
+	// finder, pairing's vouching and the sign-in prompt; nil: none.
+	Tailscale *tailscale.Client
+	// Finders find mads devices during Add devices (nil: the tailnet's
+	// peer list and mDNS on LAN mesh networks).
+	Finders []Finder
+	// SearchBackoff is the pause after each Add devices search round (5 s,
+	// then 15 s from then on): the search probes every tailnet peer each
+	// round, so it backs off.
+	SearchBackoff []time.Duration
+	// NetworkEvery is how often this device's networks are re-read (10 s);
+	// UpgradeEvery how often a better path is tried (60 s).
+	NetworkEvery, UpgradeEvery time.Duration
 }
 
 // Manager is the Router's live view of its mesh peers.
@@ -104,9 +140,39 @@ type Manager struct {
 	// removed names devices removed everywhere, by fingerprint, so a
 	// retry (the device gone here) still names it.
 	removed map[string]string
+	// there is whether each paired device has this one paired, as it last
+	// answered, by fingerprint; pinnedAt when this Router last pinned or
+	// re-paired each (halfpaired.go, F6).
+	there    map[string]thereState
+	pinnedAt map[string]time.Time
+	// approvedAt: when this Router approved each key's pairing request,
+	// by fingerprint; it isn't dialled for pairGuard after (heldOff).
+	approvedAt map[string]time.Time
+	// pairedThere: when each paired device was seen to have this one
+	// paired since its row's pairing (F6 R4), also kept on the row.
+	pairedThere map[string]time.Time
 
-	// One pinned transport per peer (dial.go).
+	// One pinned transport per peer address, one path per peer (dial.go).
 	connsState
+
+	// policy is S2, adapter the direct adapter dialling under it.
+	policy  *meshnet.DialPolicy
+	adapter *meshnet.Direct
+	// local is this device's networks, as last read (localNetworks).
+	// alive caches whether this device's Mesh Service answers (T5).
+	aliveMu   sync.Mutex
+	alive     aliveCheck
+	localMu   sync.Mutex
+	local     []meshnet.Network
+	localAt   time.Time
+	localRead bool
+	// lastGoodAt is when each peer's last_good was last written.
+	lastGoodAt map[string]time.Time
+	// search is the Add devices search in progress (discovery.go).
+	search *search
+	// tsHelper reads tailscaled for this device's networks (nil without
+	// Options.Tailscale).
+	tsHelper *tailscale.Helper
 }
 
 type peerState struct {
@@ -154,9 +220,38 @@ func NewManager(data *dataclient.Client, opts Options) *Manager {
 	if opts.PairPoll == 0 {
 		opts.PairPoll = 2 * time.Second
 	}
-	return &Manager{data: data, opts: opts, peers: map[string]*peerState{}, index: map[string]string{}, localIDs: map[string]localCheck{}, localChecking: map[string]bool{},
+	if opts.ReadyWait == 0 {
+		opts.ReadyWait = 15 * time.Second
+	}
+	if opts.JoinMaxWait == 0 {
+		opts.JoinMaxWait = contracts.PairRequestTTL
+	}
+	if opts.JoinGrace == 0 {
+		opts.JoinGrace = 30 * time.Second
+	}
+	if len(opts.SearchBackoff) == 0 {
+		opts.SearchBackoff = []time.Duration{5 * time.Second, 15 * time.Second}
+	}
+	if opts.NetworkEvery == 0 {
+		opts.NetworkEvery = 10 * time.Second
+	}
+	if opts.UpgradeEvery == 0 {
+		opts.UpgradeEvery = 60 * time.Second
+	}
+	if opts.AllowLoopback && !meshnet.LoopbackAllowed() {
+		log.Printf("mesh: refusing to dial loopback peers: only test builds may (-mesh-allow-loopback)")
+		opts.AllowLoopback = false
+	}
+	m := &Manager{data: data, opts: opts, peers: map[string]*peerState{}, index: map[string]string{}, localIDs: map[string]localCheck{}, localChecking: map[string]bool{},
 		all: map[string]contracts.Peer{}, paired: map[string]*pairedState{}, remote: map[string]remoteSeen{}, joins: map[string]*join{}, removed: map[string]string{},
-		connsState: connsState{conns: map[string]*peerConn{}}}
+		there: map[string]thereState{}, pinnedAt: map[string]time.Time{}, approvedAt: map[string]time.Time{}, pairedThere: map[string]time.Time{},
+		connsState: connsState{conns: map[string]*peerConn{}, paths: map[string]*pathState{}}, lastGoodAt: map[string]time.Time{}}
+	m.policy = &meshnet.DialPolicy{Local: func() []netip.Prefix { return meshnet.Prefixes(m.localNetworks()) }, AllowLoopback: opts.AllowLoopback}
+	m.adapter = &meshnet.Direct{Policy: m.policy}
+	if opts.Tailscale != nil {
+		m.tsHelper = &tailscale.Helper{Client: opts.Tailscale}
+	}
+	return m
 }
 
 // Run loads the peer list, follows peer.* events, and probes until ctx ends.
@@ -169,8 +264,21 @@ func (m *Manager) Run(ctx context.Context) {
 	defer probe.Stop()
 	index := time.NewTicker(m.opts.IndexInterval)
 	defer index.Stop()
+	nets := time.NewTicker(m.opts.NetworkEvery)
+	defer nets.Stop()
+	upgrade := time.NewTicker(m.opts.UpgradeEvery)
+	defer upgrade.Stop()
 	for {
 		select {
+		case <-nets.C:
+			// This device's own networks changed (home → campus, a VPN up
+			// or down): re-race every peer at once (F3 step 7).
+			if m.refreshLocal() {
+				m.invalidateAll("this device's networks changed")
+				m.ProbeAll(ctx)
+			}
+		case <-upgrade.C:
+			m.upgradePaths(ctx)
 		case <-ctx.Done():
 			// What a device lets this node do, heard but held back by the
 			// write debounce, isn't lost with this process.
@@ -312,6 +420,20 @@ func (m *Manager) Reload(ctx context.Context) error {
 			delete(m.remote, id)
 		}
 	}
+	fps := map[string]bool{}
+	for _, p := range all {
+		fps[p.Fingerprint] = true
+	}
+	for fp := range m.there {
+		if !fps[fp] {
+			delete(m.there, fp)
+		}
+	}
+	for fp := range m.approvedAt {
+		if !fps[fp] {
+			delete(m.approvedAt, fp)
+		}
+	}
 	m.dropConns(next, paired)
 	return nil
 }
@@ -330,10 +452,19 @@ func (m *Manager) Statuses() []contracts.PeerStatus {
 	defer m.mu.Unlock()
 	out := make([]contracts.PeerStatus, 0, len(m.peers))
 	for _, st := range m.peers {
-		out = append(out, m.overlayLocked(st.status()))
+		out = append(out, m.liveLocked(st))
 	}
 	slices.SortFunc(out, func(a, b contracts.PeerStatus) int { return strings.Compare(a.Name, b.Name) })
 	return out
+}
+
+// liveLocked is st's status with its path, address states and diagnosis.
+// m.mu must be held.
+func (m *Manager) liveLocked(st *peerState) contracts.PeerStatus {
+	s := m.overlayLocked(st.status())
+	s.Path, s.Addresses = m.pathStatus(st.peer)
+	s.Diagnosis = diagnosis(s, m.opts.Now())
+	return s
 }
 
 // Status is one peer's live state, by id or name.
@@ -344,7 +475,7 @@ func (m *Manager) Status(idOrName string) (contracts.PeerStatus, bool) {
 	if st == nil {
 		return contracts.PeerStatus{}, false
 	}
-	return m.overlayLocked(st.status()), true
+	return m.liveLocked(st), true
 }
 
 func (st *peerState) status() contracts.PeerStatus {
@@ -401,9 +532,14 @@ type Hello struct {
 	Platform      string `json:"platform,omitempty"`
 	HostsSessions *bool  `json:"hosts_sessions,omitempty"`
 	// Grant and TailnetCapped: this node's grant there, and whether the
-	// tailnet policy caps it lower.
+	// tailnet policy caps it lower (always false since it never does).
 	Grant         string `json:"grant,omitempty"`
 	TailnetCapped bool   `json:"tailnet_capped,omitempty"`
+	// Addresses is where the host listens now (docs/MESH-NETWORK-DESIGN.md
+	// F5): merged into its row. Absent from an older host's.
+	Addresses []contracts.NetAddress `json:"addresses,omitempty"`
+	// TailscaleKeyExpiry is the host's Tailscale key expiry, when on.
+	TailscaleKeyExpiry *time.Time `json:"tailscale_key_expiry,omitempty"`
 }
 
 // Probe is one /mesh/hello result, classified.
@@ -412,8 +548,13 @@ type Probe struct {
 	Reason string
 	RTT    time.Duration
 	Hello  Hello
-	// Status is the hello's HTTP status; 0 when nothing answered.
+	// Status is the hello's HTTP status; 0 when nothing answered. Code is
+	// the error code of an answer that wasn't 200 (unpaired_device, ...).
 	Status int
+	Code   string
+	// PinMismatch: a different key answered (on the path in use, or at
+	// every address tried).
+	PinMismatch bool
 }
 
 // ProbePeer calls p's /mesh/hello over its pinned connection and
@@ -421,18 +562,35 @@ type Probe struct {
 // before adding it. A peer with no pinned fingerprint is never dialled: it
 // is unpaired.
 func (m *Manager) ProbePeer(ctx context.Context, p contracts.Peer) Probe {
+	// A failed hello on the path in use re-races at once (F3 step 7), once.
+	for attempt := 0; ; attempt++ {
+		probe, raced := m.probeOnce(ctx, p)
+		if probe.Status != 0 || raced || attempt > 0 || probe.State == contracts.PeerUnpaired || p.Fingerprint == "" {
+			return probe
+		}
+		m.invalidate(p.Fingerprint, firstNonEmpty(probe.Reason, "it stopped answering"))
+	}
+}
+
+// probeOnce is one hello: the race (when there's no path in use) has its
+// own 6 s; the hello itself, 4 s on a working connection.
+func (m *Manager) probeOnce(ctx context.Context, p contracts.Peer) (Probe, bool) {
+	c, raced, err := m.connFresh(ctx, p)
+	if err != nil {
+		state, reason := dialFailure(p, err)
+		return Probe{State: state, Reason: reason, PinMismatch: isPinMismatch(err)}, true
+	}
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	start := m.opts.Now()
-	req, client, err := m.peerRequest(ctx, http.MethodGet, p, "/mesh/hello", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+c.host+"/mesh/hello", nil)
 	if err != nil {
-		state, reason := dialFailure(p, err)
-		return Probe{State: state, Reason: reason}
+		return Probe{State: contracts.PeerUnreachable, Reason: err.Error()}, raced
 	}
-	resp, err := client.Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
 		state, reason := dialFailure(p, err)
-		return Probe{State: state, Reason: reason}
+		return Probe{State: state, Reason: reason, PinMismatch: isPinMismatch(err)}, raced
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
@@ -443,16 +601,17 @@ func (m *Manager) ProbePeer(ctx context.Context, p contracts.Peer) Probe {
 			Error string `json:"error"`
 		}
 		_ = json.Unmarshal(body, &e)
+		p2.Code = e.Code
 		if resp.StatusCode == http.StatusForbidden {
 			p2.State, p2.Reason = contracts.PeerDenied, firstNonEmpty(e.Error, e.Code, "refused")
-			return p2
+			return p2, raced
 		}
 		p2.State, p2.Reason = contracts.PeerUnreachable, fmt.Sprintf("mesh service answered %d %s", resp.StatusCode, e.Error)
-		return p2
+		return p2, raced
 	}
 	if err := json.Unmarshal(body, &p2.Hello); err != nil {
 		p2.State, p2.Reason = contracts.PeerUnreachable, "not a mads Mesh Service (bad /mesh/hello)"
-		return p2
+		return p2, raced
 	}
 	switch {
 	case p2.Hello.MeshAPI != MeshAPI:
@@ -464,7 +623,10 @@ func (m *Manager) ProbePeer(ctx context.Context, p contracts.Peer) Probe {
 	default:
 		p2.State = contracts.PeerConnected
 	}
-	return p2
+	if p.ID != "" && p2.Hello.MeshAPI == MeshAPI {
+		m.noteHelloAddresses(ctx, p, p2.Hello.Addresses)
+	}
+	return p2, raced
 }
 
 // ProbeAll probes every peer once, concurrently: the devices this node
@@ -474,12 +636,18 @@ func (m *Manager) ProbeAll(ctx context.Context) {
 	m.mu.Lock()
 	peers := make([]contracts.Peer, 0, len(m.peers))
 	for _, st := range m.peers {
+		if m.heldOffLocked(st.peer) {
+			continue
+		}
 		peers = append(peers, st.peer)
 	}
 	others := make([]contracts.Peer, 0, len(m.paired))
 	now := m.opts.Now()
 	for _, st := range m.paired {
 		if hostsNothing(st.peer) && !st.checkedAt.IsZero() && now.Sub(st.checkedAt) < rareProbeEvery {
+			continue
+		}
+		if m.heldOffLocked(st.peer) {
 			continue
 		}
 		others = append(others, st.peer)
@@ -493,6 +661,7 @@ func (m *Manager) ProbeAll(ctx context.Context) {
 			probe := m.ProbePeer(ctx, p)
 			m.observe(ctx, p.ID, probe)
 			m.noteRemote(ctx, p, probe)
+			m.noteThere(ctx, p, probe, false)
 		}()
 	}
 	for _, p := range others {
@@ -502,6 +671,9 @@ func (m *Manager) ProbeAll(ctx context.Context) {
 			probe := m.ProbePeer(ctx, p)
 			m.observePaired(p.ID, probe)
 			m.noteRemote(ctx, p, probe)
+			// A grant-only row whose device no longer has this one paired
+			// goes (F6 R4).
+			m.noteThere(ctx, p, probe, true)
 		}()
 	}
 	wg.Wait()
@@ -539,7 +711,14 @@ func (m *Manager) observe(ctx context.Context, peerID string, p Probe) {
 	case now.Sub(st.pendingSince) >= m.opts.Debounce:
 		change = st.settle(p)
 	}
+	// Any settled change to connected, the first or back after an outage
+	// (debounced), says which path it's on.
 	firstConnect := change != nil && change.To == contracts.PeerConnected
+	if firstConnect {
+		if path, _ := m.pathStatus(st.peer); path != nil {
+			change.Via = &contracts.NetAddress{Via: "direct", Addr: path.Addr, Kind: path.Kind, Label: path.Label}
+		}
+	}
 	m.mu.Unlock()
 
 	if change != nil {

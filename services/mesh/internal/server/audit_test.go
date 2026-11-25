@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"log"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -138,9 +139,26 @@ func TestTailnetRefusalLogsAreDebounced(t *testing.T) {
 	defer log.SetOutput(prev)
 	f := newFixture(t)
 	for range 5 {
-		f.do(t, "100.0.0.3", "GET", "/sessions", nil)
+		f.do(t, "100.0.0.4", "GET", "/sessions", nil)
 	}
-	if n := strings.Count(buf.String(), "grants this device no"); n != 1 {
+	if n := strings.Count(buf.String(), "must belong to this node's owner"); n != 1 {
 		t.Fatalf("%d log lines for 5 refusals from one address:\n%s", n, buf.String())
+	}
+}
+
+// Round-2 review T7: a refusal with no tailscaled error (this host can't
+// read its own identity) logs its reason, never "(<nil>)".
+func TestTailnetRefusalLogNamesTheReason(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+	f := newFixture(t)
+	f.srv.opts.Self.UserID = 0
+	if w := f.do(t, "100.0.0.1", "GET", "/sessions", nil); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("%d", w.Code)
+	}
+	if strings.Contains(buf.String(), "<nil>") || !strings.Contains(buf.String(), "can't read its own tailnet identity") {
+		t.Fatalf("log:\n%s", buf.String())
 	}
 }

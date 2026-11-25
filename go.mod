@@ -2,11 +2,14 @@ module github.com/drewkidwell/mads
 
 go 1.26
 
+toolchain go1.27.1
+
 require (
 	github.com/creack/pty v1.1.24
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/zalando/go-keyring v0.2.6
 	golang.org/x/image v0.44.0
+	golang.org/x/net v0.54.0
 	golang.org/x/sys v0.44.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.53.0

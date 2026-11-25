@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +54,18 @@ type ForbiddenError struct {
 
 func (e *ForbiddenError) Error() string {
 	return e.Method + " " + e.Path + ": status 403: " + e.Msg
+}
+
+// RateLimitedError is a 429: the Data Service is holding the caller off
+// until RetryAfter (zero: not said).
+type RateLimitedError struct {
+	Method, Path string
+	Code, Msg    string
+	RetryAfter   time.Duration
+}
+
+func (e *RateLimitedError) Error() string {
+	return e.Method + " " + e.Path + ": status 429: " + e.Msg
 }
 
 // errorField reads one string field of a JSON error body.
@@ -312,6 +325,12 @@ func (c *Client) doIf(ctx context.Context, method, path, ifMatch string, in, out
 		return json.Unmarshal(raw, out)
 	case resp.StatusCode == http.StatusNotFound:
 		return fmt.Errorf("%s %s: %w", method, path, ErrNotFound)
+	case resp.StatusCode == http.StatusTooManyRequests:
+		e := &RateLimitedError{Method: method, Path: path, Code: errorField(raw, "code"), Msg: firstNonEmpty(errorField(raw, "error"), strings.TrimSpace(string(raw)))}
+		if secs, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && secs > 0 {
+			e.RetryAfter = time.Duration(secs) * time.Second
+		}
+		return e
 	case resp.StatusCode == http.StatusForbidden:
 		return &ForbiddenError{Method: method, Path: path, Code: errorField(raw, "code"), Msg: firstNonEmpty(errorField(raw, "error"), strings.TrimSpace(string(raw)))}
 	case resp.StatusCode == http.StatusConflict:
@@ -1056,6 +1075,13 @@ func (c *Client) DeletePeerIfUnchanged(ctx context.Context, p contracts.Peer) er
 	return c.doIf(ctx, http.MethodDelete, "/peers/"+url.PathEscape(p.ID), p.UpdatedAt.Format(time.RFC3339Nano), nil, nil)
 }
 
+// DeletePeerReconciled is DeletePeerIfUnchanged for a device that no
+// longer has this one paired (docs/MESH-NETWORK-DESIGN.md F6, R4): its
+// device.unpaired says by "reconcile".
+func (c *Client) DeletePeerReconciled(ctx context.Context, p contracts.Peer) error {
+	return c.doIf(ctx, http.MethodDelete, "/peers/"+url.PathEscape(p.ID)+"?by=reconcile", p.UpdatedAt.Format(time.RFC3339Nano), nil, nil)
+}
+
 // --- Pairing by code (docs/MESH-AUTH-DESIGN.md D6) ---
 
 // CreatePairingCode registers a new pairing code by its secret's hash
@@ -1134,8 +1160,8 @@ func (c *Client) DeviceLastUsed(ctx context.Context) ([]contracts.DeviceLastUsed
 	return out, err
 }
 
-// MeshSettings is this host's mesh settings (GET /devices/settings): the
-// zero value when none were ever set.
+// MeshSettings is this host's mesh settings (GET /devices/settings, the
+// mesh_settings row): no networks when none were chosen.
 func (c *Client) MeshSettings(ctx context.Context) (contracts.MeshSettings, error) {
 	var out contracts.MeshSettings
 	err := c.do(ctx, http.MethodGet, "/devices/settings", nil, &out)
@@ -1145,9 +1171,79 @@ func (c *Client) MeshSettings(ctx context.Context) (contracts.MeshSettings, erro
 // SetMeshSettings records this host's mesh settings (PUT
 // /devices/settings). Only this host's own user may: a relayed write is
 // refused.
+// Nil Networks sends none chosen ([]): to change only the Tailscale
+// check, SetTailnetCheck.
 func (c *Client) SetMeshSettings(ctx context.Context, s contracts.MeshSettings) (contracts.MeshSettings, error) {
+	if s.Networks == nil {
+		s.Networks = []contracts.NetworkChoice{}
+	}
 	var out contracts.MeshSettings
 	err := c.do(ctx, http.MethodPut, "/devices/settings", s, &out)
+	return out, err
+}
+
+// SetTailnetCheck sets only the Tailscale network's identity check (the
+// earlier "Only accept devices on my tailnet" form of PUT
+// /devices/settings).
+func (c *Client) SetTailnetCheck(ctx context.Context, on bool) (contracts.MeshSettings, error) {
+	var out contracts.MeshSettings
+	err := c.do(ctx, http.MethodPut, "/devices/settings", map[string]bool{"require_tailnet": on}, &out)
+	return out, err
+}
+
+// Discoverable is this host's setup window (GET /devices/discoverable).
+func (c *Client) Discoverable(ctx context.Context) (contracts.Discoverable, error) {
+	var out contracts.Discoverable
+	err := c.do(ctx, http.MethodGet, "/devices/discoverable", nil, &out)
+	return out, err
+}
+
+// SetDiscoverable opens this host's setup window until until (capped at
+// ten minutes), or closes it (zero). Only this host's own user may.
+func (c *Client) SetDiscoverable(ctx context.Context, until time.Time) (contracts.Discoverable, error) {
+	var out contracts.Discoverable
+	err := c.do(ctx, http.MethodPut, "/devices/discoverable", contracts.Discoverable{Until: until}, &out)
+	return out, err
+}
+
+// CloseDiscoverable closes this host's setup window, saying why (the Mesh
+// Service closing it on abandoned pairings).
+func (c *Client) CloseDiscoverable(ctx context.Context, reason string) (contracts.Discoverable, error) {
+	var out contracts.Discoverable
+	err := c.do(ctx, http.MethodPut, "/devices/discoverable", contracts.Discoverable{Reason: reason}, &out)
+	return out, err
+}
+
+// RenewDiscoverable extends this host's open setup window to until (still
+// at most 30 minutes from when it was opened). A closed window is a
+// *ConflictError with Code "window_closed": open it again.
+func (c *Client) RenewDiscoverable(ctx context.Context, until time.Time) (contracts.Discoverable, error) {
+	var out contracts.Discoverable
+	err := c.do(ctx, http.MethodPut, "/devices/discoverable", contracts.Discoverable{Until: until, Renew: true}, &out)
+	return out, err
+}
+
+// ReportPairMismatch is the joiner fp saying a discovered request's check
+// code didn't match (the Mesh Service, for that joiner): declined, or
+// undone if it was approved.
+func (c *Client) ReportPairMismatch(ctx context.Context, id, fp string) (contracts.PairRequest, error) {
+	var out contracts.PairRequest
+	err := c.do(ctx, http.MethodPost, "/pairing/requests/"+url.PathEscape(id)+"/mismatch", map[string]string{"fingerprint": fp}, &out)
+	return out, err
+}
+
+// ForgetPairing removes the device fp's row (the Mesh Service, for that
+// device's /mesh/forget, F6 R1). Not paired here is ErrNotFound.
+func (c *Client) ForgetPairing(ctx context.Context, fp string) error {
+	return c.do(ctx, http.MethodPost, "/pairing/forget", contracts.PairForget{Fingerprint: fp}, nil)
+}
+
+// CreateDiscoveredPairRequest opens a discovered pairing request (the
+// Mesh Service, for a discovered /mesh/pair). Outside the window it's a
+// *ForbiddenError ("not_discoverable").
+func (c *Client) CreateDiscoveredPairRequest(ctx context.Context, in contracts.PairDiscoveredRequest) (contracts.PairRequest, error) {
+	var out contracts.PairRequest
+	err := c.do(ctx, http.MethodPost, "/pairing/discovered", in, &out)
 	return out, err
 }
 

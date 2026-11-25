@@ -25,9 +25,10 @@ type Candidate struct {
 	Access       []string                   `json:"access,omitempty"`
 }
 
-// tailscaleBinaries are where the CLI lives, in the order tried. The
-// Router reads tailnet status through the CLI rather than the LocalAPI
-// because macOS daemons don't expose a fixed LocalAPI socket (P3).
+// tailscaleBinaries are where the CLI lives, in the order tried, for
+// /peers/candidates. That route predates the Router's LocalAPI client
+// (pkg/meshnet/tailscale, which finds the macOS app's endpoint too); moving
+// it onto the client is post-merge cleanup.
 var tailscaleBinaries = []string{
 	"tailscale",
 	"/opt/homebrew/bin/tailscale",

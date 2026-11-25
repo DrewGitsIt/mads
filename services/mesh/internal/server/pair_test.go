@@ -1,9 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,16 +21,68 @@ import (
 
 // fakePairing is the Data Service's pairing store: one good secret.
 type fakePairing struct {
-	mu       sync.Mutex
-	good     string // the hash that redeems
-	redeemed []contracts.PairRedeem
-	requests map[string]contracts.PairRequest
+	mu         sync.Mutex
+	good       string // the hash that redeems
+	redeemed   []contracts.PairRedeem
+	discovered []contracts.PairDiscoveredRequest
+	requests   map[string]contracts.PairRequest
+	// pendingCap is the Data Service's limit on discovered requests.
+	pendingCap int
+	// forgotten is the keys /pairing/forget removed; paired, the ones it
+	// would find (nil: every key).
+	forgotten []string
+	paired    map[string]bool
+	forgetErr error
+	// replay is F6 R7: the used code again, by the key that used it,
+	// answers its request as it is now.
+	replay bool
+}
+
+func (p *fakePairing) ForgetPairing(_ context.Context, fp string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.forgetErr != nil {
+		return p.forgetErr
+	}
+	if p.paired != nil && !p.paired[fp] {
+		return dataclient.ErrNotFound
+	}
+	p.forgotten = append(p.forgotten, fp)
+	return nil
+}
+
+func (p *fakePairing) ReportPairMismatch(_ context.Context, id, fp string) (contracts.PairRequest, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	r, ok := p.requests[id]
+	if !ok || r.Fingerprint != fp {
+		return r, dataclient.ErrNotFound
+	}
+	r.State, r.JoinerMismatch = contracts.PairDeclined, true
+	p.requests[id] = r
+	return r, nil
+}
+
+func (p *fakePairing) CreateDiscoveredPairRequest(_ context.Context, in contracts.PairDiscoveredRequest) (contracts.PairRequest, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.pendingCap > 0 && len(p.discovered) >= p.pendingCap {
+		return contracts.PairRequest{}, &dataclient.RateLimitedError{Msg: "this host already has requests waiting", RetryAfter: time.Minute}
+	}
+	p.discovered = append(p.discovered, in)
+	r := contracts.PairRequest{ID: "pr_d" + string(rune('0'+len(p.discovered))), Fingerprint: in.Fingerprint, Name: in.Name, State: contracts.PairPending,
+		Mode: contracts.PairModeDiscovered, CheckCode: in.CheckCode, Vouched: in.Vouched, ExpiresAt: time.Now().Add(time.Minute)}
+	p.requests[r.ID] = r
+	return r, nil
 }
 
 func (p *fakePairing) RedeemPairingCode(_ context.Context, in contracts.PairRedeem) (contracts.PairRequest, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.redeemed = append(p.redeemed, in)
+	if r, ok := p.requests["pr_1"]; ok && p.replay && p.good == "" && r.Fingerprint == in.Fingerprint {
+		return r, nil
+	}
 	if in.SecretHash != p.good {
 		return contracts.PairRequest{}, &dataclient.ForbiddenError{Code: "pairing_refused", Msg: "refused"}
 	}
@@ -157,9 +212,7 @@ func TestPairJoinRefusals(t *testing.T) {
 		code string
 	}{
 		{"off the tailnet", req{from: "192.0.2.1", as: f.ids.stranger}, 403, "not_tailnet"},
-		{"no capability", req{from: "100.0.0.3", as: f.ids.stranger}, 403, "no_capability"},
 		{"this host's own key", req{from: "100.0.0.1", as: f.ids.host}, 403, "pair_self"},
-		{"already paired", req{from: "100.0.0.1", as: f.ids.mac}, 409, "already_paired"},
 	} {
 		tc.q.method, tc.q.target, tc.q.body = "POST", "/mesh/pair", joinBody(secret)
 		w := f.serve(t, tc.q)
@@ -262,58 +315,67 @@ func TestPairStatus(t *testing.T) {
 	}
 }
 
-// The joiner's own mesh address is one this host will dial: anything
-// but a device on this tailnet is refused before the
-// code is touched.
-func TestPairJoinRefusesAnAddressOffTheTailnet(t *testing.T) {
+// The joiner's addresses are ones this host may dial (S3): anything that
+// could make this host reach loopback, link-local, cloud metadata or a
+// low port is refused (422 bad_address) before the code is touched. A
+// private address passes here; the prefix rule is checked at dial time.
+func TestPairJoinRefusesBadAddresses(t *testing.T) {
 	f, fp, secret := newPairFixture(t)
-	// 100.100.0.1 is one of this user's tailnet nodes; 100.100.9.9 is in
-	// the same (CGNAT) range but no node here.
-	f.tn.set("100.100.0.1", full)
-	for _, u := range []string{"http://10.0.0.5:17380", "http://spark.ts.net:17380", "http://spark.othernet.ts.net:17380",
-		"http://169.254.169.254:17380", "http://evil.example.com:17380", "http://100.100.9.9:17380"} {
+	for _, u := range []string{"http://127.0.0.1:17380", "http://169.254.169.254:17380", "http://[fe80::1]:17380",
+		"http://224.0.0.1:17380", "http://spark.tail1.ts.net:22", "http://0.0.0.0:17380", "https://spark:17380/x", "http://localhost:17380"} {
 		f.srv.pairLimits = newPairLimits(time.Now) // not what this tests
 		raw, _ := json.Marshal(PairJoin{Secret: base64.RawURLEncoding.EncodeToString(secret), Name: "spark", MeshURL: u})
 		w := f.serve(t, req{from: "100.0.0.1", as: f.ids.stranger, method: "POST", target: "/mesh/pair", body: string(raw)})
-		if w.Code != http.StatusUnprocessableEntity || errorCode(t, w) != "bad_mesh_url" {
+		if w.Code != http.StatusUnprocessableEntity || errorCode(t, w) != "bad_address" {
 			t.Errorf("%s: %d %s", u, w.Code, w.Body)
+		}
+	}
+	for _, a := range []string{"127.0.0.1:17380", "169.254.169.254:17380", "[fd00:ec2::254]:17380"} {
+		f.srv.pairLimits = newPairLimits(time.Now)
+		raw, _ := json.Marshal(PairJoin{Secret: base64.RawURLEncoding.EncodeToString(secret), Name: "spark",
+			Addresses: []contracts.NetAddress{{Via: "direct", Addr: "192.168.1.30:17380"}, {Via: "direct", Addr: a}}})
+		w := f.serve(t, req{from: "100.0.0.1", as: f.ids.stranger, method: "POST", target: "/mesh/pair", body: string(raw)})
+		if w.Code != http.StatusUnprocessableEntity || errorCode(t, w) != "bad_address" {
+			t.Errorf("addresses with %s: %d %s", a, w.Code, w.Body)
 		}
 	}
 	if fp.calls() != 0 {
 		t.Fatal("a bad address reached the pairing store")
 	}
-	// On the tailnet, at any port (its Mesh Service may run elsewhere); an IP the tailnet knows as this user's.
-	for _, u := range []string{"http://spark.tail1.ts.net:9000", "http://100.100.0.1:17380"} {
-		if err := (paircode.CheckTarget(u, paircode.TargetPolicy{TailnetSuffix: "tail1.ts.net"})); err != nil || !f.srv.onTailnet(t.Context(), u) {
-			t.Errorf("%s refused: %v", u, err)
-		}
-	}
+	// Any network's address is fine at arrival: a LAN, a MagicDNS name at
+	// any port, a public one; an unknown adapter is skipped.
 	f.srv.pairLimits = newPairLimits(time.Now)
-	if w := f.serve(t, req{from: "100.0.0.1", as: f.ids.stranger, method: "POST", target: "/mesh/pair", body: joinBody(secret)}); w.Code != http.StatusCreated {
-		t.Fatalf("good address: %d %s", w.Code, w.Body)
+	raw, _ := json.Marshal(PairJoin{Secret: base64.RawURLEncoding.EncodeToString(secret), Name: "spark", Addresses: []contracts.NetAddress{
+		{Via: "direct", Addr: "10.0.0.5:17380", Kind: "lan"}, {Via: "direct", Addr: "spark.tail1.ts.net:9000"}, {Via: "relay", Addr: "r.example:443"}, {Via: "direct", Addr: "8.8.8.8:17380"}}})
+	if w := f.serve(t, req{from: "100.0.0.1", as: f.ids.stranger, method: "POST", target: "/mesh/pair", body: string(raw)}); w.Code != http.StatusCreated {
+		t.Fatalf("good addresses: %d %s", w.Code, w.Body)
 	}
-	// Without the tailnet required, the range is all that's checked.
-	f.srv.SetRequireTailnet(false)
-	if !f.srv.onTailnet(t.Context(), "http://100.100.9.9:17380") {
-		t.Error("tailnet not required: a Tailscale-range address")
+	fp.mu.Lock()
+	got := fp.redeemed[len(fp.redeemed)-1]
+	fp.mu.Unlock()
+	if len(got.Addresses) != 3 || got.Network != "tailscale" {
+		t.Fatalf("redeemed %+v", got)
 	}
 }
 
-// Hello says when the tailnet policy caps a device's grant (an admin
-// under a policy of ["control"] acts as control).
-func TestHelloSaysWhenTheTailnetCaps(t *testing.T) {
+// The tailnet policy never caps a level any more: a device granted admin
+// under a policy of ["control"] acts as admin, and hello says it isn't
+// capped. Hello also says where this host listens and its key expiry.
+func TestHelloNeverCaps(t *testing.T) {
 	f, _, _ := newPairFixture(t)
 	f.dirs.pair(f.ids.mac, "mac", contracts.GrantAdmin, contracts.PeerCeilings{})
+	exp := time.Date(2027, 3, 3, 0, 0, 0, 0, time.UTC)
+	f.srv.opts.Addresses = func() []contracts.NetAddress {
+		return []contracts.NetAddress{{Via: "direct", Addr: "100.64.0.9:17380", Kind: "overlay", Label: "Tailscale"}}
+	}
+	f.srv.opts.TailscaleKeyExpiry = func() *time.Time { return &exp }
 	var h Hello
 	_ = json.Unmarshal(f.do(t, "100.0.0.1", "GET", "/mesh/hello", nil).Body.Bytes(), &h)
-	if h.Grant != "admin" || !h.TailnetCapped || strings.Join(h.Access, ",") != "view,chat,control" {
-		t.Fatalf("capped: %+v", h)
+	if h.Grant != "admin" || h.TailnetCapped || strings.Join(h.Access, ",") != "view,chat,control,admin" {
+		t.Fatalf("hello: %+v", h)
 	}
-	f.dirs.pair(f.ids.mac, "mac", contracts.GrantControl, contracts.PeerCeilings{})
-	h = Hello{}
-	_ = json.Unmarshal(f.do(t, "100.0.0.1", "GET", "/mesh/hello", nil).Body.Bytes(), &h)
-	if h.Grant != "control" || h.TailnetCapped {
-		t.Fatalf("not capped: %+v", h)
+	if len(h.Addresses) != 1 || h.Addresses[0].Kind != "overlay" || h.TailscaleKeyExpiry == nil || !h.TailscaleKeyExpiry.Equal(exp) {
+		t.Fatalf("hello addresses/expiry: %+v", h)
 	}
 }
 
@@ -322,11 +384,7 @@ func TestHelloSaysWhenTheTailnetCaps(t *testing.T) {
 func TestPairNamesAndPollLimits(t *testing.T) {
 	f, fp, secret := newPairFixture(t)
 	f.srv.opts.Name = "pops-mads"
-	w := f.serve(t, req{from: "100.0.0.1", as: f.ids.mac, method: "POST", target: "/mesh/pair", body: joinBody(secret)})
-	if !strings.Contains(w.Body.String(), "pops-mads") {
-		t.Fatalf("already paired names %s", w.Body)
-	}
-	w = f.serve(t, req{from: "100.0.0.1", as: f.ids.stranger, method: "POST", target: "/mesh/pair", body: joinBody(secret)})
+	w := f.serve(t, req{from: "100.0.0.1", as: f.ids.stranger, method: "POST", target: "/mesh/pair", body: joinBody(secret)})
 	var st PairStatus
 	_ = json.Unmarshal(w.Body.Bytes(), &st)
 	if st.Host.Name != "pops-mads" {
@@ -348,4 +406,72 @@ func TestPairNamesAndPollLimits(t *testing.T) {
 		t.Fatalf("paired, polling its answer: %d", c)
 	}
 	_ = fp
+}
+
+// F6 R2: a key already paired here may ask again; its request is taken
+// like any other.
+func TestPairJoinFromAPairedKey(t *testing.T) {
+	f, fp, secret := newPairFixture(t)
+	w := f.serve(t, req{from: "100.0.0.1", as: f.ids.mac, method: "POST", target: "/mesh/pair", body: joinBody(secret)})
+	if w.Code != http.StatusCreated || fp.calls() != 1 {
+		t.Fatalf("a paired key asking again: %d %s", w.Code, w.Body)
+	}
+}
+
+// F6 R7: the same key with the same code after the host declined gets
+// that request back, and the log says so rather than "waiting".
+func TestPairJoinAgainAfterDecline(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+	f, fp, secret := newPairFixture(t)
+	fp.replay = true
+	if w := f.serve(t, req{from: "100.0.0.1", as: f.ids.stranger, method: "POST", target: "/mesh/pair", body: joinBody(secret)}); w.Code != http.StatusCreated {
+		t.Fatalf("join: %d %s", w.Code, w.Body)
+	}
+	r := fp.requests["pr_1"]
+	r.State = contracts.PairDeclined
+	fp.requests["pr_1"] = r
+	buf.Reset()
+	w := f.serve(t, req{from: "100.0.0.1", as: f.ids.stranger, method: "POST", target: "/mesh/pair", body: joinBody(secret)})
+	var st PairStatus
+	_ = json.Unmarshal(w.Body.Bytes(), &st)
+	if w.Code != http.StatusCreated || st.State != contracts.PairDeclined || st.RequestID != "pr_1" {
+		t.Fatalf("again: %d %s", w.Code, w.Body)
+	}
+	if l := buf.String(); strings.Contains(l, "waiting for approval") || !strings.Contains(l, "already declined") {
+		t.Fatalf("log: %s", l)
+	}
+}
+
+// F6 R1: /mesh/forget is any paired caller's, at any level (none
+// included): the Data Service forgets the key the handshake proved, and
+// its live requests end. Not paired: unpaired_device, and the store
+// isn't asked.
+func TestMeshForget(t *testing.T) {
+	f, fp, _ := newPairFixture(t)
+	w := f.serve(t, req{from: "100.0.0.1", as: f.ids.idle, method: "POST", target: "/mesh/forget"})
+	if w.Code != http.StatusNoContent || len(fp.forgotten) != 1 || fp.forgotten[0] != string(f.ids.idle.Fingerprint()) {
+		t.Fatalf("level none: %d %s %v", w.Code, w.Body, fp.forgotten)
+	}
+	if w := f.serve(t, req{from: "100.0.0.1", as: f.ids.stranger, method: "POST", target: "/mesh/forget"}); w.Code != http.StatusForbidden || errorCode(t, w) != "unpaired_device" {
+		t.Fatalf("unpaired: %d %s", w.Code, w.Body)
+	}
+	if len(fp.forgotten) != 1 {
+		t.Fatalf("an unpaired key reached the store: %v", fp.forgotten)
+	}
+	// In the directory, gone from the store (a race): unpaired_device too.
+	fp.paired = map[string]bool{}
+	if w := f.serve(t, req{from: "100.0.0.1", as: f.ids.mac, method: "POST", target: "/mesh/forget"}); w.Code != http.StatusForbidden || errorCode(t, w) != "unpaired_device" {
+		t.Fatalf("gone from the store: %d %s", w.Code, w.Body)
+	}
+	fp.paired = nil
+	if w := f.serve(t, req{from: "100.0.0.1", as: f.ids.mac, method: "GET", target: "/mesh/forget"}); w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET: %d", w.Code)
+	}
+	fp.forgetErr = errors.New("down")
+	if w := f.serve(t, req{from: "100.0.0.1", as: f.ids.mac, method: "POST", target: "/mesh/forget"}); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("store down: %d", w.Code)
+	}
 }
