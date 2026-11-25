@@ -90,6 +90,12 @@ export interface Leg {
   navigates?: boolean;
   /** How long the marker may take (default PERF_MARKER_CAP_MS, 30 s). */
   markerCapMs?: number;
+  /**
+   * How often the harness reads the marker (default 25 ms). Its time is the
+   * page's own either way; a slower poll keeps the harness's page.evaluate
+   * calls off a main thread the leg measures (scenario 10x).
+   */
+  markerPollMs?: number;
   /** Runs before the click: inside the window, outside the leg's span (a wait past a skip window). */
   before?(ctx: ScenarioCtx): Promise<void>;
   /** The leg's git calls and Router CPU count for at least this long from the click, past settled (work a 202 left running). */

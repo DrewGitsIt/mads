@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { abortActive, loadPlan, runOne, type Result } from "./measure";
+import { abortActive, loadPlan, runOne, scrubError, type Result } from "./measure";
 import { checkByName, runCheck } from "./checks";
 import type { Manifest } from "./scenarios";
 import { scenarioById } from "./scenarios";
@@ -56,7 +56,7 @@ if (!plan) {
             try {
               result = await runOne({ plan, build, scenario, rep, mode });
             } catch (err) {
-              const error = `FATAL: ${err instanceof Error ? err.message : String(err)}`;
+              const error = scrubError(plan, undefined, `FATAL: ${err instanceof Error ? err.message : String(err)}`);
               save({ scenario: scenario.id, build: build.label, mode, rep, browser: plan.browser, ok: false, error } as Result);
               throw err;
             }
