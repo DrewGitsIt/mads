@@ -1,3 +1,4 @@
+import path from "node:path";
 import { defineConfig } from "@playwright/test";
 
 /**
@@ -22,6 +23,9 @@ export default defineConfig({
   // PERF_TEST_TIMEOUT_MS: scenario 8 at a large PERF_LONGLIVED_N needs longer.
   timeout: Number(process.env.PERF_TEST_TIMEOUT_MS ?? 10 * 60_000),
   use: { trace: "off", screenshot: "off", video: "off" },
+  // PERF_PW_OUTPUT (run.sh, real data: realism or a real CHAT_SRC): failure
+  // context goes to the run's temp tree, deleted with it.
+  outputDir: process.env.PERF_PW_OUTPUT || path.join(__dirname, "../../test-results"),
   // Each repetition launches its own browser (measure.ts: full Chromium,
   // background networking off), so nothing here launches one.
   projects: [{ name: "perf" }],

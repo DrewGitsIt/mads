@@ -152,7 +152,7 @@ ui-smoke: ui-deps
 #       GITFX=auto|1|0 GITFX_SRC=~/repo/mads (real-git fixture for 9x and checks f-i; cloned from, never run in).
 # No ui-deps prerequisite: run.sh installs deps only where they are missing.
 ui-perf:
-	BASE="$(BASE)" CAND="$(CAND)" PROFILE="$(PROFILE)" N="$(N)" BROWSER="$(BROWSER)" SCENARIOS="$(SCENARIOS)" MODES="$(MODES)" CHECKS="$(CHECKS)" REALISM="$(REALISM)" GITFX="$(GITFX)" GITFX_SRC="$(GITFX_SRC)" \
+	BASE="$(BASE)" CAND="$(CAND)" PROFILE="$(PROFILE)" N="$(N)" BROWSER="$(BROWSER)" SCENARIOS="$(SCENARIOS)" MODES="$(MODES)" CHECKS="$(CHECKS)" REALISM="$(REALISM)" GITFX="$(GITFX)" GITFX_SRC="$(GITFX_SRC)" CHAT_SRC="$(CHAT_SRC)" CHAT_TURNS="$(CHAT_TURNS)" \
 		sh tools/perf/run.sh
 
 # The perf tools' Go code (perfseed, the git shim, providers/fake/perf.go)

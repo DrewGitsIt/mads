@@ -7,6 +7,7 @@ import type { CheckResult } from "./measure";
 import { liveFixture, renameSession, type LiveFixture } from "./fixtures";
 import { arm } from "./probe";
 import { FOCUS_SKIP_MS, OUTSIDE_S, addUntracked, focusWindow, readTotals } from "./outsideEdits";
+import { chatScenarios, type ChatRef } from "./chat";
 
 /** What perfseed wrote (services/data/cmd/perfseed Manifest), as far as the scenarios need it. */
 export interface Manifest {
@@ -26,6 +27,8 @@ export interface Manifest {
   bytes: Record<string, number>;
   /** The real-git fixture (perfseed gitfx), when the run built one. */
   git?: GitFixture;
+  /** The chat scenarios' conversation (perfseed chat), when the run made one. */
+  chat?: ChatRef;
 }
 
 /** perfseed gitfx's manifest section. */
@@ -87,6 +90,12 @@ export interface Leg {
   navigates?: boolean;
   /** How long the marker may take (default PERF_MARKER_CAP_MS, 30 s). */
   markerCapMs?: number;
+  /**
+   * How often the harness reads the marker (default 25 ms). Its time is the
+   * page's own either way; a slower poll keeps the harness's page.evaluate
+   * calls off a main thread the leg measures (scenario 10x).
+   */
+  markerPollMs?: number;
   /** Runs before the click: inside the window, outside the leg's span (a wait past a skip window). */
   before?(ctx: ScenarioCtx): Promise<void>;
   /** The leg's git calls and Router CPU count for at least this long from the click, past settled (work a 202 left running). */
@@ -98,6 +107,10 @@ export interface Scenario {
   title: string;
   /** Drives the real-git fixture: run with delays off only (git is real; the mock would add to it). */
   git?: boolean;
+  /** Run with delays off only (the chat scenarios: the delays are git routes', not what they measure). */
+  delaysOffOnly?: boolean;
+  /** The open conversation's /output stream goes through to the Router (not held by the proxy): a live reply streams. */
+  liveOutput?: boolean;
   /** Gets the page to the scenario's starting view and lets it settle. Not measured. */
   prepare(ctx: ScenarioCtx): Promise<void>;
   legs: Leg[];
@@ -109,7 +122,16 @@ export interface Scenario {
    * for durations.
    */
   prepStats?(): { det: Record<string, number>; timing: Record<string, number> };
+  /**
+   * After the window: the scenario's own numbers (merged into the result's
+   * det and timing) and checks (with the smoke's), from in-page records and
+   * CDP reads made after the fact.
+   */
+  collect?(ctx: ScenarioCtx): Promise<{ det?: Record<string, number>; timing?: Record<string, number>; checks?: CheckResult[] }>;
 }
+
+/** Scenario ids that run with delays off only: the real-git 9x and the chat 10x. */
+export const DELAYS_OFF_ONLY = /^(9|10)/;
 
 // --- Selectors. Only what main already renders: the baseline is main as-is,
 // so a scenario can't lean on a test hook main doesn't have.
@@ -337,6 +359,7 @@ export const SCENARIOS: Scenario[] = [
   pinnedScenario(),
   longLivedScenario(),
   ...gitScenarios(),
+  ...chatScenarios({ manifest: () => m(), load, openSession, until, say, agentIdle, smoke: renameSmoke }),
   {
     id: "7b-offline",
     title: "Offline for a while, then back (connections refused: backoff, health, probes)",

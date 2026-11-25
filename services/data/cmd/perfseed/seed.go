@@ -90,6 +90,8 @@ type Manifest struct {
 	ElapsedMS   int64            `json:"elapsed_ms"`
 	// Git is the real-git fixture (perfseed gitfx), when the run built one.
 	Git *GitFxManifest `json:"git,omitempty"`
+	// Chat is the chat scenarios' conversation (perfseed chat), when the run made one.
+	Chat *ChatManifest `json:"chat,omitempty"`
 }
 
 type ManifestRail struct {

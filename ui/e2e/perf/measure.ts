@@ -19,6 +19,8 @@ export interface Plan {
   manifestPath: string;
   /** perfseed -transcripts output, copied into each stack's $HOME. */
   transcriptsDir?: string;
+  /** perfseed chat's fake history files (scenario 10x), copied into each stack's $MADS_HOME/fake-transcripts. */
+  fakeTranscriptsDir?: string;
   builds: Build[];
   scenarios: string[];
   n: number;
@@ -37,6 +39,12 @@ export interface Plan {
    * redacted and no screenshots are kept.
    */
   realism?: boolean;
+  /**
+   * Scenario 10x's conversation is a real transcript (CHAT_SRC): like
+   * realism, no screenshots, ARIA snapshots or stack logs are kept and
+   * errors are cut to their first line with quoted text and markup removed.
+   */
+  chatReal?: boolean;
   /**
    * The real-git fixture (perfseed gitfx; scenarios 9x, checks f–h): its
    * path, restored before every repetition from the pristine copy.
@@ -451,6 +459,8 @@ export async function bootRig(opts: {
   env?: Record<string, string>;
   /** Electron: leave the first window as it loaded, probe or not (the cold-load leg's own reload carries the probe). */
   coldLoad?: boolean;
+  /** Overrides the plan's holdOutput (a scenario that streams a live reply needs /output through). */
+  holdOutput?: boolean;
 }): Promise<Rig> {
   const gitFx = opts.plan.gitFx ?? undefined;
   const { plan, build, mode, tag, manifest } = opts;
@@ -485,8 +495,9 @@ export async function bootRig(opts: {
       build,
       seededDB: plan.seededDB,
       transcriptsDir: plan.transcriptsDir,
+      fakeTranscriptsDir: plan.fakeTranscriptsDir,
       delays,
-      holdOutput: plan.holdOutput,
+      holdOutput: opts.holdOutput ?? plan.holdOutput,
       tag,
       fastModelURL: opts.fastModelURL,
       env: opts.env,
@@ -592,15 +603,34 @@ export function liveHits(urls: string[]): string[] {
 }
 
 /** Waits for a leg's armed marker, returning [page time, harness time]. Fails after 30 s, naming it. */
-async function waitMarker(w: Watch, name: string, spec: MarkerSpec, capMs = MARKER_CAP_MS): Promise<[number, number]> {
+async function waitMarker(w: Watch, name: string, spec: MarkerSpec, capMs = MARKER_CAP_MS, pollMs = 25): Promise<[number, number]> {
   const deadline = Date.now() + capMs;
   for (;;) {
     const p = await readProbe(w.page, Number.MAX_SAFE_INTEGER);
     w.cdpLag.max = Math.max(w.cdpLag.max, Date.now() - p.pageNow);
     if (p.markers[name]) return [p.markers[name], Date.now()];
     if (Date.now() > deadline) throw new Error(`marker never appeared: ${name} ${JSON.stringify(spec)} (${capMs / 1000} s)`);
-    await sleep(25);
+    await sleep(pollMs);
   }
+}
+
+/** Real data in the workload (realism, or a real chat transcript): nothing that could carry its content is kept. */
+export const isPrivate = (plan: Plan) => !!plan.realism || !!plan.chatReal;
+
+/** A real chat transcript's error: its first line, quoted text and markup cut (a locator error can quote the page). */
+function redactChat(s: string): string {
+  return s
+    .split("\n")[0]
+    .replace(/<[^>]*>/g, "<…>")
+    .replace(/"[^"]*"|'[^']*'|`[^`]*`/g, "<…>")
+    .slice(0, 300);
+}
+
+/** An error as it may be saved: as is, or (real data) redacted. */
+export function scrubError(plan: Plan, man: Manifest | undefined, s: string): string {
+  if (!isPrivate(plan)) return s;
+  const out = man ? redact(s, man) : s.replace(/ses_[0-9a-f]+/g, "ses_<redacted>");
+  return plan.chatReal ? redactChat(out) : out;
 }
 
 function redact(s: string, man: Manifest): string {
@@ -637,7 +667,7 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
   let rig: Rig | undefined;
   let fatal: Error | undefined;
   try {
-    rig = await bootRig({ plan, build, mode, tag, manifest, coldLoad: scenario.id === "1-cold-load" });
+    rig = await bootRig({ plan, build, mode, tag, manifest, coldLoad: scenario.id === "1-cold-load", holdOutput: scenario.liveOutput ? false : undefined });
     const { stack, page, watch, metrics, ctx } = rig;
     await scenario.prepare(ctx);
     if (scenario.id !== "1-cold-load") await ctx.quiesce();
@@ -669,7 +699,7 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       // first window); the init script above arms the document it measures.
       if (!leg.navigates || (await page.evaluate(() => !!(window as unknown as { __perf?: unknown }).__perf))) await arm(page, leg.name, spec);
       await leg.act(ctx);
-      const [markerAt, markerSeen] = await waitMarker(watch, leg.name, spec, leg.markerCapMs);
+      const [markerAt, markerSeen] = await waitMarker(watch, leg.name, spec, leg.markerCapMs, leg.markerPollMs);
       const rule = await waitRule(watch, clickAt, head, SETTLE_CAP_MS);
       if (rule.capped) throw new Error(`settle capped at ${SETTLE_CAP_MS / 1000} s: ${rule.reason}`);
       const settledAt = Math.max(markerAt, rule.at);
@@ -709,7 +739,7 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
         eventsConnects: ev.connects,
         routerCpuMs: cpu1 - cpu0,
       });
-      if (process.env.PERF_DEBUG && !plan.realism) {
+      if (process.env.PERF_DEBUG && !isPrivate(plan)) {
         const dir = path.join(plan.runDir, "debug");
         mkdirSync(dir, { recursive: true });
         await page.screenshot({ path: path.join(dir, `${tag}-${result.legs.length}.png`) }).catch(() => {});
@@ -944,6 +974,13 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
       r.status ?? null,
     ]);
 
+    // The scenario's own numbers and checks from the window (scenario 10x).
+    if (scenario.collect) {
+      const c = await scenario.collect(ctx);
+      Object.assign(result.det, c.det ?? {});
+      Object.assign(result.timing, c.timing ?? {});
+      result.checks.push(...(c.checks ?? []));
+    }
     // The live-event smoke: something changed through the API shows within 2 s.
     if (scenario.smoke) result.checks.push(await scenario.smoke(ctx));
     result.ok = result.checks.every((c) => c.ok);
@@ -951,7 +988,7 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err);
     const pages = rig?.context.pages() ?? [];
-    if (pages[0] && !plan.realism) {
+    if (pages[0] && !isPrivate(plan)) {
       const shot = path.join(plan.runDir, "failures", `${tag}.png`);
       mkdirSync(path.dirname(shot), { recursive: true });
       await pages[0].screenshot({ path: shot, fullPage: true }).catch(() => {});
@@ -960,7 +997,7 @@ export async function runOne(opts: { plan: Plan; build: Build; scenario: Scenari
     await rig?.teardown();
     active = undefined;
   }
-  if (plan.realism && result.error) result.error = redact(result.error, manifest);
+  if (result.error) result.error = scrubError(plan, manifest, result.error);
   if (fatal) throw fatal;
   return result;
 }

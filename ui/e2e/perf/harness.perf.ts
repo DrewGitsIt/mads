@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { abortActive, loadPlan, runOne, type Result } from "./measure";
+import { abortActive, loadPlan, runOne, scrubError, type Result } from "./measure";
 import { checkByName, runCheck } from "./checks";
 import type { Manifest } from "./scenarios";
 import { scenarioById } from "./scenarios";
@@ -39,8 +39,9 @@ if (!plan) {
   for (const id of plan.scenarios) {
     const scenario = scenarioById(id);
     for (const mode of plan.modes) {
-      // Real git (9x): the delay mock would only add to it; delays off only.
-      if (scenario.git && mode === "on") continue;
+      // Real git (9x): the delay mock would only add to it; chat (10x): the
+      // delays are the git routes', not what it measures. Delays off only.
+      if ((scenario.git || scenario.delaysOffOnly) && mode === "on") continue;
       for (let rep = 1; rep <= plan.n; rep++) {
         const order = rep % 2 === 1 ? plan.builds : [...plan.builds].reverse();
         for (const build of order) {
@@ -55,7 +56,7 @@ if (!plan) {
             try {
               result = await runOne({ plan, build, scenario, rep, mode });
             } catch (err) {
-              const error = `FATAL: ${err instanceof Error ? err.message : String(err)}`;
+              const error = scrubError(plan, undefined, `FATAL: ${err instanceof Error ? err.message : String(err)}`);
               save({ scenario: scenario.id, build: build.label, mode, rep, browser: plan.browser, ok: false, error } as Result);
               throw err;
             }

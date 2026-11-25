@@ -65,7 +65,7 @@ build_matrix() {
 # -tags perf) must not: no release binary may carry their marker strings.
 check_no_perf_strings() {
     for bin in "$1"/*; do
-        if grep -aqE 'MADS_FAKE_START_DELAY_MS|the permission dialect always asks' "$bin"; then
+        if grep -aqE 'MADS_FAKE_START_DELAY_MS|MADS_FAKE_PERF_HISTORY_DIR|the permission dialect always asks' "$bin"; then
             die "FATAL: $bin contains perf-only fake-provider code (built with -tags perf?)"
         fi
     done

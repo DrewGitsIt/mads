@@ -13,6 +13,18 @@
 #         REALISM=1 — the workload is a read-only backup of ~/.mads/mads.db
 #           (REAL_DB to override), prepared by `perfseed realism` and deleted
 #           with the run's temp dir; nothing real is committed or reported.
+#         CHAT_SRC=synthetic|<claude-code transcript .jsonl> — scenario 10x's
+#           conversation (perfseed chat): synthetic (default: 500 turns, ~3.5k
+#           rows) or a real transcript, copied into the run's temp dir (the
+#           original only read), deleted with it, never named in a report.
+#           CHAT_TURNS=500 (synthetic). PERF_CHAT_CHARS=15000 PERF_CHAT_RATE=60
+#           PERF_CHAT_DELTA=25 (the live reply) PERF_CHAT_PACE=fast and
+#           PERF_CHAT_PACED_CHARS=3000 (paced variants) PERF_CHAT_SLOW_RATE=15
+#           PERF_CHAT_SLOW_CHARS=6000 (10cs) PERF_CHAT_TRACE=0 (no CDP trace
+#           split) PERF_CHAT_SAMPLE=min (probe-overhead calibration)
+#           PERF_CHAT_FAULT=drop|dup|swap (the text check's self-test: must fail).
+#           A real CHAT_SRC keeps no screenshots, stack logs or raw errors.
+#           PERF_PROBE_CAND=0 is refused with 10x (both sides alike).
 #
 # Builds each side's Go binaries and UI (VITE_ROUTER_URL="", same-origin)
 # into its own temp dir: a ref is checked out detached with `git worktree
@@ -42,7 +54,9 @@ BROWSER=${BROWSER:-chromium}
 SCENARIOS=$(resolve_scenarios "${SCENARIOS:-$([ -n "${REALISM:-}" ] && echo bus || echo all)}")
 # Real-git scenarios alone: delays off (the mock would add to real git).
 DEFAULT_MODES=off
-for s in $(echo "$SCENARIOS" | tr ',' ' '); do case "$s" in 9*) ;; *) DEFAULT_MODES=on,off ;; esac; done
+# Chat (10x) likewise: the delays are the git routes', not what it measures.
+CHAT=0
+for s in $(echo "$SCENARIOS" | tr ',' ' '); do case "$s" in 9*) ;; 10*) CHAT=1 ;; *) DEFAULT_MODES=on,off ;; esac; done
 MODES=${MODES:-$DEFAULT_MODES}
 PERF_DELAYS=${PERF_DELAYS:-}
 PERF_HOLD_OUTPUT=${PERF_HOLD_OUTPUT:-1}
@@ -51,6 +65,11 @@ REAL_DB=${REAL_DB:-$HOME/.mads/mads.db}
 CHECKS=${CHECKS:-$([ -n "$REALISM" ] && echo none || echo a,b,c,d,e)}
 GITFX=${GITFX:-auto}
 GITFX_SRC=${GITFX_SRC:-$HOME/repo/mads}
+CHAT_SRC=${CHAT_SRC:-synthetic}
+CHAT_TURNS=${CHAT_TURNS:-500}
+# A real transcript is real data: results keep no screenshots, ARIA
+# snapshots, stack logs or unredacted errors (as in realism).
+CHAT_REAL=0
 if [ "$GITFX" = auto ]; then
 	GITFX=0
 	for s in $(echo "$SCENARIOS" | tr ',' ' '); do case "$s" in 9*) GITFX=1 ;; esac; done
@@ -97,6 +116,19 @@ if [ "$GITFX" = 1 ]; then
 	# A file test, not git: the only git run against GITFX_SRC is the clone.
 	[ -e "$GITFX_SRC/.git" ] || [ -f "$GITFX_SRC/HEAD" ] || die "GITFX_SRC $GITFX_SRC is not a git repo"
 	REAL_GIT=$(command -v git) || die "no git on PATH"
+fi
+if [ "$CHAT" = 1 ]; then
+	[ -z "$REALISM" ] || die "the chat scenarios (10x) and REALISM don't mix (10x seeds its own conversation; CHAT_SRC takes a real transcript)"
+	if [ "$CHAT_SRC" != synthetic ]; then
+		CHAT_REAL=1
+		case "$CHAT_SRC" in *.jsonl) ;; *) die "CHAT_SRC must be synthetic or a claude-code transcript (.jsonl)" ;; esac
+		[ -f "$CHAT_SRC" ] && [ -r "$CHAT_SRC" ] || die "CHAT_SRC: no readable file"
+	fi
+	case "$CHAT_TURNS" in '' | *[!0-9]*) die "CHAT_TURNS must be a number" ;; esac
+	# The lite probe on one side only would measure the two builds unalike
+	# (10x's busy share and per-delta costs include the probe's own work).
+	[ "${PERF_PROBE_CAND:-}" != 0 ] || die "PERF_PROBE_CAND=0 and the chat scenarios (10x) don't mix: both sides must carry the same probe (PERF_PROBE=0 makes both lite)"
+
 fi
 
 # resolve <spec> → "dir <path>" or "ref <sha>"
@@ -313,6 +345,13 @@ else
 		cp -cRp "$TMP/gitfx/live" "$TMP/gitfx/pristine"
 		(cd "$ROOT" && go build -tags perf -o "$TMP/gitshim/git" ./tools/perf/gitshim)
 	fi
+	if [ "$CHAT" = 1 ]; then
+		# Scenario 10x's conversation: the fake's history file and its
+		# session. A real CHAT_SRC is only read (perfseed copies it into
+		# the temp dir first); what's made from it stays in $TMP.
+		"$TMP/perfseed" chat -db "$WL/mads.db" -manifest "$WL/manifest.json" -src "$CHAT_SRC" -turns "$CHAT_TURNS" \
+			-out "$WL/fake-transcripts" -guard "$TMP"
+	fi
 	cp "$WL/manifest.json" "$RUN_DIR/manifest.json"
 fi
 
@@ -327,6 +366,7 @@ cat >"$RUN_DIR/plan.json" <<EOF
   "seededDB": "$WL/mads.db",
   "manifestPath": "$WL/manifest.json",
   "transcriptsDir": "$TRANSCRIPTS",
+  "fakeTranscriptsDir": "$([ "$CHAT" = 1 ] && echo "$WL/fake-transcripts")",
   "builds": $BUILDS,
   "scenarios": $scen_json,
   "n": $N,
@@ -336,8 +376,9 @@ cat >"$RUN_DIR/plan.json" <<EOF
   "holdOutput": $([ "$PERF_HOLD_OUTPUT" = 0 ] && echo false || echo true),
   "checks": $checks_json,
   "realism": $([ -n "$REALISM" ] && echo true || echo false),
+  "chatReal": $([ "$CHAT" = 1 ] && [ "$CHAT_REAL" = 1 ] && echo true || echo false),
   "gitFx": $([ "$GITFX" = 1 ] && printf '{"root": "%s", "pristine": "%s"}' "$TMP/gitfx/live" "$TMP/gitfx/pristine" || echo null),
-  "meta": {"profile": "$PROFILE", "harness": "$(git -C "$ROOT" rev-parse --short HEAD)", "host": "$(uname -sm)", "probe": "$([ "${PERF_PROBE:-}" = 0 ] && echo "lite (markers only) on every side" || ([ "${PERF_PROBE_CAND:-}" = 0 ] && echo "full on base, lite (markers only) on cand" || echo full))"}
+  "meta": {"profile": "$PROFILE", "harness": "$(git -C "$ROOT" rev-parse --short HEAD)", "host": "$(uname -sm)", "probe": "$([ "${PERF_PROBE:-}" = 0 ] && echo "lite (markers only) on every side" || ([ "${PERF_PROBE_CAND:-}" = 0 ] && echo "full on base, lite (markers only) on cand" || echo full))"$([ "$CHAT" = 1 ] && printf ', "chat": "%s; reply %s chars, %s-char deltas at %s/s; paced = %s, %s chars; 10cs %s chars at %s/s%s%s"' "$([ "$CHAT_SRC" = synthetic ] && echo "synthetic conversation ($CHAT_TURNS turns)" || echo "a real claude-code transcript (CHAT_SRC, not named)")" "${PERF_CHAT_CHARS:-15000}" "${PERF_CHAT_DELTA:-25}" "${PERF_CHAT_RATE:-60}" "${PERF_CHAT_PACE:-fast}" "${PERF_CHAT_PACED_CHARS:-3000}" "${PERF_CHAT_SLOW_CHARS:-6000}" "${PERF_CHAT_SLOW_RATE:-15}" "$([ "${PERF_CHAT_SAMPLE:-}" = min ] && echo "; SAMPLING MINIMISED (calibration)")" "$([ -n "${PERF_CHAT_FAULT:-}" ] && echo "; FAULT INJECTED: ${PERF_CHAT_FAULT}")")}
 }
 EOF
 
@@ -360,7 +401,8 @@ PERF_PROFILE_FOR_APPEND=$([ -n "$REALISM" ] || echo "$PROFILE_JSON")
 (cd "$ROOT/ui" && TMPDIR="$TMP/tmp" PERF_PIDS_DIR="$PIDS" PERF_PLAN="$RUN_DIR/plan.json" PERF_GIT_CEILING="$TMP" \
 	PERF_PERFSEED="$TMP/perfseed" PERF_PROFILE_JSON="$PERF_PROFILE_FOR_APPEND" \
 	PERF_GIT_SHIM_DIR="$([ "$GITFX" = 1 ] && echo "$TMP/gitshim")" PERF_REAL_GIT="${REAL_GIT:-}" \
-	PERF_STACK_LOG_DIR="$([ -z "$REALISM" ] && echo "$RUN_DIR/stack-logs")" \
+	PERF_STACK_LOG_DIR="$([ -z "$REALISM" ] && [ "$CHAT_REAL" = 0 ] && echo "$RUN_DIR/stack-logs")" \
+	PERF_PW_OUTPUT="$([ -n "$REALISM" ] || [ "$CHAT_REAL" = 1 ] && echo "$TMP/pw-results")" \
 	npx playwright test --config e2e/perf/playwright.perf.config.ts)
 pw=$?
 if [ -n "$REALISM" ]; then

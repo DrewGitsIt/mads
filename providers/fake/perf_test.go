@@ -4,6 +4,10 @@ package fake_test
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,5 +66,82 @@ func TestPermissionDialectParksOnTheHook(t *testing.T) {
 		case <-deadline:
 			t.Fatal("no turn end after the decision")
 		}
+	}
+}
+
+func TestStreamDialectPacesDeltas(t *testing.T) {
+	f := fake.New()
+	s, err := f.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const chars, rate, delta = 1200, 100, 30
+	t0 := time.Now()
+	if err := s.Send(context.Background(), "perf-stream 1200 100 30"); err != nil {
+		t.Fatal(err)
+	}
+	var got strings.Builder
+	n := 0
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case ev := <-s.Events():
+			switch ev.Kind {
+			case provider.EventText:
+				n++
+				got.WriteString(ev.Text)
+			case provider.EventTurnEnd:
+				if want := fake.StreamText(chars); got.String() != want {
+					t.Fatalf("streamed %d chars, want the %d of StreamText", got.Len(), len(want))
+				}
+				if n != chars/delta {
+					t.Fatalf("%d deltas, want %d", n, chars/delta)
+				}
+				// 40 deltas at 100/s: about 400 ms, never all at once.
+				if d := time.Since(t0); d < 300*time.Millisecond || d > 3*time.Second {
+					t.Fatalf("took %s, want about 400 ms", d)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("no turn end")
+		}
+	}
+}
+
+func TestStreamTextIsStableMarkdown(t *testing.T) {
+	a, b := fake.StreamText(15000), fake.StreamText(15000)
+	if a != b || len(a) != 15000 {
+		t.Fatalf("StreamText not deterministic or wrong length (%d)", len(a))
+	}
+	for _, want := range []string{"## ", "```", "- ", "**", "`"} {
+		if !strings.Contains(a, want) {
+			t.Errorf("StreamText has no %q", want)
+		}
+	}
+	if fake.StreamText(100) != a[:100] {
+		t.Error("a shorter StreamText is not a prefix of a longer one")
+	}
+}
+
+func TestResumeFromPerfHistoryDir(t *testing.T) {
+	dir := t.TempDir()
+	hist := []provider.Message{{Role: "user", Text: "hi", Key: "user:u1"}, {Role: "agent", Text: "hello", Key: "a1"}}
+	raw, _ := json.Marshal(hist)
+	if err := os.WriteFile(filepath.Join(dir, "perf-chat-1.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := fake.New()
+	if _, err := f.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Resume: "perf-chat-1"}); err == nil {
+		t.Fatal("resumed an unknown ref with no MADS_FAKE_PERF_HISTORY_DIR")
+	}
+	t.Setenv("MADS_FAKE_PERF_HISTORY_DIR", dir)
+	s, err := f.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Resume: "perf-chat-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.KeyedTranscript(context.Background(), s.Ref())
+	if err != nil || len(got) != 2 || got[1].Text != "hello" {
+		t.Fatalf("history after resume = %+v, %v", got, err)
 	}
 }
