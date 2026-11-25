@@ -570,8 +570,9 @@ export type SubStreamItem =
    * line, or the first delta's arrival/persistence time). */
   | { type: "text"; text: string; timestamp?: string }
   /** Input the subagent was given — its prompt, or a message relayed through
-   * its parent. Only the subagent's own transcript has these: the live
-   * stream never carries them. */
+   * its parent. From its own transcript, or read back from the log's
+   * lifecycle lines (a run's "started" carries it); the live stream never
+   * carries them. */
   | { type: "message"; text: string; timestamp?: string }
   | ActivityEntry;
 
@@ -639,6 +640,15 @@ export function appendSubagentItem(
   return next;
 }
 
+/** Appends a whole item (a prompt or report) to one subagent's stream. */
+function pushSubagentItem(
+  streams: ReadonlyMap<string, SubStreamItem[]>,
+  parentToolUseId: string,
+  item: SubStreamItem,
+): Map<string, SubStreamItem[]> {
+  return new Map(streams).set(parentToolUseId, [...(streams.get(parentToolUseId) ?? []), item]);
+}
+
 // ---------------------------------------------------------------------------
 // History replay (T17): fold the control-plane event log into the same
 // state shapes the live stream feeds.
@@ -658,8 +668,12 @@ export const CONVERSATION_EVENT_TYPES = [
   "session.compact",
 ];
 
-/** The subagents' own streams, read back only for a dock with no file to read. */
-export const SUBAGENT_STREAM_EVENT_TYPES = ["session.subagent_event"];
+/**
+ * The subagents' own streams, read back only for a dock with no file to
+ * read — with their lifecycle lines, which hold what the stream doesn't:
+ * each run's input and its final report.
+ */
+export const SUBAGENT_STREAM_EVENT_TYPES = ["session.subagent_event", "session.subagent_task"];
 
 export interface ConversationHistory {
   statuses: Map<string, ToolStatus>;
@@ -685,7 +699,27 @@ export function foldHistoryEvents(envelopes: Envelope[]): ConversationHistory {
       }
       case "session.subagent_task": {
         const p = env.payload as SubagentTask | undefined;
-        if (p?.task_id) tasks = applyTaskEvent(tasks, p, false, env.timestamp);
+        if (!p?.task_id) break;
+        tasks = applyTaskEvent(tasks, p, false, env.timestamp);
+        // The stream has the calls but none of the subagent's words: each
+        // run's input (a "started" line's prompt — the spawn's, or a
+        // message relayed through the parent) and its report (a
+        // notification's summary) go in where they happened, so a revived
+        // subagent reads as its turns, not one report pinned to the end.
+        const anchor = tasks.get(p.task_id)?.toolUseId;
+        if (anchor && p.phase === "started" && p.prompt) {
+          subagentStreams = pushSubagentItem(subagentStreams, anchor, {
+            type: "message",
+            text: p.prompt,
+            timestamp: env.timestamp,
+          });
+        } else if (anchor && p.phase === "notification" && p.summary) {
+          subagentStreams = pushSubagentItem(subagentStreams, anchor, {
+            type: "text",
+            text: p.summary,
+            timestamp: env.timestamp,
+          });
+        }
         break;
       }
       case "session.subagent_event": {

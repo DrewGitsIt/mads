@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ToolDiff, ToolUse } from "../../router/types";
 import { ActivityDock, SubagentStream, type DockView } from "./ActivityDock";
+import type { SubStreamItem } from "./conversationItems";
 
 function toolView(tool: ToolUse): DockView {
   return { type: "tool", tool };
@@ -204,6 +205,14 @@ describe("SubagentStream — the subagent's words", () => {
       />,
     );
     expect(container.querySelectorAll("br")).toHaveLength(2);
+  });
+
+  it("holds back the last report while it runs again: that report is the run before", () => {
+    const items: SubStreamItem[] = [{ type: "text", text: "working on it" }];
+    const { container, rerender } = render(<SubagentStream items={items} summary="Run 1 done." running />);
+    expect(container.textContent).not.toContain("Run 1 done.");
+    rerender(<SubagentStream items={items} summary="Run 1 done." running={false} />);
+    expect(container.textContent).toContain("Run 1 done.");
   });
 });
 

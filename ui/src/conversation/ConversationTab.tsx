@@ -1601,6 +1601,7 @@ export function ConversationTab({
       subtype: dockTarget.subtype ?? dockModel?.subagentType,
       items: dockFileItems ?? (dockLive?.length ? dockLive : subagentReplay.get(dockTarget.parentToolUseId)) ?? [],
       task: dockModel,
+      summary: !dockFileItems && dockLive?.length ? dockModel?.summary : undefined,
     };
   }
 

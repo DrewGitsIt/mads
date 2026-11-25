@@ -143,6 +143,11 @@ func TestDelegateTranscriptReadsTheSidechain(t *testing.T) {
 		`{"type":"user","isSidechain":true,"agentId":"a1","uuid":"u4","parentUuid":"u3","timestamp":"2026-10-09T10:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_g","content":"transcript.go"}]}}`,
 		`{"type":"assistant","isSidechain":true,"agentId":"a1","uuid":"u5","parentUuid":"u4","timestamp":"2026-10-09T10:00:03Z","message":{"role":"assistant","content":[{"type":"text","text":"Here's the map."}]}}`,
 		`{"type":"user","isSidechain":true,"agentId":"a1","uuid":"u6","parentUuid":"u5","timestamp":"2026-10-09T10:05:00Z","message":{"role":"user","content":"Also check imports"}}`,
+		// A message the parent relayed (SendMessage) once the subagent had
+		// finished: the CLI's own line, wrapped — it opens the next run.
+		`{"type":"user","isSidechain":true,"agentId":"a1","uuid":"u7","parentUuid":"u6","isMeta":true,"origin":{"kind":"coordinator"},"timestamp":"2026-10-09T11:00:00Z","message":{"role":"user","content":"The coordinator sent a message while you were working:\nNow map the tests.\n\nAddress this before completing your current task."}}`,
+		// Other harness-injected lines stay out.
+		`{"type":"user","isSidechain":true,"agentId":"a1","uuid":"u8","parentUuid":"u7","isMeta":true,"timestamp":"2026-10-09T11:00:00Z","message":{"role":"user","content":"<system-reminder>injected</system-reminder>"}}`,
 	}
 	body := ""
 	for _, l := range lines {
@@ -165,7 +170,7 @@ func TestDelegateTranscriptReadsTheSidechain(t *testing.T) {
 		}
 		got = append(got, s)
 	}
-	want := []string{"user:Map the transcript code", "tool:toolu_g", "tool_result:transcript.gotoolu_g", "agent:Here's the map.", "user:Also check imports"}
+	want := []string{"user:Map the transcript code", "tool:toolu_g", "tool_result:transcript.gotoolu_g", "agent:Here's the map.", "user:Also check imports", "user:Now map the tests."}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("messages:\n got %q\nwant %q", got, want)
 	}
