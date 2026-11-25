@@ -4,6 +4,7 @@ import {
   conversationReducer,
   emptyConversation,
   allRows,
+  findTool,
   orderedRows,
   rowOf,
   subagentRows,
@@ -375,6 +376,41 @@ describe("conversationReducer", () => {
     s = run(s, f("turn_end"), page([{ role: "user", key: "user:1", text: "go" }]));
     expect(s.hot).toEqual({});
     expect(view(s)[0]).toBe("user:user:1=go");
+  });
+
+  it("reads a row from hot over its older copy in base", () => {
+    // A live text row, folded into base by a page that doesn't have it yet
+    // (settled after the page was read); a fresh reconnect marks it stale,
+    // which writes the newer copy to hot.
+    let s = run(emptyConversation(), hello(), f("replay_end"), f("user_message", { key: "user:1", text: "go" }), ...textItem("m1:0", "Hi"));
+    s = run(s, page([{ role: "user", key: "user:1", text: "go" }]));
+    expect(s.hot).toEqual({});
+    expect(rowOf(s, "m1:0")!.live).toBe(true);
+    s = run(s, hello("fresh"));
+    expect(s.base["m1:0"].stale).toBeFalsy();
+    expect(s.hot["m1:0"].stale).toBe(true);
+    expect(rowOf(s, "m1:0")!.stale).toBe(true);
+    // The replay resends the item: it replaces the stale text, not extends it.
+    s = run(s, f("item_start", { key: "m1:0", item: "text" }), f("text_delta", { key: "m1:0", text: "Hello" }), f("item_stop", { key: "m1:0" }));
+    s = run(s, f("replay_end"), f("turn_end"));
+    expect(view(s)).toEqual(["user:user:1=go", "agent:m1:0=Hello*"]);
+    expect(rowOf(s, "m1:0")!.open).toBe(false);
+  });
+
+  it("finds a tool row by call id across both layers, the latest copy", () => {
+    let s = run(
+      emptyConversation(),
+      hello(),
+      f("replay_end"),
+      f("user_message", { key: "user:1", text: "go" }),
+      f("tool_use", { key: "c", tool: { id: "c1", name: "ls" } }),
+    );
+    s = run(s, page([{ role: "user", key: "user:1", text: "go" }]));
+    expect(s.base.c).toBeDefined();
+    s = run(s, f("tool_result", { key: "c", text: "a.txt" }), f("tool_use", { key: "d", tool: { id: "d1", name: "cat" } }));
+    expect(findTool(s, "c1")?.tool?.result?.text).toBe("a.txt");
+    expect(findTool(s, "d1")?.key).toBe("d");
+    expect(findTool(s, "nope")).toBeUndefined();
   });
 });
 

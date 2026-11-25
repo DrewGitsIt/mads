@@ -130,6 +130,25 @@ export function allRows(s: ConvState): KeyedRow[] {
   return Object.values(flatRows(s));
 }
 
+/**
+ * The last row (in allRows order) whose tool call has `id`, without building
+ * the merged map: base's keys in order, each read through hot, then the keys
+ * only hot has.
+ */
+export function findTool(s: ConvState, id: string): KeyedRow | undefined {
+  let found: KeyedRow | undefined;
+  for (const k in s.base) {
+    const r = s.hot[k] ?? s.base[k];
+    if (r.role === "tool" && r.tool?.id === id) found = r;
+  }
+  for (const k in s.hot) {
+    if (Object.hasOwn(s.base, k)) continue;
+    const r = s.hot[k];
+    if (r.role === "tool" && r.tool?.id === id) found = r;
+  }
+  return found;
+}
+
 /** The rows as one new map, free to modify: `hot` laid over `base`. */
 function flatRows(s: ConvState): Record<string, KeyedRow> {
   return { ...s.base, ...s.hot };
