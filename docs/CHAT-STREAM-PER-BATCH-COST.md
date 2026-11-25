@@ -1,7 +1,9 @@
 # Chat stream: per-batch cost grows with conversation length
 
-Status: found 2026-11-24 by the mads-mobile spike; causes 1–5 confirmed against the code the same day. **Not fixed.** The same code is on
-`main` (be80db9f) and `mesh-net-ui` (f97fc5ca).
+Status: found 2026-11-24 by the mads-mobile spike; causes 1–5 confirmed against the code the
+same day. **Causes 1–5 fixed on `main` (fix A + fix B, see "What was done"); direction 5,
+rendering a window of turns, is not done.** The measurements below are the spike's, taken
+before the fix. Visual summary: [chat-stream-overview.html](chat-stream-overview.html).
 
 ## Summary
 
@@ -69,7 +71,7 @@ the same way: React 34%, browser 21%, `ChatRenderer` body 13%, GC 8%, reducer 5%
   copy (#3) still grows with total size.
 - **E3, stub out date formatting:** frame p50 went from 132 to 107 ms.
 
-## Fix directions (not chosen yet)
+## Fix directions
 
 1. **Memoize per message.**
    - Keep identities stable through the whole chain (#5): the `ConversationTab`
@@ -98,14 +100,40 @@ the same way: React 34%, browser 21%, `ChatRenderer` body 13%, GC 8%, reducer 5%
      renderer, and Android killed other apps at that point.
    - **Desktop:** optional once 1–4 land.
 
-I expect 1–4 to bring the desktop back to well under a frame per batch, and the phone
-to under one frame up to a few hundred turns. Measure after each step; E2 shows the
-ceiling.
+## What was done
+
+Measured with `make ui-perf SCENARIOS=chat` (`tools/perf/docs/PLAN.md`, "Chat
+stream"), Chromium, N=3, a 500-turn synthetic conversation (4,507 rows) calibrated
+against a real transcript.
+
+- **Fix A** (directions 2–4): `messageStamp` caches each timestamp's ISO string, title
+  and label (re-labelled at local midnight and on a time-zone change); the quiet-check
+  glide reads a border-box `ResizeObserver` height instead of `offsetHeight` every
+  commit; the reducer keeps rows written since the last bulk change in a small `hot`
+  layer over `base` (`rowOf`, `allRows`, `findTool`), so a delta copies a few keys.
+  Direction 3's live/stored split was not used: which rows count as live is murky, and
+  the two layers read the same rows by construction.
+- **Fix B** (direction 1, causes #1 and #5): bubbles, entries, items and per-call
+  permission lists keep their identity while their rows are unchanged; each item type
+  renders through a memoized component handed only what it uses (`ActivityGroup`
+  compares the shared status, background and permission maps only on its own calls);
+  `ConversationTab` passes stable callbacks. A delta re-renders only the live reply.
+
+| all 4,507 rows | main | A | A+B |
+|---|---|---|---|
+| ms per delta at 15/s (unsaturated) | 48.7 | 41.9 | 22.5 |
+| JS per delta | 31.0 | 24.1 | 7.2 |
+| frame p50 / p95 at 60/s | 48 / 52 ms | 34 / 51 ms | 16.7 / 18.3 ms |
+| sent → on screen p95 at 60/s | 79 ms | 68 ms | 34 ms |
+
+Direction 4 measured as neutral: layout per delta didn't fall, because the browser lays
+out every frame anyway. What remains is layout and paint of the whole stream, about
+12 ms per delta at 4,507 rows, which only direction 5 (or `content-visibility`) reduces.
 
 ## Verifying a fix
 
 - **Phone:** the spike's CDP tools re-run the same three sizes and give the same
   breakdown (`~/repo/mads-mobile/spike/profiles/tools/`).
-- **Desktop:** a `tools/perf` scenario (in progress) makes this a regression test:
-  load N turns, stream at 60 deltas/s, and report the per-batch main-thread time and
-  the commits per second.
+- **Desktop:** `make ui-perf BASE=main CAND=<worktree> PROFILE=S N=3 SCENARIOS=chat
+  CHECKS=none` (scenarios 10a/10b/10c, paced 10ap/10bp/10cp, and 10cs, the unsaturated
+  all-rows run). See `tools/perf/README.md`.

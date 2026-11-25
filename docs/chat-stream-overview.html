@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads chat stream: per-update cost no longer grows with the conversation</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface-1: #fcfcfb; --text-primary: #0b0b0b; --text-secondary: #52514e;
+    --text-muted: #898781; --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --s-main: #2a78d6; --s-a: #eb6834; --s-b: #1baf7a;
+    --k-js: #eda100; --k-layout: #e87ba4; --k-paint: #008300; --k-other: #4a3aa7;
+    --good-text: #006300; --warn-text: #8a5a00; --chip-old: #fbe9e4; --chip-new: #e3eefb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark; --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #ffffff; --text-secondary: #c3c2b7;
+      --text-muted: #898781; --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+      --s-main: #3987e5; --s-a: #d95926; --s-b: #199e70; --k-js: #c98500; --k-layout: #d55181; --k-paint: #008300; --k-other: #9085e9; --good-text: #0ca30c; --warn-text: #e3a73a;
+      --chip-old: #3a2420; --chip-new: #1b2a3d;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark; --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #ffffff; --text-secondary: #c3c2b7;
+    --text-muted: #898781; --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --s-main: #3987e5; --s-a: #d95926; --s-b: #199e70; --k-js: #c98500; --k-layout: #d55181; --k-paint: #008300; --k-other: #9085e9; --good-text: #0ca30c; --warn-text: #e3a73a;
+    --chip-old: #3a2420; --chip-new: #1b2a3d;
+  }
+  body { margin: 0; background: var(--page); }
+  .viz-root { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--text-primary);
+    background: var(--page); max-width: 1000px; margin: 0 auto; padding: 32px 24px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; } h2 { font-size: 18px; margin: 40px 0 8px; } h3 { font-size: 15px; margin: 0 0 8px; }
+  p, li { color: var(--text-secondary); max-width: 780px; }
+  .sub { color: var(--text-muted); margin: 0 0 24px; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+  .tile .v { font-size: 26px; font-weight: 600; } .tile .l { font-size: 13px; color: var(--text-secondary); }
+  .tile .d { font-size: 13px; color: var(--good-text); }
+  .compare { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  .flow { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+  .step { border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; background: var(--surface-1); }
+  .hot { background: var(--chip-old); } .key { background: var(--chip-new); }
+  .arrow { text-align: center; color: var(--text-muted); line-height: 1; }
+  .legend { display: flex; gap: 18px; font-size: 13px; color: var(--text-secondary); margin: 4px 0 8px; align-items: center; }
+  .legend svg { vertical-align: -2px; margin-right: 6px; }
+  svg text { font-family: inherit; }
+  .tip { position: fixed; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); display: none; z-index: 10; }
+  .tip .t { font-weight: 600; } .tip .r { color: var(--text-secondary); }
+  table { border-collapse: collapse; font-size: 13px; margin-top: 8px; width: 100%; }
+  th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+  th:first-child, td:first-child { text-align: left; } th { color: var(--text-primary); font-weight: 600; }
+  details { margin-top: 8px; color: var(--text-secondary); font-size: 13px; } summary { cursor: pointer; }
+  .note { font-size: 13px; color: var(--text-muted); }
+  .warn { color: var(--warn-text); font-weight: 600; }
+  @media (max-width: 800px) { .compare, .tiles { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="viz-root">
+
+<h1>Chat stream: per-update cost no longer grows with the conversation</h1>
+<p class="sub">Fix A and fix B, stacked · measured 2026-11-24 with the local perf harness (<code>make ui-perf SCENARIOS=chat</code>), Chromium, N=3 per build, a 500-turn conversation (4,507 rows) calibrated against a real transcript · findings: <code>docs/CHAT-STREAM-PER-BATCH-COST.md</code> · harness: <code>tools/perf/docs/PLAN.md</code> (“Chat stream”)</p>
+
+<div class="card">
+  <h3>The work in brief</h3>
+  <p>The mads-mobile spike found that every streamed text update made the chat view redo work for <b>every message</b> loaded, not just the growing reply. On the Mac, with a long conversation fully loaded, the main thread was saturated while a reply streamed and frames ran at about 20 fps; on the phone it was 7 fps.</p>
+  <p><b>Fix A (cheap, local):</b> each timestamp is formatted once per message instead of on every render; the quiet-check glide tracks the stream's height with a <code>ResizeObserver</code> instead of forcing layout on every commit; the reducer keeps recently written rows in a small layer, so a text update copies a few rows instead of all 4,500.
+  <b>Fix B (memoization):</b> everything the view derives from the rows (joined bubbles, entries, items, per-call permission lists) keeps its identity while its rows are unchanged; each item renders through a memoized component that is handed only what it uses; <code>ConversationTab</code> passes stable callbacks. A text update now re-renders only the live reply.</p>
+</div>
+
+<div class="tiles">
+  <div class="card tile"><div class="l">Cost per update, all rows loaded (15/s)</div><div class="v">22.5 ms</div><div class="d">main 48.7 · A 41.9</div></div>
+  <div class="card tile"><div class="l">JS per update, all rows loaded</div><div class="v">7.2 ms</div><div class="d">main 31.0 · A 24.1</div></div>
+  <div class="card tile"><div class="l">Frame p95 while streaming at 60/s, all rows</div><div class="v">18.3 ms</div><div class="d">main 51.7 · A 51 (≈20 fps → 60 fps)</div></div>
+  <div class="card tile"><div class="l">Update sent → on screen p95, all rows</div><div class="v">34 ms</div><div class="d">main 79 · A 68</div></div>
+</div>
+
+<h2>How a streamed update renders: main vs A vs A+B</h2>
+<div class="compare">
+  <div class="card"><h3>main</h3><div class="flow">
+    <div class="step hot">text delta → reducer copies the whole row map (4.5k keys)</div><div class="arrow">↓</div>
+    <div class="step hot">ChatRenderer rebuilds every bubble, entry and item as new objects</div><div class="arrow">↓</div>
+    <div class="step hot">React re-renders <b>every</b> message, tool group and Markdown component</div><div class="arrow">↓</div>
+    <div class="step hot">every timestamp re-parsed and re-formatted (~1,700 per render)</div><div class="arrow">↓</div>
+    <div class="step hot">a layout effect reads <code>offsetHeight</code>: forced layout every commit</div>
+  </div></div>
+  <div class="card"><h3>A: the cheap fixes</h3><div class="flow">
+    <div class="step key">delta writes a small “hot” layer: copies a few rows</div><div class="arrow">↓</div>
+    <div class="step">every item still rebuilt</div><div class="arrow">↓</div>
+    <div class="step">every message still re-renders</div><div class="arrow">↓</div>
+    <div class="step key">timestamps from a per-message cache</div><div class="arrow">↓</div>
+    <div class="step key">height from a <code>ResizeObserver</code> (saved no measurable layout: the browser lays out each frame anyway)</div>
+  </div></div>
+  <div class="card"><h3>A+B: per-message memoization</h3><div class="flow">
+    <div class="step key">delta writes the hot layer</div><div class="arrow">↓</div>
+    <div class="step key">unchanged rows keep their bubble, entry and item objects</div><div class="arrow">↓</div>
+    <div class="step key">memoized items: <b>only the live reply re-renders</b>; old groups compare only their own calls' status/permissions</div><div class="arrow">↓</div>
+    <div class="step key">stable callbacks from ConversationTab</div><div class="arrow">↓</div>
+    <div class="step">still left: the browser lays out and paints the whole 24k-node stream (~12 ms per update)</div>
+  </div></div>
+</div>
+
+<h2>Cost per update as the conversation grows</h2>
+<p>Main-thread ms per text update, from a CDP trace. 100 and 1,000 rows stream at 60 updates/s; “all 4,507 rows” streams at 15/s so the thread isn't saturated (at 60/s the cost is capped at 16.7 ms by the frame budget and the gain shows as frame rate instead — see the tiles).</p>
+<div class="legend" id="legend1"></div>
+<div class="card"><svg id="cost" role="img" aria-label="Main-thread ms per update for main, A and A+B at three conversation sizes"></svg>
+  <details><summary>Table</summary><table id="cost-t"></table></details></div>
+
+<h2>Where the time goes, all rows loaded</h2>
+<p>The same 15 updates/s run, split by what the main thread was doing. B removes most of the JS; layout and paint of the full stream are what remain.</p>
+<div class="legend" id="legend2"></div>
+<div class="card"><svg id="split" role="img" aria-label="Stacked ms per update by JS, layout, paint and other for main, A and A+B"></svg>
+  <details><summary>Table</summary><table id="split-t"></table></details></div>
+
+<h2>What review changed, and what's left</h2>
+<div class="card">
+  <ul>
+    <li><b>The harness itself was reviewed first</b> and fixed before any comparison: the text check now compares the <i>streamed</i> render (it used to read the screen after the stored copy replaced it), a run fails if the conversation didn't fully load, the full-size cost is measured below saturation (15/s), and update arrival is stamped at the proxy. Injected dropped, doubled and swapped updates are caught.</li>
+    <li><b>Fix A review:</b> no bugs (old vs new reducer run side by side over 120,000 random steps: identical). Follow-ups landed: a test for the layer order, a non-copying tool lookup for the dock, cache reset on a time-zone change, a border-box observer.</li>
+    <li><b>Fix B review:</b> one stale render found and fixed (Commit/Land card stamps didn't re-label at midnight); handler ref moved out of render; the comparator's rule documented.</li>
+    <li><b>Still left:</b> layout + paint ≈ 12 ms per update at 4,500 rows, unchanged by A or B; ChatRenderer's own pass over every row is cheap but still linear. The next lever is <code>content-visibility</code> or rendering a window of turns — needed on the phone regardless (650 MB at 500 turns).</li>
+  </ul>
+  <p class="note">Correctness on every repetition: the loaded size, the wire carried the whole stored reply, the streamed render was whole and in order (and still is after the merge), stick-to-bottom held. vitest 4,352 · <code>make ui-smoke</code> 104/104. main and A figures come from one paired run (20261124-193131); A+B from a paired run against A (20261124-200725), where A measured within 3% of its first run.</p>
+</div>
+
+<div class="tip" id="tip"></div>
+<script>
+const SC = [
+  // label, ms/update main, A, A+B ; JS main, A, A+B
+  ['First page (100 rows)',       3.23,  3.08,  2.50,  1.99,  1.82, 1.32],
+  ['10 pages (1,003 rows)',      10.31,  8.95,  5.20,  7.10,  5.78, 2.30],
+  ['All rows (4,507), 15/s',     48.73, 41.92, 22.48, 30.95, 24.08, 7.15],
+];
+const SERIES = [
+  { key: 'main', name: 'main',                 color: '--s-main', shape: 'circle' },
+  { key: 'a',    name: 'A: cheap fixes',       color: '--s-a',    shape: 'square' },
+  { key: 'b',    name: 'A+B: memoization',     color: '--s-b',    shape: 'diamond' },
+];
+// all rows, 15/s: JS, layout, paint, other (style + GC + uncategorised)
+const SPLIT = [
+  ['main',             30.95, 7.92, 3.76, 48.73 - 30.95 - 7.92 - 3.76],
+  ['A: cheap fixes',   24.08, 8.23, 3.90, 41.92 - 24.08 - 8.23 - 3.90],
+  ['A+B: memoization',  7.15, 8.03, 3.72, 22.48 - 7.15 - 8.03 - 3.72],
+];
+const KEYS = [['JS', '--k-js'], ['Layout', '--k-layout'], ['Paint', '--k-paint'], ['Other (style, GC, …)', '--k-other']];
+const css = n => getComputedStyle(document.querySelector('.viz-root')).getPropertyValue(n).trim();
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, parent, text) { const n = document.createElementNS(NS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (text != null) n.textContent = text; parent && parent.appendChild(n); return n; }
+function mark(shape, cx, cy, color, parent) {
+  const ring = css('--surface-1');
+  if (shape === 'circle') return el('circle', { cx, cy, r: 5.5, fill: color, stroke: ring, 'stroke-width': 2 }, parent);
+  if (shape === 'square') return el('rect', { x: cx - 5, y: cy - 5, width: 10, height: 10, rx: 2, fill: color, stroke: ring, 'stroke-width': 2 }, parent);
+  return el('path', { d: `M${cx},${cy - 7} L${cx + 7},${cy} L${cx},${cy + 7} L${cx - 7},${cy} Z`, fill: color, stroke: ring, 'stroke-width': 2 }, parent);
+}
+function legend(id) { const L = document.getElementById(id); L.innerHTML = '';
+  SERIES.forEach(s => { const span = document.createElement('span'); const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', 14); svg.setAttribute('height', 14); mark(s.shape, 7, 7, css(s.color), svg);
+    span.appendChild(svg); span.appendChild(document.createTextNode(s.name)); L.appendChild(span); }); }
+const fmtMs = v => v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 1 : 2).replace(/\.?0+$/, '') + ' s' : Math.round(v) + ' ms';
+const tip = document.getElementById('tip');
+function showTip(e, html) { tip.innerHTML = html; tip.style.display = 'block';
+  tip.style.left = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8) + 'px'; tip.style.top = (e.clientY + 14) + 'px'; }
+const hide = () => { tip.style.display = 'none'; };
+const LABEL_W = 220, W = 940, ROW = 36, TOP = 8, BOTTOM = 28;
+function table(id, head, rows) { document.getElementById(id).innerHTML = '<tr>' + head.map(h => '<th>' + h + '</th>').join('') + '</tr>' +
+  rows.map(r => '<tr>' + r.map(c => '<td>' + c + '</td>').join('') + '</tr>').join(''); }
+
+function dotPlot(id, idx, ticks, fmt, log) {
+  const svg = document.getElementById(id); svg.innerHTML = '';
+  const H = TOP + SC.length * ROW + BOTTOM; svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('width', '100%');
+  const lo = ticks[0], hi = ticks[ticks.length - 1];
+  const x = v => { const vv = Math.max(v, lo); return LABEL_W + (log ? (Math.log10(vv) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)) : (vv - lo) / (hi - lo)) * (W - LABEL_W - 30); };
+  ticks.forEach(t => { el('line', { x1: x(t), x2: x(t), y1: TOP, y2: H - BOTTOM, stroke: css('--grid') }, svg);
+    el('text', { x: x(t), y: H - 8, 'text-anchor': 'middle', 'font-size': 12, fill: css('--text-muted') }, svg, fmt(t)); });
+  SC.forEach((r, i) => { const y = TOP + i * ROW + ROW / 2;
+    el('text', { x: LABEL_W - 12, y: y + 4, 'text-anchor': 'end', 'font-size': 13, fill: css('--text-secondary') }, svg, r[0]);
+    const vals = idx.map(j => r[j]);
+    el('line', { x1: x(Math.min(...vals)), x2: x(Math.max(...vals)), y1: y, y2: y, stroke: css('--axis'), 'stroke-width': 2 }, svg);
+    SERIES.forEach((s, k) => mark(s.shape, x(vals[k]), y, css(s.color), svg));
+    const hit = el('rect', { x: 0, y: y - ROW / 2, width: W, height: ROW, fill: 'transparent' }, svg);
+    hit.addEventListener('mousemove', e => showTip(e, `<div class="t">${r[0]}</div>` + SERIES.map((s, k) => `<div class="r">${s.name}: ${fmt(vals[k])}</div>`).join('')));
+    hit.addEventListener('mouseleave', hide); });
+  table(id + '-t', ['Scenario', ...SERIES.map(s => s.name)], SC.map(r => [r[0], ...idx.map(j => fmt(r[j]))]));
+}
+
+// Segment label ink: dark text on light fills, white on dark ones.
+function ink(hex) { const n = parseInt(hex.slice(1), 16), ch = [n >> 16, (n >> 8) & 255, n & 255].map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+  return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2] > 0.25 ? '#0b0b0b' : '#ffffff'; }
+function stacked(id) {
+  const svg = document.getElementById(id); svg.innerHTML = '';
+  const H = TOP + SPLIT.length * ROW + BOTTOM; svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('width', '100%');
+  const hi = 50, x = v => LABEL_W + v / hi * (W - LABEL_W - 60);
+  [0, 10, 20, 30, 40, 50].forEach(t => { el('line', { x1: x(t), x2: x(t), y1: TOP, y2: H - BOTTOM, stroke: css('--grid') }, svg);
+    el('text', { x: x(t), y: H - 8, 'text-anchor': 'middle', 'font-size': 12, fill: css('--text-muted') }, svg, t + ' ms'); });
+  SPLIT.forEach((r, i) => { const y = TOP + i * ROW + 8, h = ROW - 16; let acc = 0;
+    el('text', { x: LABEL_W - 12, y: y + h / 2 + 4, 'text-anchor': 'end', 'font-size': 13, fill: css('--text-secondary') }, svg, r[0]);
+    KEYS.forEach(([name, c], k) => { const v = r[k + 1], x0 = x(acc), w = Math.max(0, x(acc + v) - x0 - 2);
+      const last = k === KEYS.length - 1;
+      el('rect', { x: x0, y, width: w, height: h, rx: last ? 4 : 0, fill: css(c) }, svg);
+      if (w > 34) el('text', { x: x0 + w / 2, y: y + h / 2 + 4, 'text-anchor': 'middle', 'font-size': 12, fill: ink(css(c)) }, svg, v.toFixed(1));
+      acc += v; });
+    el('text', { x: x(acc) + 8, y: y + h / 2 + 4, 'font-size': 13, fill: css('--text-primary') }, svg, acc.toFixed(1) + ' ms');
+    const hit = el('rect', { x: 0, y: y - 8, width: W, height: ROW, fill: 'transparent' }, svg);
+    hit.addEventListener('mousemove', e => showTip(e, `<div class="t">${r[0]}</div>` + KEYS.map(([n], k) => `<div class="r">${n}: ${r[k + 1].toFixed(2)} ms</div>`).join('') + `<div class="r">total: ${acc.toFixed(2)} ms</div>`));
+    hit.addEventListener('mouseleave', hide); });
+  table(id + '-t', ['Build', ...KEYS.map(k => k[0]), 'Total'], SPLIT.map(r => [r[0], ...r.slice(1).map(v => v.toFixed(2)), r.slice(1).reduce((a, b) => a + b).toFixed(2)]));
+}
+function keyLegend(id) { const L = document.getElementById(id); L.innerHTML = '';
+  KEYS.forEach(([n, c]) => { const span = document.createElement('span'); const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', 14); svg.setAttribute('height', 14); el('rect', { x: 1, y: 1, width: 12, height: 12, rx: 3, fill: css(c) }, svg);
+    span.appendChild(svg); span.appendChild(document.createTextNode(n)); L.appendChild(span); }); }
+function draw() { legend('legend1'); keyLegend('legend2');
+  dotPlot('cost', [1, 2, 3], [1, 2, 5, 10, 20, 50], v => (v < 10 ? v.toFixed(1) : Math.round(v)) + ' ms', true);
+  stacked('split'); }
+draw(); matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
+</script>
+</div>
+</body>
+</html>

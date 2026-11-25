@@ -35,3 +35,5 @@
 20261124-190734  tools/perf/docs/PLAN.md (chat, a real transcript, N=1: synthetic vs real)
 20261124-191015  tools/perf/docs/PLAN.md (chat stream 10x, main baseline, Chromium, synthetic)
 20261124-191920  tools/perf/docs/PLAN.md (chat probe overhead: PERF_CHAT_SAMPLE=min)
+20261124-193131  tools/perf/docs/PLAN.md, docs/chat-stream-overview.html (chat stream, main vs fix A)
+20261124-200725  tools/perf/docs/PLAN.md, docs/chat-stream-overview.html (chat stream, fix A vs A+B)

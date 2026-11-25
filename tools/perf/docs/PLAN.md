@@ -431,11 +431,11 @@ in 9a's spread.
 
 Added 2026-11-24 for [docs/CHAT-STREAM-PER-BATCH-COST.md](../../../docs/CHAT-STREAM-PER-BATCH-COST.md):
 every streamed batch re-renders every message in the chat view, so the cost
-per batch grows with the rows loaded. The fix comes in two steps (A:
+per batch grows with the rows loaded. The fix landed in two steps (A:
 timestamps cached per message, a ResizeObserver instead of the layout read
 per commit, the reducer's live-delta copy O(live rows); B: per-item
-memoization, which will likely change commits per delta); 10x measures
-main, then each. Costs are reported per delta (the work is a fixed number
+memoization, which changed commits per delta); 10x measured the pre-fix
+main, then each (results below). Costs are reported per delta (the work is a fixed number
 of deltas; how many commits it takes is the app's choice), per commit only
 as a secondary figure.
 
@@ -586,7 +586,7 @@ reveal's end), in page time.
   and with the end hidden is reported, not checked (it grows with frame
   time).
 
-### Baseline on main (2026-11-24, `tools/perf/results/20261124-191015`)
+### Baseline before the fix (main @ 7917a820, 2026-11-24, `tools/perf/results/20261124-191015`)
 
 `make ui-perf BASE=main PROFILE=S SCENARIOS=chat N=3 CHECKS=none`,
 Chromium (headless), synthetic conversation (500 turns, 4,505 rows).
@@ -627,6 +627,24 @@ Paced (window first delta → the reveal's end, 17.7 s; ms per second):
   10c, 9.6% of its frames; 2.7% at 10a).
 - Electron (`20261124-182953`, the previous harness, N=1: 10a 4.5
   ms/delta, 10c 16.7 ms/delta saturated) matched Chromium; not re-run.
+
+### Fix A and fix B (2026-11-24)
+
+Two paired runs, Chromium, N=3, all checks passing on both sides of each:
+main vs A (`20261124-193131`), then A vs A+B (`20261124-200725`; A within
+3% of its first run). Every page loaded:
+
+| | main | A | A+B |
+|---|---|---|---|
+| 10cs ms/delta (JS) | 48.7 (31.0) | 41.9 (24.1) | 22.5 (7.2) |
+| 10c commits/s, frame p50 / p95 | 48, 49 / 51 | 55, 34 / 51 | 157, 16.7 / 18.3 |
+| 10c sent → on screen p95 | 79 ms | 68 ms | 34 ms |
+| 10cp busy % | 100 | 100 | 48 |
+
+At 10 pages (10b) ms/delta went 10.3 → 9.0 → 5.2. Layout per delta did not
+fall with A (the ResizeObserver change measured neutral); layout + paint,
+about 12 ms per delta at every page, is what remains after B. Summary with
+charts: [docs/chat-stream-overview.html](../../../docs/chat-stream-overview.html).
 
 ### The text check's self-test
 
