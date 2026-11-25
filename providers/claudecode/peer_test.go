@@ -145,6 +145,57 @@ func TestSendAbsorbedIntoUnpromptedTurn(t *testing.T) {
 	}
 }
 
+// The same capture with the send moved earlier: into the gap between the
+// self-started turn's init line and its first assistant line, while the
+// model is still thinking. The CLI folds it in all the same, but no
+// assistant line has marked the turn as the CLI's yet, so before the fix the
+// send opened a turn and the turn's only result was suppressed:
+// ses_aec91da75bd9e1f9, 2026-11-24, sent 1.1s into a notification turn whose
+// first assistant line came 8.6s in.
+func TestSendBeforeUnpromptedTurnsFirstOutput(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "stream-task-absorbed-send.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &streamSession{events: make(chan provider.Event, 1024), announced: make(chan string, 1), stdin: discardWriteCloser{}}
+	inits, sent := 0, false
+	for _, ln := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(ln) == "" {
+			continue
+		}
+		l := parseWireLine(t, ln)
+		// mads's first turn: sent ahead of the CLI's init, as on the wire.
+		if l.Type == "system" && l.Subtype == "init" {
+			if inits++; inits == 1 {
+				if err := s.Send(context.Background(), "first"); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		// The absorbed send, once the self-started turn's init is in but
+		// before any of its assistant lines.
+		if inits == 2 && !sent && l.Type == "assistant" {
+			sent = true
+			if err := s.Send(context.Background(), "mid-think"); err != nil {
+				t.Fatal(err)
+			}
+			if s.turnOpen {
+				t.Fatalf("send inside the self-started turn opened a turn")
+			}
+		}
+		s.handleLine([]byte(ln))
+	}
+	if !sent {
+		t.Fatal("fixture has no self-started turn to send into")
+	}
+	if n := len(drainTurnEnds(s)); n != 2 {
+		t.Fatalf("turn ends = %d, want 2 (mads's turn, then the self-started one the send landed in)", n)
+	}
+	if s.turnOpen || s.unprompted || s.starting {
+		t.Errorf("after the last result: turnOpen=%v unprompted=%v starting=%v, want all false", s.turnOpen, s.unprompted, s.starting)
+	}
+}
+
 // A peer message that lands idle with no turn mads opened: the turn the CLI
 // runs for it ends exactly once, on its origin-"peer" result line.
 func TestPeerIdleArrivalEndsOnce(t *testing.T) {
