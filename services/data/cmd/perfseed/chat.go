@@ -102,7 +102,7 @@ func seedChat(ctx context.Context, dbPath string, man *Manifest, src string, tur
 	cm := &ChatManifest{Name: "perf chat", Ref: ref, ByRole: map[string]int{}}
 	if src == "synthetic" {
 		cm.Source = "synthetic"
-		if err := os.WriteFile(jsonl, syntheticChat(rng, turns, time.Now().UTC()), 0o644); err != nil {
+		if err := os.WriteFile(jsonl, syntheticChat(rng, turns, time.Now()), 0o644); err != nil {
 			return nil, err
 		}
 	} else {
@@ -188,10 +188,13 @@ short fresh stale first last next every some most few more less measure compare 
 send fetch parse format split join wrap fold open close keeps holds moves grows lands starts stops shows`)
 
 // syntheticChat is a claude-code main-chain transcript of turns turns
-// shaped like a long working session (about 7.3 rows a turn, as the
-// 2026-11-24 per-batch cost measurements' 500 turns / 3.6k rows): a
-// prompt, sometimes a short note, two or three tool calls with results, a
-// Markdown reply.
+// shaped like a long working session: a prompt; often a thinking block
+// before the agent's first words; sometimes a short note; one to five tool
+// calls (Bash, Read, Edit, Grep, Glob, Write, now and then a TodoWrite plan
+// or a Task delegation) with results — some long, some errors; a Markdown
+// reply, itself often after a thinking block. Its timestamps end shortly
+// before now (see chatTimes), so the newest turns read as today's and the
+// rest span the month before.
 func syntheticChat(rng *rand.Rand, turns int, now time.Time) []byte {
 	word := func() string { return chatWords[rng.IntN(len(chatWords))] }
 	words := func(n int) string {
@@ -211,6 +214,10 @@ func syntheticChat(rng *rand.Rand, turns int, now time.Time) []byte {
 	}
 	reply := func() string {
 		var b strings.Builder
+		if rng.IntN(3) == 0 {
+			h := words(3)
+			fmt.Fprintf(&b, "## %s\n\n", strings.ToUpper(h[:1])+h[1:])
+		}
 		b.WriteString(sentences(2 + rng.IntN(3)))
 		b.WriteString("\n\n")
 		if rng.IntN(2) == 0 {
@@ -226,50 +233,128 @@ func syntheticChat(rng *rand.Rand, turns int, now time.Time) []byte {
 			}
 			b.WriteString("```\n\n")
 		}
+		if rng.IntN(5) == 0 {
+			b.WriteString("| file | change |\n|---|---|\n")
+			for i := 0; i < 2+rng.IntN(4); i++ {
+				fmt.Fprintf(&b, "| `%s.ts` | %s |\n", word(), words(4))
+			}
+			b.WriteString("\n")
+		}
 		b.WriteString(sentences(1 + rng.IntN(3)))
 		return b.String()
 	}
-	var b strings.Builder
-	n := 0
-	at := now.Add(-30 * 24 * time.Hour)
-	line := func(typ string, message any) {
-		n++
-		parent := any(nil)
-		if n > 1 {
-			parent = fmt.Sprintf("perf-u%d", n-1)
+	type entry struct {
+		turn int
+		typ  string
+		msg  any
+	}
+	var lines []entry
+	msg := 0
+	// One assistant message: its blocks as claude writes them, a line each under one message id.
+	assistant := func(t int, blocks ...map[string]any) {
+		msg++
+		for _, bl := range blocks {
+			lines = append(lines, entry{t, "assistant", map[string]any{"id": fmt.Sprintf("msg_perf%06d", msg), "role": "assistant", "model": "claude-perf", "content": []any{bl}}})
 		}
-		at = at.Add(time.Duration(2+rng.IntN(30)) * time.Second)
+	}
+	thinking := func() map[string]any {
+		return map[string]any{"type": "thinking", "thinking": sentences(2 + rng.IntN(5)), "signature": "perf"}
+	}
+	withThinking := func(b map[string]any) []map[string]any {
+		if rng.IntN(2) == 0 {
+			return []map[string]any{thinking(), b}
+		}
+		return []map[string]any{b}
+	}
+	tools := []int{1, 2, 2, 2, 3, 3, 3, 3, 4, 5}
+	for t := 0; t < turns; t++ {
+		lines = append(lines, entry{t, "user", map[string]any{"role": "user", "content": sentences(1 + rng.IntN(4))}})
+		if rng.IntN(2) == 0 {
+			assistant(t, withThinking(map[string]any{"type": "text", "text": sentences(1 + rng.IntN(2))})...)
+		}
+		for k := tools[rng.IntN(len(tools))]; k > 0; k-- {
+			id := fmt.Sprintf("toolu_perf%06d_%d", t, k)
+			name, input, result, isErr := syntheticTool(rng, word, words, sentences)
+			assistant(t, map[string]any{"type": "tool_use", "id": id, "name": name, "input": input})
+			res := map[string]any{"type": "tool_result", "tool_use_id": id, "content": result}
+			if isErr {
+				res["is_error"] = true
+			}
+			lines = append(lines, entry{t, "user", map[string]any{"role": "user", "content": []any{res}}})
+		}
+		assistant(t, withThinking(map[string]any{"type": "text", "text": reply()})...)
+	}
+	at := chatTimes(rng, turns, func(i int) int { return lines[i].turn }, len(lines), now)
+	var b strings.Builder
+	for i, e := range lines {
+		parent := any(nil)
+		if i > 0 {
+			parent = fmt.Sprintf("perf-u%d", i)
+		}
 		l, _ := json.Marshal(map[string]any{
-			"type": typ, "isSidechain": false, "uuid": fmt.Sprintf("perf-u%d", n), "parentUuid": parent,
-			"timestamp": at.Format(time.RFC3339Nano), "message": message,
+			"type": e.typ, "isSidechain": false, "uuid": fmt.Sprintf("perf-u%d", i+1), "parentUuid": parent,
+			"timestamp": at[i].Format(time.RFC3339Nano), "message": e.msg,
 		})
 		b.Write(l)
 		b.WriteByte('\n')
 	}
-	msg := 0
-	assistant := func(block map[string]any) {
-		msg++
-		line("assistant", map[string]any{"id": fmt.Sprintf("msg_perf%06d", msg), "role": "assistant", "model": "claude-perf", "content": []any{block}})
-	}
-	tools := []int{1, 2, 2, 2, 3, 3, 3, 3, 4, 1}
-	for t := 0; t < turns; t++ {
-		at = at.Add(time.Duration(30+rng.IntN(120)) * time.Minute)
-		line("user", map[string]any{"role": "user", "content": sentences(1 + rng.IntN(4))})
-		if rng.IntN(2) == 0 {
-			assistant(map[string]any{"type": "text", "text": sentences(1 + rng.IntN(2))})
-		}
-		for k := tools[rng.IntN(len(tools))]; k > 0; k-- {
-			id := fmt.Sprintf("toolu_perf%06d_%d", t, k)
-			name, input, result := syntheticTool(rng, word, words, sentences)
-			assistant(map[string]any{"type": "tool_use", "id": id, "name": name, "input": input})
-			line("user", map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": result}}})
-		}
-		assistant(map[string]any{"type": "text", "text": reply()})
-	}
 	return []byte(b.String())
 }
 
-func syntheticTool(rng *rand.Rand, word func() string, words func(int) string, sentences func(int) string) (string, map[string]any, string) {
+// chatTodayTurns is how many of the newest turns fall today (local time).
+const chatTodayTurns = 12
+
+// chatTimes stamps the n lines of a synthetic conversation (turnOf: each
+// line's turn). The newest chatTodayTurns turns are spread over the 50
+// minutes before now−5 min (never before local midnight); every older turn
+// lies before midnight − 1 h, 30–150 minutes apart, so formatMessageTime's
+// "today" and "other day" forms are both drawn and which rows are today is
+// the same whenever in the day the run starts (after 00:05). Lines within
+// a turn are 2–31 s apart. The gaps come from rng, drawn in a fixed order.
+func chatTimes(rng *rand.Rand, turns int, turnOf func(int) int, n int, now time.Time) []time.Time {
+	end := now.Add(-5 * time.Minute)
+	y, m, d := now.In(time.Local).Date()
+	midnight := time.Date(y, m, d, 0, 0, 0, 0, time.Local)
+	// Offsets within each turn, and the gap before each turn.
+	within := make([]time.Duration, n)
+	span := make([]time.Duration, turns)
+	for i := 0; i < n; i++ {
+		t := turnOf(i)
+		if i > 0 && turnOf(i-1) == t {
+			within[i] = within[i-1] + time.Duration(2+rng.IntN(30))*time.Second
+		}
+		span[t] = within[i]
+	}
+	gap := make([]time.Duration, turns)
+	for t := range gap {
+		gap[t] = time.Duration(30+rng.IntN(120)) * time.Minute
+	}
+	start := make([]time.Time, turns)
+	today := min(chatTodayTurns, turns)
+	from := end.Add(-50 * time.Minute)
+	if from.Before(midnight) {
+		from = midnight.Add(time.Minute)
+	}
+	if from.After(end) {
+		from = end
+	}
+	for k := 0; k < today; k++ {
+		t := turns - today + k
+		start[t] = from.Add(time.Duration(int64(end.Sub(from)) * int64(k) / int64(max(1, today))))
+	}
+	next := midnight.Add(-time.Hour)
+	for t := turns - today - 1; t >= 0; t-- {
+		start[t] = next.Add(-span[t])
+		next = start[t].Add(-gap[t])
+	}
+	out := make([]time.Time, n)
+	for i := range out {
+		out[i] = start[turnOf(i)].Add(within[i]).UTC()
+	}
+	return out
+}
+
+func syntheticTool(rng *rand.Rand, word func() string, words func(int) string, sentences func(int) string) (string, map[string]any, string, bool) {
 	file := fmt.Sprintf("ui/src/%s/%s%s.ts", word(), word(), word())
 	lines := func(n int) string {
 		l := make([]string, n)
@@ -278,14 +363,50 @@ func syntheticTool(rng *rand.Rand, word func() string, words func(int) string, s
 		}
 		return strings.Join(l, "\n")
 	}
-	switch rng.IntN(4) {
-	case 0:
-		return "Bash", map[string]any{"command": "go test ./" + word() + "/...", "description": words(4)}, lines(3 + rng.IntN(30))
-	case 1:
-		return "Read", map[string]any{"file_path": "/repo/" + file}, lines(20 + rng.IntN(60))
-	case 2:
-		return "Edit", map[string]any{"file_path": "/repo/" + file, "old_string": words(8), "new_string": words(10)}, "The file /repo/" + file + " has been updated."
+	// Some calls fail, as real ones do: a test run, a stale edit, a missing file.
+	if rng.IntN(12) == 0 {
+		switch rng.IntN(3) {
+		case 0:
+			return "Bash", map[string]any{"command": "go test ./" + word() + "/...", "description": words(4)}, "Exit code 1\n--- FAIL: Test" + word() + "\n" + lines(4+rng.IntN(12)), true
+		case 1:
+			return "Edit", map[string]any{"file_path": "/repo/" + file, "old_string": words(8), "new_string": words(10)}, "<tool_use_error>String to replace not found in file.</tool_use_error>", true
+		default:
+			return "Read", map[string]any{"file_path": "/repo/" + file}, "<tool_use_error>File does not exist.</tool_use_error>", true
+		}
+	}
+	switch r := rng.IntN(20); {
+	case r < 6:
+		// Now and then a long output (a full test log).
+		n := 3 + rng.IntN(30)
+		if rng.IntN(6) == 0 {
+			n = 150 + rng.IntN(250)
+		}
+		return "Bash", map[string]any{"command": "go test ./" + word() + "/...", "description": words(4)}, lines(n), false
+	case r < 10:
+		return "Read", map[string]any{"file_path": "/repo/" + file}, lines(20 + rng.IntN(60)), false
+	case r < 13:
+		return "Edit", map[string]any{"file_path": "/repo/" + file, "old_string": words(8), "new_string": words(10)}, "The file /repo/" + file + " has been updated.", false
+	case r < 15:
+		return "Grep", map[string]any{"pattern": word(), "path": "/repo/ui/src"}, sentences(2), false
+	case r < 16:
+		return "Glob", map[string]any{"pattern": "ui/src/**/" + word() + "*.ts"}, lines(2 + rng.IntN(10)), false
+	case r < 17:
+		return "Write", map[string]any{"file_path": "/repo/" + file, "content": lines(10 + rng.IntN(30))}, "File created successfully at: /repo/" + file, false
+	case r < 19:
+		todos := make([]map[string]any, 3+rng.IntN(5))
+		cur := rng.IntN(len(todos))
+		for i := range todos {
+			st := "pending"
+			if i < cur {
+				st = "completed"
+			} else if i == cur {
+				st = "in_progress"
+			}
+			x := words(3 + rng.IntN(5))
+			todos[i] = map[string]any{"content": strings.ToUpper(x[:1]) + x[1:], "status": st, "activeForm": words(3)}
+		}
+		return "TodoWrite", map[string]any{"todos": todos}, "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress.", false
 	default:
-		return "Grep", map[string]any{"pattern": word(), "path": "/repo/ui/src"}, sentences(2)
+		return "Task", map[string]any{"description": words(3), "prompt": sentences(3 + rng.IntN(4)), "subagent_type": "general-purpose"}, sentences(3+rng.IntN(5)) + "\n\n- " + sentences(1) + "\n- " + sentences(1), false
 	}
 }
