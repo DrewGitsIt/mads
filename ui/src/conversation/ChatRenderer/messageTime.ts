@@ -19,8 +19,26 @@ let dayFormat: Intl.DateTimeFormat | undefined;
 // doesn't build a Date per stamp to learn what day it is.
 let today: { key: string; from: number; until: number } | undefined;
 
+// Every cached string is local time: a time-zone change (travel, a system
+// setting) drops them all. Checked at most once a second.
+let zone: { name: string; checkedAt: number } | undefined;
+const ZONE_CHECK_MS = 1000;
+
+function checkZone(ms: number): void {
+  if (zone && ms - zone.checkedAt < ZONE_CHECK_MS && ms >= zone.checkedAt) return;
+  const name = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (zone && zone.name !== name) {
+    stamps.clear();
+    today = undefined;
+    timeFormat = undefined;
+    dayFormat = undefined;
+  }
+  zone = { name, checkedAt: ms };
+}
+
 function todayKey(): string {
   const ms = Date.now();
+  checkZone(ms);
   if (!today || ms >= today.until || ms < today.from) {
     const now = new Date(ms);
     const y = now.getFullYear();
@@ -33,9 +51,14 @@ function todayKey(): string {
 
 /** "22:59" today, "Sep 28 16:54" otherwise — short enough for a hover stamp. */
 export function formatMessageTime(date: Date, now?: Date): string {
+  let day: string;
+  if (now) {
+    checkZone(Date.now());
+    day = now.toDateString();
+  } else day = todayKey();
   timeFormat ??= new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
   const time = timeFormat.format(date);
-  if (date.toDateString() === (now ? now.toDateString() : todayKey())) return time;
+  if (date.toDateString() === day) return time;
   dayFormat ??= new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
   return `${dayFormat.format(date)} ${time}`;
 }
@@ -68,6 +91,7 @@ const stamps = new Map<string, StampEntry | null>();
  */
 export function messageStamp(timestamp?: string): MessageStamp | undefined {
   if (!timestamp) return undefined;
+  const key = todayKey(); // first: a zone change clears the cache
   let entry = stamps.get(timestamp);
   if (entry === undefined) {
     const date = parseMessageTime(timestamp);
@@ -86,7 +110,6 @@ export function messageStamp(timestamp?: string): MessageStamp | undefined {
     stamps.set(timestamp, entry);
   }
   if (!entry) return undefined;
-  const key = todayKey();
   if (entry.labelFor !== key) {
     timeFormat ??= new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
     if (!entry.time) entry.time = timeFormat.format(entry.date);

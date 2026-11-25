@@ -38,4 +38,27 @@ describe("messageStamp", () => {
     expect(messageStamp(ts)!.label).toMatch(/Sep 29/);
     expect(formatMessageTime(at)).toBe(messageStamp(ts)!.label);
   });
+
+  it("re-formats after the time zone changes", () => {
+    const tz = process.env.TZ;
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-29T12:00:00Z"));
+      process.env.TZ = "UTC";
+      const ts = "2026-09-29T21:52:23Z";
+      const utc = messageStamp(ts)!;
+      expect(utc.label).toBe(formatMessageTime(new Date(ts)));
+      process.env.TZ = "Asia/Tokyo";
+      vi.advanceTimersByTime(2000);
+      const tokyo = messageStamp(ts)!;
+      expect(tokyo).not.toBe(utc);
+      expect(tokyo.title).toBe(new Date(ts).toLocaleString());
+      expect(tokyo.label).toBe(formatMessageTime(new Date(ts)));
+      expect(tokyo.label).toMatch(/Sep 30/); // 06:52 the next day in Tokyo
+    } finally {
+      if (tz === undefined) delete process.env.TZ;
+      else process.env.TZ = tz;
+    }
+  });
 });
+
