@@ -482,5 +482,8 @@ describe("reusing the last render's items", () => {
     const next = reuseAnchored(prev, new Map([["t1", [a]], ["t2", [b, a]]]));
     expect(next.get("t1")).toBe(prev.get("t1"));
     expect(next.get("t2")).toEqual([b, a]);
+    // Every list the same: the map itself is the last one.
+    expect(reuseAnchored(prev, new Map([["t1", [a]], ["t2", [b]]]))).toBe(prev);
+    expect(reuseAnchored(prev, new Map([["t1", [a]]]))).not.toBe(prev);
   });
 });

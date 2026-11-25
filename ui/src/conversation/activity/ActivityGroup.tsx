@@ -160,27 +160,37 @@ export const ActivityGroup = memo(ActivityGroupView, sameGroupProps);
  */
 export function sameGroupProps(a: ActivityGroupProps, b: ActivityGroupProps): boolean {
   if (a.entries !== b.entries) return false;
-  const ids: string[] = [];
-  for (const e of b.entries) if (e.type === "tool" && e.tool.id) ids.push(e.tool.id);
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)] as (keyof ActivityGroupProps)[]);
+  const keys = Object.keys(b) as (keyof ActivityGroupProps)[];
+  if (Object.keys(a).length !== keys.length) return false;
   for (const k of keys) {
+    if (!(k in a)) return false;
+    if (Object.is(a[k], b[k])) continue;
     switch (k) {
       case "statuses":
       case "background":
-      case "permissions":
-        if (a[k] !== b[k] && ids.some((id) => a[k]?.get(id) !== b[k]?.get(id))) return false;
+      case "permissions": {
+        const x = a[k];
+        const y = b[k];
+        if (b.entries.some((e) => e.type === "tool" && e.tool.id !== undefined && x?.get(e.tool.id) !== y?.get(e.tool.id))) {
+          return false;
+        }
         break;
+      }
       case "selectedToolId":
-        if (a[k] !== b[k] && (ids.includes(a[k] ?? "") || ids.includes(b[k] ?? ""))) return false;
+        if (hasCall(b.entries, a[k]) || hasCall(b.entries, b[k])) return false;
         break;
       case "reveal":
-        if (a[k] !== b[k] && (holds(a, a[k]) || holds(b, b[k]))) return false;
+        if (holds(a, a[k]) || holds(b, b[k])) return false;
         break;
       default:
-        if (!Object.is(a[k], b[k])) return false;
+        return false;
     }
   }
   return true;
+}
+
+function hasCall(entries: ActivityEntry[], id: string | undefined): boolean {
+  return id !== undefined && entries.some((e) => e.type === "tool" && e.tool.id === id);
 }
 
 /** Whether a reveal names one of the group's permission cards. */

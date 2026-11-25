@@ -293,17 +293,20 @@ export function sameList<T>(a: readonly T[], b: readonly T[]): boolean {
 /**
  * anchorPermissions' lists, reused per anchor while they hold the same
  * requests — so a card arriving for one call leaves every other call's list,
- * and the item rendering it, as it was.
+ * and the item rendering it, as it was; and the whole map while every list is.
  */
 export function reuseAnchored(
   prev: ReadonlyMap<string, PermissionRequest[]>,
   anchored: Map<string, PermissionRequest[]>,
-): Map<string, PermissionRequest[]> {
+): ReadonlyMap<string, PermissionRequest[]> {
+  let all = anchored.size === prev.size;
   for (const [id, list] of anchored) {
     const old = prev.get(id);
     if (old && sameList(old, list)) anchored.set(id, old);
+    else all = false;
   }
-  return anchored;
+  // Nothing changed (the usual case: no cards at all): the map itself is last render's.
+  return all ? prev : anchored;
 }
 
 /**
