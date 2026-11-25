@@ -56,7 +56,7 @@ make perf-tools-test                                    # Go: perfseed + git shi
 | seeder | [services/data/cmd/perfseed](../../services/data/cmd/perfseed) | Go, `-tags perf`: `seed`, `calibrate`, `realism`, `gitfx`, `append`, `chat`. Stays there: it imports `services/data/internal/store` |
 | specs | [ui/e2e/perf/](../../ui/e2e/perf) | Playwright/TypeScript: probe, delay proxy, collectors, scenarios, checks, report. Stays there: it needs ui's node_modules and `ui/e2e/lib/topology.ts` |
 | fake provider dialects | [providers/fake/perf.go](../../providers/fake/perf.go) | `permission`, `perf-stream`, `MADS_FAKE_START_DELAY_MS`, `MADS_FAKE_PERF_HISTORY_DIR` (`-tags perf`); overlaid on every build the runner makes |
-| chat scenarios | [ui/e2e/perf/chat.ts](../../ui/e2e/perf/chat.ts) | 10x: the in-page recorder, the trace split, the checks (PLAN.md, "Chat stream") |
+| chat scenarios | [ui/e2e/perf/chat.ts](../../ui/e2e/perf/chat.ts) | 10x: the in-page recorder, the trace split, the checks and their fault-injection self-test (`PERF_CHAT_FAULT`; PLAN.md, "Chat stream") |
 | make targets | [Makefile](../../Makefile) | `ui-perf`, `perf-tools-test` |
 
 ## Safety rules
@@ -69,7 +69,9 @@ make perf-tools-test                                    # Go: perfseed + git shi
   in the run's temp dir, deleted at the end, and reports name nothing. A
   real `CHAT_SRC` transcript is copied into the run's temp dir and only
   read; what is made from it is deleted with the run, and reports say
-  "real" and its shape, never its name or content.
+  "real" and its shape, never its name or content. Such a run, like
+  realism, keeps no screenshots, ARIA snapshots, stack logs or Playwright
+  failure context under `results/`, and cuts errors to a redacted line.
 - The git fixture only clones FROM `GITFX_SRC`; all its git runs inside the
   run's temp tree with global config and hooks off.
 - `node_modules` is installed (`npm ci`) or copy-on-write cloned, never

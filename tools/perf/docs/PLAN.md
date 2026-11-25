@@ -191,11 +191,11 @@ f–i are the git checks (below). `CHECKS=a,b|none` picks them.
     real-git fixture (empty under `REALISM=1` means `bus`: the two don't mix);
   - `bus`: 1–8, 3b, 3t, 7b — the event-bus regression set; no fixture build;
   - `git`: 9a–9h (delays off by default);
-  - `chat`: 10a–10c, 10ap–10cp (delays off only);
+  - `chat`: 10a–10c, 10ap–10cp, 10cs (delays off only);
   - aliases mix with ids (`bus,9a`); `none` runs checks only.
 - `MODES=on,off` (default both; 9x and 10x only: off), `CHECKS` (default a–e; none
   in realism), `REALISM=1`, `GITFX`, `PERF_PROBE=0` / `PERF_PROBE_CAND=0`
-  (lite probe: markers only).
+  (lite probe: markers only; `PERF_PROBE_CAND=0` is refused with 10x), `PERF_CHAT_*` (10x; run.sh).
 - Builds each side's binaries and UI into separate temp dirs (a ref via a
   temp detached `git worktree add`, removed after). This tree's
   `providers/fake` is overlaid on every build (the harness's dialects).
@@ -432,8 +432,12 @@ in 9a's spread.
 Added 2026-11-24 for [docs/CHAT-STREAM-PER-BATCH-COST.md](../../../docs/CHAT-STREAM-PER-BATCH-COST.md):
 every streamed batch re-renders every message in the chat view, so the cost
 per batch grows with the rows loaded. The fix comes in two steps (A:
-timestamps, the forced layout, the reducer's copy; B: per-item
-memoization); 10x measures main, then each.
+timestamps cached per message, a ResizeObserver instead of the layout read
+per commit, the reducer's live-delta copy O(live rows); B: per-item
+memoization, which will likely change commits per delta); 10x measures
+main, then each. Costs are reported per delta (the work is a fixed number
+of deltas; how many commits it takes is the app's choice), per commit only
+as a secondary figure.
 
 ### Conversation (`perfseed chat`)
 
@@ -446,101 +450,230 @@ dormant; the session child's fake resumes it from
 claude-code's and the fake can stream a live reply into the same
 conversation. (A claude-code session can't stream hermetically: there is no
 claude CLI.) `CHAT_SRC`:
-- `synthetic` (default): a claude-code jsonl generated in the measured
-  shape, `CHAT_TURNS=500` turns → 3,539 rows (500 user, 763 agent, 1,138
-  tool calls and results), 1.2 MB of text; per turn a prompt, sometimes a
-  note, 1–4 tool calls (Bash, Read, Edit, Grep) with results, a Markdown
-  reply; timestamps over 30 days.
+- `synthetic` (default): a claude-code jsonl, `CHAT_TURNS=500` turns →
+  4,505 rows, 2.3 MB of text. Per turn: a prompt; half the time a thinking
+  block before the agent's first words; sometimes a short note; 1–5 tool
+  calls with results (Bash — one in six a 150–400-line log —, Read, Edit,
+  Grep, Glob, Write, now and then a TodoWrite plan or a Task delegation;
+  one call in twelve fails, `is_error`); a Markdown reply (headings,
+  bullets, code, tables), half the time after a thinking block.
+  Timestamps: the newest 12 turns over the 50 minutes before now − 5 min
+  (today, local), every older one before local midnight − 1 h, 30–150
+  minutes apart, back about a month — so formatMessageTime's today and
+  other-day forms are both drawn, and which rows are today's is the same
+  whenever in the day the run starts (after 00:05).
 - a real transcript (`.jsonl`): copied into the run's temp dir (the
   original only read), deleted with it; the manifest and report carry its
-  shape only (source "real", turns, rows by role, text bytes).
+  shape only (source "real", turns, rows by role, text bytes). Real data:
+  the run keeps no screenshots, ARIA snapshots, stack logs or Playwright
+  failure context in results/ (those go to the temp tree or nowhere), and
+  errors are cut to their first line with quoted text and markup removed.
 
 ### Scenarios
 
-Three sizes, each unpaced and paced (`stream_speed` = `PERF_CHAT_PACE`,
-default fast, 1500 words a minute: useReveal commits every frame):
+| # | Loaded before the stream | Reply |
+|---|---|---|
+| 10a / 10ap | the mount's last page (100 rows) | unpaced 15,000 chars; paced 3,000 |
+| 10b / 10bp | 9 more pages by scroll-up paging (scrollTop 0 → useOlderPages), `PERF_CHAT_MID_PAGES=10` | as 10a |
+| 10c / 10cp | every page, by Ctrl+↑↑ (loadAllOlder, merged as one) | as 10a |
+| 10cs | every page, as 10c | 6,000 chars at `PERF_CHAT_SLOW_RATE=15` deltas/s: the fixed-work measure |
 
-| # | Loaded before the stream |
-|---|---|
-| 10a / 10ap | the mount's last page (100 rows) |
-| 10b / 10bp | 9 more pages by scroll-up paging (scrollTop 0 → useOlderPages), `PERF_CHAT_MID_PAGES=10` |
-| 10c / 10cp | every page, by Ctrl+↑↑ (loadAllOlder, merged as one) |
+Unpaced: `stream_speed` off, `PERF_CHAT_CHARS=15000` characters of
+generated Markdown (headings, paragraphs with inline code and bold,
+bullets, fenced code) as `PERF_CHAT_DELTA=25`-character deltas at
+`PERF_CHAT_RATE=60` a second (600 deltas, 10 s). Paced: `stream_speed` =
+`PERF_CHAT_PACE` (default fast, 1500 words a minute: useReveal commits
+every frame), `PERF_CHAT_PACED_CHARS=3000` at the same rate, so the stream
+ends in 2 s and the reveal in ~18 s; the window runs to the reveal's end.
 
-Prepare (not measured): set the pace, wake the child with a warm-up turn
-(through the Router), open the session from the rail, load the size, go
-back to the tail with Ctrl+↓↓ (following), then a full GC
-(`HeapProfiler.collectGarbage`) and the heap and DOM counts. The leg: type
-`perf-stream <chars> <rate> <delta>` in the composer and press Enter; the
-fake streams `PERF_CHAT_CHARS=15000` characters of generated Markdown
-(headings, paragraphs with inline code and bold, bullets, fenced code) as
-`PERF_CHAT_DELTA=25`-character deltas at `PERF_CHAT_RATE=60` a second (600
-deltas, 10 s). Its marker: turn end received and, unpaced, the whole reply
-on screen. The proxy passes `/output` through for 10x (nothing held).
+**Why 10cs.** At every page loaded 10c and 10cp saturate the main thread
+(busy 99.9%): busy and ms/delta are then ceilings, and a fix shows up as
+more commits or shorter frames, not lower cost. 10cs is the same
+conversation fed 15 deltas a second, which main keeps up with (about 75%
+busy), so its busy ms and ms/delta are the real cost of a fixed amount of
+work (240 deltas) and drop when a fix makes it cheaper. A burst (N deltas
+at once, timed to fully rendered) was the alternative; it lets the app
+batch arbitrarily, so it measures batching as much as cost, and its
+arrival pattern is unlike a model's.
+
+Prepare (not measured): set `stream_speed` (off or the pace), wake the
+child with a warm-up turn (through the Router), open the session from the
+rail, load the size (10b: scroll to the top until 9 older pages have been
+fetched, counted at the proxy), go back to the tail with Ctrl+↓↓
+(following), then a full GC (`HeapProfiler.collectGarbage`) and the heap
+and DOM counts. The leg: type `perf-stream <chars> <rate> <delta>` and
+press Enter. Its marker: the recorder's end snapshot is taken (below). The
+proxy passes `/output` through for 10x (nothing held) and stamps each
+`text_delta` frame as it goes out.
 
 ### Metrics
 
-Window: the first text delta the page receives → turn end, in page time.
+Window: the first text delta the page receives → turn end (paced: → the
+reveal's end), in page time.
 - **In-page recorder** (`chat.ts` CHAT_PROBE, an init script; records only
   once armed): every `text_delta` / `turn_end` the app's `/output`
-  EventSource gets (a listener of its own per kind); every React commit,
-  via the DevTools global hook (`__REACT_DEVTOOLS_GLOBAL_HOOK__`, which
-  React calls in production builds; every root's commits count); every
-  frame (rAF); and in the task after each frame (layout clean, nothing
-  forced) the scroller's distance from its bottom, its `data-stick` mode,
-  and the letters and digits of the reply as rendered (its text minus the
-  hover `<time>` and code blocks' Copy buttons).
+  EventSource gets (a listener of its own per kind, ahead of the app's);
+  every React commit, via the DevTools global hook
+  (`__REACT_DEVTOOLS_GLOBAL_HOOK__`, called in production builds; every
+  root's commits count); every frame (rAF); its own long-task observer (so
+  `PERF_PROBE=0` measures both sides alike; `PERF_PROBE_CAND=0` is refused
+  for 10x); and in the task after each frame a sample: the scroller's
+  distance from its bottom and `data-stick` mode, whether the reply's end
+  is in view, and the reply's rendered letters and digits (counted only).
+  The reply's bubble is found by `[data-find="<key>"]` and kept while
+  connected (a scan of every row only if that misses, counted). Its text
+  skips `button`, `time` and `[data-find-skip]` subtrees.
 - From those: deltas/s, commits/s and per delta, frame interval p50/p95,
-  frames over 50 ms, long tasks (the probe's longtask observer), delta →
-  on screen p50/p95 (the first sample after a delta that renders its
-  running count; paced, the reveal's lag by design), frames off the bottom.
+  frames over 50 ms, long tasks, frames off the bottom and with the
+  reply's end out of view (share, longest stretch). Unpaced, delta → on
+  screen p50/p95 (the first sample rendering a delta's running count):
+  from the proxy's send stamp (headline: includes the page's backlog of
+  queued messages) and from the page's own handling of the message. Paced:
+  turn end → the reveal's end instead (on-screen latency is the reveal's
+  pace by design).
 - **CDP trace** (`PERF_CHAT_TRACE=0` turns it off), started before the
   leg and read after the window, sliced between the recorder's own
-  `performance.mark`s (`perf-chat-first-delta`, `perf-chat-turn-end`) on
-  their thread: busy = top-level task time / window; ms per commit and per
-  delta; self time by bucket (JS, style, layout, paint/composite, GC,
-  other) per commit, with the spike's buckets.
-- After loading: rows loaded (pages × 100, capped), items rendered, DOM
-  nodes (page, stream), JS heap used after a full GC (MB).
+  `performance.mark`s (`perf-chat-first-delta` and `perf-chat-turn-end`,
+  paced `perf-chat-reveal-end`) on their thread: busy (top-level task time
+  / window, and ms); self time by bucket (JS, style, layout,
+  paint/composite, GC, other) per delta (primary), per second (paced) and
+  per commit (secondary), with the spike's buckets.
+- **Saturation**: a cell over 90% busy is flagged ⚠ in the summary; its
+  busy and per-delta costs are ceilings, so its headline is frame
+  p50/p95, commits/s and sent → on screen p95 (bold), and 10cs gives the
+  cost.
+- After loading: older pages fetched, rows loaded, items and user messages
+  rendered, `<time>` elements, DOM nodes (page, stream, stream per row),
+  JS heap used after a full GC (MB).
+- **Probe overhead**: the recorder times its own sample() and delta
+  listener (in-page clock, ms per second of window) and marks each sample
+  with `performance.measure("perf-chat-sample")`; the trace gives its
+  share of busy and the style/layout forced inside it. The harness reads
+  the leg's marker every 250 ms (`markerPollMs`; its time is the page's
+  own) so its `page.evaluate` calls stay off the window's main thread.
+  `PERF_CHAT_SAMPLE=min` (sample every 30th frame, no mid-stream text
+  checks) is the calibration.
 
 ### Checks (every repetition; a failure fails it)
 
-- the wire carried the whole reply: what the page's EventSource received
-  equals the reply the agent stored (`GET /transcript`), 15,000 characters;
-- all of it is on screen, in order: the rendered letters and digits equal
-  the wire's (Markdown syntax is all punctuation; the generator writes no
-  ordered lists, links or HTML); paced, after Show all;
-- stick-to-bottom held: `data-stick` stayed `follow` all window, and within
-  5 s after the scroller is within 10 px of its bottom with the reply's end
-  in view (a runway page turn glides; after Show all the last pin takes
-  ~1.4 s).
+- **the loaded size is the scenario's**: older pages fetched equal what the
+  transcript, paged as the app pages it (through the Router: the last 100
+  rows, then `before=<oldest key>` while `has_more`), gives for the size —
+  0, 9, or all — and the user messages rendered (`[data-user-msg]`) equal
+  the user rows among the loaded ones;
+- **the wire carried the whole reply**: what the page's EventSource
+  received equals the reply the agent stored (`GET /transcript`);
+- **the streamed reply rendered whole and in order**: every 10th sample the
+  rendered letters and digits are a prefix of what the wire has brought so
+  far; and the end snapshot — taken once the whole reply is on screen
+  (paced: revealed), or 15 s after turn end (paced: longer) — equals all
+  of it. The snapshot is of the streamed render: the post-turn_end
+  `GET …/transcript` (refreshLast, which merges the stored text over the
+  live row) is held in the page until it is taken (outside the unpaced
+  window; at the paced window's end). A message stamp's letters and
+  digits read along with the reply at either end are allowed (a fix that
+  changes the stamp's markup doesn't fail it); anything else is not.
+  Self-test: `PERF_CHAT_FAULT=drop|dup|swap` (delta `PERF_CHAT_FAULT_AT`,
+  default 50) alters the recorder's reference copy, never the wire check's,
+  so a correct render must fail — it does (below), and `chat.test.ts`
+  proves the comparison on dropped, doubled and swapped deltas;
+- **after the merge the reply still reads the same** (stored render = wire);
+- **stick-to-bottom held**: `data-stick` stayed `follow` all window; the
+  reply's end was never out of view for longer than useStickToBottom's
+  `MOVE_MS` (1 s: a runway page turn's glide that hasn't landed by then
+  has failed); within 5 s after, the scroller is within 10 px of its
+  bottom with the reply's end in view. The share of frames off the bottom
+  and with the end hidden is reported, not checked (it grows with frame
+  time).
 
-### Baseline on main (2026-11-24, `tools/perf/results/20261124-182257`)
+### Baseline on main (2026-11-24, `tools/perf/results/20261124-191015`)
 
 `make ui-perf BASE=main PROFILE=S SCENARIOS=chat N=3 CHECKS=none`,
-Chromium (headless), synthetic conversation. Medians of 3; every check
-passed in all 18 repetitions; no Ctrl+↓↓ retries.
+Chromium (headless), synthetic conversation (500 turns, 4,505 rows).
+Medians of 3; every check passed in all 21 repetitions; no Ctrl+↓↓
+retries. ⚠ = saturated (busy over 90%): busy and ms/delta are ceilings;
+read frames, commits/s and sent → on screen there.
 
-| | rows / DOM nodes | heap MB | commits/s | busy % | ms/commit | ms/delta | JS / style / layout / paint / GC per commit | frame p50 / p95 | delta → on screen p95 |
-|---|---|---|---|---|---|---|---|---|---|
-| 10a first page | 100 / 1.1k | 8.3 | 182 | 22 | 1.2 | 3.7 | 0.8 / 0 / 0.1 / 0.1 / 0 | 16.7 / 17.7 | 10 ms |
-| 10b 10 pages | 1,000 / 5.8k | 14.2 | 182 | 73 | 4.0 | 12.2 | 2.8 / 0 / 0.5 / 0.4 / 0.1 | 16.7 / 17.4 | 14 ms |
-| 10c every page | 3,541 / 19.1k | 19.8 | 55 | 99.9 | 18.3 | 16.6 | 12.2 / 0.1 / 3.0 / 1.5 / 0.8 | 33.4 / 50.2 | 37 ms |
-| 10ap paced | 100 / 1.1k | 8.3 | 122 | 18 | 1.5 | 3.0 | 1.0 / 0 / 0.1 / 0.1 / 0.1 | 16.7 / 17.6 | (reveal) |
-| 10bp paced | 1,000 / 5.8k | 14.2 | 122 | 57 | 4.6 | 9.4 | 3.5 / 0 / 0.4 / 0.3 / 0.1 | 16.7 / 17.6 | (reveal) |
-| 10cp paced | 3,541 / 19.1k | 19.8 | 53 | 99.9 | 18.8 | 16.6 | 12.4 / 0.1 / 3.0 / 1.5 / 0.8 | 16.7 / 33.4 | (reveal) |
+Unpaced (window first delta → turn end; ms per delta, trace self time):
 
-- 60 deltas/s arrive in every case; commits count every React root (about
-  3 per delta at small sizes). At every page React merges them to ~55
-  commits/s and the main thread is saturated: ~17 ms per delta, frames at
-  33 ms (unpaced). The spike's desktop number (29 ms per batch, 58% busy,
-  headless Chrome, 3.6k rows) was measured in a different host; here the
-  same shape costs less per delta but leaves no idle time.
-- Cost grows with rows loaded: 3.7 → 12.2 → 16.6 ms per delta; JS is two
-  thirds of it, layout (the forced layout per commit) about a sixth.
-- No long tasks at any size on desktop; stick-to-bottom held throughout.
-- Electron, N=1 (`20261124-182953`): 10a 4.5 ms/delta, 27% busy, 9.4 MB
-  heap; 10c 16.7 ms/delta, 99.9% busy, 52 commits/s, 19.2 ms/commit, frames
-  33.9 / 50.9 ms, 20.4 MB heap — the same as Chromium.
+| | rows / stream DOM nodes (per row) | heap MB | busy % | ms/delta | JS / style / layout / paint / GC per delta | commits/s (ms/commit) | frame p50 / p95 | on screen p95: sent / handled |
+|---|---|---|---|---|---|---|---|---|
+| 10a first page | 100 / 582 (5.8) | 8.3 | 19.6 | 3.27 | 2.01 / 0.09 / 0.37 / 0.39 / 0.11 | 182 (1.08) | 16.7 / 18.2 | 12 / 11 ms |
+| 10b 10 pages | 1,003 / 5.3k (5.2) | 14.6 | 62 | 10.32 | 7.17 / 0.11 / 1.39 / 0.98 / 0.20 | 182 (3.41) | 16.7 / 18.3 | 11 / 11 ms |
+| 10c every page ⚠ | 4,507 / 23.8k (5.3) | 23.2 | 100 | 16.64 | 11.02 / 0.12 / 2.76 / 1.45 / 0.70 | **48.7** (20.5) | **48 / 51.7** | **76** / 41 ms |
+| 10cs every page, 15/s | 4,507 / 23.8k (5.3) | 23.2 | 72.9 | 48.52 | 31.09 / 0.38 / 7.81 / 3.78 / 2.45 | 46.9 (15.6) | 16.7 / 33.4 | 47 / 46 ms |
+
+Paced (window first delta → the reveal's end, 17.7 s; ms per second):
+
+| | busy % | ms/s | JS / style / layout / paint / GC per s | commits/s (ms/commit) | frame p50 / p95 | turn end → reveal end |
+|---|---|---|---|---|---|---|
+| 10ap first page | 10.3 | 103 | 66 / 1.6 / 8.0 / 11.4 / 5.8 | 67.8 (1.53) | 16.7 / 18.5 | 15.7 s |
+| 10bp 10 pages | 32.4 | 324 | 225 / 2.1 / 35.9 / 30.5 / 9.4 | 65.0 (4.90) | 16.7 / 18.3 | 15.7 s |
+| 10cp every page ⚠ | 99.9 | 1000 | 659 / 5.8 / 155 / 85 / 51 | **47.9** (20.9) | **16.7 / 33.8** | 15.8 s |
+
+- 60 deltas/s arrive in every unpaced case; commits count every React root
+  (about 3 per delta). At every page the main thread saturates: React
+  merges them to ~49 commits/s, frames run at 48 ms, and a delta reaches
+  the screen 76 ms (p95) after the proxy sent it — 35 ms of that is the
+  page's backlog before it even handles the message (41 ms from handling).
+- The fixed-work measure, 10cs: at 15 deltas/s every page costs 48.5 ms
+  of main thread per delta (73% busy, not saturated); 10c's 16.6 ms/delta
+  is a ceiling, not the cost. JS is about two thirds, layout a sixth, at
+  every size.
+- Cost grows with rows loaded: 3.3 → 10.3 ms per delta from 100 to 1,000
+  rows; 48.5 at 4,507 (10cs, where each delta gets its own ~3 commits).
+- Long tasks: one at 10c (median), none elsewhere; stick-to-bottom held
+  throughout (the reply's end out of view at most 231 ms at a time at
+  10c, 9.6% of its frames; 2.7% at 10a).
+- Electron (`20261124-182953`, the previous harness, N=1: 10a 4.5
+  ms/delta, 10c 16.7 ms/delta saturated) matched Chromium; not re-run.
+
+### The text check's self-test
+
+`PERF_CHAT_FAULT=drop` on 10a, 10b, 10c (`20261124-190424`), `dup`
+(`20261124-190543`) and `swap` (`20261124-190631`) on 10a, delta 50: every
+repetition failed the streamed-text check and only it (and 10c's old
+5%-of-frames stick rule, since replaced), e.g. drop: "the first bad one
+870 ms in (1003 rendered vs 989 received, first difference at 957); end
+snapshot … 11659 of 11645"; dup: the end snapshot timed out 15 s after
+turn end, 11,659 of 11,673; swap: same length, first difference at 957.
+The load checks passed at all three sizes.
+
+### Probe overhead (`20261124-191920`, `PERF_CHAT_SAMPLE=min`, N=3)
+
+| | recorder ms/s (share of busy), default | ms/delta default → minimised | layout/delta default → minimised |
+|---|---|---|---|
+| 10a | 12.8 (4.1%) | 3.27 → 3.10 | 0.37 → 0.36 |
+| 10b | 13.4 (1.1%) | 10.32 → 10.16 | 1.39 → 1.38 |
+| 10cs | 5.5 (0.5%) | 48.52 → 47.86 | 7.81 → 7.96 |
+
+The per-frame sample costs 0.16 ms (10a/10b, a 15,000-character reply)
+to 0.2 ms (10c); its forced style + layout is at most 0.46 ms a second
+(10c), nothing at the other sizes. Minimising it lowers ms/delta by
+0.16–0.66 (1.4–5%), all JS; the same on both sides of a comparison.
+
+### Synthetic vs a real transcript (`20261124-190734`, N=1)
+
+One long local claude-code transcript (55 turns, 2,633 rows: 1,042 tool
+calls and results, 382 agent, 100 thinking, 6 compactions, 6
+notifications), not named:
+
+| | rows | stream DOM nodes per row | `<time>` | ms/delta | synthetic at the same size |
+|---|---|---|---|---|---|
+| 10a | 100 | 3.9 | 16 | 3.06 | 5.8 nodes/row, 3.27 ms |
+| 10b | ~1,200 (11 pages: see below) | 5.0 | 205 | 11.58 | 5.2, 10.32 (1,003 rows) |
+| 10c ⚠ | 2,635 | 4.0 | 437 | 16.80 (ceiling) | 5.3, 16.64 (ceiling) |
+| 10cs | 2,635 | 4.0 | 437 | 23.73 (35.7% busy) | 5.3, 48.52 at 4,507 rows |
+
+The synthetic conversation is a little denser than the real one (5.2–5.8
+DOM nodes per row against 3.9–5.0) and costs about the same per row
+loaded: 10cs 10.8 ms per delta per 1,000 rows synthetic, 9.0 real; 10b
+within 12%. Neither comes near the spike's ~35 nodes per row on its first
+page (2.6k nodes / 73 rows, the whole document's count). On this real
+transcript 10b's scroll paging overshoots — short rows leave the view
+near its top after a prepend and useOlderPages fetches again (11 pages,
+not 9, twice) — and the load check fails, as it should: 10b is exact on
+the synthetic conversation only.
 
 ## History
 
@@ -556,4 +689,8 @@ passed in all 18 repetitions; no Ctrl+↓↓ retries.
 - 2026-11-22: moved to `tools/perf/` as durable dev tooling (was
   `ui/e2e/perf/` + `docs/`).
 - 2026-11-24: chat stream scenarios 10x, `perfseed chat`, the fake's
-  `perf-stream` dialect and resume from `MADS_FAKE_PERF_HISTORY_DIR`.
+  `perf-stream` dialect and resume from `MADS_FAKE_PERF_HISTORY_DIR`; after
+  review the same day: the streamed-text check (with its fault self-test),
+  the load-size check, per-delta costs and saturation flags, 10cs, the
+  proxy's delta stamps, paced to the reveal's end, the recorder's own cost,
+  a richer synthetic conversation, real-transcript privacy.
